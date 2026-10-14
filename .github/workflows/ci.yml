@@ -49,8 +49,18 @@ jobs:
         run: npm run lint
       - name: Build unpacked Chrome extension
         run: npm run build:extension
+      # The shared adapter-template vectors, including the timed bounds cases,
+      # run in both engines: Rust in `cargo test`, TypeScript here.
       - name: Run extension worker tests
         run: npm run test:extension
+      # Uses the host built by "Build Rust workspace" and the extension build.
+      - name: Compare adapter-template engines on generated cases
+        run: npm run test:adapter-diff -- --cases 5000
+      # The fuzz targets are their own workspace; running them needs nightly
+      # and cargo-fuzz, so CI only keeps them compiling.
+      - name: Check adapter-template fuzz targets compile
+        if: runner.os == 'macOS'
+        run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
       - name: Audit npm lockfile
         run: npm audit --audit-level=high
 

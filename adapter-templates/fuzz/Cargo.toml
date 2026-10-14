@@ -1,0 +1,47 @@
+# Fuzz targets for the adapter-template engine (adapter-templates.md §12).
+# This is its own workspace, outside the repository's, so libfuzzer-sys and
+# its nightly-only sanitizer build never enter the main lockfile or CI.
+# Run with cargo-fuzz on a nightly toolchain, from this directory:
+#
+#     cargo +nightly fuzz run parse_document
+#     cargo +nightly fuzz run prepare_url
+#     cargo +nightly fuzz run match_title
+
+[package]
+name = "adapter-templates-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+adapter-templates = { path = ".." }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse_document"
+path = "fuzz_targets/parse_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "prepare_url"
+path = "fuzz_targets/prepare_url.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "match_title"
+path = "fuzz_targets/match_title.rs"
+test = false
+doc = false
+bench = false

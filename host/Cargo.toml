@@ -13,6 +13,7 @@ description = "Local native messaging host for Brauser"
 scripted-dialogs = []
 
 [dependencies]
+adapter-templates = { path = "../adapter-templates" }
 anyhow = "1"
 cap-std = "4.0"
 directories = "6"

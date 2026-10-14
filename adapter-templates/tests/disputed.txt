@@ -1,0 +1,3 @@
+# Vector ids the Rust harness skips because the vector seems wrong.
+# One id per line; each needs an entry under DISPUTED VECTORS in the change
+# description. Blank lines and lines starting with # are ignored.
