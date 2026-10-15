@@ -1,4 +1,4 @@
-# Rauser Browser Browsing Assistant — Design Specification
+# Brauser: The Rauser Browser Assistant — Design Specification
 
 > Status: Draft v0.6 · M0 merged, M1 accepted for development on macOS, side-panel rework, M2 step 1 (harness setup), and service-worker background delivery merged, artifact model (M1.5a, then M1.5b) next, no public package yet · Short name "Brauser"; CLI and binary `brauser` · License: Apache-2.0 · Platforms: Google Chrome on macOS and Windows
 >
@@ -388,7 +388,7 @@ The panel is about the page in the active tab. Capture housekeeping collapses in
 
 ```
 ┌────────────────────────────────────────────┐
-│ Rauser Browser Browsing Assistant       ⚙  │  gear opens settings
+│ Rauser Browser Assistant                ⚙  │  gear opens settings
 ├────────────────────────────────────────────┤
 │ Designing Data-Intensive Apps — Ch. 5      │  current page; follows the
 │ oreilly.com/library/view/…/ch05            │  active tab
