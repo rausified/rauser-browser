@@ -4,17 +4,16 @@ The Rauser Browser Assistant (Brauser) is a local-first browser assistant design
 
 ## Status
 
-M0 is merged. M1 development code includes a Chrome side panel, opt-in visit capture, and native folder selection and confirmation. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS; the Windows interactive check is parked, so it is not ready for general download.
+M0 is merged. M1 development code includes a Chrome side panel, opt-in visit capture, and native folder selection and confirmation. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS, the only supported platform (DESIGN.md §13), so it is not yet ready for general download.
 
 Read the [design specification](DESIGN.md) for the architecture, security model, planned features, and release plan.
 
 ## Planned support
 
 - Google Chrome Stable on macOS 15 or later (Intel and Apple silicon)
-- Google Chrome Stable on Windows 11 version 25H2 or later supported releases (x64)
-- Edge and other browsers are not in the first-release support scope
+- Edge and other browsers, and every other operating system including Windows and Linux, are out of scope (DESIGN.md §13)
 
-The release plan calls for the browser extension to be distributed through the Chrome Web Store and a signed native-host installer to be provided for each supported operating system. See [Distribution](DESIGN.md#11-distribution) for details.
+The release plan calls for the browser extension to be distributed through the Chrome Web Store and a signed native-host installer to be provided for macOS. See [Distribution](DESIGN.md#11-distribution) for details.
 
 ## Development
 
@@ -37,7 +36,7 @@ npm run test:extension
 
 1. Build the native host with `cargo build --locked -p brauser` and the extension with `npm ci --ignore-scripts && npm run build:extension`.
 2. In Google Chrome, open `chrome://extensions`, enable Developer mode, and load `extension/dist/` as an unpacked extension. Copy the extension ID shown there.
-3. Register the development host for that ID. On macOS, run `node scripts/register-dev-host.mjs YOUR_EXTENSION_ID "$(pwd)/target/debug/brauser"` after replacing `YOUR_EXTENSION_ID`. On Windows, run the same script from PowerShell with your extension ID and the absolute path to `target\debug\brauser.exe`.
+3. Register the development host for that ID: run `node scripts/register-dev-host.mjs YOUR_EXTENSION_ID "$(pwd)/target/debug/brauser"` after replacing `YOUR_EXTENSION_ID`.
 4. Open the Brauser side panel. Until setup is complete it warns that Brauser isn't set up; click the gear icon or **Open settings** to open the settings page in a tab. There, choose a notes folder, enter a site URL and path prefix, then enable the site. Chrome requests the site permission and the native host confirms the capture policy. The panel updates when settings change; it sends buffered visits and pauses capture. The panel also follows whichever tab is active: on any HTTP(S) page it loads that page's note (if any) and autosaves what you type. The first note on a page the extension has no standing Chrome access to needs the toolbar button, the **Add a note in Brauser** command (`Ctrl+Shift+9`/`Cmd+Shift+9`), or the page's right-click menu, which grant temporary access to that one tab; the panel can then request the page's exact origin so it keeps working there without repeating the trigger.
 
 If **Choose folder** is disabled and the settings page says "Native host unavailable," check that the extension ID in the native-host registration matches the ID shown on `chrome://extensions`, rebuild the host at the registered path, then reload the settings page and reopen the panel. The development host registration is per user; the guided macOS smoke run below sets up its own isolated profile automatically.
@@ -62,7 +61,7 @@ The host binds the chosen folder to its filesystem identity. If that folder is m
 
 Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Visit logging still checks the original URL against its confirmed site rule before normalizing or logging it, but notes work on any HTTP(S) page regardless of that allowlist. See [protocol/README.md](protocol/README.md) for the message contract.
 
-The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows interactive testing is parked until a Windows machine is available; Windows CI still builds and tests every change. Windows power-loss durability for newly created Markdown file names is not yet established. The public package remains a later release milestone.
+The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. macOS is the only supported platform (DESIGN.md §13); the public package remains a later release milestone.
 
 ## License
 

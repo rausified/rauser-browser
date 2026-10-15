@@ -10,12 +10,8 @@ permissions:
 
 jobs:
   build:
-    name: Build and check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, windows-2025]
+    name: Build and check
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -31,8 +27,6 @@ jobs:
         run: cargo test --locked --workspace
       - name: Check Rust lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      # One command per step: Windows runs `run` in PowerShell, which does
-      # not stop when an earlier native command fails.
       - name: Test the scripted-dialogs test build
         run: cargo test --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
       - name: Lint the scripted-dialogs test build
@@ -59,7 +53,6 @@ jobs:
       # The fuzz targets are their own workspace; running them needs nightly
       # and cargo-fuzz, so CI only keeps them compiling.
       - name: Check adapter-template fuzz targets compile
-        if: runner.os == 'macOS'
         run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
       - name: Audit npm lockfile
         run: npm audit --audit-level=high
