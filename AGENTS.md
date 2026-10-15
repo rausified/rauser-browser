@@ -1,4 +1,4 @@
-# Rauser Browser Browsing Assistant contributor instructions
+# Brauser: The Rauser Browser Assistant contributor instructions
 
 ## Current state
 

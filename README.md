@@ -1,6 +1,6 @@
-# Rauser Browser Browsing Assistant
+# Brauser: The Rauser Browser Assistant
 
-The Rauser Browser Browsing Assistant (Brauser) is a local-first browser assistant designed to help people keep useful context from the pages they visit. It uses a browser sidebar, Markdown notes, an optional native host,  and local Agent Harness integrations.
+The Rauser Browser Assistant (Brauser) is a local-first browser assistant designed to help people keep useful context from the pages they visit. It uses a browser sidebar, Markdown notes, an optional native host,  and local Agent Harness integrations.
 
 ## Status
 
