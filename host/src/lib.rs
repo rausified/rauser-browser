@@ -5,6 +5,7 @@
 #[cfg(all(feature = "scripted-dialogs", not(debug_assertions)))]
 compile_error!("the scripted-dialogs feature is only for debug test builds");
 
+pub mod adapters;
 pub mod brand;
 pub mod capture;
 pub mod config;

@@ -1,3 +1,5 @@
 [workspace]
-members = ["protocol", "host", "macos-alert"]
+members = ["protocol", "host", "macos-alert", "adapter-templates"]
+# Fuzz targets are their own workspace (cargo-fuzz, nightly only).
+exclude = ["adapter-templates/fuzz"]
 resolver = "3"

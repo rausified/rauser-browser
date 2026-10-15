@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{Result, bail};
-use brauser_host::{brand::NAMESPACE, config::ConfigStore, dialog, native};
+use brauser_host::{adapters, brand::NAMESPACE, config::ConfigStore, dialog, native};
 
 fn main() {
     if let Err(error) = run() {
@@ -31,6 +31,9 @@ fn run() -> Result<()> {
         // Chrome supplies its extension origin as a command-line argument to
         // native messaging hosts. The installed manifest, rather than argv,
         // authorizes the stable extension ID.
+        // Developer and test tooling: evaluates adapter templates without
+        // reading the config (adapter-templates.md §12).
+        Some(adapters::COMMAND) => adapters::run(args),
         Some(command @ (dialog::PICK_FOLDER_COMMAND | dialog::CONFIRM_COMMAND)) => {
             dialog::run_child_command(command)
         }

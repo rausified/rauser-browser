@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "adapter-templates"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "ambient-authority"
 version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,6 +51,7 @@ dependencies = [
 name = "brauser"
 version = "0.1.0"
 dependencies = [
+ "adapter-templates",
  "anyhow",
  "brauser-macos-alert",
  "brauser-protocol",
