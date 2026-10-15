@@ -543,6 +543,19 @@ function compareCodePoints(a: string, b: string): number {
   return (a.length - i) - (b.length - j);
 }
 
+/** §4.1: a required literal, a required alternation (captured or not), or a
+ * required fixed-shape capture (`uuid`, or `hex` with bounds that fix its
+ * length at exactly 32 or more) anchors a template. An optional segment, and
+ * any other capture type, never does. */
+function isAnchorSegment(segment: Segment): boolean {
+  if (segment.kind === "lit" || segment.kind === "alt") return true;
+  if (segment.kind !== "cap" || segment.optional) return false;
+  const ctype = segment.ctype;
+  if (ctype.kind === "alt") return true;
+  if (ctype.type === "uuid") return true;
+  return ctype.type === "hex" && ctype.min === ctype.max && ctype.min >= 32;
+}
+
 function compileRule(
   raw: unknown, fail: (code: string) => never,
 ): { rule: CompiledRule; captures: Map<string, { ctype: CType; optional: boolean }> } {
@@ -574,7 +587,7 @@ function compileRule(
     if (sawOptional && !optional && segment.kind !== "rest") fail("optional_misplaced");
     if (optional) sawOptional = true;
   }
-  if (!segments.some((segment) => segment.kind === "lit" || segment.kind === "alt")) fail("no_literal_segment");
+  if (!segments.some(isAnchorSegment)) fail("no_literal_segment");
 
   // 4. query.
   // Conditions are checked in ascending key order by code point (SQ-V21):

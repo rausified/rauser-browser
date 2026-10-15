@@ -1,6 +1,6 @@
 //! Path templates (§4) and URL segment preparation (§5.1 steps 3-6).
 
-use crate::ctype::{CType, check_literal, parse_alternation};
+use crate::ctype::{BaseType, CType, check_literal, parse_alternation};
 use crate::error::ErrorCode;
 
 const MAX_TEMPLATE_CHARS: usize = 512;
@@ -61,6 +61,34 @@ pub(crate) fn parse_capture(content: &str) -> Result<(String, CType, bool), Erro
     Ok((name.to_owned(), CType::parse(ctype)?, optional))
 }
 
+/// §4.1: a required literal, a required alternation (captured or not), or a
+/// required fixed-shape capture (`uuid`, or `hex` with bounds that fix its
+/// length at exactly 32 or more) anchors a template. An optional segment,
+/// and any other capture type, never does.
+fn is_anchor(s: &Segment) -> bool {
+    match s {
+        Segment::Literal(_) | Segment::Alternation(_) => true,
+        Segment::Capture {
+            ctype,
+            optional: false,
+            ..
+        } => match ctype {
+            CType::Alternation(_) => true,
+            CType::Typed {
+                base: BaseType::Uuid,
+                ..
+            } => true,
+            CType::Typed {
+                base: BaseType::Hex,
+                bounds: (min, max),
+                ..
+            } => min == max && *min >= 32,
+            CType::Typed { .. } => false,
+        },
+        _ => false,
+    }
+}
+
 impl PathTemplate {
     /// Parses and structurally checks a path template. On error, returns the
     /// code and the character offset of the offending segment: for
@@ -107,10 +135,7 @@ impl PathTemplate {
         if required + optional + usize::from(rest) != segments.len() {
             return Err((ErrorCode::OptionalMisplaced, offsets[required + optional]));
         }
-        if !segments
-            .iter()
-            .any(|s| matches!(s, Segment::Literal(_) | Segment::Alternation(_)))
-        {
+        if !segments.iter().any(is_anchor) {
             return Err((ErrorCode::NoLiteralSegment, 0));
         }
         Ok(PathTemplate {

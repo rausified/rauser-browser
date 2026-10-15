@@ -5,7 +5,7 @@
 //! inherits scope on a shared origin, and it must not match the origin root,
 //! a probe URL, or anything an existing adapter already recognizes.
 
-use crate::ctype::CType;
+use crate::ctype::{BaseType, CType};
 use crate::document::{Document, QueryCond, SHARED_ORIGINS};
 use crate::error::{DraftErrorCode, ValidationError};
 use crate::eval::{Prepared, match_rule};
@@ -52,6 +52,19 @@ fn scope_value(scope: &Scope) -> Value {
                 (k.clone(), Value::Array(list))
             })
             .collect(),
+    )
+}
+
+/// §10.4: an identifier capture is `int`, `hex`, `uuid`, `jira_key`, or
+/// `token`. A `name` capture (a host-supplied tenant or namespace) is not an
+/// identifier, and neither is a capture of an alternation.
+fn is_identifier_capture(s: &Segment) -> bool {
+    matches!(
+        s,
+        Segment::Capture {
+            ctype: CType::Typed { base, .. },
+            ..
+        } if *base != BaseType::Name
     )
 }
 
@@ -108,13 +121,15 @@ pub fn check_draft(
     };
     let a = &doc.adapters[0];
 
-    // 4. Per rule: a literal before the first capture, then `{*}` not second.
-    // Neither `{_}` nor a plain alternation is a capture or a literal (SQ28).
+    // 4. Per rule: a literal before the first identifier capture, then `{*}`
+    // not second. Neither `{_}` nor a plain alternation is a capture or a
+    // literal (SQ28); a `name` capture or a captured alternation is a
+    // capture but not an identifier.
     for rule in &a.rules {
         let segs = &rule.path.segments;
         let first_capture = segs
             .iter()
-            .position(|s| matches!(s, Segment::Capture { .. }))
+            .position(is_identifier_capture)
             .unwrap_or(segs.len());
         if !segs[..first_capture]
             .iter()
@@ -127,12 +142,11 @@ pub fn check_draft(
         }
     }
 
-    // 5. The ID uses at least one typed capture.
-    if !a
-        .id
-        .names()
-        .any(|n| matches!(a.id_ctype(n), Some(CType::Typed { .. })))
-    {
+    // 5. The ID uses at least one identifier capture; a `name` capture alone
+    // does not count (§10.4).
+    if !a.id.names().any(
+        |n| matches!(a.id_ctype(n), Some(CType::Typed { base, .. }) if *base != BaseType::Name),
+    ) {
         return DraftError(DraftErrorCode::IdNeedsTypedCapture);
     }
 

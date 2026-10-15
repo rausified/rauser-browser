@@ -57,7 +57,7 @@ JSON strings in the file escape invisible and combining characters (` `, `́`, 
 | `why` | One line starting with the spec section (`§5.1: ...`, or `DESIGN 6.2: ...`). |
 | `impls` | `["rust", "ts"]` or `["rust"]`. The worker does not validate everything, overlap-check, or judge drafts, so host-only kinds are `["rust"]`. |
 | `sq` | Optional. Spec-question tags whose reading this case depends on. See "Spec questions". |
-| `pending` | Optional. A spec-question tag. The harness skips the case, but must still parse it, until that question is settled. Four Notion-starter cases depend on SQ1. |
+| `pending` | Optional. A spec-question tag. The harness skips the case, but must still parse it, until that question is settled. |
 | `budget_ms` | Optional. Bounds cases (§12): the call must complete within this many milliseconds on CI hardware. |
 | `expect` | Kind-specific expected result. Compare it by deep equality. Object key order is not significant. |
 
@@ -314,7 +314,7 @@ The first failing check is reported.
 | Name | Contents |
 |---|---|
 | `starters` | 0 `jira.issue` and 1 `confluence.page` on `acme.atlassian.net` (§11), 2 `gdoc` (§11), 3 `github.pr` scoped to `acme-corp` (§11), 4 `github.issue` (synthetic, same scope, DESIGN 6.8), 5 `sharepoint.doc` on `acme.sharepoint.com`, and 6 `sharepoint.doc` on `acme-my.sharepoint.com` (OneDrive for work, SQ-V2) |
-| `notion_starter` | The §11 Notion adapter verbatim. It is invalid under §4.1 (SQ1). |
+| `notion_starter` | The §11 Notion adapter verbatim, anchored by its fixed-shape `hex(32)` capture (§4.1). |
 | `mail` | A prefix title list: `["({~}) {title} - Mail", "{title} - Mail"]` |
 | `tracker` | Title captures that must agree with path captures, with a tab-title alias on `num` |
 | `long_jira` | An ID that repeats its capture, used to reach the 512-byte ID cap |
@@ -339,9 +339,7 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 
 | Tag | Section | Reading used |
 |---|---|---|
-| SQ1 | §4.1 vs §11 | The §11 Notion adapter has no literal or alternation segment, so it fails validation (`no_literal_segment`). Its evaluate cases are `pending`. |
 | SQ2 | §5.1 | Dot segments are resolved by the WHATWG parser before step 3, including `%2e`. Step 5 therefore fires only on synthetic `segments` input. |
-| SQ3 | §4.1 | A captured alternation does not count as the required literal or alternation segment. |
 | SQ4 | §3, §6 | Scope is checked on the first matching rule, and a failure there is terminal (`out_of_scope`). |
 | SQ5 | §6, §8.1 | `scope` is allowed on an origin that is not shared. `unscoped` is an error there, and so is having both keys. An empty list or table is an error. An optional capture cannot be scoped. Differing modifiers are a `capture_type_conflict`. |
 | SQ6 | §4.1, §7.1 | `jira_key` bounds apply to the project part. `uuid` takes no bounds. |
@@ -396,16 +394,16 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | Kind | Cases | Impls |
 |---|---|---|
 | validate | 576 | rust, ts |
-| evaluate | 373 (4 pending) | rust, ts |
+| evaluate | 373 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
 | overlap | 35 | rust |
-| draft | 36 | rust |
+| draft | 37 | rust |
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 4 | rust |
-| **Total** | **1247** | |
+| **Total** | **1248** | |
 
 ## Maintenance
 

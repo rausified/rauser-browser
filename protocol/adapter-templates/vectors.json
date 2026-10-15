@@ -3962,13 +3962,12 @@
       "expect": {"ok": true}
     },
     {
-      "id": "validate.starter.notion_no_literal",
+      "id": "validate.starter.notion_ok",
       "kind": "validate",
-      "why": "§4.1 vs §11: the Notion example has no literal or alternation segment, which §4.1 rejects",
+      "why": "§4.1, §11: the Notion example's fixed-shape hex(32) capture is its anchor",
       "impls": ["rust", "ts"],
-      "sq": ["SQ1"],
       "doc": {"$fixture": "notion_starter"},
-      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+      "expect": {"ok": true}
     },
     {
       "id": "validate.doc.empty_object",
@@ -9078,11 +9077,10 @@
       "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
     },
     {
-      "id": "validate.path.no_literal_captured_alternation",
+      "id": "validate.path.captured_alternation_anchor",
       "kind": "validate",
-      "why": "§4.1: a captured alternation binds a value and is not a literal segment",
+      "why": "§4.1: a captured alternation is an anchor",
       "impls": ["rust", "ts"],
-      "sq": ["SQ3"],
       "doc": {
         "format": 1,
         "artifacts": [
@@ -9094,7 +9092,7 @@
           }
         ]
       },
-      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+      "expect": {"ok": true}
     },
     {
       "id": "validate.path.no_literal_root",
@@ -22389,10 +22387,8 @@
     {
       "id": "eval.notion_starter.in",
       "kind": "evaluate",
-      "why": "§11: the Notion starter, if SQ1 relaxes §4.1",
+      "why": "§11: the Notion starter",
       "impls": ["rust", "ts"],
-      "sq": ["SQ1"],
-      "pending": "SQ1",
       "expect": {
         "match": true,
         "adapter": 0,
@@ -22408,10 +22404,8 @@
     {
       "id": "eval.notion_starter.case_variant",
       "kind": "evaluate",
-      "why": "§11: the Notion starter, if SQ1 relaxes §4.1",
+      "why": "§11: the Notion starter",
       "impls": ["rust", "ts"],
-      "sq": ["SQ1"],
-      "pending": "SQ1",
       "expect": {
         "match": true,
         "adapter": 0,
@@ -22427,10 +22421,8 @@
     {
       "id": "eval.notion_starter.out",
       "kind": "evaluate",
-      "why": "§11: the Notion starter, if SQ1 relaxes §4.1",
+      "why": "§11: the Notion starter",
       "impls": ["rust", "ts"],
-      "sq": ["SQ1"],
-      "pending": "SQ1",
       "expect": {"match": false, "reason": "out_of_scope"},
       "doc": {"$fixture": "notion_starter"},
       "url": "https://www.notion.so/personal/Release-Plan-0123456789abcdef0123456789abcdef"
@@ -22438,10 +22430,8 @@
     {
       "id": "eval.notion_starter.no_workspace",
       "kind": "evaluate",
-      "why": "§11: the Notion starter, if SQ1 relaxes §4.1",
+      "why": "§11: the Notion starter",
       "impls": ["rust", "ts"],
-      "sq": ["SQ1"],
-      "pending": "SQ1",
       "expect": {"match": false, "reason": "no_rule"},
       "doc": {"$fixture": "notion_starter"},
       "url": "https://www.notion.so/Release-Plan-0123456789abcdef0123456789abcdef"
@@ -24299,7 +24289,7 @@
     {
       "id": "draft.github_first_capture",
       "kind": "draft",
-      "why": "§10.4: every rule needs a literal segment before its first capture",
+      "why": "§10.4: `name` captures are not identifiers, so `discussions` is the leading literal before the first identifier capture `{number}`",
       "impls": ["rust"],
       "existing": {"$fixture": "starters"},
       "draft": {
@@ -24310,7 +24300,23 @@
       },
       "probes": [],
       "search_keys": ["q", "query", "search", "jql", "filter"],
-      "expect": {"draft_error": "draft_no_leading_literal"}
+      "expect": {"ok": true, "scope": {"owner": ["acme-corp"]}}
+    },
+    {
+      "id": "draft.name_only_id",
+      "kind": "draft",
+      "why": "§10.4: a rule whose ID uses only `name` captures is dropped",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {
+        "type": "github.wiki",
+        "origin": "https://github.com",
+        "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/wiki/{page:name}"}],
+        "id": "github.wiki:{host}/{owner}/{repo}/{page}"
+      },
+      "probes": [],
+      "search_keys": ["q", "query", "search", "jql", "filter"],
+      "expect": {"draft_error": "draft_id_needs_typed_capture"}
     },
     {
       "id": "draft.forbidden_title",
