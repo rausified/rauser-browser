@@ -49,10 +49,6 @@ pub(crate) fn default_strip_params() -> Vec<String> {
     vec!["utm_*".into(), "fbclid".into(), "gclid".into()]
 }
 
-pub(crate) const fn default_near_repeat_secs() -> u32 {
-    300
-}
-
 pub struct ConfigStore {
     path: PathBuf,
     config: ConfigSnapshot,
@@ -683,8 +679,9 @@ struct StoredConfig {
     sites: Vec<SiteConfig>,
     #[serde(default = "default_strip_params")]
     strip_params: Vec<String>,
-    #[serde(default = "default_near_repeat_secs")]
-    near_repeat_secs: u32,
+    // Accept and ignore the retired M1 key. New config writes omit it.
+    #[serde(default, skip_serializing, rename = "near_repeat_secs")]
+    _near_repeat_secs: Option<u32>,
     // A missing key (any config written before M2) counts as unconfirmed.
     #[serde(default)]
     agent_denylist: Vec<String>,
@@ -820,7 +817,7 @@ impl StoredConfig {
             capture_enabled: value.capture_enabled,
             sites: value.sites.clone(),
             strip_params: value.strip_params.clone(),
-            near_repeat_secs: value.near_repeat_secs,
+            _near_repeat_secs: None,
             agent_denylist: value.agent_denylist.clone(),
             agent_denylist_confirmed: value.agent_denylist_confirmed,
             log_incognito: value.log_incognito,
@@ -843,7 +840,6 @@ impl From<StoredConfig> for ConfigSnapshot {
             capture_enabled: value.capture_enabled,
             sites: value.sites,
             strip_params: value.strip_params,
-            near_repeat_secs: value.near_repeat_secs,
             agent_denylist: value.agent_denylist,
             agent_denylist_confirmed: value.agent_denylist_confirmed,
             log_incognito: value.log_incognito,
@@ -1114,7 +1110,6 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
         capture_enabled: false,
         sites: Vec::new(),
         strip_params: default_strip_params(),
-        near_repeat_secs: default_near_repeat_secs(),
         agent_denylist: Vec::new(),
         agent_denylist_confirmed: false,
         log_incognito: false,
@@ -1159,9 +1154,6 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
         {
             bail!("tracking parameters must be simple names or prefix patterns ending in *");
         }
-    }
-    if config.near_repeat_secs > 86_400 {
-        bail!("near-repeat window exceeds 24 hours");
     }
     if config.capture_enabled && (config.storage.is_none() || config.sites.is_empty()) {
         bail!("capture requires a selected notes folder and at least one site");
@@ -1947,10 +1939,7 @@ mod tests {
         assert_eq!(status.message.as_deref(), Some(AGENT_ENTRY_INVALID));
 
         // Saving other settings keeps the bad entry on disk for the user.
-        let next = ConfigSnapshot {
-            near_repeat_secs: 60,
-            ..store.snapshot().clone()
-        };
+        let next = store.snapshot().clone();
         let revision = store.revision().to_owned();
         store.update(next, &revision).unwrap().unwrap();
         let contents = fs::read_to_string(&path).unwrap();
@@ -2044,15 +2033,11 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, _) = fixtures::ready(folder.path());
         let mut store = loaded(&path);
-        let next = ConfigSnapshot {
-            near_repeat_secs: 60,
-            ..store.snapshot().clone()
-        };
+        let next = store.snapshot().clone();
         let revision = store.revision().to_owned();
         store.update(next, &revision).unwrap().unwrap();
         assert_ready_here(&store, "claude-code", "2.1.284");
         let reloaded = loaded(&path);
-        assert_eq!(reloaded.snapshot().near_repeat_secs, 60);
         assert!(reloaded.snapshot().agent.is_some());
         assert_ready_here(&reloaded, "claude-code", "2.1.284");
         assert!(
@@ -2458,14 +2443,18 @@ mod tests {
         let (path, _, revision) = committed(folder.path());
         let mut store = loaded(&path);
         let record = store.agent.record.clone();
-        let next = ConfigSnapshot {
-            near_repeat_secs: 600,
-            ..store.snapshot().clone()
-        };
+        let mut next = store.snapshot().clone();
+        next.strip_params.push("campaign".into());
         let updated = store.update(next, &revision).unwrap().unwrap();
         assert_ne!(updated, revision);
         let store = loaded(&path);
-        assert_eq!(store.snapshot().near_repeat_secs, 600);
+        assert!(
+            store
+                .snapshot()
+                .strip_params
+                .iter()
+                .any(|value| value == "campaign")
+        );
         assert!(store.snapshot().agent_denylist_confirmed);
         assert_eq!(store.agent.record, record);
         assert_ready_here(&store, "claude-code", "2.1.284");

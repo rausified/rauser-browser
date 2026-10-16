@@ -846,17 +846,6 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
             ));
         }
     }
-    let prior_repeat = if trusted_current {
-        current.near_repeat_secs
-    } else {
-        config::default_near_repeat_secs()
-    };
-    if next.near_repeat_secs < prior_repeat {
-        lines.push(format!(
-            "Shorten repeat suppression from {} to {} seconds.",
-            prior_repeat, next.near_repeat_secs
-        ));
-    }
     if let Some(next_storage) = &next.storage {
         let old_storage = if trusted_current {
             current.storage.as_ref()
@@ -938,7 +927,6 @@ mod tests {
             capture_enabled: false,
             sites: Vec::new(),
             strip_params: Vec::new(),
-            near_repeat_secs: 300,
             ..crate::config::empty_config()
         };
         let mut authority = ConsentAuthority::new();
@@ -1017,10 +1005,7 @@ mod tests {
     #[test]
     fn update_accepts_unchanged_confirmed_and_agent_echo() {
         let current = set_up();
-        let next = ConfigSnapshot {
-            near_repeat_secs: 600,
-            ..current.clone()
-        };
+        let next = current.clone();
         assert!(approval_lines(&current, &next).is_empty());
         assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
     }
@@ -1362,7 +1347,7 @@ mod tests {
         );
         // A different current config at the same revision is also stale.
         let moved = ConfigSnapshot {
-            near_repeat_secs: 600,
+            strip_params: vec!["different".into()],
             ..granted.current.clone()
         };
         assert!(

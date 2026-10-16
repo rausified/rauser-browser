@@ -36,6 +36,9 @@
           "$ref": "#/$defs/RecordActivityRequest"
         },
         {
+          "$ref": "#/$defs/RecordBatchRequest"
+        },
+        {
           "$ref": "#/$defs/RecordWhyRequest"
         },
         {
@@ -77,6 +80,9 @@
         },
         {
           "$ref": "#/$defs/ActivityRecorded"
+        },
+        {
+          "$ref": "#/$defs/BatchRecorded"
         },
         {
           "$ref": "#/$defs/WhyRecorded"
@@ -417,7 +423,6 @@
         "capture_enabled",
         "sites",
         "strip_params",
-        "near_repeat_secs",
         "agent_denylist",
         "agent_denylist_confirmed",
         "log_incognito",
@@ -453,11 +458,6 @@
             "minLength": 1,
             "maxLength": 64
           }
-        },
-        "near_repeat_secs": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 86400
         },
         "agent_denylist": {
           "type": "array",
@@ -797,6 +797,26 @@
         "event": { "$ref": "#/$defs/ActivityEvent" }
       }
     },
+    "RecordBatchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "batch_id", "events", "overflow"],
+      "properties": {
+        "type": { "const": "record_batch" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "batch_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/CaptureBatchItem" }
+        },
+        "overflow": {
+          "oneOf": [{ "$ref": "#/$defs/OverflowMarker" }, { "type": "null" }]
+        }
+      }
+    },
     "RecordWhyRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -1054,6 +1074,19 @@
         "relative_path": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
       }
     },
+    "BatchRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "batch_id", "results", "overflow_recorded"],
+      "properties": {
+        "type": { "const": "batch_recorded" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "batch_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "results": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/BatchEventResult" } },
+        "overflow_recorded": { "type": "boolean" }
+      }
+    },
     "WhyRecorded": {
       "type": "object",
       "additionalProperties": false,
@@ -1298,6 +1331,41 @@
           "type": "boolean"
         }
       }
+    },
+    "CaptureBatchItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "visit", "activity"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/CaptureEventKind" },
+        "visit": { "oneOf": [{ "$ref": "#/$defs/VisitEvent" }, { "type": "null" }] },
+        "activity": { "oneOf": [{ "$ref": "#/$defs/ActivityEvent" }, { "type": "null" }] }
+      }
+    },
+    "OverflowMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "first_occurred_at", "last_occurred_at"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "first_occurred_at": { "type": "string", "minLength": 20, "maxLength": 25 },
+        "last_occurred_at": { "type": "string", "minLength": 20, "maxLength": 25 }
+      }
+    },
+    "BatchEventResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "outcome", "reason", "relative_path"],
+      "properties": {
+        "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "outcome": { "$ref": "#/$defs/VisitOutcome" },
+        "reason": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "relative_path": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+      }
+    },
+    "CaptureEventKind": {
+      "type": "string",
+      "enum": ["visit", "activity"]
     },
     "ActivityTrail": {
       "type": "object",

@@ -68,7 +68,6 @@ export interface ConfigSnapshot {
   capture_enabled: boolean;
   sites: SiteConfig[];
   strip_params: string[];
-  near_repeat_secs: number;
   agent_denylist: string[];
   agent_denylist_confirmed: boolean;
   log_incognito: boolean;
@@ -145,6 +144,15 @@ export interface RecordActivityRequest {
   event: ActivityEvent;
 }
 
+export interface RecordBatchRequest {
+  type: "record_batch";
+  protocol_version: 5;
+  request_id: string;
+  batch_id: string;
+  events: CaptureBatchItem[];
+  overflow: OverflowMarker | null;
+}
+
 export interface RecordWhyRequest {
   type: "record_why";
   protocol_version: 5;
@@ -212,6 +220,15 @@ export interface ActivityRecorded {
   relative_path: string | null;
 }
 
+export interface BatchRecorded {
+  type: "batch_recorded";
+  protocol_version: 5;
+  request_id: string;
+  batch_id: string;
+  results: BatchEventResult[];
+  overflow_recorded: boolean;
+}
+
 export interface WhyRecorded {
   type: "why_recorded";
   protocol_version: 5;
@@ -272,6 +289,27 @@ export interface VisitEvent {
   occurred_at: string;
   incognito: boolean;
 }
+
+export interface CaptureBatchItem {
+  kind: CaptureEventKind;
+  visit: VisitEvent | null;
+  activity: ActivityEvent | null;
+}
+
+export interface OverflowMarker {
+  count: number;
+  first_occurred_at: string;
+  last_occurred_at: string;
+}
+
+export interface BatchEventResult {
+  event_id: string;
+  outcome: VisitOutcome;
+  reason: string | null;
+  relative_path: string | null;
+}
+
+export type CaptureEventKind = "visit" | "activity";
 
 export interface ActivityTrail {
   from_artifact_id: string | null;
@@ -370,6 +408,6 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;

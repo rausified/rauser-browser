@@ -215,7 +215,6 @@ fn harness_confirmation_text_round_trips() {
         capture_enabled: false,
         sites: Vec::new(),
         strip_params: Vec::new(),
-        near_repeat_secs: 300,
         agent_denylist: vec!["bank.example".into(), "mail.example".into()],
         agent_denylist_confirmed: false,
         log_incognito: false,

@@ -33,12 +33,17 @@ export interface QueuedVisit {
   // Once the panel has received an item, its event is frozen: the host hashes
   // the entry text, so a later edit would break interrupted-write recovery.
   dispatched?: boolean;
+  // All records in one native delivery retain its ID across retries, making
+  // both the log append and an attached overflow marker idempotent.
+  batch_id?: string;
 }
 
 export interface QueueState {
   version: 1;
   items: QueuedVisit[];
   overflow_count: number;
+  overflow_first_at: string | null;
+  overflow_last_at: string | null;
   rejected_count: number;
   // A persistent notice that stays until the user dismisses it.
   last_error: string | null;
@@ -51,6 +56,8 @@ export interface WorkerStatus {
   live_activity: number;
   next_retry_at: number | null;
   overflow_count: number;
+  overflow_first_at: string | null;
+  overflow_last_at: string | null;
   rejected_count: number;
   last_error: string | null;
   retry_error: string | null;
@@ -92,6 +99,8 @@ export function emptyQueue(): QueueState {
     version: 1,
     items: [],
     overflow_count: 0,
+    overflow_first_at: null,
+    overflow_last_at: null,
     rejected_count: 0,
     last_error: null,
     retry_error: null,
@@ -234,6 +243,7 @@ export function isQueuedVisit(value: unknown): value is QueuedVisit {
     Number.isFinite(item.retry_after) &&
     (item.tab_id === undefined || (typeof item.tab_id === "number" && Number.isInteger(item.tab_id))) &&
     (item.dispatched === undefined || typeof item.dispatched === "boolean") &&
+    (item.batch_id === undefined || typeof item.batch_id === "string") &&
     common && (legacy || activity)
   );
 }
