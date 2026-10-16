@@ -78,16 +78,36 @@ async function readPolicy(): Promise<PolicyLease | null> {
   return (await readPolicyState()).lease;
 }
 
-async function readPolicyState(): Promise<{ lease: PolicyLease | null; needsMigration: boolean }> {
+type LegacyPolicyLease = Omit<PolicyLease, "adapters">;
+
+function legacyPolicyLease(value: unknown): LegacyPolicyLease | null {
+  if (typeof value !== "object" || value === null || "adapters" in value) return null;
+  // Protocol v4 leases had exactly the current policy fields except for the
+  // adapter document. Adding an empty document lets the current validator
+  // check that old shape without treating arbitrary corrupt state as an
+  // upgrade signal.
+  const candidate = { ...value, adapters: { format: 1, artifacts: [] } };
+  if (!isPolicyLease(candidate)) return null;
+  return {
+    revision: candidate.revision,
+    expires_at: candidate.expires_at,
+    capture_enabled: candidate.capture_enabled,
+    sites: candidate.sites,
+  };
+}
+
+async function readPolicyState(): Promise<{
+  lease: PolicyLease | null;
+  legacyLease: LegacyPolicyLease | null;
+}> {
   const stored = await chrome.storage.local.get(POLICY_KEY);
   const value = stored[POLICY_KEY];
   const valid = isPolicyLease(value);
   return {
     lease: valid ? value : null,
-    // A lease from an older extension version is present but fails the new
-    // shape. Renew it once from the host. Missing state (first run) and null
-    // (an intentional suspension during repair) stay inert.
-    needsMigration: value !== undefined && value !== null && !valid,
+    // A well-formed lease from the previous extension version is renewed from
+    // the host. Missing, suspended, or malformed state stays inert.
+    legacyLease: valid ? null : legacyPolicyLease(value),
   };
 }
 
@@ -550,7 +570,9 @@ async function syncNeeds(): Promise<SyncNeeds> {
   const state = await readPolicyState();
   const lease = state.lease;
   if (await pausePending()) return { renew: false, deliver: false };
-  if (state.needsMigration) return { renew: true, deliver: false };
+  if (state.legacyLease) {
+    return { renew: state.legacyLease.capture_enabled, deliver: false };
+  }
   if (!lease || !lease.capture_enabled) {
     return { renew: false, deliver: false };
   }
@@ -564,7 +586,10 @@ async function syncNeeds(): Promise<SyncNeeds> {
 /** Whether this URL needs a host renewal before capture can decide. */
 async function leaseNeedsRenewalFor(url: string): Promise<boolean> {
   const state = await readPolicyState();
-  if (state.needsMigration) return !await pausePending();
+  if (state.legacyLease) {
+    const legacy = { ...state.legacyLease, expires_at: Infinity, adapters: { format: 1, artifacts: [] } };
+    return matchingSite(legacy, url) !== null && !await pausePending();
+  }
   const lease = state.lease;
   if (!lease || !lease.capture_enabled || lease.expires_at > Date.now()) return false;
   // matchingSite refuses every URL once the lease lapses, so ask it as if

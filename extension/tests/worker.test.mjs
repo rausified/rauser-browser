@@ -1062,6 +1062,39 @@ test("an older cached lease renews once instead of permanently disabling backgro
   assert.equal(values.get(storageKey("policy_v1")).adapters.artifacts.length, 1);
 });
 
+test("an older cached lease does not start the host for an unrelated navigation", async () => {
+  const origin = "https://upgrade-policy.example";
+  resetSync(origin, 2 * HOUR_MS);
+  const legacy = values.get(storageKey("policy_v1"));
+  delete legacy.adapters;
+  values.set(storageKey("policy_v1"), legacy);
+  tabs.set(14, { id: 14, url: "https://elsewhere.example/", title: "Elsewhere", incognito: false });
+
+  onCommitted({
+    tabId: 14, frameId: 0, documentId: "doc-upgrade-elsewhere", documentLifecycle: "active",
+    url: "https://elsewhere.example/", timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(ports.length, 0);
+});
+
+test("disabled or malformed cached policy does not cause background host wakeups", async () => {
+  const origin = "https://disabled-upgrade.example";
+  resetSync(origin, 2 * HOUR_MS);
+  const legacy = values.get(storageKey("policy_v1"));
+  delete legacy.adapters;
+  legacy.capture_enabled = false;
+  values.set(storageKey("policy_v1"), legacy);
+  onAlarm({ name: SYNC_ALARM });
+  await flush();
+  assert.equal(ports.length, 0);
+
+  values.set(storageKey("policy_v1"), { corrupt: true });
+  onAlarm({ name: SYNC_ALARM });
+  await flush();
+  assert.equal(ports.length, 0);
+});
+
 test("a local pause still blocks migration of an older cached lease", async () => {
   const origin = "https://paused-upgrade.example";
   resetSync(origin, 2 * HOUR_MS);
