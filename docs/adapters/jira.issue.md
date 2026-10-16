@@ -4,9 +4,9 @@ Status: development draft. The adapter grammar and recorded examples were
 verified by both adapter-template engines on 2026-10-16. A live Jira Cloud UI
 check is still required before this draft is release-certified.
 
-Brauser offers this draft when an enabled exact origin is a Jira Cloud tenant,
-such as `https://acme.atlassian.net`. It recognizes both the canonical issue
-page and a board modal:
+Brauser offers this draft when an enabled exact HTTPS origin is a Jira Cloud
+tenant, such as `https://acme.atlassian.net`. It recognizes both the canonical
+issue page and a board modal:
 
 - `https://acme.atlassian.net/browse/PROJ-42`
 - `https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42`

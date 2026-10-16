@@ -15,17 +15,19 @@ export interface StarterOffer {
 
 const GITHUB_ORIGIN = "https://github.com";
 
-function hostname(origin: string): string | null {
+function secureHostname(origin: string): string | null {
   try {
     const url = new URL(origin);
-    return url.origin === origin ? url.hostname.toLowerCase() : null;
+    return url.origin === origin && url.protocol === "https:"
+      ? url.hostname.toLowerCase()
+      : null;
   } catch {
     return null;
   }
 }
 
 export function starterKind(origin: string): StarterKind | null {
-  const host = hostname(origin);
+  const host = secureHostname(origin);
   if (!host) return null;
   if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "jira";
   if (host.endsWith(".sharepoint.com") && host !== "sharepoint.com") return "sharepoint";
@@ -136,7 +138,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
         key: "github.pr",
         kind,
         label: "GitHub pull requests",
-        description: "Pull request overview, files, commits, and checks share one artifact.",
+        description: "Pull request routes share one artifact; files use review mode, while commits and checks use view mode.",
         origin: site.origin,
         needs_scope: true,
         adapter: scope ? githubPullRequest(scope) : null,

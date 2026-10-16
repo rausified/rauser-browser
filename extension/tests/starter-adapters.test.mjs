@@ -35,8 +35,10 @@ test("generated starters stay identical to the shared cross-engine fixtures", ()
 test("starter origins are classified narrowly", () => {
   assert.equal(starterKind("https://acme.atlassian.net"), "jira");
   assert.equal(starterKind("https://atlassian.net"), null);
+  assert.equal(starterKind("http://acme.atlassian.net"), null);
   assert.equal(starterKind("https://acme.sharepoint.com"), "sharepoint");
   assert.equal(starterKind("https://acme-my.sharepoint.com"), "sharepoint");
+  assert.equal(starterKind("http://acme.sharepoint.com"), null);
   assert.equal(starterKind("https://github.com"), "github");
   assert.equal(starterKind("http://github.com"), null);
   assert.equal(starterKind("https://github.com.evil.example"), null);
@@ -81,6 +83,10 @@ test("GitHub drafts are scoped and preserve PR modes", () => {
   assert.equal(review.match, true);
   assert.equal(review.artifact_id, "github.pr:github.com/acme-corp/widget/412");
   assert.equal(review.mode, "review");
+  const other = evaluate(doc, "https://github.com/acme-corp/widget/pull/412/activity");
+  assert.equal(other.match, true);
+  assert.equal(other.artifact_id, review.artifact_id);
+  assert.equal(other.mode, null);
   assert.equal(evaluate(doc, "https://github.com/personal/widget/pull/412/files").match, false);
   const issue = evaluate(doc, "https://github.com/acme-corp/widget/issues/77");
   assert.equal(issue.match, true);

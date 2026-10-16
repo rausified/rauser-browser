@@ -4,7 +4,7 @@ Status: development draft. The adapter grammar and recorded examples were
 verified by both adapter-template engines on 2026-10-16. A live SharePoint and
 OneDrive UI check is still required before this draft is release-certified.
 
-Brauser offers this draft on exact `*.sharepoint.com` origins, including
+Brauser offers this draft on exact HTTPS `*.sharepoint.com` origins, including
 OneDrive for work tenants served from `<tenant>-my.sharepoint.com`. It covers
 the common Office document routes under `/sites/` and `/personal/`, including
 the `/:w:/r/` sharing form. Route literals compare without ASCII case, and the
