@@ -8,6 +8,7 @@ target/
 *.swp
 *.swo
 .last_cycle_output.md
+.last_cycle_review_output.md
 overnight-run.log*
 .bosun_commit_gate_failure.md*
 .bosun_gate_*.log
