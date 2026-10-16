@@ -50,6 +50,12 @@ jobs:
       # Uses the host built by "Build Rust workspace" and the extension build.
       - name: Compare adapter-template engines on generated cases
         run: npm run test:adapter-diff -- --cases 5000
+      # End-to-end run in headless Chrome (preinstalled on the runner image)
+      # against the scripted-dialogs host; nothing is shown on screen.
+      - name: Build scripted-dialogs host
+        run: cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
+      - name: Run headless macOS smoke test
+        run: npm run smoke:macos:headless
       # The fuzz targets are their own workspace; running them needs nightly
       # and cargo-fuzz, so CI only keeps them compiling.
       - name: Check adapter-template fuzz targets compile

@@ -27,9 +27,9 @@ for (const name of ["manifest.json", "options.html", "panel.html"]) {
 }
 await copyFile(join(extensionDir, "panel.css"), join(outputDir, "panel.css"));
 for (const name of [
-  "adapter-templates.js", "agent.js", "brand.js", "coordination.js", "grants.js", "model.js", "native.js",
+  "adapter-review.js", "adapter-templates.js", "agent.js", "brand.js", "coordination.js", "grants.js", "model.js", "native.js",
   "note-editor.js", "options.js", "panel.js", "protocol-shape.js",
-  "settings.js", "worker.js",
+  "settings.js", "starter-adapters.js", "worker.js",
 ]) {
   await copyFile(join(intermediateDir, "extension", name), join(outputDir, name));
 }

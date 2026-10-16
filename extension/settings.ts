@@ -2,7 +2,9 @@
 // Each page owns one session; the config mutation lock serializes changes
 // across every open page, and the worker's policy lease tells a page when
 // another page has saved a different revision.
-import type { AgentStatus, ConfigSnapshot, HarnessOffer, SiteConfig } from "../protocol/ts/generated.js";
+import type {
+  AdapterWarning, AgentStatus, ConfigSnapshot, HarnessOffer, SiteConfig,
+} from "../protocol/ts/generated.js";
 import {
   POLICY_LEASE_MS,
   POLICY_STORAGE_KEY,
@@ -35,6 +37,18 @@ export function sameSite(left: SiteConfig, right: SiteConfig): boolean {
   return left.origin === right.origin && left.path_prefix === right.path_prefix;
 }
 
+/** Keep host configuration valid when an origin loses its final enabled site.
+ * A site rule can narrow one origin by path, while adapters are origin-wide,
+ * so adapters remain until every site entry for that origin is gone. */
+export function adaptersForSites(config: ConfigSnapshot, sites: SiteConfig[]): ConfigSnapshot["adapters"] {
+  const origins = new Set(sites.map((site) => site.origin));
+  return {
+    format: config.adapters.format,
+    artifacts: config.adapters.artifacts.filter((adapter) =>
+      typeof adapter.origin === "string" && origins.has(adapter.origin)),
+  };
+}
+
 export async function withConfigMutationLock<T>(action: () => Promise<T>): Promise<T> {
   if (!navigator.locks?.request) {
     throw new Error("Chrome cannot coordinate configuration and permission changes on this page");
@@ -56,6 +70,7 @@ export function leaseFor(config: ConfigSnapshot, currentRevision: string): Polic
     expires_at: Date.now() + POLICY_LEASE_MS,
     capture_enabled: config.capture_enabled,
     sites: config.sites,
+    adapters: config.adapters,
   };
 }
 
@@ -75,6 +90,8 @@ export class ConfigSession {
   revision: string | null = null;
   configIssue: string | null = null;
   agentStatus: AgentStatus | null = null;
+  adapterIssue: string | null = null;
+  adapterWarnings: AdapterWarning[] = [];
   status: WorkerStatus | null = null;
   // While this page pauses, the worker clears the lease before the host
   // commits. That null lease is this page's own write, not another page's.
@@ -118,24 +135,34 @@ export class ConfigSession {
     this.setRevision(response.revision);
     this.configIssue = response.config_issue;
     this.agentStatus = response.agent_status;
+    this.adapterIssue = response.adapter_issue;
+    this.adapterWarnings = response.adapter_warnings;
     this.onChange();
   }
 
   /** config_updated carries no agent status, so read it after a save. A
    * newer revision belongs to another page, whose lease change reloads.
    * The save itself has committed, so a failed read only blanks the status. */
-  private async refreshAgentStatus(): Promise<void> {
+  private async refreshDerivedStatus(): Promise<void> {
     try {
       const latest = await this.readHostConfig();
-      if (latest.revision === this.revision) this.agentStatus = latest.agent_status;
+      if (latest.revision === this.revision) {
+        this.agentStatus = latest.agent_status;
+        this.adapterIssue = latest.adapter_issue;
+        this.adapterWarnings = latest.adapter_warnings;
+      }
     } catch {
       this.agentStatus = null;
+      this.adapterIssue = null;
+      this.adapterWarnings = [];
     }
   }
 
   async applyHostConfig(response: Awaited<ReturnType<ConfigSession["readHostConfig"]>>): Promise<void> {
     this.setHostConfig(response);
-    if (response.config_issue) await worker<WorkerStatus>({ kind: "suspend_policy" });
+    if (response.config_issue || response.adapter_issue) {
+      await worker<WorkerStatus>({ kind: "suspend_policy" });
+    }
     else await this.installHostPolicy();
   }
 
@@ -207,10 +234,12 @@ export class ConfigSession {
     this.config = updated.config;
     this.setRevision(updated.revision);
     this.configIssue = null;
+    this.adapterIssue = null;
+    this.adapterWarnings = [];
     onCommitted?.();
     this.onChange();
     await this.installHostPolicy(resumeAfterConfirmation, resumeAfterPauseToken);
-    await this.refreshAgentStatus();
+    await this.refreshDerivedStatus();
     await this.refreshStatus();
   }
 
@@ -267,9 +296,11 @@ export class ConfigSession {
     this.config = updated.config;
     this.setRevision(updated.revision);
     this.configIssue = null;
+    this.adapterIssue = null;
+    this.adapterWarnings = [];
     this.onChange();
     await this.installHostPolicy();
-    await this.refreshAgentStatus();
+    await this.refreshDerivedStatus();
     await this.refreshStatus();
   }
 
@@ -283,15 +314,16 @@ export class ConfigSession {
       // from the host's current revision while holding the same mutation lock.
       const latest = await this.readHostConfig();
       this.setHostConfig(latest);
-      if (latest.config_issue) {
+      if (latest.config_issue || latest.adapter_issue) {
         await worker<WorkerStatus>({ kind: "suspend_policy" });
-        throw new Error(latest.config_issue);
+        throw new Error(latest.config_issue ?? latest.adapter_issue ?? "adapter policy is invalid");
       }
       const sites = latest.config.sites.filter((site) => !revoked.has(site.origin));
       if (sites.length !== latest.config.sites.length) {
         await this.saveConfig({
           ...latest.config,
           sites,
+          adapters: adaptersForSites(latest.config, sites),
           capture_enabled: latest.config.capture_enabled && sites.length > 0,
         }, null);
       } else {
@@ -358,6 +390,7 @@ export class ConfigSession {
 
   private expectsLease(): boolean {
     return this.config !== null && this.revision !== null && this.configIssue === null &&
+      this.adapterIssue === null &&
       (this.config.storage !== null || !this.config.capture_enabled);
   }
 }

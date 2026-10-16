@@ -196,6 +196,8 @@ fn dispatch(
                 revision: config.revision().to_owned(),
                 config_issue: config.config_issue().map(str::to_owned),
                 agent_status: config.agent_status(),
+                adapter_issue: config.adapter_issue().map(str::to_owned),
+                adapter_warnings: config.adapter_warnings().to_vec(),
             })
         }
         Request::UpdateConfig(value) => {
@@ -214,6 +216,15 @@ fn dispatch(
                 );
             }
             if let Err(validation_error) = config::validate(&value.config) {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &validation_error.to_string(),
+                );
+            }
+            if let Err(validation_error) =
+                config::validate_adapter_transition(config.snapshot(), &value.config)
+            {
                 return error(
                     &value.request_id,
                     ErrorCode::InvalidConfig,
@@ -322,6 +333,15 @@ fn dispatch(
                 );
             }
             if let Err(validation_error) = config::validate(&value.config) {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &validation_error.to_string(),
+                );
+            }
+            if let Err(validation_error) =
+                config::validate_adapter_transition(config.snapshot(), &value.config)
+            {
                 return error(
                     &value.request_id,
                     ErrorCode::InvalidConfig,
@@ -505,6 +525,16 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     if config.refresh().is_err() || config.config_issue().is_some() {
         return retryable("configuration is unavailable or needs repair");
     }
+    if config.adapter_issue().is_some() {
+        return Response::VisitRecorded(VisitRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            event_id,
+            outcome: VisitOutcome::Suppressed,
+            reason: Some("adapter_policy_invalid".into()),
+            relative_path: None,
+        });
+    }
     if !config.snapshot().capture_enabled {
         return Response::VisitRecorded(VisitRecorded {
             protocol_version: PROTOCOL_VERSION,
@@ -514,6 +544,24 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
             reason: Some("capture_disabled".into()),
             relative_path: None,
         });
+    }
+    match config::adapter_matches(
+        config.snapshot(),
+        &value.event.url,
+        value.event.title.as_deref(),
+    ) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Response::VisitRecorded(VisitRecorded {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                event_id,
+                outcome: VisitOutcome::Suppressed,
+                reason: Some("not_an_artifact".into()),
+                relative_path: None,
+            });
+        }
+        Err(_) => return retryable("adapter policy is unavailable"),
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return retryable("choose a notes folder before capture");
@@ -716,7 +764,10 @@ fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brauser_protocol::{ConfigSnapshot, GetConfigRequest, HelloRequest, UpdateConfigRequest};
+    use brauser_protocol::{
+        ConfigSnapshot, GetConfigRequest, HelloRequest, RecordVisitRequest, UpdateConfigRequest,
+        VisitEvent,
+    };
     use std::io::Cursor;
 
     fn encoded_request(request: Request) -> Vec<u8> {
@@ -767,6 +818,7 @@ mod tests {
                     agent_denylist_confirmed: false,
                     log_incognito: false,
                     agent: None,
+                    adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
                 consent_token: None,
@@ -962,6 +1014,7 @@ mod tests {
                 agent_denylist_confirmed: false,
                 log_incognito: false,
                 agent: None,
+                adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(
                 Request::UpdateConfig(UpdateConfigRequest {
@@ -1319,6 +1372,130 @@ mod tests {
         let mut store = ConfigStore::for_test(path.to_path_buf());
         store.refresh().unwrap();
         store
+    }
+
+    #[test]
+    fn invalid_adapter_policy_suppresses_a_visit_before_vault_io() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n",
+        );
+        let response = record_visit(
+            RecordVisitRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "visit-1".into(),
+                event: VisitEvent {
+                    event_id: "not-even-a-uuid".into(),
+                    url: "https://work.example/issues/1".into(),
+                    title: Some("Issue 1".into()),
+                    occurred_at: "not-a-timestamp".into(),
+                    incognito: false,
+                },
+            },
+            &mut loaded(&path),
+        );
+        match response {
+            Response::VisitRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_eq!(recorded.reason.as_deref(), Some("adapter_policy_invalid"));
+            }
+            other => panic!("expected a suppressed visit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_suppresses_unrecognized_and_out_of_scope_worker_deliveries() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/teams/{owner:name|lower}/items/{id:int}" }]
+id = "work:{host}/{owner}/{id}"
+scope = { owner = ["acme"] }
+"#,
+        );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let mut config = loaded(&path);
+
+        for (url, label) in [
+            ("https://work.example/search", "unrecognized"),
+            (
+                "https://work.example/teams/personal/items/7",
+                "outside scope",
+            ),
+        ] {
+            let response = record_visit(
+                RecordVisitRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: format!("visit-{label}"),
+                    event: VisitEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        url: url.into(),
+                        title: Some("Private item".into()),
+                        occurred_at: occurred_at.clone(),
+                        incognito: false,
+                    },
+                },
+                &mut config,
+            );
+            match response {
+                Response::VisitRecorded(recorded) => {
+                    assert_eq!(recorded.outcome, VisitOutcome::Suppressed, "{label}");
+                    assert_eq!(
+                        recorded.reason.as_deref(),
+                        Some("not_an_artifact"),
+                        "{label}"
+                    );
+                    assert!(recorded.relative_path.is_none(), "{label}");
+                }
+                other => panic!("expected a suppressed visit for {label}, got {other:?}"),
+            }
+        }
+        assert!(!root.join("log").exists());
+
+        let response = record_visit(
+            RecordVisitRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "visit-recognized".into(),
+                event: VisitEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    url: "https://work.example/teams/acme/items/7".into(),
+                    title: Some("Work item".into()),
+                    occurred_at,
+                    incognito: false,
+                },
+            },
+            &mut config,
+        );
+        match response {
+            Response::VisitRecorded(recorded) => {
+                assert_ne!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_ne!(recorded.reason.as_deref(), Some("not_an_artifact"));
+            }
+            other => panic!("expected a recognized visit result, got {other:?}"),
+        }
     }
 
     fn refused(response: &Response) -> (ErrorCode, &str) {

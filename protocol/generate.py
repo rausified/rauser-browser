@@ -61,6 +61,8 @@ def shape_type(shape: dict, target: str) -> str:
             if target == "typescript":
                 return json.dumps(value)
             fail("string constants are only supported on TypeScript tags")
+    if shape.get("type") == "object" and set(shape) == {"type"}:
+        return "serde_json::Value" if target == "rust" else "Record<string, unknown>"
     types = {
         "string": ("String", "string"),
         "boolean": ("bool", "boolean"),

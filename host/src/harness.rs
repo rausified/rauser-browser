@@ -1800,7 +1800,13 @@ printf '%s\n' '{"type":"thread.started","thread_id":"t"}' '{"type":"turn.started
         pub(crate) fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
             for dir in ["bin", "log", "home"] {
-                fs::create_dir(root.path().join(dir)).unwrap();
+                let path = root.path().join(dir);
+                fs::create_dir(&path).unwrap();
+                // Tests must not depend on the invoking shell's umask. The
+                // fake binary directory models a secure installation even on
+                // builders whose cooperative umask would otherwise make a
+                // freshly created directory group-writable.
+                fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
             }
             Self { root }
         }
@@ -1994,6 +2000,7 @@ mod process_tests {
         let fake = Fake::new();
         let real_dir = fake.path("versions");
         fs::create_dir(&real_dir).unwrap();
+        fs::set_permissions(&real_dir, fs::Permissions::from_mode(0o700)).unwrap();
         let help = fake.path("help.txt");
         fs::write(&help, CLAUDE_HELP).unwrap();
         let real = real_dir.join("2.1.284");
@@ -2460,8 +2467,9 @@ printf '%s\n' '{{"type":"thread.started","thread_id":"t"}}' '{{"type":"turn.star
     #[test]
     fn probe_runs_in_empty_host_workdir_removed_afterwards() {
         let fake = Fake::new();
-        let script =
-            fake.claude("ls -A; touch leftover; stat -f %Lp . 2>/dev/null || stat -c %a .; pwd -P");
+        let script = fake.claude(
+            "ls -A; touch leftover; if [ \"$(uname -s)\" = Darwin ]; then stat -f %Lp .; else stat -c %a .; fi; pwd -P",
+        );
         let env = fake.env(&[]);
         let mut seen = Vec::new();
         for _ in 0..2 {

@@ -19,8 +19,9 @@ the typed request. A mismatch returns an `error` response with code
 `unsupported_protocol_version` and the host's protocol version. If malformed
 input has no recoverable request ID, an `error` response may use an empty ID.
 
-Protocol version 4 covers host discovery, configuration, consent, visit
-capture, versioned whole-file page notes, and the AI-harness readiness gate. `get_config` returns a
+Protocol version 5 covers host discovery, configuration, consent, visit
+capture, versioned whole-file page notes, the AI-harness readiness gate, and
+format-versioned artifact-adapter configuration. `get_config` returns a
 `revision` that the extension must send as `expected_revision` with its full
 `update_config` snapshot. A successful update returns a new `revision`; a stale
 revision returns a `conflict` error. The revision is `missing` when no config
@@ -39,7 +40,7 @@ An M0 file with a notes root but no native-picker provenance is returned as an
 inert repair state. The user must reselect the folder; the host backs up the
 old file before saving the M1 config. M1 accepts the neutral profile only.
 
-Version 4 adds `StorageConfig.summaries_dir` (required, `null` until a
+Version 4 added `StorageConfig.summaries_dir` (required, `null` until a
 summaries folder is chosen) and four required `ConfigSnapshot` keys:
 `agent_denylist` (normalized hostnames), `agent_denylist_confirmed`,
 `log_incognito` (always `false`), and `agent` (the harness entry or `null`).
@@ -54,6 +55,21 @@ uses and, for a non-null `url`, reports whether the denylist allows that
 page; `agent_checked` is its only success response. Every refusal is an
 `error`, `not_configured` naming settings. An M1 TOML file loads with
 `summaries_dir` null and the denylist unconfirmed.
+
+Version 5 adds the required `ConfigSnapshot.adapters` document: `format` is
+the adapter-template language version and `artifacts` contains at most 64
+adapter tables. The JSON Schema bounds their outer shape; the host validates
+their complete grammar, origins, scope, and IDs with the Rust
+`adapter-templates` engine. Every adapter origin must also appear in `sites`.
+`config_result.adapter_warnings` identifies bounded pairs of rules that may
+overlap (the earlier configured rule wins), while `adapter_issue` suspends
+automatic capture for a malformed or unsupported on-disk adapter document.
+The host still returns that document unchanged so a newer format is preserved
+and repairable; notes and AI settings remain available. Existing TOML without
+an `[adapters]` table loads as format 1 with no artifacts. Until alias
+migrations arrive, an existing adapter's `id` template is immutable. Adapter
+additions or changes require native confirmation, and an unscoped adapter on a
+shared origin adds an explicit every-account-in-this-Chrome-profile warning.
 
 Native harness setup is two messages. `discover_harnesses` takes
 `expected_revision` and returns `harnesses_discovered` with at most eight

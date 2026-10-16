@@ -9,6 +9,16 @@ use std::time::{Duration, Instant};
 
 const HOST: &str = env!("CARGO_BIN_EXE_brauser");
 
+fn private_tempdir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    directory
+}
+
 /// Start a dialog child and send its request the way the parent host does:
 /// a byte-length line, then the text. The returned stdin is the parent's end
 /// of the pipe, which the child watches to learn that its parent is gone.
@@ -55,7 +65,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::E
 
 #[test]
 fn child_replies_with_the_scripted_folder() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     std::fs::write(
         directory.path().join("answer"),
         r#"{"dialog":"pick-folder","reply":"picked:/tmp/notes"}"#,
@@ -74,7 +84,7 @@ fn child_replies_with_the_scripted_folder() {
 
 #[test]
 fn child_fails_closed_on_a_mismatched_answer() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     std::fs::write(
         directory.path().join("answer"),
         r#"{"dialog":"pick-folder","reply":"canceled"}"#,
@@ -87,7 +97,7 @@ fn child_fails_closed_on_a_mismatched_answer() {
 
 #[test]
 fn child_rejects_a_request_without_its_length() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let mut child = Command::new(HOST)
         .arg("__dialog-confirm")
         .env("BRAUSER_SCRIPTED_DIALOGS", directory.path())
@@ -111,7 +121,7 @@ fn child_rejects_a_request_without_its_length() {
 
 #[test]
 fn child_closes_its_dialog_when_the_parent_goes_away() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (mut child, stdin) = start_dialog("__dialog-confirm", directory.path(), "Title\nBody");
     // Wait until the dialog is open, then close the parent's end of the pipe,
     // as a host that was killed or disconnected would. No answer arrives.
@@ -138,7 +148,7 @@ fn child_closes_its_dialog_when_the_parent_goes_away() {
 #[test]
 fn killing_the_host_closes_its_open_dialog() {
     let home = tempfile::tempdir().unwrap();
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let mut host = Command::new(HOST)
         .arg("serve")
         .env("HOME", home.path())
@@ -184,9 +194,11 @@ fn killing_the_host_closes_its_open_dialog() {
 #[test]
 fn harness_confirmation_text_round_trips() {
     use brauser_host::harness::{self, Adapter, BinaryIdentity, Candidate};
-    use brauser_protocol::{AgentConfig, ConfigSnapshot, HarnessAdapter, StorageConfig};
+    use brauser_protocol::{
+        AdapterDocument, AgentConfig, ConfigSnapshot, HarnessAdapter, StorageConfig,
+    };
 
-    let folder = tempfile::tempdir().unwrap();
+    let folder = private_tempdir();
     // Quotes and non-ASCII survive the child's stdin and shown.jsonl. The
     // folder is only shown, never created: Windows forbids `"` in names.
     let notes = folder.path().join("notes \"é\"");
@@ -208,6 +220,10 @@ fn harness_confirmation_text_round_trips() {
         agent_denylist_confirmed: false,
         log_incognito: false,
         agent: None,
+        adapters: AdapterDocument {
+            format: 1,
+            artifacts: Vec::new(),
+        },
     };
     let after = ConfigSnapshot {
         storage: Some(storage(Some("summaries"))),
@@ -244,7 +260,7 @@ fn harness_confirmation_text_round_trips() {
         brauser_host::consent::harness_confirmation_text(&candidate, &after, &current).unwrap();
     assert!(body.contains("\"mail.example\" and its subdomains"));
 
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     std::fs::write(
         directory.path().join("answer"),
         r#"{"dialog":"confirm","reply":"confirmed"}"#,

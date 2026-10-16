@@ -15,6 +15,7 @@ const config = {
   },
   capture_enabled: false, sites: [], strip_params: [], near_repeat_secs: 300,
   agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
+  adapters: { format: 1, artifacts: [] },
 };
 
 test("previewDenylistEntry_normalizes_case_and_idn", () => {
@@ -117,9 +118,9 @@ test("agentStateText_describes_each_state", () => {
     "AI commands are off (version 2.1.284): run setup again");
 });
 
-test("isConfig_requires_v4_keys", () => {
+test("isConfig_requires_v5_keys", () => {
   assert.equal(isConfig(config), true);
-  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent"]) {
+  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);
