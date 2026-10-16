@@ -104,7 +104,12 @@ them ahead of the plan.
 
 ## In Progress / This Iteration
 
-- None.
+- **M1.5a step 6.4 — Measured artifact activity.** Migrate automatic
+  capture end to end from temporary per-navigation visit rows to durable local
+  hourly activity totals, including cold opens, attention, modes, trail
+  sources, worker-start map repair, host-side adapter revalidation, and
+  append-only activity/why protocol records. Keep step 6.5's batch intent and
+  pressure redesign as the next independent durability change.
 
 ## Shipped
 
