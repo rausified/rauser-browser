@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { finishHostPause, withLatestHostState } = await import("../dist/coordination.js");
-const { localTimestamp } = await import("../dist/model.js");
+const { PolicyLeaseCache, localTimestamp } = await import("../dist/model.js");
+const { compileDocument } = await import("../dist/adapter-templates.js");
 const { storageKey } = await import("../dist/brand.js");
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
@@ -183,13 +184,38 @@ function artifact(origin, extra = {}) {
 
 function lease(origin) {
   return {
-    revision: "host-revision",
+    revision: `host-revision:${origin}`,
     expires_at: Date.now() + 60_000,
     capture_enabled: true,
     sites: [{ origin, path_prefix: "/" }],
     adapters: { format: 1, artifacts: [artifact(origin)] },
   };
 }
+
+test("a restored policy compiles once per revision while every install validates", () => {
+  let compilations = 0;
+  const policies = new PolicyLeaseCache((adapters) => {
+    compilations += 1;
+    return compileDocument(adapters);
+  });
+  const first = lease("https://compiled.example");
+
+  assert.equal(policies.restore(first), first);
+  assert.ok(policies.compiledFor(first));
+  assert.equal(policies.restore(structuredClone(first)).revision, first.revision);
+  assert.equal(compilations, 1);
+
+  const next = { ...structuredClone(first), revision: "next-revision" };
+  assert.equal(policies.restore(next), next);
+  assert.equal(compilations, 2);
+
+  assert.equal(policies.install(structuredClone(next)).revision, next.revision);
+  assert.equal(compilations, 3);
+  const invalid = structuredClone(next);
+  invalid.adapters.artifacts[0].match = [{ path: "/items/{id:missing}" }];
+  assert.equal(policies.install(invalid), null);
+  assert.equal(compilations, 4);
+});
 
 function visit(id, url) {
   return {
@@ -480,6 +506,81 @@ test("a navigation outside every enabled site skips grant checks and tab reads",
   await flush();
   assert.ok(permissionChecks > checks);
   assert.equal((await send({ kind: "get_activity" })).length, 1);
+});
+
+test("matching navigations never serialize the adapter document", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  tabs.clear();
+  const origin = "https://cached-policy.example";
+  grants.set("https://cached-policy.example:443/*", true);
+  values.set(storageKey("policy_v1"), lease(origin));
+  tabs.set(31, { id: 31, url: `${origin}/items/first`, title: "First", incognito: false });
+  tabs.set(32, { id: 32, url: `${origin}/items/second`, title: "Second", incognito: false });
+
+  const stringify = JSON.stringify;
+  let adapterSerializations = 0;
+  JSON.stringify = function (value, replacer, space) {
+    if (value && typeof value === "object" && value.format === 1 && Array.isArray(value.artifacts)) {
+      adapterSerializations += 1;
+    }
+    return stringify.call(JSON, value, replacer, space);
+  };
+  try {
+    onCommitted({
+      tabId: 31, frameId: 0, documentId: "doc-cache-1", documentLifecycle: "active",
+      url: `${origin}/items/first`, timeStamp: Date.now(),
+    });
+    await flush();
+    onCommitted({
+      tabId: 32, frameId: 0, documentId: "doc-cache-2", documentLifecycle: "active",
+      url: `${origin}/items/second`, timeStamp: Date.now(),
+    });
+    await flush();
+  } finally {
+    JSON.stringify = stringify;
+  }
+
+  assert.equal(adapterSerializations, 0);
+  assert.equal((await send({ kind: "get_activity" })).length, 2);
+});
+
+test("an expired policy install cannot replace the active revision's compiled adapter", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  tabs.clear();
+  const origin = "https://expired-install.example";
+  grants.set("https://expired-install.example:443/*", true);
+  const active = lease(origin);
+  values.set(storageKey("policy_v1"), active);
+  await send({ kind: "get_status" });
+
+  const expired = {
+    ...structuredClone(active),
+    expires_at: Date.now() - 1,
+    adapters: {
+      format: 1,
+      artifacts: [artifact(origin, { match: [{ path: "/private/{id:token}" }] })],
+    },
+  };
+  await assert.rejects(send({
+    kind: "install_policy",
+    lease: expired,
+    resume_after_confirmation: false,
+    resume_after_pause_token: null,
+  }), /invalid or expired/);
+
+  tabs.set(33, { id: 33, url: `${origin}/private/secret`, title: "Private", incognito: false });
+  onCommitted({
+    tabId: 33, frameId: 0, documentId: "doc-expired-install", documentLifecycle: "active",
+    url: `${origin}/private/secret`, timeStamp: Date.now(),
+  });
+  await flush();
+
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  assert.deepEqual(values.get(storageKey("policy_v1")), active);
 });
 
 test("adapter rules, scope, and Chrome grants all fail closed before buffering", async () => {
@@ -1079,7 +1180,7 @@ function batchRecorded(request, outcome = "persisted", reason = null, overflowRe
 function configResult(request, origin, overrides = {}) {
   return {
     type: "config_result", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
-    revision: "host-revision",
+    revision: `host-revision:${origin}`,
     config: {
       storage: {
         root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",

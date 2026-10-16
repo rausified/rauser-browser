@@ -1,7 +1,12 @@
 import type {
   ActivityEvent, AdapterDocument, SiteConfig, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
-import { validateDocument } from "./adapter-templates.js";
+import {
+  compileDocument,
+  validateDocument,
+  type CompiledDocument,
+  type CompileResult,
+} from "./adapter-templates.js";
 import { storageKey } from "./brand.js";
 
 export const POLICY_LEASE_MS = 24 * 60 * 60 * 1_000;
@@ -161,11 +166,14 @@ export function siteMatchesUrl(site: SiteConfig, url: URL): boolean {
 }
 
 export function isPolicyLease(value: unknown): value is PolicyLease {
+  return isPolicyLeaseShape(value) && "ok" in validateDocument(value.adapters);
+}
+
+function isPolicyLeaseShape(value: unknown): value is PolicyLease {
   if (typeof value !== "object" || value === null) return false;
   const lease = value as Record<string, unknown>;
   const sites = lease.sites;
   const adapters = lease.adapters;
-  const adapterValidation = validateDocument(adapters);
   return (
     typeof lease.revision === "string" &&
     lease.revision.length > 0 &&
@@ -182,7 +190,6 @@ export function isPolicyLease(value: unknown): value is PolicyLease {
     ) &&
     typeof adapters === "object" &&
     adapters !== null &&
-    "ok" in adapterValidation &&
     Array.isArray((adapters as Record<string, unknown>).artifacts) &&
     ((adapters as Record<string, unknown>).artifacts as unknown[]).every((artifact) =>
       typeof artifact === "object" && artifact !== null &&
@@ -192,6 +199,43 @@ export function isPolicyLease(value: unknown): value is PolicyLease {
         (site as Record<string, unknown>).origin ===
           (artifact as Record<string, unknown>).origin))
   );
+}
+
+type AdapterCompiler = (adapters: unknown) => CompileResult;
+
+/**
+ * Owns the compiled adapter document for the worker's current host revision.
+ *
+ * `install` always validates because extension messages are untrusted.
+ * `restore` validates a stored lease once after worker startup and then trusts
+ * the revision that the host minted, avoiding a full compile on every storage
+ * read. The lease's site gate still runs before the compiled document is used.
+ */
+export class PolicyLeaseCache {
+  private cached: { revision: string; doc: CompiledDocument } | null = null;
+
+  constructor(private readonly compile: AdapterCompiler = compileDocument) {}
+
+  install(value: unknown): PolicyLease | null {
+    if (!isPolicyLeaseShape(value)) return null;
+    const compiled = this.compile(value.adapters);
+    if (!compiled.ok) return null;
+    this.cached = { revision: value.revision, doc: compiled.doc };
+    return value;
+  }
+
+  restore(value: unknown): PolicyLease | null {
+    if (!isPolicyLeaseShape(value)) {
+      this.cached = null;
+      return null;
+    }
+    if (this.cached?.revision === value.revision) return value;
+    return this.install(value);
+  }
+
+  compiledFor(lease: PolicyLease): CompiledDocument | null {
+    return this.cached?.revision === lease.revision ? this.cached.doc : null;
+  }
 }
 
 export function isQueuedVisit(value: unknown): value is QueuedVisit {
