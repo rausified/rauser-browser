@@ -52,8 +52,18 @@ def main() -> int:
         ),
         "README.md": "Hourly artifact activity and the Recent view are still unbuilt",
         "DESIGN.md": "hourly artifact activity are next",
+        "AGENTS.md delivery": "delivery-and-durability step",
+        "README.md delivery": "delivery compaction, the index",
+        "DESIGN.md delivery": "delivery and durability, indexing",
     }
-    bodies = {"AGENTS.md": agents, "README.md": readme, "DESIGN.md": design}
+    bodies = {
+        "AGENTS.md": agents,
+        "README.md": readme,
+        "DESIGN.md": design,
+        "AGENTS.md delivery": agents,
+        "README.md delivery": readme,
+        "DESIGN.md delivery": design,
+    }
     for filename, claim in stale_claims.items():
         body = bodies[filename]
         if normalized(claim) in normalized(body):
@@ -72,8 +82,12 @@ def main() -> int:
 
     if "records hourly artifact activity" not in normalized(readme):
         errors.append("README.md Status no longer records shipped artifact activity")
-    if "hourly artifact activity merged" not in normalized(design):
+    if "delivers day-bounded batches" not in normalized(readme):
+        errors.append("README.md Status no longer records shipped batched delivery")
+    if "hourly artifact activity" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped artifact activity")
+    if "batched durable delivery merged" not in normalized(design):
+        errors.append("DESIGN.md status no longer records shipped delivery durability")
 
     for error in errors:
         print(error, file=sys.stderr)

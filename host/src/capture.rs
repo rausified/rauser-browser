@@ -31,6 +31,7 @@ const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 --
 const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_BATCH_INTENT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BATCH_ENTRIES: usize = 65;
 const MAX_URL_BYTES: usize = 8192;
 const MAX_TITLE_BYTES: usize = 2048;
 const MAX_STRIP_RULES: usize = 64;
@@ -823,19 +824,12 @@ impl CaptureStore {
             });
         }
         // A previous attempt may have synced the entry but failed to sync a
-        // newly published directory entry. Do this before terminal replay or
-        // near-repeat acknowledgements.
+        // newly published directory entry. Do this before terminal replay.
         sync_directory(&day_dir).context("syncing daily log directory before acknowledgement")?;
         let mut file = day_dir
             .open_with(&filename, OpenOptions::new().read(true).append(true))
             .context("opening owned daily log")?;
-        let scan = scan_log(
-            &mut file,
-            &event_hash,
-            &url_hash,
-            timestamp.unix_timestamp(),
-            0,
-        )?;
+        let scan = scan_log(&mut file, &event_hash)?;
         if scan.duplicate {
             // A previous attempt may have written this marker but failed its
             // file sync. Do not acknowledge replay until it is durable.
@@ -941,7 +935,7 @@ impl CaptureStore {
         let mut file = day_dir
             .open_with(filename, OpenOptions::new().read(true).append(true))
             .context("opening original daily log")?;
-        let scan = scan_log(&mut file, event_hash, "", 0, 0)?;
+        let scan = scan_log(&mut file, event_hash)?;
         if scan.duplicate {
             file.sync_all().context("syncing replayed daily log")?;
             sync_directory(&day_dir).context("syncing original daily log directory")?;
@@ -1038,7 +1032,7 @@ impl CaptureStore {
         let mut appended = Vec::new();
         for entry in entries {
             file.seek(SeekFrom::Start(0))?;
-            let scan = scan_log(&mut file, &entry.event_hash, "", 0, 0)?;
+            let scan = scan_log(&mut file, &entry.event_hash)?;
             if scan.duplicate {
                 outcomes.push(Some(CaptureOutcome::Suppressed {
                     reason: "duplicate_event".into(),
@@ -1118,7 +1112,14 @@ impl CaptureStore {
         };
         if intent.version != 2
             || intent.event_hashes.is_empty()
+            || intent.event_hashes.len() > MAX_BATCH_ENTRIES
+            || intent
+                .event_hashes
+                .iter()
+                .any(|hash| hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            || Uuid::parse_str(&intent.batch_id).is_err()
             || intent.offset > MAX_LOG_BYTES
+            || intent.entry.is_empty()
             || intent.entry.len() > MAX_BATCH_INTENT_BYTES
         {
             bail!("capture batch intent is invalid; manual repair is required");
@@ -1158,7 +1159,7 @@ impl CaptureStore {
         let mut complete = true;
         for hash in &intent.event_hashes {
             file.seek(SeekFrom::Start(0))?;
-            complete &= scan_log(&mut file, hash, "", 0, 0)?.duplicate;
+            complete &= scan_log(&mut file, hash)?.duplicate;
         }
         if !complete {
             if self.root_identity != intent.root_identity || metadata.len() < intent.offset {
@@ -1628,16 +1629,9 @@ fn complete_entry_len(bytes: &[u8]) -> Option<usize> {
 
 struct ScanResult {
     duplicate: bool,
-    near_repeat: bool,
 }
 
-fn scan_log(
-    file: &mut cap_std::fs::File,
-    event_hash: &str,
-    url_hash: &str,
-    at: i64,
-    near_repeat_secs: u64,
-) -> Result<ScanResult> {
+fn scan_log(file: &mut cap_std::fs::File, event_hash: &str) -> Result<ScanResult> {
     // Split on bytes: a crash can leave the log cut inside a multibyte
     // character, and that must not stop the scan or the resume after it.
     let mut lines = BufReader::new(file).split(b'\n').map(|line| {
@@ -1651,25 +1645,16 @@ fn scan_log(
     if lines.next().transpose()?.as_deref() != Some(LOG_HEADER.as_bytes()) {
         bail!("daily log exists without {APP_NAME} ownership marker");
     }
-    let mut result = ScanResult {
-        duplicate: false,
-        near_repeat: false,
-    };
+    let mut result = ScanResult { duplicate: false };
     for line in lines {
         let line = line?;
         let Ok(line) = std::str::from_utf8(&line) else {
             continue;
         };
-        if let Some((id, url, previous_at)) = parse_marker(line) {
-            if id == event_hash {
-                result.duplicate = true;
-            }
-            if near_repeat_secs > 0
-                && url == url_hash
-                && at.abs_diff(previous_at) <= near_repeat_secs
-            {
-                result.near_repeat = true;
-            }
+        if let Some((id, _, _)) = parse_marker(line)
+            && id == event_hash
+        {
+            result.duplicate = true;
         }
     }
     Ok(result)
@@ -1904,14 +1889,71 @@ mod tests {
             .join(format!("{:04}", first_time.year()))
             .join(format!("{:02}", first_time.month() as u8))
             .join(relative);
-        let markdown = fs::read_to_string(log).unwrap();
+        let markdown = fs::read_to_string(&log).unwrap();
         assert_eq!(markdown.matches("\n- ").count(), 3);
         assert!(markdown.contains("Capture overflow: 3 completed activity hour(s)"));
+
+        // Simulate a crash after the compact intent was durable but only a
+        // prefix of the combined append reached the daily log.
+        let original = fs::read(&log).unwrap();
+        let offset = format!("{LOG_HEADER}\n").len();
+        let entry = String::from_utf8(original[offset..].to_vec()).unwrap();
+        let intent = BatchIntent {
+            version: 2,
+            batch_id: batch_id.clone(),
+            root_path: store.root_path.to_string_lossy().into_owned(),
+            root_identity: store.root_identity.clone(),
+            relative_log: log
+                .strip_prefix(root.path())
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            event_hashes: vec![
+                sha256_hex(first.event_id.as_bytes()),
+                sha256_hex(second.event_id.as_bytes()),
+                sha256_hex(batch_id.as_bytes()),
+            ],
+            entry: entry.clone(),
+            offset: offset as u64,
+        };
+        publish_batch_intent(&store.batch_intent_path(), &intent).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len((offset + entry.len() / 2) as u64)
+            .unwrap();
 
         let replay = store.record_batch(policy(), &batch_id, &events, Some(&overflow));
         assert!(replay.overflow_recorded);
         assert!(replay.events.iter().all(|(_, outcome)| matches!(outcome,
             CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")));
+        assert_eq!(fs::read(&log).unwrap(), original);
+        assert!(!store.batch_intent_path().exists());
+    }
+
+    #[test]
+    fn compact_intent_refuses_more_entries_than_one_protocol_batch() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let path = store.batch_intent_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let intent = BatchIntent {
+            version: 2,
+            batch_id: Uuid::new_v4().to_string(),
+            root_path: store.root_path.to_string_lossy().into_owned(),
+            root_identity: store.root_identity.clone(),
+            relative_log: "log/2026/10/2026-10-16.md".into(),
+            event_hashes: vec!["a".repeat(64); MAX_BATCH_ENTRIES + 1],
+            entry: "\n- entry\n".into(),
+            offset: 0,
+        };
+        fs::write(path, serde_json::to_vec(&intent).unwrap()).unwrap();
+
+        let error = store.recover_batch_intent().unwrap_err().to_string();
+        assert!(error.contains("capture batch intent is invalid"));
     }
 
     #[test]

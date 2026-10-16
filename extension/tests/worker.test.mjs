@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { finishHostPause, withLatestHostState } = await import("../dist/coordination.js");
-const { PolicyLeaseCache, localTimestamp } = await import("../dist/model.js");
+const { MAX_QUEUE_BYTES, PolicyLeaseCache, localTimestamp } = await import("../dist/model.js");
 const { compileDocument } = await import("../dist/adapter-templates.js");
 const { storageKey } = await import("../dist/brand.js");
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
@@ -229,6 +229,31 @@ function visit(id, url) {
     dedupe_key: id,
     attempts: 0,
     retry_after: 0,
+  };
+}
+
+function activityVisit(id, url, extra = {}) {
+  return {
+    event: {
+      event_id: id,
+      artifact_id: "test:pressure.example/shared",
+      artifact_type: "test.item",
+      url,
+      title: null,
+      occurred_at: "2026-10-15T10:00:00+00:00",
+      incognito: false,
+      opens: 1,
+      focused_seconds: 0,
+      background_seconds: 0,
+      modes: [],
+      trails: [],
+      refs: [],
+      ...extra,
+    },
+    dedupe_key: id,
+    attempts: 0,
+    retry_after: 0,
+    dispatched: false,
   };
 }
 
@@ -1495,6 +1520,44 @@ test("one native batch drains multiple records and durably acknowledges overflow
   assert.equal(status.overflow_last_at, null);
 });
 
+test("a lost acknowledgement replays the exact overflow snapshot", async () => {
+  const origin = "https://overflow-retry.example";
+  resetSync(origin, 2 * HOUR_MS);
+  queueWith(visit("retry", `${origin}/items/a`));
+  const queue = values.get(storageKey("queue_v1"));
+  queue.overflow_count = 4;
+  queue.overflow_first_at = "2026-10-16T08:00:00+00:00";
+  queue.overflow_last_at = "2026-10-16T11:00:00+00:00";
+  values.set(storageKey("queue_v1"), queue);
+
+  const firstAnswer = send({ kind: "sync_now" });
+  const firstPort = await until(() => ports[0], "the first overflow delivery");
+  const firstRequest = await sentOn(firstPort, 1);
+  const whileWriting = values.get(storageKey("queue_v1"));
+  whileWriting.overflow_count = 6;
+  whileWriting.overflow_last_at = "2026-10-16T13:00:00+00:00";
+  values.set(storageKey("queue_v1"), whileWriting);
+  firstPort.drop();
+  await firstAnswer;
+
+  const retryable = values.get(storageKey("queue_v1"));
+  retryable.items[0].retry_after = 0;
+  values.set(storageKey("queue_v1"), retryable);
+  const secondAnswer = send({ kind: "sync_now" });
+  const secondPort = await until(() => ports[1], "the replayed overflow delivery");
+  const replay = await sentOn(secondPort, 1);
+  assert.equal(replay.batch_id, firstRequest.batch_id);
+  assert.deepEqual(replay.overflow, firstRequest.overflow,
+    "new drops must not change an idempotent batch replay");
+  secondPort.reply(batchRecorded(replay, "persisted", null, true));
+
+  const status = await secondAnswer;
+  assert.equal(status.queued, 0);
+  assert.equal(status.overflow_count, 2);
+  assert.equal(status.overflow_first_at, "2026-10-16T11:00:00+00:00");
+  assert.equal(status.overflow_last_at, "2026-10-16T13:00:00+00:00");
+});
+
 test("queue pressure turns on the toolbar badge at eighty percent", async () => {
   const origin = "https://pressure.example";
   resetSync(origin, 2 * HOUR_MS);
@@ -1505,4 +1568,46 @@ test("queue pressure turns on the toolbar badge at eighty percent", async () => 
   await send({ kind: "discard_pending", event_ids:
     Array.from({ length: 205 }, (_, index) => `pressure-${index}`) });
   assert.equal(badgeText, "");
+});
+
+test("pressure coalescing never grows the queue past its byte cap", async () => {
+  const origin = "https://pressure.example";
+  resetSync(origin, 2 * HOUR_MS);
+  const existing = activityVisit(
+    "00000000-0000-4000-8000-000000000001", `${origin}/items/shared`);
+  const padding = "x".repeat(1_850);
+  queueWith(existing, ...Array.from({ length: 204 }, (_, index) =>
+    visit(`filler-${index}`, `${origin}/items/filler-${index}?padding=${padding}`)));
+  const before = values.get(storageKey("queue_v1"));
+  const beforeBytes = new TextEncoder().encode(JSON.stringify(before.items)).length;
+  assert.ok(beforeBytes < MAX_QUEUE_BYTES);
+
+  const evidence = `${origin}/items/shared?evidence=${"y".repeat(7_800)}`;
+  values.set(storageKey("activity_totals_v1"), {
+    version: 1,
+    totals: [{
+      event_id: "00000000-0000-4000-8000-000000000002",
+      artifact_id: "test:pressure.example/shared", artifact_type: "test.item",
+      hour_start: "2026-10-15T10:00:00+00:00",
+      url: `${origin}/items/shared`, title: "A".repeat(300),
+      opens: 1, focused_ms: 1_000, background_ms: 0,
+      modes: ["view", "edit", "review"].map((mode) => ({ mode, url: evidence })),
+      trails: Array.from({ length: 10 }, (_, index) => ({
+        from_artifact_id: `test:pressure.example/source-${index}`,
+        from_url: `${evidence}&trail=${index}`,
+        transition: "link",
+      })),
+      refs: Array.from({ length: 20 }, (_, index) => ({
+        artifact_type: "test.item", value: `${index}-${"r".repeat(500)}`,
+      })),
+    }],
+  });
+
+  const status = await send({ kind: "get_status" });
+  const after = values.get(storageKey("queue_v1"));
+  assert.equal(status.overflow_count, 1);
+  assert.equal(after.items.length, 205);
+  assert.equal(after.items[0].event.opens, 1,
+    "a refused merge leaves the original durable event unchanged");
+  assert.ok(new TextEncoder().encode(JSON.stringify(after.items)).length <= MAX_QUEUE_BYTES);
 });
