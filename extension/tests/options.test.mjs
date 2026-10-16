@@ -3,6 +3,7 @@ import test from "node:test";
 
 const { storageKey } = await import("../dist/brand.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 
 // Run after build:extension. Each test loads a fresh copy of the settings page
 // against a fake DOM, a scripted native host, a stub worker, and a Chrome
@@ -91,7 +92,18 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
     configIssue: null,
     added: [],
     removed: [],
+    storageChanged: [],
+    requests: [],
     elements,
+  };
+  state.firePolicyChange = () => {
+    for (const listener of state.storageChanged) {
+      listener({ [POLICY_STORAGE_KEY]: { newValue: {
+        revision: String(state.revision), expires_at: Date.now() + 60_000,
+        capture_enabled: state.config.capture_enabled, sites: state.config.sites,
+        adapters: state.config.adapters,
+      } } }, "local");
+    }
   };
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
@@ -114,6 +126,7 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
   elements.get("status").textContent = "Connecting to native host…";
 
   function hostReply(request) {
+    state.requests.push(request);
     const custom = host[request.type]?.(request, state);
     if (custom) return custom;
     switch (request.type) {
@@ -195,7 +208,7 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
           for (const name of Array.isArray(keys) ? keys : [keys]) state.storage.delete(name);
         },
       },
-      onChanged: { addListener() {} },
+      onChanged: { addListener(listener) { state.storageChanged.push(listener); } },
     },
     permissions: {
       async contains(permissions) { return has(permissions); },
@@ -515,6 +528,71 @@ test("adapter workspace edits, reorders, and removes through revisioned saves", 
   await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the removal");
   assert.equal(state.config.adapters.artifacts[0].type, "work.search");
   assert.ok(state.revision >= 4);
+});
+
+test("an open adapter edit follows its target across an external reorder", async () => {
+  const issue = {
+    type: "work.issue", origin: "https://a.com",
+    match: [{ path: "/issues/{id:int}" }], id: "work.issue:{host}/{id}",
+  };
+  const search = {
+    type: "work.search", origin: "https://a.com",
+    match: [{ path: "/search", query: { q: "{id:token}" } }], id: "work.search:{host}/{id}",
+  };
+  const state = install({ adapters: [issue, search] });
+  await openSettings();
+
+  env.elements.get("adapter-list").querySelectorAll("button")[0].click();
+  const edited = JSON.parse(env.elements.get("adapter-json").value);
+  edited.title = "{title} - Issue";
+  env.elements.get("adapter-json").value = JSON.stringify(edited, null, 2);
+
+  state.config = {
+    ...state.config,
+    adapters: { format: 1, artifacts: [structuredClone(search), structuredClone(issue)] },
+  };
+  state.revision += 1;
+  state.firePolicyChange();
+  await until(() => state.requests.filter((request) => request.type === "get_config").length >= 2 && idle(),
+    "the external adapter reorder to load");
+
+  env.elements.get("adapter-json").dispatch("input");
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.some((adapter) => adapter.title) && idle(),
+    "the reordered adapter edit to save");
+  assert.equal(state.config.adapters.artifacts[0].type, "work.search");
+  assert.equal(state.config.adapters.artifacts[0].title, undefined);
+  assert.equal(state.config.adapters.artifacts[1].type, "work.issue");
+  assert.equal(state.config.adapters.artifacts[1].title, "{title} - Issue");
+});
+
+test("an open adapter edit refuses to overwrite an externally changed target", async () => {
+  const issue = {
+    type: "work.issue", origin: "https://a.com",
+    match: [{ path: "/issues/{id:int}" }], id: "work.issue:{host}/{id}",
+  };
+  const state = install({ adapters: [issue] });
+  await openSettings();
+
+  env.elements.get("adapter-list").querySelectorAll("button")[0].click();
+  const edited = JSON.parse(env.elements.get("adapter-json").value);
+  edited.title = "{title} - Local";
+  env.elements.get("adapter-json").value = JSON.stringify(edited, null, 2);
+
+  state.config = {
+    ...state.config,
+    adapters: { format: 1, artifacts: [{ ...structuredClone(issue), title: "{title} - External" }] },
+  };
+  state.revision += 1;
+  state.firePolicyChange();
+  await until(() => state.requests.filter((request) => request.type === "get_config").length >= 2 &&
+    /changed on another settings page/.test(env.elements.get("adapter-validation").textContent),
+    "the external adapter change to be refused");
+
+  assert.equal(env.elements.get("save-adapter").disabled, true);
+  env.elements.get("save-adapter").click();
+  assert.equal(state.config.adapters.artifacts[0].title, "{title} - External");
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
 });
 
 test("a failed hello reports the host as unavailable", async () => {
