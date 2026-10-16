@@ -892,6 +892,52 @@ test("a host that cannot be started reports the session disconnected", async () 
   session.host.disconnect();
 });
 
+test("a post-save folder issue suspends policy instead of installing a lease", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  ports.length = 0;
+  const origin = "https://changed-folder.example";
+  grants.set(exactPattern(origin), true);
+  const saved = configResult({ request_id: "fixture" }, origin).config;
+  const session = new ConfigSession(() => undefined);
+  session.config = structuredClone(saved);
+  session.revision = "r1";
+  const previousSendMessage = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = async (request) => ({ ok: true, value: await send(request) });
+
+  try {
+    const saving = session.saveConfig(structuredClone(saved), null);
+    const port = ports[0];
+    let request = await sentOn(port, 1);
+    assert.equal(request.type, "confirm_config");
+    port.reply({
+      type: "config_confirmed", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      consent_token: "consent", summary: "No additional capture access is requested.",
+    });
+    request = await sentOn(port, 2);
+    assert.equal(request.type, "update_config");
+    port.reply({
+      type: "config_updated", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      revision: "r2", config: saved,
+    });
+    request = await sentOn(port, 3);
+    assert.equal(request.type, "get_config");
+    port.reply(configResult(request, origin, {
+      revision: "r2",
+      config: saved,
+      config_issue: "The selected notes folder is unavailable or changed.",
+    }));
+    await saving;
+
+    assert.equal(values.get(storageKey("policy_v1")), null);
+    assert.match(session.configIssue, /unavailable or changed/);
+  } finally {
+    chrome.runtime.sendMessage = previousSendMessage;
+    session.host.disconnect();
+  }
+});
+
 test("unaddressed host errors and version mismatches reach the caller", async () => {
   ports.length = 0;
   const client = new HostClient();

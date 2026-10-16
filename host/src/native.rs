@@ -153,6 +153,17 @@ fn valid_request_id(id: &str) -> bool {
         && !id.chars().any(char::is_control)
 }
 
+fn validate_config_update(
+    current: &brauser_protocol::ConfigSnapshot,
+    next: &brauser_protocol::ConfigSnapshot,
+) -> Result<()> {
+    config::validate_update(current, next)?;
+    if current.adapters != next.adapters {
+        config::validate_adapter_transition(current, next)?;
+    }
+    Ok(())
+}
+
 fn dispatch(
     request: Request,
     config: &mut ConfigStore,
@@ -216,15 +227,7 @@ fn dispatch(
                     "configuration changed; read it again before updating",
                 );
             }
-            if let Err(validation_error) = config::validate(&value.config) {
-                return error(
-                    &value.request_id,
-                    ErrorCode::InvalidConfig,
-                    &validation_error.to_string(),
-                );
-            }
-            if let Err(validation_error) =
-                config::validate_adapter_transition(config.snapshot(), &value.config)
+            if let Err(validation_error) = validate_config_update(config.snapshot(), &value.config)
             {
                 return error(
                     &value.request_id,
@@ -333,15 +336,7 @@ fn dispatch(
                     "configuration changed; read it again before confirming",
                 );
             }
-            if let Err(validation_error) = config::validate(&value.config) {
-                return error(
-                    &value.request_id,
-                    ErrorCode::InvalidConfig,
-                    &validation_error.to_string(),
-                );
-            }
-            if let Err(validation_error) =
-                config::validate_adapter_transition(config.snapshot(), &value.config)
+            if let Err(validation_error) = validate_config_update(config.snapshot(), &value.config)
             {
                 return error(
                     &value.request_id,
@@ -1258,8 +1253,9 @@ fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
 mod tests {
     use super::*;
     use brauser_protocol::{
-        ActivityEvent, ActivityMode, ActivityTrail, ConfigSnapshot, GetConfigRequest, HelloRequest,
-        RecordActivityRequest, RecordVisitRequest, UpdateConfigRequest, VisitEvent,
+        ActivityEvent, ActivityMode, ActivityTrail, ConfigSnapshot, ConfirmConfigRequest,
+        GetConfigRequest, HelloRequest, RecordActivityRequest, RecordVisitRequest,
+        UpdateConfigRequest, VisitEvent,
     };
     use std::io::Cursor;
 
@@ -1415,6 +1411,72 @@ mod tests {
             }
             other => panic!("expected stale-update conflict, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn native_config_flow_preserves_an_invalid_adapter_document() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        crate::config::fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
+        );
+        let mut config = ConfigStore::for_test(path);
+        config.refresh().unwrap();
+        let revision = config.revision().to_owned();
+        let next = ConfigSnapshot {
+            agent_denylist: vec!["bank.example".into()],
+            ..config.snapshot().clone()
+        };
+        let mut consent = ConsentAuthority::new();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext {
+            env: &env,
+            confirm: no_dialog,
+        };
+
+        let confirmed = dispatch(
+            Request::ConfirmConfig(ConfirmConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "confirm".into(),
+                expected_revision: revision.clone(),
+                config: next.clone(),
+                picker_token: None,
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        let consent_token = match confirmed {
+            Response::ConfigConfirmed(value) => value.consent_token,
+            other => panic!("expected config confirmation, got {other:?}"),
+        };
+        let updated = dispatch(
+            Request::UpdateConfig(UpdateConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "update".into(),
+                expected_revision: revision,
+                config: next,
+                picker_token: None,
+                consent_token: Some(consent_token),
+                harness_token: None,
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+
+        match updated {
+            Response::ConfigUpdated(value) => {
+                assert_eq!(value.config.adapters.format, 2);
+                assert_eq!(value.config.agent_denylist, ["bank.example"]);
+            }
+            other => panic!("expected config update, got {other:?}"),
+        }
+        assert!(config.adapter_issue().is_some());
     }
 
     #[test]

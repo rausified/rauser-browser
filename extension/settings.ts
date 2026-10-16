@@ -148,6 +148,7 @@ export class ConfigSession {
     try {
       const latest = await this.readHostConfig();
       if (latest.revision === this.revision) {
+        this.configIssue = latest.config_issue;
         this.agentStatus = latest.agent_status;
         this.adapterIssue = latest.adapter_issue;
         this.adapterWarnings = latest.adapter_warnings;
@@ -155,8 +156,6 @@ export class ConfigSession {
       }
     } catch {
       this.agentStatus = null;
-      this.adapterIssue = null;
-      this.adapterWarnings = [];
     }
     return false;
   }
@@ -236,13 +235,10 @@ export class ConfigSession {
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);
-    this.configIssue = null;
-    this.adapterIssue = null;
-    this.adapterWarnings = [];
     onCommitted?.();
     this.onChange();
     const statusVerified = await this.refreshDerivedStatus();
-    if (statusVerified && this.adapterIssue === null) {
+    if (statusVerified && this.configIssue === null && this.adapterIssue === null) {
       await this.installHostPolicy(resumeAfterConfirmation, resumeAfterPauseToken);
     } else {
       await worker<WorkerStatus>({ kind: "suspend_policy" });
@@ -302,12 +298,11 @@ export class ConfigSession {
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);
-    this.configIssue = null;
-    this.adapterIssue = null;
-    this.adapterWarnings = [];
     this.onChange();
     const statusVerified = await this.refreshDerivedStatus();
-    if (statusVerified && this.adapterIssue === null) await this.installHostPolicy();
+    if (statusVerified && this.configIssue === null && this.adapterIssue === null) {
+      await this.installHostPolicy();
+    }
     else await worker<WorkerStatus>({ kind: "suspend_policy" });
     await this.refreshStatus();
   }
