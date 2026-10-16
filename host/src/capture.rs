@@ -769,6 +769,11 @@ impl CaptureStore {
             .context("opening capture lock")?;
         lock_file.lock().context("locking capture log")?;
 
+        // A previous host may have stopped partway through a compact batch.
+        // Finish it before a legacy single-record append can land after the
+        // torn prefix and make the durable batch intent unrecoverable.
+        self.recover_batch_intent()?;
+
         let event_hash = sha256_hex(event_id.as_bytes());
         let url_hash = sha256_hex(normalized_url.as_bytes());
         let title = safe_title(event.title.as_deref());
@@ -998,6 +1003,22 @@ impl CaptureStore {
         }) {
             bail!("capture batch crosses a local calendar-day boundary");
         }
+
+        // Pre-upgrade queue items may already have M1's per-event durable
+        // intent. It remains the global event-ID authority across root and
+        // log-directory changes, and may name an append that needs finishing.
+        let mut outcomes: Vec<Option<CaptureOutcome>> = (0..entries.len()).map(|_| None).collect();
+        for (index, entry) in entries.iter().enumerate() {
+            let journal_path = self.journal_path(&entry.event_hash);
+            if let Some(intent) = read_intent(&journal_path)? {
+                outcomes[index] =
+                    Some(self.replay_intent(&intent, &entry.event_hash, entry.entry.as_bytes())?);
+            }
+        }
+        if outcomes.iter().all(Option::is_some) {
+            return Ok(outcomes.into_iter().map(Option::unwrap).collect());
+        }
+
         let new_log = !self.root.exists(relative_dir.join(&filename));
         self.root
             .create_dir_all(&relative_dir)
@@ -1027,20 +1048,21 @@ impl CaptureStore {
             .open_with(&filename, OpenOptions::new().read(true).append(true))
             .context("opening owned daily log")?;
 
-        let mut outcomes = Vec::with_capacity(entries.len());
         let mut combined = String::new();
         let mut appended = Vec::new();
-        for entry in entries {
+        for (index, entry) in entries.iter().enumerate() {
+            if outcomes[index].is_some() {
+                continue;
+            }
             file.seek(SeekFrom::Start(0))?;
             let scan = scan_log(&mut file, &entry.event_hash)?;
             if scan.duplicate {
-                outcomes.push(Some(CaptureOutcome::Suppressed {
+                outcomes[index] = Some(CaptureOutcome::Suppressed {
                     reason: "duplicate_event".into(),
-                }));
+                });
             } else {
                 combined.push_str(&entry.entry);
-                appended.push(outcomes.len());
-                outcomes.push(None);
+                appended.push(index);
             }
         }
         if combined.is_empty() {
@@ -1954,6 +1976,105 @@ mod tests {
 
         let error = store.recover_batch_intent().unwrap_err().to_string();
         assert!(error.contains("capture batch intent is invalid"));
+    }
+
+    #[test]
+    fn batched_upgrade_delivery_honors_a_legacy_event_intent() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let legacy =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let visit = event();
+        assert!(matches!(
+            record(&legacy, &visit),
+            CaptureOutcome::Persisted { .. }
+        ));
+
+        let current =
+            CaptureStore::open_at(&storage(root.path(), "other-log"), None, state.path()).unwrap();
+        let batch_id = Uuid::new_v4().to_string();
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        let outcome = current.record_batch(
+            CapturePolicy {
+                enabled: true,
+                sites: &sites,
+                strip_params: &[],
+            },
+            &batch_id,
+            &[CaptureBatchEvent::Visit(&visit)],
+            None,
+        );
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [(id, CaptureOutcome::Suppressed { reason })]
+                if id == &visit.event_id && reason == "duplicate_event"
+        ));
+        assert!(!root.path().join("other-log").exists());
+    }
+
+    #[test]
+    fn legacy_single_delivery_recovers_a_torn_compact_batch_first() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let first = event();
+        let batch_id = Uuid::new_v4().to_string();
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        let outcome = store.record_batch(
+            CapturePolicy {
+                enabled: true,
+                sites: &sites,
+                strip_params: &[],
+            },
+            &batch_id,
+            &[CaptureBatchEvent::Visit(&first)],
+            None,
+        );
+        let CaptureOutcome::Persisted { relative_path } = &outcome.events[0].1 else {
+            panic!("expected the fixture batch to persist");
+        };
+        let log = root.path().join(relative_path);
+        let original = fs::read(&log).unwrap();
+        let offset = format!("{LOG_HEADER}\n").len();
+        let entry = String::from_utf8(original[offset..].to_vec()).unwrap();
+        publish_batch_intent(
+            &store.batch_intent_path(),
+            &BatchIntent {
+                version: 2,
+                batch_id,
+                root_path: store.root_path.to_string_lossy().into_owned(),
+                root_identity: store.root_identity.clone(),
+                relative_log: relative_path.to_string_lossy().into_owned(),
+                event_hashes: vec![sha256_hex(first.event_id.as_bytes())],
+                entry: entry.clone(),
+                offset: offset as u64,
+            },
+        )
+        .unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len((offset + entry.len() / 2) as u64)
+            .unwrap();
+
+        let mut second = event();
+        second.occurred_at = first.occurred_at.clone();
+        assert!(matches!(
+            record(&store, &second),
+            CaptureOutcome::Persisted { .. }
+        ));
+        let repaired = fs::read_to_string(&log).unwrap();
+        assert!(repaired.as_bytes().starts_with(&original));
+        assert_eq!(repaired.matches("\n- ").count(), 2);
+        assert!(!store.batch_intent_path().exists());
     }
 
     #[test]

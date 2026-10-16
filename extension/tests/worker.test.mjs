@@ -1558,6 +1558,34 @@ test("a lost acknowledgement replays the exact overflow snapshot", async () => {
   assert.equal(status.overflow_last_at, "2026-10-16T13:00:00+00:00");
 });
 
+test("dismissing an in-flight overflow cannot erase later drops", async () => {
+  const origin = "https://overflow-dismiss.example";
+  resetSync(origin, 2 * HOUR_MS);
+  queueWith(visit("writing", `${origin}/items/a`));
+  const queue = values.get(storageKey("queue_v1"));
+  queue.overflow_count = 4;
+  queue.overflow_first_at = "2026-10-16T08:00:00+00:00";
+  queue.overflow_last_at = "2026-10-16T11:00:00+00:00";
+  values.set(storageKey("queue_v1"), queue);
+
+  const answered = send({ kind: "sync_now" });
+  const port = await until(() => ports[0], "the in-flight overflow delivery");
+  const request = await sentOn(port, 1);
+  await send({ kind: "clear_notices" });
+
+  const afterDismiss = values.get(storageKey("queue_v1"));
+  afterDismiss.overflow_count = 2;
+  afterDismiss.overflow_first_at = "2026-10-16T12:00:00+00:00";
+  afterDismiss.overflow_last_at = "2026-10-16T13:00:00+00:00";
+  values.set(storageKey("queue_v1"), afterDismiss);
+  port.reply(batchRecorded(request, "persisted", null, true));
+
+  const status = await answered;
+  assert.equal(status.overflow_count, 2);
+  assert.equal(status.overflow_first_at, "2026-10-16T12:00:00+00:00");
+  assert.equal(status.overflow_last_at, "2026-10-16T13:00:00+00:00");
+});
+
 test("queue pressure turns on the toolbar badge at eighty percent", async () => {
   const origin = "https://pressure.example";
   resetSync(origin, 2 * HOUR_MS);

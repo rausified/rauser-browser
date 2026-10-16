@@ -806,11 +806,20 @@ async function ackBatch(
   queue.items = retained;
   const retryingBatch = retained.filter((item) => item.batch_id === batch.batch_id);
   const retryCarrier = retryingBatch[0];
-  if (retryCarrier &&
+  if (retryCarrier && overflowRecorded) {
+    for (const item of retryingBatch) delete item.batch_overflow;
+    retryCarrier.batch_overflow = null;
+  } else if (retryCarrier &&
       !retryingBatch.some((item) => item.batch_overflow !== undefined)) {
-    retryCarrier.batch_overflow = overflowRecorded ? null : batch.overflow;
+    retryCarrier.batch_overflow = batch.overflow;
   }
-  if (overflowRecorded) {
+  // Dismiss can reset the counters while this batch is in the host. Only
+  // subtract the frozen snapshot when the live range still starts with it;
+  // otherwise every current drop happened after that reset and is new.
+  const snapshotStillCounted = batch.overflow !== null &&
+    queue.overflow_count >= batch.overflow.count &&
+    queue.overflow_first_at === batch.overflow.first_occurred_at;
+  if (overflowRecorded && snapshotStillCounted) {
     const recorded = batch.overflow?.count ?? 0;
     queue.overflow_count = Math.max(0, queue.overflow_count - recorded);
     if (queue.overflow_count === 0) {
