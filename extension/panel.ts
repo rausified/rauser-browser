@@ -142,7 +142,8 @@ async function reloadConfig(): Promise<void> {
   else show(session.config!.capture_enabled
     ? "Capture is enabled for the listed sites."
     : "Capture is off.");
-  if (session.status?.pause_pending && session.config?.capture_enabled && !session.configIssue) {
+  if (session.status?.pause_pending && session.config?.capture_enabled &&
+      !session.configIssue && !session.adapterIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
   }
 }
@@ -202,7 +203,7 @@ async function panelTick(): Promise<void> {
 }
 
 async function pauseCapture(): Promise<void> {
-  if (!session.config || session.configIssue) return;
+  if (!session.config || session.configIssue || session.adapterIssue) return;
   busy = true;
   updateControls();
   try {

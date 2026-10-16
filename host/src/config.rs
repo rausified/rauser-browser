@@ -1228,15 +1228,17 @@ pub(crate) fn validate_adapter_transition(
         let Some((origin, artifact_type)) = identity else {
             continue;
         };
-        let Some(new) = next
+        let mut matching = next
             .adapters
             .artifacts
             .iter()
-            .find(|candidate| adapter_identity(candidate) == Some((origin, artifact_type)))
-        else {
+            .filter(|candidate| adapter_identity(candidate) == Some((origin, artifact_type)));
+        let Some(first) = matching.next() else {
             continue;
         };
-        if old.get("id") != new.get("id") {
+        if old.get("id") != first.get("id")
+            && !matching.any(|candidate| old.get("id") == candidate.get("id"))
+        {
             bail!(
                 "the id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
             );
@@ -1768,6 +1770,30 @@ mod tests {
             "{error}"
         );
         validate_adapter_transition(&current, &current).unwrap();
+    }
+
+    #[test]
+    fn id_transition_matches_the_id_among_same_type_siblings() {
+        let first = adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        );
+        let second = adapter(
+            "https://work.example",
+            "work.issue",
+            "/tickets/{id:int}",
+            "work.issue:{host}/ticket/{id}",
+        );
+        let current = adapter_config("https://work.example", vec![first.clone(), second.clone()]);
+        validate(&current).unwrap();
+
+        // Adapter order is policy precedence, not adapter identity. Reordering
+        // two same-type adapters does not change either durable ID contract.
+        let reordered = adapter_config("https://work.example", vec![second, first]);
+        validate(&reordered).unwrap();
+        validate_adapter_transition(&current, &reordered).unwrap();
     }
 
     #[test]

@@ -781,6 +781,12 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     // A hand-edited but unusable config is not a trusted prior grant. Repair
     // must ask again before it makes any of those rules effective.
     let trusted_current = config::validate_base(current).is_ok();
+    // Adapter validity is deliberately separate from base config validity so
+    // notes and AI settings remain usable during adapter repair. An invalid
+    // adapter document is not, however, a prior capture grant: a later edit
+    // such as enabling its missing origin must confirm every adapter that the
+    // repair makes effective.
+    let trusted_adapters = config::validate(current).is_ok();
     // Adding an exclusion takes effect at once. Removing or replacing one
     // weakens privacy and needs confirmation, confirmed list or not (§7.3).
     // These come first: sites the caller adds cannot push them down the dialog.
@@ -799,7 +805,7 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     for (index, adapter) in next.adapters.artifacts.iter().enumerate() {
         // Config order decides which overlapping rule wins, so moving an
         // otherwise unchanged adapter is itself a policy change.
-        let unchanged = trusted_current && current.adapters.artifacts.get(index) == Some(adapter);
+        let unchanged = trusted_adapters && current.adapters.artifacts.get(index) == Some(adapter);
         if unchanged {
             continue;
         }
@@ -1175,6 +1181,45 @@ mod tests {
         crate::config::validate(&next).unwrap();
         let lines = approval_lines(&current, &next);
         assert!(lines.iter().any(|line| line.contains("gdoc")));
+        assert!(lines.iter().any(|line| {
+            line.contains("every account") && line.contains("separate Chrome profile")
+        }));
+        assert!(authorize(&current, &next, None, None).is_err());
+    }
+
+    #[test]
+    fn activating_an_invalid_existing_adapter_requires_adapter_confirmation() {
+        let adapter = json!({
+            "type": "gdoc",
+            "origin": "https://docs.google.com",
+            "unscoped": "acknowledged",
+            "match": [{"path": "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}"}],
+            "modes": {"edit": "edit", "view": "view", "preview": "view"},
+            "id": "gdoc:{host}/{id}",
+        });
+        let current = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: vec![adapter],
+            },
+            ..crate::config::empty_config()
+        };
+        assert!(crate::config::validate_base(&current).is_ok());
+        assert!(crate::config::validate(&current).is_err());
+
+        // Adding the missing origin makes the already-present adapter active.
+        // It must not be mistaken for a previously confirmed adapter merely
+        // because its bytes and array position are unchanged.
+        let next = ConfigSnapshot {
+            sites: vec![SiteConfig {
+                origin: "https://docs.google.com".into(),
+                path_prefix: "/".into(),
+            }],
+            ..current.clone()
+        };
+        crate::config::validate(&next).unwrap();
+        let lines = approval_lines(&current, &next);
+        assert!(lines.iter().any(|line| line.contains("artifact adapter")));
         assert!(lines.iter().any(|line| {
             line.contains("every account") && line.contains("separate Chrome profile")
         }));

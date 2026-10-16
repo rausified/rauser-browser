@@ -576,7 +576,7 @@ function enableSite(): void {
 }
 
 async function pauseCapture(): Promise<void> {
-  if (!session.config || session.configIssue) return;
+  if (!session.config || session.configIssue || session.adapterIssue) return;
   busy = true;
   updateControls();
   try {
@@ -593,7 +593,7 @@ async function pauseCapture(): Promise<void> {
 
 async function removeSite(site: SiteConfig): Promise<void> {
   const baseConfig = session.config;
-  if (busy || !baseConfig || !session.revision || session.configIssue ||
+  if (busy || !baseConfig || !session.revision || session.configIssue || session.adapterIssue ||
       !baseConfig.sites.some((entry) => sameSite(entry, site))) return;
   busy = true;
   updateControls();
