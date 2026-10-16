@@ -48,6 +48,9 @@ one-line note, and keep each fix to one cycle. These came from a code review
 of PR #34 (merged to GitHub main as 68f180b). The review was not separately
 verified, so confirm each failure scenario with a failing test first. If the
 test shows the finding is wrong, check it off as "not reproduced" and say why.
+`brwr-rto`, `brwr-1fo`, and `brwr-992` come instead from a 2026-10-16
+read-only security review of the host code at c908fc5. Treat them the same way.
+Their line numbers predate step 6.6, so re-check them.
 
 ## Known Issues (Blocking Deploy)
 
@@ -135,6 +138,17 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   Fixed all three: starter availability now requires a real draft, installed
   GitHub types are detected without typed scope, and future adapter-table keys
   are preserved host-side as an adapter-only issue with explicit reset repair.
+- [ ] `brwr-rto` **Trail transitions are unvalidated free text.** `trail.transition`
+  (host/src/capture.rs ~136) accepts any string up to 64 chars and will feed
+  step 6.6's index reader; restrict it to Chrome's TransitionType values.
+- [ ] `brwr-1fo` **Bidi and zero-width characters spoof log rows.**
+  `safe_markdown_line` strips control chars but not Unicode format chars
+  (U+202E, U+200B–U+200F, U+2066–U+2069, U+FEFF), so a hostile title can
+  visually disguise an entry.
+- [ ] `brwr-992` **Activity checks are duplicated across delivery paths.**
+  `record_activity` (native.rs ~640–717) re-implements `check_activity_policy`
+  (~977–1020); unify so single and batch delivery can't drift. Take after the
+  two above.
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
   expected count in `scripts/smoke-macos.mjs` in the same commit. The smoke run
