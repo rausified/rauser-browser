@@ -1282,17 +1282,22 @@ fn validate_adapter_transition_with_history(
         let Some((origin, id)) = adapter_contract_identity(candidate) else {
             continue;
         };
+        let Some(artifact_type) = adapter_contract_type(candidate) else {
+            continue;
+        };
         for previous in retired.iter().chain(&removed) {
             let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
                 continue;
             };
+            let Some(previous_type) = adapter_contract_type(previous) else {
+                continue;
+            };
             if origin == previous_origin
-                && id != previous_id
+                && (id != previous_id || artifact_type != previous_type)
                 && adapter_contracts_overlap(previous, candidate)?
             {
-                let artifact_type = candidate["type"].as_str().unwrap_or("unknown");
                 bail!(
-                    "the id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+                    "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
                 );
             }
         }
@@ -1361,8 +1366,12 @@ fn adapter_contract_identity(value: &serde_json::Value) -> Option<(&str, &str)> 
     Some((value.get("origin")?.as_str()?, value.get("id")?.as_str()?))
 }
 
+fn adapter_contract_type(value: &serde_json::Value) -> Option<&str> {
+    value.get("type")?.as_str()
+}
+
 /// Pair unchanged contracts first, then pair recognition edits that retain the
-/// same origin and ID. What remains is a real retirement or introduction.
+/// same origin, type, and ID. What remains is a real retirement or introduction.
 fn adapter_contract_delta(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
@@ -1389,6 +1398,7 @@ fn adapter_contract_delta(
         if let Some((new_index, _)) = next.iter().enumerate().find(|(index, new)| {
             !next_matched[*index]
                 && adapter_contract_identity(old) == adapter_contract_identity(new)
+                && adapter_contract_type(old) == adapter_contract_type(new)
         }) {
             current_matched[old_index] = true;
             next_matched[new_index] = true;
@@ -1444,22 +1454,24 @@ fn updated_adapter_history(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
 ) -> Vec<serde_json::Value> {
-    let active: HashSet<(String, String)> = adapter_contracts(next)
-        .iter()
-        .filter_map(adapter_contract_identity)
-        .map(|(origin, id)| (origin.to_owned(), id.to_owned()))
-        .collect();
+    let active = adapter_contracts(next);
     let mut updated: Vec<_> = history
         .iter()
-        .filter(|contract| {
-            adapter_contract_identity(contract)
-                .is_some_and(|(origin, id)| !active.contains(&(origin.to_owned(), id.to_owned())))
-        })
+        // An active adapter only supersedes the exact historical contract.
+        // A disjoint or narrowed adapter may deliberately reuse the same ID,
+        // but it does not protect routes that only the historical contract
+        // recognized from being reintroduced later under a different ID.
+        .filter(|contract| !active.contains(contract))
         .cloned()
         .collect();
     if validate_adapters(current).is_ok() {
-        let (removed, _) = adapter_contract_delta(current, next);
-        for contract in removed {
+        // Recognition edits that retain an ID also retire the old shape. Keep
+        // it for the same reason as a wholly removed adapter: a later update
+        // must not be able to assign that old route a new record key.
+        for contract in adapter_contracts(current) {
+            if active.contains(&contract) {
+                continue;
+            }
             if !updated.contains(&contract) {
                 updated.push(contract);
             }
@@ -2104,6 +2116,20 @@ mod tests {
             direct_error.contains("cannot change until artifact migrations"),
             "{direct_error}"
         );
+        let type_only = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.ticket",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            )],
+        );
+        let type_error = store.update(type_only, &revision).unwrap_err().to_string();
+        assert!(
+            type_error.contains("cannot change until artifact migrations"),
+            "{type_error}"
+        );
 
         let removed = adapter_config("https://work.example", Vec::new());
         let revision = store.update(removed, &revision).unwrap().unwrap();
@@ -2135,6 +2161,122 @@ mod tests {
         );
         let revision = restarted.update(disjoint, &revision).unwrap().unwrap();
         restarted.update(original, &revision).unwrap().unwrap();
+    }
+
+    #[test]
+    fn recognition_edits_do_not_release_old_routes_for_a_new_id() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let original = adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        );
+        let moved = adapter(
+            "https://work.example",
+            "work.issue",
+            "/tickets/{id:int}",
+            "work.issue:{host}/{id}",
+        );
+        let revision = store
+            .update(
+                adapter_config("https://work.example", vec![original.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(
+                adapter_config("https://work.example", vec![moved.clone()]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+
+        let remapped = adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/changed/{id}",
+        );
+        let error = store
+            .update(
+                adapter_config("https://work.example", vec![moved, remapped]),
+                &revision,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn disjoint_adapter_reusing_an_id_does_not_erase_route_history() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let original = adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        );
+        let disjoint = adapter(
+            "https://work.example",
+            "work.issue",
+            "/tickets/{id:int}",
+            "work.issue:{host}/{id}",
+        );
+        let revision = store
+            .update(
+                adapter_config("https://work.example", vec![original]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(
+                adapter_config("https://work.example", Vec::new()),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(
+                adapter_config("https://work.example", vec![disjoint]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(
+                adapter_config("https://work.example", Vec::new()),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+
+        let remapped = adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/changed/{id}",
+        );
+        let error = store
+            .update(
+                adapter_config("https://work.example", vec![remapped]),
+                &revision,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
     }
 
     #[test]
