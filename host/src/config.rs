@@ -647,12 +647,25 @@ impl ConfigStore {
         }
         validate_update(&current.config, &next)?;
         let adapters_unchanged = current.config.adapters == next.adapters;
+        let empty_adapter_document = AdapterDocument {
+            format: 1,
+            artifacts: Vec::new(),
+        };
         // A remove-all repair of an otherwise empty document is identical on
         // the wire because future `[adapters]` keys stay host-only. Treat an
         // exact no-op config update as that explicit narrowing; real unrelated
         // edits continue to preserve fields this host does not understand.
-        let clear_adapter_extensions =
-            current.config == next && !current.adapter_extensions.is_empty();
+        let clear_adapter_extensions = !current.adapter_extensions.is_empty()
+            && next.adapters == empty_adapter_document
+            && (!adapters_unchanged || current.config == next);
+        if !current.adapter_extensions.is_empty()
+            && !adapters_unchanged
+            && !clear_adapter_extensions
+        {
+            bail!(
+                "unsupported adapter-table keys can only be removed by resetting the whole adapter document"
+            );
+        }
         if !adapters_unchanged {
             validate_adapter_transition_with_history(
                 &current.config,
@@ -665,10 +678,10 @@ impl ConfigStore {
         } else {
             updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next)
         };
-        let adapter_extensions = if adapters_unchanged && !clear_adapter_extensions {
-            current.adapter_extensions.clone()
-        } else {
+        let adapter_extensions = if clear_adapter_extensions {
             BTreeMap::new()
+        } else {
+            current.adapter_extensions.clone()
         };
 
         let agent = match &harness_commit {
@@ -2534,6 +2547,48 @@ mod tests {
         let repaired = fs::read_to_string(&path).unwrap();
         assert!(!repaired.contains("future_mode"), "{repaired}");
         assert_eq!(reloaded.adapter_issue(), None);
+    }
+
+    #[test]
+    fn unknown_adapter_table_keys_refuse_partial_adapter_replacement() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 1\nfuture_mode = \"semantic\"\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
+        );
+        let before = fs::read(&path).unwrap();
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let mut partial_replacement = store.snapshot().clone();
+        partial_replacement.adapters.artifacts[0]["match"] =
+            json!([{ "path": "/tickets/{id:int}" }]);
+
+        let error = store
+            .update(partial_replacement, &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("resetting the whole adapter document"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        let reset = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: Vec::new(),
+            },
+            ..store.snapshot().clone()
+        };
+        store.update(reset, &revision).unwrap().unwrap();
+        let repaired = fs::read_to_string(&path).unwrap();
+        assert!(!repaired.contains("future_mode"), "{repaired}");
+        assert!(!repaired.contains("[[artifacts]]"), "{repaired}");
+        assert_eq!(store.adapter_issue(), None);
     }
 
     #[test]
