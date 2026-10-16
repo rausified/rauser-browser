@@ -20,7 +20,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { APP_NAME, BINARY_NAME, NATIVE_HOST_NAME } from "../extension/brand.ts";
+import { APP_NAME, BINARY_NAME, NATIVE_HOST_NAME, storageKey } from "../extension/brand.ts";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DIST = path.join(REPO, "extension", "dist");
@@ -36,6 +36,8 @@ const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Ch
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
 const PROTOCOL_VERSION = 5;
+// Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
+const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const EXTENSION_ID = /^[a-p]{32}$/;
 const CLAUDE_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "claude_help.txt");
 const CODEX_EXEC_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "codex_exec_help.txt");
@@ -884,7 +886,8 @@ async function run() {
   async function pendingVisitsCleared() {
     await waitFor(() => onPanel(async (page) => {
       const summary = await page.text("#queue-summary");
-      requireCondition(summary === "0 pending visits.", `Panel shows: ${summary}`);
+      // Live hour totals are not yet due for delivery; only the queue counts.
+      requireCondition(/(^|· )0 pending capture records\.$/.test(summary), `Panel shows: ${summary}`);
     }), { timeout: 20_000 });
   }
 
@@ -1342,31 +1345,83 @@ async function run() {
       return { files, rows: files.flatMap((file) => file.text.split("\n").filter((line) => line.startsWith("- "))) };
     };
 
-    await step("The worker delivers allowed visits with the panel closed", async () => {
+    // An activity entry is a "- " row naming the URL, followed by its
+    // `<!-- brauser:visit ... kind=activity data=... -->` marker line.
+    const activityRows = (rows, url) => rows.filter((line) => line.includes(`<${url}>`));
+    const logs = async () => (await markdownFiles(path.join(notesRoot, "log"))).map((file) => file.text);
+    const activityMarkers = async () => (await logs()).join("\n").split("\n")
+      .filter((line) => line.startsWith("<!-- brauser:visit ") && line.includes(" kind=activity ")).length;
+
+    // The worker's live hourly totals (DESIGN.md §5.1), read from the trusted
+    // settings page, which shares chrome.storage.local with the worker.
+    const activityTotals = () => onSettings((page) => page.evaluate(
+      `chrome.storage.local.get(${JSON.stringify(ACTIVITY_TOTALS_KEY)})
+        .then((stored) => stored[${JSON.stringify(ACTIVITY_TOTALS_KEY)}]?.totals ?? [])`));
+
+    // Totals reach the log only after their local hour ends. Rather than wait
+    // an hour, relabel the live totals in this disposable profile as the
+    // previous hour (same UTC offset), so the worker's own freeze-and-deliver
+    // path treats them as completed.
+    const rewindActivityHour = () => onSettings((page) => page.evaluate(`(async () => {
+      const key = ${JSON.stringify(ACTIVITY_TOTALS_KEY)};
+      const stored = (await chrome.storage.local.get(key))[key];
+      if (!stored?.totals?.length) return 0;
+      const earlier = (hour) => {
+        const offset = hour.slice(19);
+        const sign = offset[0] === "-" ? -1 : 1;
+        const minutes = sign * (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
+        const shifted = new Date(Date.parse(hour) - 3_600_000 + minutes * 60_000);
+        return shifted.toISOString().slice(0, 19) + offset;
+      };
+      for (const total of stored.totals) total.hour_start = earlier(total.hour_start);
+      await chrome.storage.local.set({ [key]: stored });
+      return stored.totals.length;
+    })()`));
+
+    await step("The worker measures allowed activity with the panel closed", async () => {
       await closePanel();
       await navigate(origin, allowed);
       await navigate(origin, blocked);
-      // The panel is closed, so the service worker starts the host itself
-      // from its delivery alarm, about 30 seconds after the capture.
+      await openSettingsTab();
+      await waitFor(async () => {
+        const totals = await activityTotals();
+        const forAllowed = totals.filter((total) => total.url === allowed);
+        requireCondition(forAllowed.length === 1 && forAllowed[0].opens === 1,
+          `Expected one open of the allowed page in the hourly totals; found ${JSON.stringify(forAllowed)}`);
+        requireCondition(!totals.some((total) => total.url.includes("/blocked/")),
+          "The blocked path was measured");
+      }, { timeout: 20_000, interval: 1_000 });
+    });
+
+    await step("A completed hour of activity reaches the daily log", async () => {
+      await openPanel();
+      // Retried because the worker may rewrite its totals between our read and
+      // write; each attempt relabels whatever is live, then asks for a sync.
       await waitFor(async () => {
         const { files, rows } = await logRows();
-        requireCondition(rows.filter((line) => line.includes(`<${allowed}>`)).length === 1,
-          "Expected exactly one allowed visit in the daily log");
+        if (activityRows(rows, allowed).length === 0) {
+          await rewindActivityHour();
+          await onPanel((page) => page.evaluate(`chrome.runtime.sendMessage({ kind: "sync_now" })`));
+        }
+        const latest = await logRows();
+        requireCondition(activityRows(latest.rows, allowed).length === 1,
+          "Expected exactly one activity entry for the allowed page in the daily log");
+        requireCondition(await activityMarkers() === 1,
+          "Expected the allowed page's entry to carry exactly one activity marker");
         requireCondition(!files.some((file) => file.text.includes(blocked)),
-          "Blocked-path visit appeared in the daily log");
-      }, { timeout: 120_000, interval: 1_000 });
-      await openPanel();
+          "Blocked-path activity appeared in the daily log");
+      }, { timeout: 60_000, interval: 2_000 });
       await pendingVisitsCleared();
     });
 
-    await step("Panel reopen does not duplicate the visit", async () => {
+    await step("Panel reopen does not duplicate the activity entry", async () => {
       await closePanel();
       await openPanel();
       await pendingVisitsCleared();
       await delay(1_000);
       const { rows } = await logRows();
-      requireCondition(rows.filter((line) => line.includes(`<${allowed}>`)).length === 1,
-        "Allowed visit was duplicated or removed");
+      requireCondition(activityRows(rows, allowed).length === 1,
+        "Allowed activity entry was duplicated or removed");
     });
 
     await step("Note autosave writes the whole note about a second after typing stops", async () => {
@@ -1735,6 +1790,11 @@ async function run() {
       const { files } = await logRows();
       requireCondition(!files.some((file) => file.text.includes(afterRemoval)),
         "A visit was logged after site removal");
+      // The log alone proves little within the hour; the live totals must not
+      // have measured the removed site either.
+      await openSettingsTab();
+      requireCondition(!(await activityTotals()).some((total) => total.url === afterRemoval),
+        "Activity was measured after site removal");
     });
 
     if (options.headless) {
