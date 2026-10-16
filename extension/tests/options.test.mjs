@@ -553,6 +553,22 @@ test("GitHub starters stay disabled until an explicit valid organization scope",
   assert.equal(draft.unscoped, undefined);
 });
 
+test("a missing starter offer cannot become available when scope changes", async () => {
+  const site = { origin: "https://github.com", path_prefix: "/" };
+  install({ sites: [site] });
+  await openSettings();
+  const gallery = env.elements.get("starter-gallery");
+  const [scope] = gallery.querySelectorAll("input");
+  const [pullRequest] = gallery.querySelectorAll("button");
+  pullRequest.dataset.starterKey = "missing-starter";
+
+  scope.value = "acme-corp";
+  scope.dispatch("input");
+
+  assert.equal(pullRequest.dataset.available, "false");
+  assert.equal(pullRequest.disabled, true);
+});
+
 test("adapter workspace names overlaps and highlights a matching safety probe", async () => {
   const search = {
     type: "work.search", origin: "https://a.com",

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 const {
+  hasAdapter,
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
@@ -51,6 +52,13 @@ test("GitHub organization scopes normalize, deduplicate, and reject unsafe forms
   assert.equal(parseGitHubOrganizations("-leading"), null);
   assert.equal(parseGitHubOrganizations("trailing-"), null);
   assert.equal(parseGitHubOrganizations("name with space"), null);
+});
+
+test("an installed GitHub starter is recognized before scope is typed", () => {
+  const installed = starterOffers(site("https://github.com"), ["acme-corp"])[0].adapter;
+  const unscopedOffer = starterOffers(site("https://github.com"), null)[0];
+  assert.equal(unscopedOffer.adapter, null);
+  assert.equal(hasAdapter([installed], unscopedOffer), true);
 });
 
 test("Jira draft joins issue pages and board modals under one canonical ID", () => {
