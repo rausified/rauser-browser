@@ -309,26 +309,40 @@ export class ConfigSession {
 
   async reconcileRevocations(): Promise<void> {
     if (!this.config || !this.revision) return;
-    const state = await worker<WorkerStatus>({ kind: "get_status" });
-    if (!state.revoked_origins.length) return;
-    const revoked = new Set(state.revoked_origins);
+    const observed = await worker<WorkerStatus>({ kind: "get_status" });
+    if (!observed.revoked_origins.length) return;
     await withConfigMutationLock(async () => {
+      // An origin may have been explicitly re-enabled by another page while
+      // this page waited for the lock. That flow acknowledges its old marker
+      // under this same lock, so never act on the snapshot taken above.
+      const state = await worker<WorkerStatus>({ kind: "get_status" });
+      if (!state.revoked_origins.length) return;
+      const revoked = new Set(state.revoked_origins);
       // A different page may have committed since our previous read. Recompute
       // from the host's current revision while holding the same mutation lock.
       const latest = await this.readHostConfig();
       this.setHostConfig(latest);
-      if (latest.config_issue || latest.adapter_issue) {
+      if (latest.config_issue) {
         await worker<WorkerStatus>({ kind: "suspend_policy" });
-        throw new Error(latest.config_issue ?? latest.adapter_issue ?? "adapter policy is invalid");
+        throw new Error(latest.config_issue);
       }
       const sites = latest.config.sites.filter((site) => !revoked.has(site.origin));
       if (sites.length !== latest.config.sites.length) {
         await this.saveConfig({
           ...latest.config,
           sites,
-          adapters: adaptersForSites(latest.config, sites),
+          // An invalid or future adapter document can only pass the host's
+          // narrow repair exception when echoed without structural changes. Keep it inert
+          // while still writing the revoked Chrome origins out of host policy.
+          adapters: latest.adapter_issue
+            ? latest.config.adapters
+            : adaptersForSites(latest.config, sites),
           capture_enabled: latest.config.capture_enabled && sites.length > 0,
         }, null);
+      } else if (latest.adapter_issue) {
+        // The revocation was already absent from host policy. Keep the bad
+        // adapter document inert rather than reinstalling it as a lease.
+        await worker<WorkerStatus>({ kind: "suspend_policy" });
       } else {
         await this.installHostPolicy();
       }
