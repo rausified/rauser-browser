@@ -19,6 +19,7 @@ import {
   type WorkerStatus,
 } from "./model.js";
 import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
+import { compileDocument, evaluate, type CompiledDocument, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
@@ -53,6 +54,7 @@ const encoder = new TextEncoder();
 let storageReady: Promise<void> | null = null;
 let sequence: Promise<unknown> = Promise.resolve();
 let navigationReady = false;
+let compiledAdapters: { key: string; doc: CompiledDocument } | null = null;
 
 function ensureTrustedStorage(): Promise<void> {
   storageReady ??= chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
@@ -73,9 +75,40 @@ function describe(error: unknown): string {
 }
 
 async function readPolicy(): Promise<PolicyLease | null> {
+  return (await readPolicyState()).lease;
+}
+
+type LegacyPolicyLease = Omit<PolicyLease, "adapters">;
+
+function legacyPolicyLease(value: unknown): LegacyPolicyLease | null {
+  if (typeof value !== "object" || value === null || "adapters" in value) return null;
+  // Protocol v4 leases had exactly the current policy fields except for the
+  // adapter document. Adding an empty document lets the current validator
+  // check that old shape without treating arbitrary corrupt state as an
+  // upgrade signal.
+  const candidate = { ...value, adapters: { format: 1, artifacts: [] } };
+  if (!isPolicyLease(candidate)) return null;
+  return {
+    revision: candidate.revision,
+    expires_at: candidate.expires_at,
+    capture_enabled: candidate.capture_enabled,
+    sites: candidate.sites,
+  };
+}
+
+async function readPolicyState(): Promise<{
+  lease: PolicyLease | null;
+  legacyLease: LegacyPolicyLease | null;
+}> {
   const stored = await chrome.storage.local.get(POLICY_KEY);
-  const lease = stored[POLICY_KEY];
-  return isPolicyLease(lease) ? lease : null;
+  const value = stored[POLICY_KEY];
+  const valid = isPolicyLease(value);
+  return {
+    lease: valid ? value : null,
+    // A well-formed lease from the previous extension version is renewed from
+    // the host. Missing, suspended, or malformed state stays inert.
+    legacyLease: valid ? null : legacyPolicyLease(value),
+  };
 }
 
 async function readQueue(): Promise<QueueState> {
@@ -131,6 +164,19 @@ function sameSite(left: { origin: string; path_prefix: string }, right: {
   origin: string; path_prefix: string;
 }): boolean {
   return left.origin === right.origin && left.path_prefix === right.path_prefix;
+}
+
+function withSites(lease: PolicyLease, sites: PolicyLease["sites"]): PolicyLease {
+  const origins = new Set(sites.map((site) => site.origin));
+  return {
+    ...lease,
+    sites,
+    adapters: {
+      ...lease.adapters,
+      artifacts: lease.adapters.artifacts.filter((artifact) =>
+        typeof artifact.origin === "string" && origins.has(artifact.origin)),
+    },
+  };
 }
 
 function validSite(value: unknown): value is { origin: string; path_prefix: string } {
@@ -222,7 +268,7 @@ async function reconcileGrants(): Promise<PolicyLease | null> {
   const activeSites = lease.sites.filter((site) =>
     !locallyRemoved.some((removed) => sameSite(removed, site)));
   if (activeSites.length !== lease.sites.length) {
-    lease = { ...lease, sites: activeSites };
+    lease = withSites(lease, activeSites);
     const queue = await readQueue();
     queue.items = queue.items.filter((item) => matchesAnySite(activeSites, item.event.url));
     await chrome.storage.local.set({ [POLICY_KEY]: lease, [QUEUE_KEY]: queue });
@@ -246,7 +292,7 @@ async function reconcileGrants(): Promise<PolicyLease | null> {
   }
   if (!removed.length) return lease;
 
-  const narrowed: PolicyLease = { ...lease, sites: retained };
+  const narrowed = withSites(lease, retained);
   const queue = await readQueue();
   queue.items = queue.items.filter((item) => matchesAnySite(narrowed.sites, item.event.url));
   queue.last_error = `Chrome access was removed for ${removed.join(", ")}; pending visits were purged`;
@@ -277,6 +323,23 @@ function withoutHash(rawUrl: string): string | null {
   }
 }
 
+/** Match only a URL already allowed by the lease's site policy. */
+function matchingArtifact(
+  lease: PolicyLease,
+  rawUrl: string,
+  title?: string,
+): Extract<EvaluateResult, { match: true }> | null {
+  if (!matchingSite(lease, rawUrl)) return null;
+  const key = `${lease.revision}\n${JSON.stringify(lease.adapters)}`;
+  if (compiledAdapters?.key !== key) {
+    const compiled = compileDocument(lease.adapters);
+    if (!compiled.ok) return null;
+    compiledAdapters = { key, doc: compiled.doc };
+  }
+  const found = evaluate(compiledAdapters.doc, rawUrl, title);
+  return found.match ? found : null;
+}
+
 /** Buffer a qualifying navigation; true when a visit joined the queue. */
 async function captureNavigation(
   details: ChromeNavigationDetails,
@@ -289,9 +352,9 @@ async function captureNavigation(
   // Most navigations are for sites the user never enabled. Check the cached
   // lease first so they cost one storage read, not a full grant reconcile.
   const cached = await readPolicy();
-  if (!cached || !matchingSite(cached, details.url)) return false;
+  if (!cached || !matchingArtifact(cached, details.url)) return false;
   const lease = await reconcileGrants();
-  if (!lease || !matchingSite(lease, details.url)) return false;
+  if (!lease || !matchingArtifact(lease, details.url)) return false;
   if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return false;
 
   let tab: ChromeTab;
@@ -366,7 +429,7 @@ async function patchTitle(tabId: number, rawTitle: string, tab: ChromeTab): Prom
   // Only the tab's newest visit may take the title, and only before the panel
   // has seen it. A dispatched event may already be partly written by the host.
   if (!latest || latest.dispatched !== false || withoutHash(latest.event.url) !== current ||
-      !matchingSite(lease, latest.event.url)) {
+      !matchingArtifact(lease, latest.event.url)) {
     return;
   }
   const title = rawTitle.slice(0, MAX_TITLE_CHARS);
@@ -393,13 +456,13 @@ async function installPolicy(
   }
   const removed = await readLocallyRemovedSites();
   const stillRemoved = removed.filter((site) => lease.sites.some((entry) => sameSite(entry, site)));
-  const effectiveLease: PolicyLease = {
-    ...lease,
-    sites: lease.sites.filter((site) => !stillRemoved.some((entry) => sameSite(entry, site))),
-  };
+  const effectiveLease = withSites(
+    lease,
+    lease.sites.filter((site) => !stillRemoved.some((entry) => sameSite(entry, site))),
+  );
   const queue = await readQueue();
   queue.items = queue.items.filter((item) =>
-    effectiveLease.capture_enabled && matchesAnySite(effectiveLease.sites, item.event.url));
+    effectiveLease.capture_enabled && matchingArtifact(effectiveLease, item.event.url));
   await chrome.storage.local.set({
     [POLICY_KEY]: effectiveLease,
     [PAUSE_KEY]: false,
@@ -419,7 +482,7 @@ async function currentStatus(
   const paused = await pausePending();
   const nextRetryAt = !paused && policy?.capture_enabled && policy.expires_at > Date.now()
     ? visits.items
-      .filter((item) => matchesAnySite(policy.sites, item.event.url))
+      .filter((item) => matchingArtifact(policy, item.event.url) !== null)
       .reduce<number | null>((earliest, item) =>
         earliest === null ? item.retry_after : Math.min(earliest, item.retry_after), null)
     : null;
@@ -449,7 +512,7 @@ async function takeReady(): Promise<QueuedVisit[]> {
   const queue = await readQueue();
   const ready = queue.items.filter(
     (item) =>
-      item.retry_after <= Date.now() && matchingSite(lease, item.event.url) !== null,
+      item.retry_after <= Date.now() && matchingArtifact(lease, item.event.url) !== null,
   );
   // Freeze these events before they are sent to the host.
   if (ready.some((item) => item.dispatched !== true)) {
@@ -504,8 +567,13 @@ interface SyncNeeds {
 }
 
 async function syncNeeds(): Promise<SyncNeeds> {
-  const lease = await readPolicy();
-  if (!lease || !lease.capture_enabled || await pausePending()) {
+  const state = await readPolicyState();
+  const lease = state.lease;
+  if (await pausePending()) return { renew: false, deliver: false };
+  if (state.legacyLease) {
+    return { renew: state.legacyLease.capture_enabled, deliver: false };
+  }
+  if (!lease || !lease.capture_enabled) {
     return { renew: false, deliver: false };
   }
   const now = Date.now();
@@ -515,9 +583,14 @@ async function syncNeeds(): Promise<SyncNeeds> {
   return { renew, deliver };
 }
 
-/** Whether this URL would be captured but for an expired lease. */
-async function leaseExpiredFor(url: string): Promise<boolean> {
-  const lease = await readPolicy();
+/** Whether this URL needs a host renewal before capture can decide. */
+async function leaseNeedsRenewalFor(url: string): Promise<boolean> {
+  const state = await readPolicyState();
+  if (state.legacyLease) {
+    const legacy = { ...state.legacyLease, expires_at: Infinity, adapters: { format: 1, artifacts: [] } };
+    return matchingSite(legacy, url) !== null && !await pausePending();
+  }
+  const lease = state.lease;
   if (!lease || !lease.capture_enabled || lease.expires_at > Date.now()) return false;
   // matchingSite refuses every URL once the lease lapses, so ask it as if
   // the lease were still current.
@@ -660,7 +733,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
         !matchesAnySite([site], item.event.url) || matchesAnySite(remaining, item.event.url));
       await chrome.storage.local.set({
         [REMOVED_SITES_KEY]: nextRemoved,
-        [POLICY_KEY]: lease ? { ...lease, sites: remaining } : null,
+        [POLICY_KEY]: lease ? withSites(lease, remaining) : null,
         [QUEUE_KEY]: queue,
       });
       return currentStatus(null, queue);
@@ -741,7 +814,7 @@ async function captureAndDeliver(details: ChromeNavigationDetails, useCurrentTit
   // first visits of the day are not dropped for want of a fresh lease.
   const capture = async (): Promise<boolean | "expired"> => {
     await ensureTrustedStorage();
-    return await leaseExpiredFor(details.url) ? "expired" : captureNavigation(details, useCurrentTitle);
+    return await leaseNeedsRenewalFor(details.url) ? "expired" : captureNavigation(details, useCurrentTitle);
   };
   let captured = await serialize(capture);
   if (captured === "expired") {

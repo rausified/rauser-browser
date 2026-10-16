@@ -545,6 +545,24 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
             relative_path: None,
         });
     }
+    match config::adapter_matches(
+        config.snapshot(),
+        &value.event.url,
+        value.event.title.as_deref(),
+    ) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Response::VisitRecorded(VisitRecorded {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                event_id,
+                outcome: VisitOutcome::Suppressed,
+                reason: Some("not_an_artifact".into()),
+                relative_path: None,
+            });
+        }
+        Err(_) => return retryable("adapter policy is unavailable"),
+    }
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return retryable("choose a notes folder before capture");
     };
@@ -1389,6 +1407,94 @@ mod tests {
                 assert_eq!(recorded.reason.as_deref(), Some("adapter_policy_invalid"));
             }
             other => panic!("expected a suppressed visit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_suppresses_unrecognized_and_out_of_scope_worker_deliveries() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/teams/{owner:name|lower}/items/{id:int}" }]
+id = "work:{host}/{owner}/{id}"
+scope = { owner = ["acme"] }
+"#,
+        );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let mut config = loaded(&path);
+
+        for (url, label) in [
+            ("https://work.example/search", "unrecognized"),
+            (
+                "https://work.example/teams/personal/items/7",
+                "outside scope",
+            ),
+        ] {
+            let response = record_visit(
+                RecordVisitRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: format!("visit-{label}"),
+                    event: VisitEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        url: url.into(),
+                        title: Some("Private item".into()),
+                        occurred_at: occurred_at.clone(),
+                        incognito: false,
+                    },
+                },
+                &mut config,
+            );
+            match response {
+                Response::VisitRecorded(recorded) => {
+                    assert_eq!(recorded.outcome, VisitOutcome::Suppressed, "{label}");
+                    assert_eq!(
+                        recorded.reason.as_deref(),
+                        Some("not_an_artifact"),
+                        "{label}"
+                    );
+                    assert!(recorded.relative_path.is_none(), "{label}");
+                }
+                other => panic!("expected a suppressed visit for {label}, got {other:?}"),
+            }
+        }
+        assert!(!root.join("log").exists());
+
+        let response = record_visit(
+            RecordVisitRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "visit-recognized".into(),
+                event: VisitEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    url: "https://work.example/teams/acme/items/7".into(),
+                    title: Some("Work item".into()),
+                    occurred_at,
+                    incognito: false,
+                },
+            },
+            &mut config,
+        );
+        match response {
+            Response::VisitRecorded(recorded) => {
+                assert_ne!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_ne!(recorded.reason.as_deref(), Some("not_an_artifact"));
+            }
+            other => panic!("expected a recognized visit result, got {other:?}"),
         }
     }
 

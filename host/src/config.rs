@@ -1180,12 +1180,7 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
 }
 
 fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
-    let json =
-        serde_json::to_value(&config.adapters).context("serializing the adapter configuration")?;
-    let value: AdapterValue =
-        serde_json::from_value(json).context("reading the adapter configuration")?;
-    let document = AdapterTemplates::from_value(&value)
-        .map_err(|error| anyhow::anyhow!("adapter configuration is invalid: {error}"))?;
+    let document = compile_adapters(config)?;
     for (index, adapter) in document.adapters().iter().enumerate() {
         if !config
             .sites
@@ -1209,6 +1204,26 @@ fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
             second_rule: pair.second.1 as u32,
         })
         .collect())
+}
+
+fn compile_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
+    let json =
+        serde_json::to_value(&config.adapters).context("serializing the adapter configuration")?;
+    let value: AdapterValue =
+        serde_json::from_value(json).context("reading the adapter configuration")?;
+    AdapterTemplates::from_value(&value)
+        .map_err(|error| anyhow::anyhow!("adapter configuration is invalid: {error}"))
+}
+
+/// Re-run the authoritative adapter engine for every delivered browser event.
+/// The worker's lease check is a privacy prefilter, never an authorization
+/// decision the privileged host trusts.
+pub(crate) fn adapter_matches(
+    config: &ConfigSnapshot,
+    url: &str,
+    title: Option<&str>,
+) -> Result<bool> {
+    Ok(compile_adapters(config)?.evaluate(url, title).is_ok())
 }
 
 /// Artifact IDs are record keys. Alias events are not implemented until

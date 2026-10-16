@@ -967,6 +967,12 @@ async function run() {
       !text.includes("Allow visit logging") && !text.includes("Turn on automatic visit logging."),
     `The folder confirmation does not describe only the folder: ${JSON.stringify(text)}`);
   }
+  async function answerAdapterConfirmation(button) {
+    if (!options.headless) return answerAlert(button);
+    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
+    requireCondition(text.includes('Enable or change the "smoke.page" artifact adapter'),
+      `The adapter confirmation does not name the fixture adapter: ${JSON.stringify(text)}`);
+  }
 
   // --headless: Chrome's permission prompt is browser UI that no command-line
   // switch or DevTools method can answer, so grant the access ahead of time
@@ -1275,6 +1281,60 @@ async function run() {
       await waitFor(() => onPanel(async (page) =>
         requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")),
       { timeout: 20_000 });
+    });
+
+    await step("Confirmed adapter becomes the worker and host capture boundary", async () => {
+      const current = await hostConfig(wrapper);
+      const next = structuredClone(current.config);
+      next.adapters = {
+        format: 1,
+        artifacts: [{
+          type: "smoke.page",
+          origin,
+          match: [{ path: "/allowed/{page:token}" }],
+          id: "smoke:{host}/{page}",
+        }],
+      };
+      // The product editor is a later step, so the smoke runner drives the
+      // existing native confirmation/update protocol directly from the
+      // extension page. The same page then reloads and publishes the new
+      // revision into the worker's lease.
+      const saving = inSettings((page) => page.evaluate(`(() => new Promise((resolve, reject) => {
+        const port = chrome.runtime.connectNative(${JSON.stringify(NATIVE_HOST_NAME)});
+        const expectedRevision = ${JSON.stringify(current.revision)};
+        const config = ${JSON.stringify(next)};
+        const confirmId = crypto.randomUUID();
+        const updateId = crypto.randomUUID();
+        port.onDisconnect.addListener(() => reject(new Error(chrome.runtime.lastError?.message ?? "Native host disconnected")));
+        port.onMessage.addListener((message) => {
+          if (message.type === "error") {
+            reject(new Error(message.message));
+            port.disconnect();
+          } else if (message.type === "config_confirmed" && message.request_id === confirmId) {
+            port.postMessage({
+              type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
+              expected_revision: expectedRevision, config, picker_token: null,
+              consent_token: message.consent_token, harness_token: null,
+            });
+          } else if (message.type === "config_updated" && message.request_id === updateId) {
+            resolve(message.revision);
+            port.disconnect();
+          }
+        });
+        port.postMessage({
+          type: "confirm_config", protocol_version: ${PROTOCOL_VERSION}, request_id: confirmId,
+          expected_revision: expectedRevision, config, picker_token: null,
+        });
+      }))()`));
+      await userAction(`In ${APP_NAME}'s confirmation dialog, review and enable the smoke.page fixture adapter, then click Yes.`, async () => {
+        const reply = await hostConfig(wrapper);
+        requireCondition(reply.config.adapters.artifacts.length === 1 &&
+          reply.config.adapters.artifacts[0].type === "smoke.page",
+        "The fixture adapter was not saved");
+      }, async () => answerAdapterConfirmation("Yes"));
+      await saving;
+      await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
+      await settingsConnected();
     });
 
     const logRows = async () => {

@@ -4,7 +4,7 @@ The Rauser Browser Assistant (Brauser) is a local-first browser assistant design
 
 ## Status
 
-M0 is merged. M1 development code includes a Chrome side panel, opt-in visit capture, and native folder selection and confirmation. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS, the only supported platform (DESIGN.md §13), so it is not yet ready for general download.
+M0 is merged. M1 development code includes a Chrome side panel, opt-in capture, and native folder selection and confirmation. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. M1.5a now makes configured adapter templates active: only recognized artifact URLs pass the worker's private buffer, and the host independently rechecks every delivery. Hourly artifact activity, the adapter editor and starter adapters, and the Recent view are still unbuilt. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS, the only supported platform (DESIGN.md §13), so it is not yet ready for general download.
 
 Read the [design specification](DESIGN.md) for the architecture, security model, planned features, and release plan.
 
