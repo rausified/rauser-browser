@@ -762,8 +762,9 @@ their array indexes shifted. It separately verifies that matched prior indexes
 remain ordered, so an actual precedence-changing reorder still requires native
 confirmation; duplicate identities are treated as changed rather than guessed.
 While an adapter issue is present, a revisioned update may echo only that exact inert
-document so folder, AI-privacy, harness, and pause controls remain usable; any
-adapter change must replace it with a fully valid document. Settings offers a
+document so folder, AI-privacy, harness, pause, and Chrome-revocation narrowing
+remain usable; any adapter change must replace it with a fully valid document.
+Settings offers a
 single remove-invalid-rules action, and re-reads `adapter_issue` after every
 save before it can publish a worker lease. An
 unscoped shared-origin adapter adds the every-account-in-this-Chrome-profile
@@ -804,8 +805,11 @@ highlights any match. These probe matches warn but do not block a user-written
 adapter, as required by §7.2. URL-shape samples and re-map counts still wait for
 Create adapter in M1.5b step 7.6. Removing an origin's final site, including a
 Chrome-grant revocation reconciled at startup, removes its adapters in the same
-host update so config cannot retain an adapter whose origin is no longer
-enabled.
+host update so a valid config cannot retain an adapter whose origin is no
+longer enabled. If the adapter document is already invalid or from a future
+format, revocation still removes the site and may turn capture off, but echoes
+the unsupported document byte-for-byte and keeps it suspended until explicit
+repair rather than reinterpreting it.
 - **M1 compatibility.** M1's `[[sites]]` entries (an exact origin and an optional path prefix) remain valid config that grants an origin but records nothing on their own (§5.1).
 
 ### 7.3 Privacy

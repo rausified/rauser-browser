@@ -94,6 +94,7 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
     removed: [],
     storageChanged: [],
     requests: [],
+    workerRequests: [],
     elements,
   };
   state.firePolicyChange = () => {
@@ -186,6 +187,7 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
         };
       },
       async sendMessage(request) {
+        state.workerRequests.push(request);
         if (request.kind === "remove_site") {
           return { ok: true, value: statusFor({ ...workerStatus, locally_removed_sites: [request.site] }) };
         }
@@ -337,6 +339,49 @@ test("a settings load failure after hello is not reported as a missing host", as
   await openSettings();
   assert.doesNotMatch(statusText(), /Native host unavailable/);
   assert.match(statusText(), /config\.json is unreadable/);
+});
+
+test("a Chrome revocation narrows host sites while adapter policy needs repair", async () => {
+  const futureAdapters = { format: 2, artifacts: [{ future: true }] };
+  const state = install({
+    workerStatus: { revoked_origins: [SITE.origin] },
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision),
+        config: { ...current.config, adapters: futureAdapters }, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
+        adapter_warnings: [],
+      }),
+    },
+  });
+
+  await openSettings();
+
+  assert.deepEqual(state.config.sites, []);
+  assert.equal(state.config.capture_enabled, false);
+  assert.deepEqual(state.config.adapters, futureAdapters);
+  assert.ok(state.requests.some((request) => request.type === "update_config"));
+});
+
+test("a stale Chrome revocation cannot reinstall an invalid adapter policy", async () => {
+  const state = install({
+    workerStatus: { revoked_origins: ["https://already-removed.example"] },
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision),
+        config: { ...current.config, adapters: { format: 2, artifacts: [{ future: true }] } },
+        config_issue: null, agent_status: AGENT_STATUS,
+        adapter_issue: "unsupported adapter format 2", adapter_warnings: [],
+      }),
+    },
+  });
+
+  await openSettings();
+
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+  assert.equal(state.workerRequests.some((request) => request.kind === "install_policy"), false);
+  assert.ok(state.workerRequests.some((request) => request.kind === "suspend_policy"));
+  assert.ok(state.workerRequests.some((request) => request.kind === "ack_revocations"));
 });
 
 test("adapter policy problems and overlap warnings are visible in settings", async () => {
