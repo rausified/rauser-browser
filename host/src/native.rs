@@ -524,16 +524,6 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     if config.refresh().is_err() || config.config_issue().is_some() {
         return retryable("configuration is unavailable or needs repair");
     }
-    if config.adapter_issue().is_some() {
-        return Response::VisitRecorded(VisitRecorded {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id,
-            event_id,
-            outcome: VisitOutcome::Suppressed,
-            reason: Some("adapter_policy_invalid".into()),
-            relative_path: None,
-        });
-    }
     if !config.snapshot().capture_enabled {
         return Response::VisitRecorded(VisitRecorded {
             protocol_version: PROTOCOL_VERSION,
@@ -543,6 +533,9 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
             reason: Some("capture_disabled".into()),
             relative_path: None,
         });
+    }
+    if config.adapter_issue().is_some() {
+        return retryable("adapter policy is unavailable");
     }
     match config::adapter_matches(
         config.snapshot(),
@@ -626,10 +619,17 @@ fn record_activity(
             None,
         );
     }
-    if config.adapter_issue().is_some() || !config.snapshot().capture_enabled {
+    if !config.snapshot().capture_enabled {
         return answer(
             VisitOutcome::Suppressed,
             Some("capture_disabled".into()),
+            None,
+        );
+    }
+    if config.adapter_issue().is_some() {
+        return answer(
+            VisitOutcome::Retryable,
+            Some("adapter policy is unavailable".into()),
             None,
         );
     }
@@ -812,7 +812,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
         accepted.push(accepted_event);
     }
 
-    let retry_all = |reason: &str| {
+    let answer_all = |outcome: VisitOutcome, reason: &str| {
         accepted
             .iter()
             .map(|event| {
@@ -822,7 +822,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                 };
                 BatchEventResult {
                     event_id,
-                    outcome: VisitOutcome::Retryable,
+                    outcome,
                     reason: Some(reason.to_owned()),
                     relative_path: None,
                 }
@@ -836,7 +836,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
                 batch_id: value.batch_id,
-                results: retry_all("configuration is unavailable"),
+                results: answer_all(VisitOutcome::Retryable, "configuration is unavailable"),
                 overflow_recorded: false,
             });
         }
@@ -846,7 +846,28 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
             batch_id: value.batch_id,
-            results: retry_all("configuration is unavailable or needs repair"),
+            results: answer_all(
+                VisitOutcome::Retryable,
+                "configuration is unavailable or needs repair",
+            ),
+            overflow_recorded: false,
+        });
+    }
+    if !config.snapshot().capture_enabled {
+        return Response::BatchRecorded(BatchRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            batch_id: value.batch_id,
+            results: answer_all(VisitOutcome::Suppressed, "capture_disabled"),
+            overflow_recorded: false,
+        });
+    }
+    if config.adapter_issue().is_some() {
+        return Response::BatchRecorded(BatchRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            batch_id: value.batch_id,
+            results: answer_all(VisitOutcome::Retryable, "adapter policy is unavailable"),
             overflow_recorded: false,
         });
     }
@@ -1253,9 +1274,9 @@ fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
 mod tests {
     use super::*;
     use brauser_protocol::{
-        ActivityEvent, ActivityMode, ActivityTrail, ConfigSnapshot, ConfirmConfigRequest,
-        GetConfigRequest, HelloRequest, RecordActivityRequest, RecordVisitRequest,
-        UpdateConfigRequest, VisitEvent,
+        ActivityEvent, ActivityMode, ActivityTrail, CaptureBatchItem, ConfigSnapshot,
+        ConfirmConfigRequest, GetConfigRequest, HelloRequest, RecordActivityRequest,
+        RecordBatchRequest, RecordVisitRequest, UpdateConfigRequest, VisitEvent,
     };
     use std::io::Cursor;
 
@@ -1926,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_adapter_policy_suppresses_a_visit_before_vault_io() {
+    fn invalid_adapter_policy_keeps_a_visit_retryable_before_vault_io() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
         std::fs::create_dir(&root).unwrap();
@@ -1954,10 +1975,115 @@ mod tests {
         );
         match response {
             Response::VisitRecorded(recorded) => {
-                assert_eq!(recorded.outcome, VisitOutcome::Suppressed);
-                assert_eq!(recorded.reason.as_deref(), Some("adapter_policy_invalid"));
+                assert_eq!(recorded.outcome, VisitOutcome::Retryable);
+                assert_eq!(
+                    recorded.reason.as_deref(),
+                    Some("adapter policy is unavailable")
+                );
             }
-            other => panic!("expected a suppressed visit, got {other:?}"),
+            other => panic!("expected a retryable visit, got {other:?}"),
+        }
+    }
+
+    fn activity_for_invalid_policy() -> ActivityEvent {
+        ActivityEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: "work:work.example/1".into(),
+            artifact_type: "work.item".into(),
+            url: "https://work.example/issues/1".into(),
+            title: Some("Issue 1".into()),
+            occurred_at: "2026-10-16T13:00:00Z".into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 3,
+            background_seconds: 0,
+            modes: Vec::new(),
+            trails: Vec::new(),
+            refs: Vec::new(),
+        }
+    }
+
+    fn invalid_adapter_config(folder: &tempfile::TempDir) -> ConfigStore {
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n",
+        );
+        loaded(&path)
+    }
+
+    #[test]
+    fn invalid_adapter_policy_keeps_single_activity_retryable() {
+        let folder = tempfile::tempdir().unwrap();
+        let response = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "activity-1".into(),
+                event: activity_for_invalid_policy(),
+            },
+            &mut invalid_adapter_config(&folder),
+        );
+        match response {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Retryable);
+                assert_eq!(
+                    recorded.reason.as_deref(),
+                    Some("adapter policy is unavailable")
+                );
+            }
+            other => panic!("expected a retryable activity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_adapter_policy_keeps_every_batch_event_retryable() {
+        let folder = tempfile::tempdir().unwrap();
+        let activity = activity_for_invalid_policy();
+        let visit_id = uuid::Uuid::new_v4().to_string();
+        let response = record_batch(
+            RecordBatchRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "batch-1".into(),
+                batch_id: uuid::Uuid::new_v4().to_string(),
+                events: vec![
+                    CaptureBatchItem {
+                        kind: CaptureEventKind::Visit,
+                        visit: Some(VisitEvent {
+                            event_id: visit_id.clone(),
+                            url: "https://work.example/issues/1".into(),
+                            title: Some("Issue 1".into()),
+                            occurred_at: "2026-10-16T13:05:00Z".into(),
+                            incognito: false,
+                        }),
+                        activity: None,
+                    },
+                    CaptureBatchItem {
+                        kind: CaptureEventKind::Activity,
+                        visit: None,
+                        activity: Some(activity.clone()),
+                    },
+                ],
+                overflow: None,
+            },
+            &mut invalid_adapter_config(&folder),
+        );
+        match response {
+            Response::BatchRecorded(recorded) => {
+                assert_eq!(recorded.results.len(), 2);
+                for result in recorded.results {
+                    assert_eq!(result.outcome, VisitOutcome::Retryable);
+                    assert_eq!(
+                        result.reason.as_deref(),
+                        Some("adapter policy is unavailable")
+                    );
+                }
+            }
+            other => panic!("expected a retryable batch, got {other:?}"),
         }
     }
 
