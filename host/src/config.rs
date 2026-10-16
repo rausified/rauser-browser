@@ -359,7 +359,7 @@ impl ConfigStore {
 
     /// Hold this lock from the policy refresh through a privileged write.
     /// ConfigStore::update takes the same lock before replacing config.toml.
-    pub(crate) fn lock_current(&self) -> Result<File> {
+    pub fn lock_current(&self) -> Result<File> {
         let parent = self.path.parent().context("config path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         let path = parent.join(".config.lock");
@@ -869,14 +869,10 @@ struct StoredStorage {
     log_dir: String,
     pages_dir: String,
     later_dir: String,
-    #[serde(default = "default_artifacts_dir")]
-    artifacts_dir: String,
+    #[serde(default)]
+    artifacts_dir: Option<String>,
     #[serde(default)]
     summaries_dir: Option<String>,
-}
-
-fn default_artifacts_dir() -> String {
-    "artifacts".into()
 }
 
 impl From<StorageConfig> for StoredStorage {
@@ -887,7 +883,7 @@ impl From<StorageConfig> for StoredStorage {
             log_dir: value.log_dir,
             pages_dir: value.pages_dir,
             later_dir: value.later_dir,
-            artifacts_dir: value.artifacts_dir,
+            artifacts_dir: Some(value.artifacts_dir),
             summaries_dir: value.summaries_dir,
         }
     }
@@ -895,16 +891,49 @@ impl From<StorageConfig> for StoredStorage {
 
 impl From<StoredStorage> for StorageConfig {
     fn from(value: StoredStorage) -> Self {
+        let mut occupied = vec![
+            Path::new(&value.log_dir),
+            Path::new(&value.pages_dir),
+            Path::new(&value.later_dir),
+        ];
+        if let Some(summaries_dir) = &value.summaries_dir {
+            occupied.push(Path::new(summaries_dir));
+        }
+        let artifacts_dir = value
+            .artifacts_dir
+            .unwrap_or_else(|| unused_artifacts_dir(&occupied));
         Self {
             root: value.root,
             profile: value.profile,
             log_dir: value.log_dir,
             pages_dir: value.pages_dir,
             later_dir: value.later_dir,
-            artifacts_dir: value.artifacts_dir,
+            artifacts_dir,
             summaries_dir: value.summaries_dir,
         }
     }
+}
+
+/// Older configs did not name an artifact directory. Preserve their existing
+/// layout even when one of its configurable locations already uses the usual
+/// `artifacts` name; adopting a colliding default would make the whole config
+/// unreadable before the user had any way to choose a different location.
+fn unused_artifacts_dir(occupied: &[&Path]) -> String {
+    for suffix in 0u32.. {
+        let candidate = match suffix {
+            0 => "artifacts".to_owned(),
+            1 => "brauser-artifacts".to_owned(),
+            value => format!("brauser-artifacts-{value}"),
+        };
+        let candidate_parts = lower_components(Path::new(&candidate));
+        if occupied.iter().all(|path| {
+            let parts = lower_components(path);
+            !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(&parts)
+        }) {
+            return candidate;
+        }
+    }
+    unreachable!("a finite set of content paths cannot occupy every generated name")
 }
 
 /// `[agent]` as §7.1 shows it: the chosen harness and its entry.
@@ -2074,6 +2103,10 @@ mod tests {
         assert!(store.configured());
         let snapshot = store.snapshot();
         assert_eq!(snapshot.storage.as_ref().unwrap().summaries_dir, None);
+        assert_eq!(
+            snapshot.storage.as_ref().unwrap().artifacts_dir,
+            "artifacts"
+        );
         assert!(snapshot.agent_denylist.is_empty());
         assert!(!snapshot.agent_denylist_confirmed);
         assert!(!snapshot.log_incognito);
@@ -2086,6 +2119,23 @@ mod tests {
             (ErrorCode::NotConfigured, SET_UP_AGENT.into())
         );
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
+    }
+
+    #[test]
+    fn old_config_gets_a_non_overlapping_artifact_directory() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        let body = fs::read_to_string(&path)
+            .unwrap()
+            .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"");
+        fs::write(&path, body).unwrap();
+
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        let storage = store.snapshot().storage.as_ref().unwrap();
+        assert_eq!(storage.pages_dir, "artifacts");
+        assert_eq!(storage.artifacts_dir, "brauser-artifacts");
     }
 
     #[test]

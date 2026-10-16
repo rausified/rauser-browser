@@ -46,7 +46,12 @@ fn run() -> Result<()> {
 }
 
 fn reindex() -> Result<()> {
-    let config = ConfigStore::load()?;
+    let mut config = ConfigStore::load()?;
+    // Serialize the scan and cache replacement with capture/config updates.
+    // Otherwise a concurrent delivery can publish a newer cache and then be
+    // silently replaced by the reindex snapshot that started first.
+    let _lock = config.lock_current()?;
+    config.refresh()?;
     if let Some(issue) = config.config_issue() {
         bail!("configuration needs repair: {issue}");
     }

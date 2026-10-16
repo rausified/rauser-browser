@@ -61,7 +61,7 @@ struct IndexState {
     dirty: BTreeSet<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CachedEvent {
     Activity(ActivityEvent),
@@ -69,7 +69,7 @@ enum CachedEvent {
     Legacy(LegacyVisit),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LegacyVisit {
     marker_id: String,
@@ -95,6 +95,7 @@ struct ArtifactRow {
     last_mode: Option<String>,
     why: Option<String>,
     activities: Vec<ActivityEvent>,
+    latest_at: OffsetDateTime,
 }
 
 #[derive(Clone)]
@@ -175,11 +176,24 @@ impl ArtifactIndex {
         let mut state = self.load_or_rebuild()?;
         for event in events {
             let (event_id, artifact_id) = event_identity(&event);
-            if let Some(previous) = state.events.insert(event_id, event) {
-                state.dirty.insert(event_identity(&previous).1);
+            if let Some(previous) = state.events.get(&event_id) {
+                if previous != &event {
+                    bail!("an indexed event ID cannot be reused with different content");
+                }
+                state.dirty.insert(artifact_id);
+                continue;
             }
+            state.events.insert(event_id, event);
             state.dirty.insert(artifact_id);
         }
+        self.publish_state_and_database(&state)
+    }
+
+    /// Reconcile a terminal replay or a newly drained legacy visit from the
+    /// authoritative owned markers. In particular, never let an untrusted
+    /// retry body replace the event that is already durable in the log.
+    pub fn reconcile_from_logs(&self) -> Result<()> {
+        let state = self.scan_logs()?;
         self.publish_state_and_database(&state)
     }
 
@@ -268,6 +282,7 @@ impl ArtifactIndex {
         if files.len() > MAX_SCAN_FILES {
             bail!("artifact log contains too many files to index");
         }
+        files.sort();
         for relative in files {
             let metadata = logs
                 .symlink_metadata(&relative)
@@ -292,8 +307,18 @@ impl ArtifactIndex {
             }
             for event in parse_log(text) {
                 let (id, artifact_id) = event_identity(&event);
-                state.events.insert(id, event);
-                state.dirty.insert(artifact_id);
+                match state.events.entry(id) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(event);
+                        state.dirty.insert(artifact_id);
+                    }
+                    std::collections::btree_map::Entry::Occupied(entry)
+                        if entry.get() != &event =>
+                    {
+                        bail!("artifact log reuses an event ID with different content");
+                    }
+                    std::collections::btree_map::Entry::Occupied(_) => {}
+                }
             }
         }
         Ok(state)
@@ -348,11 +373,12 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
     let mut artifacts = BTreeMap::<String, ArtifactRow>::new();
     let mut visits = Vec::new();
     let mut edges = BTreeMap::<(String, String, String), EdgeRow>::new();
-    let mut whys = BTreeMap::<String, (String, String)>::new();
+    let mut whys = BTreeMap::<String, (OffsetDateTime, String)>::new();
     for event in events.values() {
         match event {
             CachedEvent::Activity(event) => {
-                let day = local_date(&event.occurred_at).unwrap_or_else(|| "0000-00-00".into());
+                let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let day = at.date().to_string();
                 let site = Url::parse(&event.url)
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned))
@@ -375,6 +401,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         last_mode: None,
                         why: None,
                         activities: Vec::new(),
+                        latest_at: at,
                     });
                 row.focused_secs = row
                     .focused_secs
@@ -383,15 +410,24 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     .background_secs
                     .saturating_add(u64::from(event.background_seconds));
                 row.opens = row.opens.saturating_add(u64::from(event.opens));
-                row.days.insert(day.clone());
+                if event.opens > 0 {
+                    row.days.insert(day.clone());
+                }
                 if day < row.first_seen {
                     row.first_seen = day.clone();
                 }
-                if day >= row.last_seen {
+                if day > row.last_seen {
                     row.last_seen = day.clone();
-                    row.title = title.clone();
+                }
+                if at >= row.latest_at {
+                    row.latest_at = at;
+                    if let Some(title) = &event.title {
+                        row.title = title.clone();
+                    }
                     row.url = event.url.clone();
-                    row.last_mode = event.modes.last().map(|mode| mode.mode.clone());
+                    if let Some(mode) = event.modes.last() {
+                        row.last_mode = Some(mode.mode.clone());
+                    }
                 }
                 row.activities.push(event.clone());
                 visits.push(VisitRow {
@@ -423,7 +459,10 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                 }
             }
             CachedEvent::Why(event) => {
-                let candidate = (event.occurred_at.clone(), event.text.clone());
+                let candidate = (
+                    parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                    event.text.clone(),
+                );
                 if whys
                     .get(&event.artifact_id)
                     .is_none_or(|current| candidate.0 >= current.0)
@@ -432,7 +471,8 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                 }
             }
             CachedEvent::Legacy(event) => {
-                let day = local_date(&event.occurred_at).unwrap_or_else(|| "0000-00-00".into());
+                let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let day = at.date().to_string();
                 let site = Url::parse(&event.url)
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned))
@@ -454,13 +494,17 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         last_mode: None,
                         why: None,
                         activities: Vec::new(),
+                        latest_at: at,
                     });
                 row.days.insert(day.clone());
                 if day < row.first_seen {
                     row.first_seen = day.clone();
                 }
-                if day >= row.last_seen {
+                if day > row.last_seen {
                     row.last_seen = day.clone();
+                }
+                if at >= row.latest_at {
+                    row.latest_at = at;
                     row.title = event.title.clone();
                     row.url = event.url.clone();
                 }
@@ -480,13 +524,12 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
         }
     }
     visits.sort_by(|a, b| {
-        a.occurred_at
-            .cmp(&b.occurred_at)
-            .then(a.event_id.cmp(&b.event_id))
+        timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
     });
     for row in artifacts.values_mut() {
-        row.activities
-            .sort_by(|a, b| a.occurred_at.cmp(&b.occurred_at));
+        row.activities.sort_by(|a, b| {
+            timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
+        });
         row.why = whys.remove(&row.artifact_id).map(|(_, text)| text);
     }
     Derived {
@@ -517,10 +560,15 @@ fn add_edge(
     }
 }
 
-fn local_date(timestamp: &str) -> Option<String> {
-    OffsetDateTime::parse(timestamp, &Rfc3339)
-        .ok()
-        .map(|value| value.date().to_string())
+fn parsed_timestamp(timestamp: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(timestamp, &Rfc3339).ok()
+}
+
+fn timestamp_order(left: &str, right: &str) -> std::cmp::Ordering {
+    match (parsed_timestamp(left), parsed_timestamp(right)) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        _ => left.cmp(right),
+    }
 }
 
 fn collect_markdown(
@@ -602,6 +650,12 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 || event.artifact_type.is_empty()
                 || event.artifact_type.len() > 64
                 || !safe_page_url(&event.url)
+                || event.modes.iter().any(|mode| !safe_page_url(&mode.url))
+                || event
+                    .trails
+                    .iter()
+                    .filter_map(|trail| trail.from_url.as_deref())
+                    .any(|url| !safe_page_url(url))
                 || sha256_hex(event.event_id.as_bytes()) != id_hash
                 || sha256_hex(event.url.as_bytes()) != url_hash
                 || event.occurred_at != at
@@ -837,13 +891,32 @@ fn owned_artifact(bytes: &[u8], artifact_id: &str) -> bool {
     let Some(frontmatter) = text[4..].split_once("\n---\n").map(|value| value.0) else {
         return false;
     };
-    frontmatter.lines().any(|line| line == "  kind: artifact")
-        && frontmatter.lines().any(|line| {
-            line.strip_prefix("  artifact_id: ")
-                .and_then(|value| serde_json::from_str::<String>(value).ok())
-                .as_deref()
-                == Some(artifact_id)
-        })
+    let mut blocks = 0;
+    let mut in_brauser = false;
+    let mut kinds = 0;
+    let mut kind_matches = false;
+    let mut ids = 0;
+    let mut id_matches = false;
+    for line in frontmatter.lines() {
+        if !line.starts_with(' ') {
+            in_brauser = line == "brauser:";
+            if in_brauser {
+                blocks += 1;
+            }
+            continue;
+        }
+        if !in_brauser {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("  kind: ") {
+            kinds += 1;
+            kind_matches = value == "artifact";
+        } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
+            ids += 1;
+            id_matches = serde_json::from_str::<String>(value).ok().as_deref() == Some(artifact_id);
+        }
+    }
+    blocks == 1 && kinds == 1 && kind_matches && ids == 1 && id_matches
 }
 
 fn artifact_path(artifacts_dir: &str, artifact: &ArtifactRow) -> PathBuf {
@@ -959,6 +1032,7 @@ struct Rollup {
     focused: u64,
     background: u64,
     opens: u64,
+    last_date: Date,
 }
 
 fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
@@ -973,6 +1047,7 @@ fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
             focused: 0,
             background: 0,
             opens: 0,
+            last_date: date,
         });
         row.focused = row.focused.saturating_add(u64::from(event.focused_seconds));
         row.background = row
@@ -999,12 +1074,21 @@ fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
             focused: 0,
             background: 0,
             opens: 0,
+            last_date: date,
         });
         target.focused = target.focused.saturating_add(row.focused);
         target.background = target.background.saturating_add(row.background);
         target.opens = target.opens.saturating_add(row.opens);
+        target.last_date = target.last_date.max(date);
     }
-    rolled.into_values().rev().collect()
+    let mut output = rolled.into_values().collect::<Vec<_>>();
+    output.sort_by(|left, right| {
+        right
+            .last_date
+            .cmp(&left.last_date)
+            .then(right.label.cmp(&left.label))
+    });
+    output
 }
 
 fn measures(focused: u64, background: u64, opens: u64) -> String {
@@ -1558,6 +1642,112 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
+    fn ownership_requires_one_matching_brauser_identity_block() {
+        let id = "work:example.com/7";
+        let owned = format!(
+            "---\ntitle: \"Seven\"\nbrauser:\n  kind: artifact\n  artifact_id: {}\n---\n",
+            serde_json::to_string(id).unwrap()
+        );
+        assert!(owned_artifact(owned.as_bytes(), id));
+
+        let unrelated = format!(
+            "---\ntitle: \"Seven\"\nother:\n  kind: artifact\n  artifact_id: {}\n---\n",
+            serde_json::to_string(id).unwrap()
+        );
+        assert!(!owned_artifact(unrelated.as_bytes(), id));
+
+        let duplicate = format!(
+            "---\nbrauser:\n  kind: artifact\n  artifact_id: {}\nbrauser:\n  kind: artifact\n  artifact_id: {}\n---\n",
+            serde_json::to_string(id).unwrap(),
+            serde_json::to_string(id).unwrap()
+        );
+        assert!(!owned_artifact(duplicate.as_bytes(), id));
+    }
+
+    #[test]
+    fn an_event_id_cannot_replace_different_indexed_content() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let original = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "7",
+            "Original",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&original, &[]).unwrap();
+
+        let mut forged = original.clone();
+        forged.title = Some("Forged retry".into());
+        assert!(index.record_activity(&forged, &[]).is_err());
+
+        let output = Command::new("python3")
+            .args([
+                "-c",
+                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select title from artifacts').fetchone()[0])",
+            ])
+            .arg(index.database_path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "Original");
+    }
+
+    #[test]
+    fn latest_metadata_uses_instant_order_across_offsets() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let early = activity(
+            "00000000-0000-4000-8000-000000000999",
+            "OFFSET",
+            "Earlier",
+            "2026-10-16T01:00:00Z",
+        );
+        let mut later = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "OFFSET",
+            "Later",
+            "2026-10-15T23:00:00-07:00",
+        );
+        later.modes[0].mode = "edit".into();
+        index.record_activities([&early, &later], &[]).unwrap();
+        index.regenerate_dirty().unwrap();
+
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(markdown.contains("title: \"Later\""));
+        assert!(markdown.contains("  last_mode: \"edit\""));
+    }
+
+    #[test]
+    fn passive_activity_does_not_invent_an_open_or_erase_the_last_mode() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let opened = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "CARRY",
+            "Opened",
+            "2026-10-15T23:00:00Z",
+        );
+        let mut carried = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "CARRY",
+            "Still open",
+            "2026-10-16T00:00:00Z",
+        );
+        carried.opens = 0;
+        carried.modes.clear();
+        index.record_activities([&opened, &carried], &[]).unwrap();
+
+        let derived = derive(&index.load_or_rebuild().unwrap().events);
+        let row = derived.artifacts.get(&opened.artifact_id).unwrap();
+        assert_eq!(row.days.len(), 1);
+        assert_eq!(row.last_mode.as_deref(), Some("view"));
+        assert_eq!(row.title, "Still open");
+    }
+
+    #[test]
     fn a_year_of_daily_opens_has_a_bounded_timeline() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
@@ -1581,8 +1771,16 @@ print(json.dumps([tables,row]))"#;
             .filter(|line| line.starts_with("- "))
             .count();
         assert!(lines <= 48, "unbounded Timeline had {lines} lines");
+        assert_eq!(
+            markdown.lines().find(|line| line.starts_with("- ")),
+            Some("- 2026-09-30 · focused 2 min · 1 min in background · opened 1×")
+        );
         assert!(markdown.contains("- 2025-10"));
         assert!(markdown.contains("- 2026-09-30"));
+        assert!(
+            fs::metadata(index.database_path()).unwrap().len() > (5 * SQLITE_PAGE_SIZE) as u64,
+            "the SQLite fixture did not exercise an interior B-tree page"
+        );
         let output = Command::new("python3").args([
             "-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
         ]).arg(index.database_path()).output().unwrap();
@@ -1625,6 +1823,42 @@ print(json.dumps([tables,row]))"#;
         ]).arg(index.database_path()).output().unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
+    }
+
+    #[test]
+    fn reindex_refuses_conflicting_content_for_one_event_id() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let original = activity(
+            "00000000-0000-4000-8000-000000000010",
+            "REUSED",
+            "Original",
+            "2026-10-15T12:00:00Z",
+        );
+        let mut forged = original.clone();
+        forged.title = Some("Forged".into());
+        let marker = |event: &ActivityEvent| {
+            let payload = hex::encode(serde_json::to_vec(event).unwrap());
+            format!(
+                "{MARKER_PREFIX}{} url={} at={} kind=activity data={payload} -->\n",
+                sha256_hex(event.event_id.as_bytes()),
+                sha256_hex(event.url.as_bytes()),
+                event.occurred_at,
+            )
+        };
+        for (day, event) in [("15", &original), ("16", &forged)] {
+            let dir = root.path().join("log/2026/10");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join(format!("2026-10-{day}.md")),
+                format!("{LOG_HEADER}\n{}", marker(event)),
+            )
+            .unwrap();
+        }
+
+        let error = index.reindex().unwrap_err().to_string();
+        assert!(error.contains("reuses an event ID"), "{error}");
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {
