@@ -79,10 +79,13 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   Fixed by matching survivors on `(origin, type, id)` and separately checking
   relative order, so deletion shifts are immediate while real precedence
   reorders still require confirmation.
-- [ ] `brwr-uc0` **Invalid adapter policy discards recognized visits for good**
+- [x] `brwr-uc0` **Invalid adapter policy discards recognized visits for good**
   (host/src/native.rs ~534). `adapter_policy_invalid` returns terminal
   Suppressed, while `config_issue` returns retryable. Visits recognized under
-  a valid lease are lost during a transient fault. Make it retryable.
+  a valid lease are lost during a transient fault. Fixed across legacy visits,
+  single activity delivery, and current mixed batches: an invalid adapter
+  document now returns retryable for every capture event and leaves batch
+  overflow evidence pending, while an intentional Pause remains terminal.
 - [ ] `brwr-4kh` **Chrome revocations not written back while `adapter_issue` is set**
   (extension/settings.ts ~317; `removeSite` in options.ts).
   `reconcileRevocations` throws, so the host keeps a revoked origin
@@ -210,6 +213,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Shipped
 
+- **Category:** Bug Fix. **Keep recognized capture queued while adapter policy needs repair (2026-10-16).** The native host now returns a retryable result when a transient invalid or future adapter document interrupts legacy visits, single hourly activities, or the current mixed delivery batch, so the worker retains every recognized event and any overflow evidence until policy is repaired. An intentional capture pause and a valid policy miss remain terminal, preserving immediate user control and defense-in-depth filtering. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 failing-first ingress regressions (+2 net tests), with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** Bug Fix. **Let adapter and site removals take effect without re-confirming survivors (2026-10-16).** Native consent now matches adapters by stable origin, type, and ID instead of their mutable array slot, so removing an early adapter or an origin no longer makes every later unscoped rule look newly enabled or overflow the confirmation limit. Relative prior positions are still checked independently, preserving native confirmation for a genuine precedence-changing reorder, and ambiguous duplicate identities fail closed. **Metrics:** 263 Rust tests and 8 extension suites passing; 2 new failing-first and privacy-boundary regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Bug Fix. **Keep open adapter edits attached to the adapter the user chose (2026-10-16).** The settings editor now retains an adapter's origin, type, ID, and canonical structural snapshot instead of a mutable array index. A config refresh can reorder other adapters without redirecting the pending edit, while an externally changed, removed, or ambiguous target disables Save, explains the conflict, and preserves the newer revision for review. **Metrics:** 261 Rust tests and 8 extension suites passing; 2 new failing-first cross-page regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Bug Fix. **Restore settings and recovery while adapter policy is invalid (2026-10-16).** The host now permits unrelated settings and harness setup to carry forward only the exact already-inert adapter document, while every adapter edit still requires a fully valid replacement. Settings keeps folder, AI-privacy, harness, and Pause controls usable, offers a clear remove-all repair action, and re-reads host adapter status before publishing any worker lease so the recovery path remains fail-closed. **Metrics:** 259 Rust tests and 8 extension suites passing; 5 new regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
@@ -224,6 +228,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
+- Legacy `record_visit`, compatibility `record_activity`, and current
+  `record_batch` had drifted into three different answers for the same invalid
+  adapter state. Keep their shared policy-state outcomes aligned until the old
+  entry points have had a release to drain and can be removed; event-shape and
+  artifact-identity validation can remain specific to each payload.
 - Automatic capture now emits measured activity, while the legacy visit path exists only to drain pre-upgrade queue entries. Step 6.5 should batch new activity writes and compact intents without removing that compatibility until old queues have had a release to drain.
 - The headless macOS smoke flow was updated to confirm and install a fixture adapter through native messaging. It could not be executed on this Linux VM; run `npm run smoke:macos:headless` on macOS before relying on that new end-to-end step.
 - Protocol v5 currently freezes an existing adapter's `id` template before any alias migration exists. When activity events land, replace that conservative guard with the designed activity-aware migration and explicit alias events rather than relaxing it in place.
