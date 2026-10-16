@@ -9,6 +9,7 @@ const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 // Run after build:extension. The mock copies storage values as Chrome does,
 // which catches accidental reliance on mutating an object returned by get().
 const values = new Map();
+const sessionValues = new Map();
 const grants = new Map();
 const tabs = new Map();
 let permissionCheckError = false;
@@ -18,11 +19,35 @@ let onMessage;
 let onCommitted;
 let onHistoryStateUpdated;
 let onTabUpdated;
+let onTabActivated;
+let onTabRemoved;
+let onTabReplaced;
+let onCreatedNavigationTarget;
+let onWindowFocusChanged;
+let onIdleStateChanged;
+let frameGate = null;
+let frameEntered = null;
 let onAlarm;
 let onStartup;
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
+
+function storageArea(entries) {
+  return {
+    async get(key) {
+      const result = {};
+      for (const name of Array.isArray(key) ? key : [key]) {
+        if (entries.has(name)) result[name] = structuredClone(entries.get(name));
+      }
+      return result;
+    },
+    async set(items) {
+      for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
+    },
+    async setAccessLevel() {},
+  };
+}
 
 function fakePort() {
   const messageListeners = [];
@@ -70,21 +95,8 @@ globalThis.chrome = {
     onClicked: { addListener() {} },
   },
   storage: {
-    local: {
-      async get(key) {
-        const result = {};
-        for (const name of Array.isArray(key) ? key : [key]) {
-          if (values.has(name)) result[name] = structuredClone(values.get(name));
-        }
-        return result;
-      },
-      async set(items) {
-        for (const [name, value] of Object.entries(items)) {
-          values.set(name, structuredClone(value));
-        }
-      },
-      async setAccessLevel() {},
-    },
+    local: storageArea(values),
+    session: storageArea(sessionValues),
   },
   permissions: {
     async contains({ origins }) {
@@ -102,15 +114,37 @@ globalThis.chrome = {
       return structuredClone(tabs.get(tabId));
     },
     onUpdated: { addListener(listener) { onTabUpdated = listener; } },
+    onActivated: { addListener(listener) { onTabActivated = listener; } },
+    onRemoved: { addListener(listener) { onTabRemoved = listener; } },
+    onReplaced: { addListener(listener) { onTabReplaced = listener; } },
+    async query() { return [...tabs.values()].map((tab) => structuredClone(tab)); },
   },
   webNavigation: {
     onCommitted: { addListener(listener) { onCommitted = listener; } },
     onHistoryStateUpdated: { addListener(listener) { onHistoryStateUpdated = listener; } },
+    onCreatedNavigationTarget: { addListener(listener) { onCreatedNavigationTarget = listener; } },
+    async getFrame({ tabId }) {
+      const tab = tabs.get(tabId);
+      const result = tab?.url ? { url: tab.url } : null;
+      frameEntered?.();
+      if (frameGate) await frameGate;
+      return result;
+    },
+  },
+  windows: {
+    WINDOW_ID_NONE: -1,
+    async getLastFocused() { return { id: 1, focused: true }; },
+    onFocusChanged: { addListener(listener) { onWindowFocusChanged = listener; } },
+  },
+  idle: {
+    setDetectionInterval() {},
+    async queryState() { return "active"; },
+    onStateChanged: { addListener(listener) { onIdleStateChanged = listener; } },
   },
   sidePanel: { async setPanelBehavior() {} },
 };
 
-await import("../dist/worker.js");
+const { queueActivityMapRebuild, rebuildActivityMap } = await import("../dist/worker.js");
 const { HostClient, HostError, PROTOCOL_VERSION } = await import("../dist/native.js");
 const { ConfigSession } = await import("../dist/settings.js");
 
@@ -169,6 +203,7 @@ function visit(id, url) {
 
 test("config repair suspends capture without losing visits, while confirmed revocation purges", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   const firstOrigin = "https://first.example";
   const secondOrigin = "https://second.example";
@@ -224,6 +259,7 @@ test("config repair suspends capture without losing visits, while confirmed revo
 
 test("a newer local pause cannot be resumed by an older enable confirmation", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   grants.set("https://first.example:443/*", true);
   const candidateLease = lease("https://first.example");
@@ -312,6 +348,7 @@ test("pause re-reads a conflicting host revision before clearing the local block
 
 test("a re-enabled origin clears only its old revocation after a matching lease and live grant", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   const origin = "https://again.example";
   const pattern = "https://again.example:443/*";
@@ -337,8 +374,9 @@ test("a re-enabled origin clears only its old revocation after a matching lease 
   assert.deepEqual(confirmed.revoked_origins, []);
 });
 
-test("a committed page takes its title only until the panel receives the visit", async () => {
+test("a committed page updates the live hourly activity title before freezing", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   tabs.clear();
   const origin = "https://title.example";
@@ -351,37 +389,28 @@ test("a committed page takes its title only until the panel receives the visit",
     url: `${origin}/items/a`, timeStamp: Date.now(),
   });
   await flush();
-  const [queued] = values.get(storageKey("queue_v1")).items;
-  assert.equal(queued.event.title, null);
-  assert.equal(queued.tab_id, 7);
-  assert.equal(queued.dispatched, false);
-  assert.ok(queued.retry_after > Date.now(), "an untitled visit waits for its title");
-  assert.match(queued.event.occurred_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+  let [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, null);
+  assert.equal(live.opens, 1);
+  assert.match(live.hour_start, /^\d{4}-\d{2}-\d{2}T\d{2}:00:00[+-]\d{2}:\d{2}$/);
+  assert.equal(values.get(storageKey("queue_v1")), undefined,
+    "the current hour is not delivered before it is complete");
 
   onTabUpdated(7, { title: "x".repeat(400) }, { id: 7, url: `${origin}/items/a#part`, incognito: false });
   await flush();
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "x".repeat(300));
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "x".repeat(300));
 
-  onTabUpdated(7, { title: "Other tab" }, { id: 8, url: `${origin}/items/b`, incognito: false });
+  tabs.set(8, { id: 8, url: `${origin}/items/a`, title: "Other tab", incognito: false });
   onTabUpdated(8, { title: "Other tab" }, { id: 8, url: `${origin}/items/a`, incognito: false });
   await flush();
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "x".repeat(300));
-
-  assert.deepEqual(await send({ kind: "get_pending" }), []);
-  const graceElapsed = values.get(storageKey("queue_v1"));
-  graceElapsed.items[0].retry_after = 0;
-  values.set(storageKey("queue_v1"), graceElapsed);
-  const pending = await send({ kind: "get_pending" });
-  assert.equal(pending.length, 1);
-  assert.equal(values.get(storageKey("queue_v1")).items[0].dispatched, true);
-
-  onTabUpdated(7, { title: "Too late" }, { id: 7, url: `${origin}/items/a`, incognito: false });
-  await flush();
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "x".repeat(300));
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "x".repeat(300));
 });
 
 test("a stored visit without a dispatch flag is never patched", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   const origin = "https://legacy.example";
   grants.set("https://legacy.example:443/*", true);
@@ -402,6 +431,7 @@ test("a stored visit without a dispatch flag is never patched", async () => {
 
 test("a navigation outside every enabled site skips grant checks and tab reads", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   tabs.clear();
   grants.set("https://enabled.example:443/*", true);
@@ -425,11 +455,12 @@ test("a navigation outside every enabled site skips grant checks and tab reads",
   });
   await flush();
   assert.ok(permissionChecks > checks);
-  assert.equal(values.get(storageKey("queue_v1")).items.length, 1);
+  assert.equal((await send({ kind: "get_activity" })).length, 1);
 });
 
 test("adapter rules, scope, and Chrome grants all fail closed before buffering", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   tabs.clear();
   const origin = "https://scoped.example";
@@ -471,7 +502,7 @@ test("adapter rules, scope, and Chrome grants all fail closed before buffering",
   await flush();
   assert.ok(permissionChecks > initialChecks, "a recognized URL reaches the live grant gate");
   assert.equal(tabReads, initialReads, "a missing grant is refused before reading the tab");
-  assert.equal(values.get(storageKey("queue_v1")).items.length, 0);
+  assert.equal(values.get(storageKey("queue_v1"))?.items.length ?? 0, 0);
   assert.deepEqual(values.get(storageKey("policy_v1")).sites, []);
   assert.deepEqual(values.get(storageKey("policy_v1")).adapters.artifacts, []);
   assert.notEqual((await send({ kind: "get_status" })).policy_expires_at, null);
@@ -494,11 +525,64 @@ test("adapter rules, scope, and Chrome grants all fail closed before buffering",
     url: `${origin}/teams/acme/items/7`, timeStamp: Date.now(),
   });
   await flush();
-  assert.equal(values.get(storageKey("queue_v1")).items.length, 1);
+  assert.equal((await send({ kind: "get_activity" })).length, 1);
+});
+
+test("worker-start map rebuild restores recognized tabs without counting opens", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  tabs.clear();
+  const origin = "https://rebuild.example";
+  grants.set("https://rebuild.example:443/*", true);
+  values.set(storageKey("policy_v1"), lease(origin));
+  tabs.set(30, {
+    id: 30, windowId: 1, active: true, status: "loading",
+    url: `${origin}/items/restored`, title: "Restored", incognito: false,
+  });
+
+  await rebuildActivityMap();
+  const session = sessionValues.get(storageKey("activity_session_v1"));
+  assert.equal(session.tabs[30].artifact_id, "test:rebuild.example/restored");
+  assert.equal(session.active_by_window[1], 30);
+  assert.deepEqual(values.get(storageKey("activity_totals_v1")).totals, [],
+    "rebuild maps attention but is not a cold open");
+
+  tabs.get(30).url = `${origin}/items/different`;
+  await rebuildActivityMap();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].artifact_id,
+    "test:rebuild.example/restored", "an existing map entry is not overwritten");
+
+  sessionValues.clear();
+  tabs.get(30).url = `${origin}/items/restored`;
+  let releaseFrame;
+  frameGate = new Promise((resolve) => { releaseFrame = resolve; });
+  const entered = new Promise((resolve) => { frameEntered = resolve; });
+  const rebuilding = queueActivityMapRebuild();
+  await entered;
+  tabs.get(30).url = `${origin}/items/committed`;
+  onCommitted({
+    tabId: 30, frameId: 0, documentId: "commit-during-rebuild", documentLifecycle: "active",
+    url: `${origin}/items/committed`, timeStamp: Date.now(), transitionType: "link",
+  });
+  releaseFrame();
+  frameGate = null;
+  frameEntered = null;
+  await rebuilding;
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].artifact_id,
+    "test:rebuild.example/committed", "a queued commit overwrites the rebuilt entry");
+
+  grants.set("https://rebuild.example:443/*", false);
+  sessionValues.clear();
+  await rebuildActivityMap();
+  assert.deepEqual(sessionValues.get(storageKey("activity_session_v1"))?.tabs ?? {}, {},
+    "getFrame URLs without a live Chrome grant are never mapped");
 });
 
 test("a successful ack clears retry state but keeps notices until dismissed", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   const origin = "https://ack.example";
   grants.set("https://ack.example:443/*", true);
@@ -573,8 +657,9 @@ test("worker accepts messages only from the side panel and settings page", async
   }
 });
 
-test("an SPA route change waits for its new title before the panel can send it", async () => {
+test("an SPA route change accepts the title update into its live hour", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   tabs.clear();
   const origin = "https://spa.example";
@@ -588,18 +673,33 @@ test("an SPA route change waits for its new title before the panel can send it",
     url: `${origin}/items/b`, timeStamp: Date.now(),
   });
   await flush();
-  const [queued] = values.get(storageKey("queue_v1")).items;
-  assert.equal(queued.event.title, "Route A");
-  assert.ok(queued.retry_after > Date.now(), "a history update waits for its title");
+  let [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "Route A");
   assert.deepEqual(await send({ kind: "get_pending" }), []);
 
   onTabUpdated(9, { title: "Route B" }, { id: 9, url: `${origin}/items/b`, incognito: false });
   await flush();
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "Route B");
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "Route B");
+
+  // Some SPAs set document.title before pushState. Chrome's title event can
+  // still carry the prior URL; it must not retitle that prior artifact, while
+  // the following history event may take the already-current tab title.
+  tabs.set(9, { id: 9, windowId: 1, url: `${origin}/items/c`, title: "Route C", incognito: false });
+  onTabUpdated(9, { title: "Route C" }, { id: 9, url: `${origin}/items/b`, incognito: false });
+  onHistoryStateUpdated({
+    tabId: 9, frameId: 0, documentId: "doc-spa", documentLifecycle: "active",
+    url: `${origin}/items/c`, timeStamp: Date.now(), transitionType: "link",
+  });
+  await flush();
+  const totals = await send({ kind: "get_activity" });
+  assert.equal(totals.find((total) => total.artifact_id.endsWith("/b")).title, "Route B");
+  assert.equal(totals.find((total) => total.artifact_id.endsWith("/c")).title, "Route C");
 });
 
 test("a retry notice clears once nothing is left to retry, and on dismissal", async () => {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   const origin = "https://retry.example";
   grants.set("https://retry.example:443/*", true);
@@ -849,6 +949,14 @@ function recorded(request, outcome = "persisted", reason = null) {
   };
 }
 
+function activityRecorded(request, outcome = "persisted", reason = null) {
+  return {
+    type: "activity_recorded", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    event_id: request.event.event_id, outcome, reason,
+    relative_path: outcome === "persisted" ? "log/day.md" : null,
+  };
+}
+
 function configResult(request, origin, overrides = {}) {
   return {
     type: "config_result", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
@@ -872,6 +980,7 @@ function configResult(request, origin, overrides = {}) {
 
 function resetSync(origin, expiresIn) {
   values.clear();
+  sessionValues.clear();
   grants.clear();
   tabs.clear();
   alarms.clear();
@@ -895,30 +1004,44 @@ test("the worker registers its periodic sync alarm and syncs on browser startup"
   assert.equal(typeof onStartup, "function");
 });
 
-test("with no extension page open, the worker delivers a captured visit itself", async () => {
+test("with no extension page open, the worker freezes and delivers a completed activity hour", async () => {
   const origin = "https://background.example";
   resetSync(origin, 2 * HOUR_MS);
   tabs.set(9, { id: 9, url: `${origin}/items/issue`, title: "Issue", incognito: false });
   onCommitted({
     tabId: 9, frameId: 0, documentId: "doc-bg", documentLifecycle: "active",
-    url: `${origin}/items/issue`, timeStamp: Date.now(),
+    url: `${origin}/items/issue`, timeStamp: Date.now() - 2 * HOUR_MS,
   });
   await flush();
   assert.ok(alarms.has(DELIVER_ALARM), "a capture schedules a delivery");
-  assert.equal(ports.length, 0, "the title grace period passes before any host starts");
-
-  const queue = values.get(storageKey("queue_v1"));
-  queue.items[0].retry_after = 0;
-  values.set(storageKey("queue_v1"), queue);
+  assert.equal(ports.length, 0, "the current event does not start a host directly");
   onAlarm({ name: DELIVER_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   const request = await sentOn(port, 1);
-  assert.equal(request.type, "record_visit");
+  assert.equal(request.type, "record_activity");
   assert.equal(request.event.url, `${origin}/items/issue`);
-  port.reply(recorded(request));
+  assert.equal(request.event.opens, 1);
+  port.reply(activityRecorded(request));
   await until(() => values.get(storageKey("queue_v1")).items.length === 0, "the queue to drain");
   await until(() => port.closed, "the host connection to close");
   assert.equal((await send({ kind: "get_status" })).host_error, null);
+});
+
+test("a status wake hands off completed hours before reporting live activity", async () => {
+  const origin = "https://status-boundary.example";
+  resetSync(origin, 2 * HOUR_MS);
+  tabs.set(10, { id: 10, url: `${origin}/items/old-hour`, title: "Old hour", incognito: false });
+  onCommitted({
+    tabId: 10, frameId: 0, documentId: "doc-status", documentLifecycle: "active",
+    url: `${origin}/items/old-hour`, timeStamp: Date.now() - 2 * HOUR_MS,
+  });
+  await flush();
+
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.live_activity, 0);
+  assert.equal(status.queued, 1);
+  assert.equal(values.get(storageKey("queue_v1")).items[0].event.artifact_id,
+    "test:status-boundary.example/old-hour");
 });
 
 test("the worker leaves the host alone when there is nothing to send or renew", async () => {
@@ -1035,8 +1158,11 @@ test("after the lease lapsed, the first navigation renews it and is still captur
   const request = await sentOn(port, 1);
   assert.equal(request.type, "get_config");
   port.reply(configResult(request, origin));
-  await until(() => values.get(storageKey("queue_v1"))?.items.length === 1, "the visit to be buffered");
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.url, `${origin}/items/first`);
+  const [live] = await until(async () => {
+    const totals = await send({ kind: "get_activity" });
+    return totals.length === 1 && totals;
+  }, "the activity total to be retained");
+  assert.equal(live.url, `${origin}/items/first`);
 });
 
 test("an older cached lease renews once instead of permanently disabling background capture", async () => {
@@ -1055,10 +1181,11 @@ test("an older cached lease renews once instead of permanently disabling backgro
   const request = await sentOn(port, 1);
   assert.equal(request.type, "get_config");
   port.reply(configResult(request, origin));
-  await until(() => values.get(storageKey("queue_v1"))?.items.length === 1,
-    "the first post-upgrade artifact to be buffered");
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.url,
-    `${origin}/items/migrated`);
+  const [live] = await until(async () => {
+    const totals = await send({ kind: "get_activity" });
+    return totals.length === 1 && totals;
+  }, "the first post-upgrade artifact activity");
+  assert.equal(live.url, `${origin}/items/migrated`);
   assert.equal(values.get(storageKey("policy_v1")).adapters.artifacts.length, 1);
 });
 

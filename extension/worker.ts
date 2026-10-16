@@ -1,4 +1,4 @@
-import type { VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import type { ActivityEvent, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
 import {
   MAX_QUEUE_BYTES,
   MAX_QUEUED_VISITS,
@@ -8,7 +8,6 @@ import {
   exactOriginPattern,
   isPolicyLease,
   isQueuedVisit,
-  localTimestamp,
   matchingSite,
   siteMatchesUrl,
   type PolicyLease,
@@ -23,6 +22,11 @@ import { compileDocument, evaluate, type CompiledDocument, type EvaluateResult }
 import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
+import {
+  activateTab, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
+  recordNavigation, removeTab, replaceTab, setIdle, settleActivity,
+  type ActivityState,
+} from "./activity.js";
 
 const QUEUE_KEY = storageKey("queue_v1");
 const POLICY_KEY = POLICY_STORAGE_KEY;
@@ -31,14 +35,12 @@ const PAUSE_KEY = storageKey("pause_pending_v1");
 const PAUSE_TOKEN_KEY = storageKey("pause_token_v1");
 const REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
 const HOST_ERROR_KEY = storageKey("host_error_v1");
+const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
+const ACTIVITY_SESSION_KEY = storageKey("activity_session_v1");
 // Matches MAX_URL_BYTES in host/src/capture.rs, so the host never rejects a
 // visit the worker chose to buffer.
 const MAX_VISIT_URL_BYTES = 8_192;
 const MAX_TITLE_CHARS = 300;
-const DEDUPE_WINDOW_MS = 2_000;
-// Hold a new visit briefly so tabs.onUpdated can supply its title before an
-// open panel sends, and thereby freezes, the event.
-const TITLE_GRACE_MS = 3_000;
 // The worker, not the panel, starts the host to deliver visits and renew the
 // policy lease, so capture keeps working while no extension page is open.
 // The alarm wakes the worker to retry deliveries and renew the lease in time.
@@ -56,8 +58,78 @@ let sequence: Promise<unknown> = Promise.resolve();
 let navigationReady = false;
 let compiledAdapters: { key: string; doc: CompiledDocument } | null = null;
 
+function activitySessionStorage(): ChromeStorageArea {
+  return chrome.storage.session;
+}
+
+async function readActivity(): Promise<ActivityState> {
+  const [local, session] = await Promise.all([
+    chrome.storage.local.get(ACTIVITY_TOTALS_KEY),
+    activitySessionStorage().get(ACTIVITY_SESSION_KEY),
+  ]);
+  const totals = local[ACTIVITY_TOTALS_KEY];
+  const context = session[ACTIVITY_SESSION_KEY];
+  const fresh = emptyActivityState();
+  if (typeof totals === "object" && totals !== null &&
+      (totals as { version?: unknown }).version === 1 &&
+      Array.isArray((totals as { totals?: unknown }).totals)) {
+    fresh.totals = structuredClone((totals as { totals: ActivityState["totals"] }).totals);
+  }
+  if (typeof context === "object" && context !== null &&
+      (context as { version?: unknown }).version === 1) {
+    const saved = context as Partial<ActivityState>;
+    if (saved.tabs && saved.pending_sources && saved.active_by_window &&
+        typeof saved.chrome_focused === "boolean" && typeof saved.idle === "boolean" &&
+        typeof saved.measured_at === "number") {
+      fresh.tabs = structuredClone(saved.tabs);
+      fresh.pending_sources = structuredClone(saved.pending_sources);
+      fresh.active_by_window = structuredClone(saved.active_by_window);
+      fresh.last_focused_window = saved.last_focused_window ?? null;
+      fresh.chrome_focused = saved.chrome_focused;
+      fresh.idle = saved.idle;
+      fresh.measured_at = saved.measured_at;
+    }
+  }
+  return fresh;
+}
+
+async function writeActivity(state: ActivityState): Promise<void> {
+  const { totals, ...context } = state;
+  await Promise.all([
+    chrome.storage.local.set({ [ACTIVITY_TOTALS_KEY]: { version: 1, totals } }),
+    activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: context }),
+  ]);
+}
+
+async function narrowActivity(lease: PolicyLease | null): Promise<void> {
+  const activity = await readActivity();
+  settleActivity(activity, Date.now(), () => crypto.randomUUID());
+  const allowed = (url: string): boolean => lease !== null && matchingArtifact(lease, url) !== null;
+  activity.totals = activity.totals.filter((total) => allowed(total.url));
+  for (const [tabId, tab] of Object.entries(activity.tabs)) {
+    if (!allowed(tab.url)) delete activity.tabs[tabId];
+  }
+  for (const [tabId, source] of Object.entries(activity.pending_sources)) {
+    if (source.from_url === null || !allowed(source.from_url)) delete activity.pending_sources[tabId];
+  }
+  await writeActivity(activity);
+}
+
+function activityContext(state: ActivityState): Omit<ActivityState, "totals"> {
+  const { totals, ...context } = state;
+  void totals;
+  return context;
+}
+
+function isActivityEvent(event: VisitEvent | ActivityEvent): event is ActivityEvent {
+  return "artifact_id" in event;
+}
+
 function ensureTrustedStorage(): Promise<void> {
-  storageReady ??= chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  storageReady ??= Promise.all([
+    chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
+    chrome.storage.session.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }),
+  ]).then(() => undefined);
   return storageReady;
 }
 
@@ -116,7 +188,7 @@ async function readQueue(): Promise<QueueState> {
   const value = stored[QUEUE_KEY];
   if (value === undefined) return emptyQueue();
   if (typeof value !== "object" || value === null) {
-    throw new Error("Visit queue is unreadable; capture is paused");
+    throw new Error("Capture queue is unreadable; capture is paused");
   }
   const state = value as Record<string, unknown>;
   if (
@@ -129,7 +201,7 @@ async function readQueue(): Promise<QueueState> {
     !(state.retry_error === undefined || state.retry_error === null ||
       typeof state.retry_error === "string")
   ) {
-    throw new Error("Visit queue is unreadable; capture is paused");
+    throw new Error("Capture queue is unreadable; capture is paused");
   }
   // Queues stored before retry_error existed kept retry failures in last_error.
   return { ...(value as QueueState), retry_error: (state.retry_error as string | null | undefined) ?? null };
@@ -137,6 +209,42 @@ async function readQueue(): Promise<QueueState> {
 
 async function writeQueue(state: QueueState): Promise<void> {
   await chrome.storage.local.set({ [QUEUE_KEY]: state });
+}
+
+/** Freeze completed local hours and move them into the durable delivery
+ * queue. The total and queue are published in one storage.local update so a
+ * worker stop cannot lose the handoff. */
+async function freezeActivity(now = Date.now()): Promise<number> {
+  const activity = await readActivity();
+  const frozen = freezeCompleted(activity, now, () => crypto.randomUUID());
+  if (!frozen.length) {
+    await writeActivity(activity);
+    return 0;
+  }
+  const queue = await readQueue();
+  let accepted = 0;
+  for (const event of frozen) {
+    const item: QueuedVisit = {
+      event, dedupe_key: event.event_id, attempts: 0, retry_after: 0, dispatched: false,
+    };
+    const next = [...queue.items, item];
+    if (next.length > MAX_QUEUED_VISITS ||
+        encoder.encode(JSON.stringify(next)).length > MAX_QUEUE_BYTES) {
+      queue.overflow_count += 1;
+      queue.last_error = "Activity queue is full; completed hours were not buffered";
+      continue;
+    }
+    queue.items = next;
+    accepted += 1;
+  }
+  await Promise.all([
+    chrome.storage.local.set({
+      [ACTIVITY_TOTALS_KEY]: { version: 1, totals: activity.totals },
+      [QUEUE_KEY]: queue,
+    }),
+    activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: activityContext(activity) }),
+  ]);
+  return accepted;
 }
 
 async function readRevocations(): Promise<string[]> {
@@ -246,8 +354,8 @@ async function purgeRevokedQueueWithoutPolicy(): Promise<void> {
   queue.items = retained;
   const removed = [...revoked];
   queue.last_error = removed.length
-    ? `Chrome access was removed for ${removed.join(", ")}; pending visits were purged`
-    : "Invalid pending visits were purged";
+    ? `Chrome access was removed for ${removed.join(", ")}; pending capture records were purged`
+    : "Invalid pending capture records were purged";
   const revocations = await readRevocations();
   await chrome.storage.local.set({
     [QUEUE_KEY]: queue,
@@ -272,6 +380,7 @@ async function reconcileGrants(): Promise<PolicyLease | null> {
     const queue = await readQueue();
     queue.items = queue.items.filter((item) => matchesAnySite(activeSites, item.event.url));
     await chrome.storage.local.set({ [POLICY_KEY]: lease, [QUEUE_KEY]: queue });
+    await narrowActivity(lease);
   }
   if (!lease.capture_enabled) {
     const queue = await readQueue();
@@ -279,6 +388,7 @@ async function reconcileGrants(): Promise<PolicyLease | null> {
       queue.items = [];
       await writeQueue(queue);
     }
+    await narrowActivity(null);
     return lease;
   }
 
@@ -295,22 +405,15 @@ async function reconcileGrants(): Promise<PolicyLease | null> {
   const narrowed = withSites(lease, retained);
   const queue = await readQueue();
   queue.items = queue.items.filter((item) => matchesAnySite(narrowed.sites, item.event.url));
-  queue.last_error = `Chrome access was removed for ${removed.join(", ")}; pending visits were purged`;
+  queue.last_error = `Chrome access was removed for ${removed.join(", ")}; pending capture records were purged`;
   const revocations = await readRevocations();
   await chrome.storage.local.set({
     [POLICY_KEY]: narrowed,
     [QUEUE_KEY]: queue,
     [REVOCATIONS_KEY]: [...new Set([...revocations, ...removed])].slice(0, 256),
   });
+  await narrowActivity(narrowed);
   return narrowed;
-}
-
-function dedupeKey(details: ChromeNavigationDetails): string {
-  const url = new URL(details.url);
-  url.hash = "";
-  const document = details.documentId ?? "unknown-document";
-  const timeBucket = Math.floor(details.timeStamp / DEDUPE_WINDOW_MS);
-  return `${details.tabId}:${document}:${timeBucket}:${url.href}`;
 }
 
 function withoutHash(rawUrl: string): string | null {
@@ -340,7 +443,7 @@ function matchingArtifact(
   return found.match ? found : null;
 }
 
-/** Buffer a qualifying navigation; true when a visit joined the queue. */
+/** Update the durable hourly activity total for a qualifying navigation. */
 async function captureNavigation(
   details: ChromeNavigationDetails,
   useCurrentTitle: boolean,
@@ -352,9 +455,22 @@ async function captureNavigation(
   // Most navigations are for sites the user never enabled. Check the cached
   // lease first so they cost one storage read, not a full grant reconcile.
   const cached = await readPolicy();
-  if (!cached || !matchingArtifact(cached, details.url)) return false;
+  const cachedMatch = cached ? matchingArtifact(cached, details.url) : null;
+  if (!cached || !cachedMatch) {
+    const activity = await readActivity();
+    if (activity.tabs[String(details.tabId)]) {
+      recordNavigation(activity, {
+        tab_id: details.tabId, window_id: activity.tabs[String(details.tabId)]?.window_id ?? -1,
+        url: "", title: null, transition: details.transitionType ?? "unknown",
+        qualifiers: details.transitionQualifiers ?? [], reload: false,
+      }, null, details.timeStamp, () => crypto.randomUUID());
+      await writeActivity(activity);
+    }
+    return false;
+  }
   const lease = await reconcileGrants();
-  if (!lease || !matchingArtifact(lease, details.url)) return false;
+  const match = lease ? matchingArtifact(lease, details.url) : null;
+  if (!lease || !match) return false;
   if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return false;
 
   let tab: ChromeTab;
@@ -367,7 +483,6 @@ async function captureNavigation(
 
   const visitedAt = new Date(details.timeStamp);
   if (!Number.isFinite(visitedAt.getTime())) return false;
-  const occurred_at = localTimestamp(visitedAt);
   // At commit, the tab still shows the previous document's title. The title
   // arrives later through tabs.onUpdated. A same-document history update
   // starts from the tab's current title, but an SPA usually sets the new
@@ -381,46 +496,54 @@ async function captureNavigation(
     }
   }
 
-  const event: VisitEvent = {
-    event_id: crypto.randomUUID(),
-    url: details.url,
-    title,
-    occurred_at,
-    incognito: false,
-  };
-  const queue = await readQueue();
-  const key = dedupeKey(details);
-  if (queue.items.some((item) => item.dedupe_key === key)) return false;
-  const item: QueuedVisit = {
-    event,
-    dedupe_key: key,
-    attempts: 0,
-    // Either way, hold the visit so tabs.onUpdated can supply the real title.
-    retry_after: Date.now() + TITLE_GRACE_MS,
-    tab_id: details.tabId,
-    dispatched: false,
-  };
-  const nextItems = [...queue.items, item];
-  if (
-    nextItems.length > MAX_QUEUED_VISITS ||
-    encoder.encode(JSON.stringify(nextItems)).length > MAX_QUEUE_BYTES
-  ) {
-    queue.overflow_count += 1;
-    queue.last_error = "Visit queue is full; newer visits were not buffered";
-  } else {
-    queue.items = nextItems;
-  }
-  await writeQueue(queue);
+  const activity = await readActivity();
+  recordNavigation(activity, {
+    tab_id: details.tabId, window_id: tab.windowId ?? -1, url: details.url, title,
+    transition: details.transitionType ?? "unknown",
+    qualifiers: details.transitionQualifiers ?? [],
+    reload: details.transitionType === "reload",
+  }, match, details.timeStamp, () => crypto.randomUUID());
+  await writeActivity(activity);
+  await freezeActivity(details.timeStamp);
   return true;
 }
 
-async function patchTitle(tabId: number, rawTitle: string, tab: ChromeTab): Promise<void> {
+async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
+  let tab: ChromeTab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
   if (tab.incognito !== false || !tab.url) return;
   await ensureTrustedStorage();
   const lease = await readPolicy();
   if (!lease) return;
   const current = withoutHash(tab.url);
   if (current === null) return;
+  const activity = await readActivity();
+  const mapped = activity.tabs[String(tabId)];
+  const title = rawTitle.slice(0, MAX_TITLE_CHARS);
+  const titleMatch = mapped && withoutHash(mapped.url) === current
+    ? matchingArtifact(lease, mapped.url, title) : null;
+  if (mapped && titleMatch) {
+    mapped.title = title;
+    const hour = [...activity.totals].reverse().find((total) =>
+      total.artifact_id === mapped.artifact_id);
+    if (hour) {
+      hour.title = titleMatch.title ?? title;
+      hour.url = mapped.url;
+      for (const ref of titleMatch.refs ?? []) {
+        if (hour.refs.length >= 20) break;
+        if (!hour.refs.some((known) => known.artifact_type === ref.type && known.value === ref.value)) {
+          hour.refs.push({ artifact_type: ref.type, value: ref.value });
+        }
+      }
+    }
+    await writeActivity(activity);
+  }
+  // Drain compatibility: M1 visits that were buffered before upgrade may
+  // still accept their late title until first dispatch.
   const queue = await readQueue();
   let latest: QueuedVisit | undefined;
   for (const item of queue.items) {
@@ -432,7 +555,6 @@ async function patchTitle(tabId: number, rawTitle: string, tab: ChromeTab): Prom
       !matchingArtifact(lease, latest.event.url)) {
     return;
   }
-  const title = rawTitle.slice(0, MAX_TITLE_CHARS);
   if (latest.event.title === title) return;
   latest.event = { ...latest.event, title };
   await writeQueue(queue);
@@ -469,6 +591,7 @@ async function installPolicy(
     [REMOVED_SITES_KEY]: stillRemoved,
     [QUEUE_KEY]: queue,
   });
+  await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
   const reconciled = await reconcileGrants();
   return currentStatus(reconciled);
 }
@@ -478,9 +601,20 @@ async function currentStatus(
   queue: QueueState | null = null,
 ): Promise<WorkerStatus> {
   const policy = lease ?? (await readPolicy());
-  const visits = queue ?? (await readQueue());
   const paused = await pausePending();
-  const nextRetryAt = !paused && policy?.capture_enabled && policy.expires_at > Date.now()
+  const captureActive = !paused && policy?.capture_enabled === true &&
+    policy.expires_at > Date.now();
+  // A panel/status wake may be the first event after an hour boundary. Make
+  // that wake perform the same local handoff as the sync alarm, so completed
+  // totals are never presented as current-hour activity.
+  if (captureActive) await freezeActivity();
+  const visits = captureActive ? await readQueue() : queue ?? (await readQueue());
+  const activity = await readActivity();
+  if (captureActive) {
+    settleActivity(activity, Date.now(), () => crypto.randomUUID());
+    await writeActivity(activity);
+  }
+  const nextRetryAt = captureActive
     ? visits.items
       .filter((item) => matchingArtifact(policy, item.event.url) !== null)
       .reduce<number | null>((earliest, item) =>
@@ -488,6 +622,7 @@ async function currentStatus(
     : null;
   return {
     queued: visits.items.length,
+    live_activity: activity.totals.length,
     next_retry_at: nextRetryAt,
     overflow_count: visits.overflow_count,
     rejected_count: visits.rejected_count,
@@ -533,12 +668,12 @@ async function ackVisit(
   if (outcome === "retryable") {
     item.attempts += 1;
     item.retry_after = Date.now() + Math.min(60 * 60_000, 5_000 * 2 ** Math.min(item.attempts, 10));
-    queue.retry_error = reason ?? "The host could not save this visit yet";
+    queue.retry_error = reason ?? "The host could not save this capture record yet";
   } else {
     queue.items = queue.items.filter((entry) => entry.event.event_id !== eventId);
     if (outcome === "rejected") {
       queue.rejected_count += 1;
-      queue.last_error = reason ?? "A visit was rejected by host policy";
+      queue.last_error = reason ?? "A capture record was rejected by host policy";
     }
     // last_error holds purge, overflow, and rejection notices. Only the
     // user dismisses those; retry_error lapses with the last retrying visit.
@@ -576,6 +711,7 @@ async function syncNeeds(): Promise<SyncNeeds> {
   if (!lease || !lease.capture_enabled) {
     return { renew: false, deliver: false };
   }
+  await freezeActivity();
   const now = Date.now();
   const renew = lease.expires_at - now <= LEASE_RENEW_WINDOW_MS;
   const queue = await readQueue();
@@ -629,12 +765,15 @@ async function deliverPending(host: HostClient): Promise<string | null> {
     let reason: string | null;
     let failure: string | null = null;
     try {
-      const response = await host.call({
-        type: "record_visit",
-        protocol_version: PROTOCOL_VERSION,
-        request_id: newRequestId(),
-        event: item.event,
-      }, "visit_recorded");
+      const response = isActivityEvent(item.event)
+        ? await host.call({
+          type: "record_activity", protocol_version: PROTOCOL_VERSION,
+          request_id: newRequestId(), event: item.event,
+        }, "activity_recorded")
+        : await host.call({
+          type: "record_visit", protocol_version: PROTOCOL_VERSION,
+          request_id: newRequestId(), event: item.event,
+        }, "visit_recorded");
       if (response.event_id !== item.event.event_id) {
         throw new Error("Host acknowledged a different visit ID");
       }
@@ -703,6 +842,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
         [PAUSE_KEY]: true, [PAUSE_TOKEN_KEY]: crypto.randomUUID(),
         [POLICY_KEY]: null, [QUEUE_KEY]: queue,
       });
+      await narrowActivity(null);
       return currentStatus(null, queue);
     }
     case "get_pending_ids":
@@ -711,7 +851,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       if (!Array.isArray(message.event_ids) ||
           message.event_ids.length > MAX_QUEUED_VISITS ||
           !message.event_ids.every((id) => typeof id === "string")) {
-        throw new Error("Invalid pending-visit discard request");
+        throw new Error("Invalid pending-record discard request");
       }
       const selected = new Set(message.event_ids);
       const queue = await readQueue();
@@ -736,10 +876,15 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
         [POLICY_KEY]: lease ? withSites(lease, remaining) : null,
         [QUEUE_KEY]: queue,
       });
+      await narrowActivity(lease ? withSites(lease, remaining) : null);
       return currentStatus(null, queue);
     }
     case "get_pending":
       return takeReady();
+    case "get_activity": {
+      await freezeActivity();
+      return (await readActivity()).totals;
+    }
     case "ack_visit":
       return ackVisit(message.event_id, message.outcome, message.reason);
     case "get_status":
@@ -822,8 +967,8 @@ async function captureAndDeliver(details: ChromeNavigationDetails, useCurrentTit
     captured = await serialize(() => captureNavigation(details, useCurrentTitle));
   }
   if (!captured) return;
-  // Deliver after tabs.onUpdated has had time to supply the title. Keep an
-  // existing alarm, so steady browsing cannot keep pushing delivery back.
+  // Keep an existing alarm, so steady browsing cannot keep pushing delivery
+  // of a newly completed hour back.
   if (!await chrome.alarms.get(DELIVER_ALARM)) {
     await chrome.alarms.create(DELIVER_ALARM, { delayInMinutes: DELIVER_DELAY_MINUTES });
   }
@@ -857,12 +1002,65 @@ function registerNavigationListeners(): void {
 registerNavigationListeners();
 
 // Chrome reports a tab's title only for origins this extension was granted.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   const title = changeInfo.title;
   if (title === undefined) return;
-  void serialize(() => patchTitle(tabId, title, tab)).catch((error: unknown) => {
+  void serialize(() => patchTitle(tabId, title)).catch((error: unknown) => {
     console.warn(`${APP_NAME} title update skipped:`, describe(error));
   });
+});
+
+chrome.tabs.onActivated.addListener((info) => {
+  void serialize(async () => {
+    const activity = await readActivity();
+    activateTab(activity, info.tabId, info.windowId, Date.now(), () => crypto.randomUUID());
+    await writeActivity(activity);
+  }).catch((error: unknown) => console.warn(`${APP_NAME} tab attention update skipped:`, describe(error)));
+});
+
+chrome.tabs.onRemoved?.addListener((tabId) => {
+  void serialize(async () => {
+    const activity = await readActivity();
+    removeTab(activity, tabId, Date.now(), () => crypto.randomUUID());
+    await writeActivity(activity);
+  }).catch((error: unknown) => console.warn(`${APP_NAME} tab removal update skipped:`, describe(error)));
+});
+
+const moveActivityTab = (added: number, removed: number): void => {
+  void serialize(async () => {
+    const activity = await readActivity();
+    replaceTab(activity, added, removed);
+    await writeActivity(activity);
+  }).catch((error: unknown) => console.warn(`${APP_NAME} discarded-tab update skipped:`, describe(error)));
+};
+chrome.tabs.onReplaced?.addListener(moveActivityTab);
+chrome.webNavigation?.onTabReplaced?.addListener((details) =>
+  moveActivityTab(details.tabId, details.replacedTabId));
+
+chrome.webNavigation?.onCreatedNavigationTarget?.addListener((details) => {
+  void serialize(async () => {
+    const activity = await readActivity();
+    createdNavigationTarget(activity, details.sourceTabId, details.tabId);
+    await writeActivity(activity);
+  }).catch((error: unknown) => console.warn(`${APP_NAME} trail source skipped:`, describe(error)));
+});
+
+chrome.windows?.onFocusChanged.addListener((windowId) => {
+  void serialize(async () => {
+    const activity = await readActivity();
+    focusWindow(activity, windowId === chrome.windows?.WINDOW_ID_NONE ? null : windowId,
+      Date.now(), () => crypto.randomUUID());
+    await writeActivity(activity);
+  }).catch((error: unknown) => console.warn(`${APP_NAME} window attention update skipped:`, describe(error)));
+});
+
+chrome.idle?.setDetectionInterval(300);
+chrome.idle?.onStateChanged.addListener((state) => {
+  void serialize(async () => {
+    const activity = await readActivity();
+    setIdle(activity, state !== "active", Date.now(), () => crypto.randomUUID());
+    await writeActivity(activity);
+  }).catch((error: unknown) => console.warn(`${APP_NAME} idle update skipped:`, describe(error)));
 });
 
 chrome.permissions.onAdded.addListener((permissions) => {
@@ -883,6 +1081,48 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onStartup.addListener(() => void syncWithHost());
+
+export async function rebuildActivityMap(): Promise<void> {
+  if (!chrome.tabs.query || !chrome.webNavigation?.getFrame) return;
+  await ensureTrustedStorage();
+  const lease = await reconcileGrants();
+  if (!lease?.capture_enabled) return;
+  const activity = await readActivity();
+  const now = Date.now();
+  // Do not attribute time before this worker established current browser
+  // focus and idle state. Existing hourly totals themselves remain durable.
+  activity.measured_at = now;
+  const [tabs, focused, idle] = await Promise.all([
+    chrome.tabs.query({}),
+    chrome.windows?.getLastFocused() ?? Promise.resolve({ id: undefined, focused: false }),
+    chrome.idle?.queryState(300) ?? Promise.resolve("active" as const),
+  ]);
+  activity.chrome_focused = focused.focused;
+  activity.last_focused_window = focused.id ?? activity.last_focused_window;
+  activity.idle = idle !== "active";
+  for (const tab of tabs) {
+    if (tab.id === undefined || tab.incognito !== false || activity.tabs[String(tab.id)]) continue;
+    const frame = await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 }).catch(() => null);
+    const url = frame?.url;
+    const match = url ? matchingArtifact(lease, url) : null;
+    if (!url || !match) continue;
+    activity.tabs[String(tab.id)] = {
+      artifact_id: match.artifact_id, artifact_type: match.type, url, title: null,
+      mode: match.mode, window_id: tab.windowId ?? -1,
+    };
+    if (tab.active) activity.active_by_window[String(tab.windowId ?? -1)] = tab.id;
+  }
+  await writeActivity(activity);
+}
+
+export function queueActivityMapRebuild(): Promise<void> {
+  return serialize(rebuildActivityMap);
+}
+
+// Queue behind this pass so a navigation waking the worker cannot race a
+// missing-map rebuild. Chrome APIs that older test doubles omit simply skip it.
+void queueActivityMapRebuild().catch((error: unknown) =>
+  console.warn(`${APP_NAME} activity-map rebuild skipped:`, describe(error)));
 
 // Registering the alarm again would restart its period on every wake.
 void chrome.alarms.get(SYNC_ALARM).then(async (existing) => {

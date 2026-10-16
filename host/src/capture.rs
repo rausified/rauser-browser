@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{SiteConfig, StorageConfig, VisitEvent};
+use brauser_protocol::{ActivityEvent, SiteConfig, StorageConfig, VisitEvent, WhyEvent};
 use cap_std::fs::{Dir, OpenOptions};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,11 @@ pub enum CaptureOutcome {
     Retryable { message: String },
 }
 
+struct EventRendering<'a> {
+    body: Option<&'a str>,
+    marker_metadata: Option<&'a str>,
+}
+
 impl CaptureStore {
     pub fn open(storage: &StorageConfig) -> Result<Self> {
         Self::open_checked(storage, None)
@@ -110,6 +115,194 @@ impl CaptureStore {
     }
 
     pub fn record(&self, policy: CapturePolicy<'_>, event: &VisitEvent) -> CaptureOutcome {
+        self.record_entry(policy, event, None, None)
+    }
+
+    pub fn record_activity(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &ActivityEvent,
+    ) -> CaptureOutcome {
+        if event.opens > 100_000
+            || event.focused_seconds > 7_200
+            || event.background_seconds > 7_200
+            || event.modes.len() > 3
+            || event.trails.len() > 10
+            || event.refs.len() > 20
+            || event.artifact_id.len() > 512
+            || event.artifact_type.len() > 64
+            || event.modes.iter().any(|mode| {
+                !matches!(mode.mode.as_str(), "view" | "edit" | "review")
+                    || mode.url.is_empty()
+                    || mode.url.len() > MAX_URL_BYTES
+            })
+            || event.trails.iter().any(|trail| {
+                trail.transition.is_empty()
+                    || trail.transition.len() > 64
+                    || trail
+                        .from_artifact_id
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 512)
+                    || trail
+                        .from_url
+                        .as_ref()
+                        .is_some_and(|value| value.len() > MAX_URL_BYTES)
+                    || trail.from_artifact_id.is_some() != trail.from_url.is_some()
+            })
+            || event.refs.iter().any(|reference| {
+                reference.artifact_type.is_empty()
+                    || reference.artifact_type.len() > 64
+                    || reference.value.is_empty()
+                    || reference.value.len() > 512
+            })
+        {
+            return CaptureOutcome::Rejected {
+                reason: "invalid_activity".into(),
+            };
+        }
+        let modes = event
+            .modes
+            .iter()
+            .map(|mode| mode.mode.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut measures = Vec::new();
+        if event.focused_seconds > 0 {
+            measures.push(format!("focused {}s", event.focused_seconds));
+        }
+        if event.background_seconds > 0 {
+            measures.push(format!("background {}s", event.background_seconds));
+        }
+        if event.opens > 0 {
+            measures.push(format!("opened {} time(s)", event.opens));
+        }
+        if !modes.is_empty() {
+            measures.push(format!("modes {modes}"));
+        }
+        if measures.is_empty() {
+            return CaptureOutcome::Rejected {
+                reason: "empty_activity".into(),
+            };
+        }
+        let body = format!(
+            "{} — {} — {}",
+            event.occurred_at,
+            safe_title(event.title.as_deref()),
+            measures.join(" · ")
+        );
+        let mut payload = event.clone();
+        for mode in &mut payload.modes {
+            let source = match parse_page_url(&mode.url) {
+                Ok(source) => source,
+                Err(reason) => return CaptureOutcome::Rejected { reason },
+            };
+            match is_authorized(&source, policy.sites) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return CaptureOutcome::Rejected {
+                        reason: "mode_site_not_allowed".into(),
+                    };
+                }
+                Err(message) => return CaptureOutcome::Retryable { message },
+            }
+            mode.url = match normalize_url(source, policy.strip_params) {
+                Ok(normalized) => normalized,
+                Err(message) => return CaptureOutcome::Retryable { message },
+            };
+        }
+        for trail in &mut payload.trails {
+            let Some(raw_source) = trail.from_url.as_deref() else {
+                continue;
+            };
+            let source = match parse_page_url(raw_source) {
+                Ok(source) => source,
+                Err(reason) => return CaptureOutcome::Rejected { reason },
+            };
+            match is_authorized(&source, policy.sites) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return CaptureOutcome::Rejected {
+                        reason: "trail_site_not_allowed".into(),
+                    };
+                }
+                Err(message) => return CaptureOutcome::Retryable { message },
+            }
+            trail.from_url = match normalize_url(source, policy.strip_params) {
+                Ok(normalized) => Some(normalized),
+                Err(message) => return CaptureOutcome::Retryable { message },
+            };
+        }
+        let visit = VisitEvent {
+            event_id: event.event_id.clone(),
+            url: event.url.clone(),
+            title: event.title.clone(),
+            occurred_at: event.occurred_at.clone(),
+            incognito: event.incognito,
+        };
+        let marker = match serde_json::to_value(payload) {
+            Ok(value) => value,
+            Err(_) => {
+                return CaptureOutcome::Rejected {
+                    reason: "invalid_activity".into(),
+                };
+            }
+        };
+        self.record_entry(
+            CapturePolicy {
+                near_repeat_secs: 0,
+                ..policy
+            },
+            &visit,
+            Some(&body),
+            Some(("activity", marker)),
+        )
+    }
+
+    pub fn record_why(&self, policy: CapturePolicy<'_>, event: &WhyEvent) -> CaptureOutcome {
+        let text = safe_markdown_line(Some(&event.text), 500);
+        if text == "Untitled"
+            || event.artifact_id.is_empty()
+            || event.artifact_id.len() > 512
+            || event.text.chars().count() > 500
+        {
+            return CaptureOutcome::Rejected {
+                reason: "invalid_why".into(),
+            };
+        }
+        let body = format!("{} — Why: {}", event.occurred_at, text);
+        let visit = VisitEvent {
+            event_id: event.event_id.clone(),
+            url: event.url.clone(),
+            title: Some(event.text.clone()),
+            occurred_at: event.occurred_at.clone(),
+            incognito: event.incognito,
+        };
+        let marker = match serde_json::to_value(event) {
+            Ok(value) => value,
+            Err(_) => {
+                return CaptureOutcome::Rejected {
+                    reason: "invalid_why".into(),
+                };
+            }
+        };
+        self.record_entry(
+            CapturePolicy {
+                near_repeat_secs: 0,
+                ..policy
+            },
+            &visit,
+            Some(&body),
+            Some(("why", marker)),
+        )
+    }
+
+    fn record_entry(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &VisitEvent,
+        custom_body: Option<&str>,
+        marker_payload: Option<(&str, serde_json::Value)>,
+    ) -> CaptureOutcome {
         if !policy.enabled {
             return CaptureOutcome::Suppressed {
                 reason: "capture_disabled".into(),
@@ -167,12 +360,32 @@ impl CaptureStore {
                 message: "near-repeat window exceeds 24 hours".into(),
             };
         }
+        let marker_metadata = match marker_payload {
+            Some((kind, mut payload)) => {
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("url".into(), serde_json::Value::String(normalized.clone()));
+                }
+                match serde_json::to_vec(&payload) {
+                    Ok(json) => Some(format!(" kind={kind} data={}", hex::encode(json))),
+                    Err(_) => {
+                        return CaptureOutcome::Rejected {
+                            reason: "invalid_event_metadata".into(),
+                        };
+                    }
+                }
+            }
+            None => None,
+        };
         match self.record_authorized(
             &event_id,
             timestamp,
             &normalized,
             event,
             policy.near_repeat_secs,
+            EventRendering {
+                body: custom_body,
+                marker_metadata: marker_metadata.as_deref(),
+            },
         ) {
             Ok(outcome) => outcome,
             Err(error) => CaptureOutcome::Retryable {
@@ -188,6 +401,7 @@ impl CaptureStore {
         normalized_url: &str,
         event: &VisitEvent,
         near_repeat_secs: u64,
+        rendering: EventRendering<'_>,
     ) -> Result<CaptureOutcome> {
         let lock_parent = self
             .lock_path
@@ -206,9 +420,14 @@ impl CaptureStore {
         let event_hash = sha256_hex(event_id.as_bytes());
         let url_hash = sha256_hex(normalized_url.as_bytes());
         let title = safe_title(event.title.as_deref());
+        let body = rendering.body.map_or_else(
+            || format!("{} — {} — <{}>", event.occurred_at, title, normalized_url),
+            |prefix| format!("{prefix} — <{normalized_url}>"),
+        );
         let entry = format!(
-            "\n- {} — {} — <{}>\n{MARKER_PREFIX}{event_hash} url={url_hash} at={} -->\n",
-            event.occurred_at, title, normalized_url, event.occurred_at
+            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
+            event.occurred_at,
+            rendering.marker_metadata.unwrap_or("")
         );
         let journal_path = self.journal_path(&event_hash);
         if let Some(intent) = read_intent(&journal_path)? {
@@ -901,7 +1120,7 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
     let rest = line.strip_prefix(MARKER_PREFIX)?;
     let (id, rest) = rest.split_once(" url=")?;
     let (url, rest) = rest.split_once(" at=")?;
-    let timestamp = rest.strip_suffix(" -->")?;
+    let timestamp = rest.strip_suffix(" -->")?.split(' ').next()?;
     if id.len() != 64 || url.len() != 64 {
         return None;
     }
@@ -910,9 +1129,13 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
 }
 
 fn safe_title(value: Option<&str>) -> String {
+    safe_markdown_line(value, 300)
+}
+
+fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
     let title = value.unwrap_or("Untitled").trim();
     let mut out = String::new();
-    for ch in title.chars().take(300) {
+    for ch in title.chars().take(limit) {
         if ch.is_control() {
             out.push(' ');
         } else {
@@ -932,6 +1155,7 @@ fn safe_title(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
 
     fn storage(root: &Path, log_dir: &str) -> StorageConfig {
         StorageConfig {
@@ -947,7 +1171,7 @@ mod tests {
     fn event() -> VisitEvent {
         VisitEvent {
             event_id: Uuid::new_v4().to_string(),
-            url: "https://example.com/article?keep=1".into(),
+            url: "https://example.com/article?keep=1&secret=2".into(),
             title: Some("Article".into()),
             occurred_at: OffsetDateTime::now_utc()
                 .replace_nanosecond(0)
@@ -972,6 +1196,170 @@ mod tests {
             },
             event,
         )
+    }
+
+    fn activity() -> ActivityEvent {
+        ActivityEvent {
+            event_id: Uuid::new_v4().to_string(),
+            artifact_id: "web:example/article".into(),
+            artifact_type: "web.page".into(),
+            url: "https://example.com/article?keep=1".into(),
+            title: Some("Article".into()),
+            occurred_at: OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&Rfc3339)
+                .unwrap(),
+            incognito: false,
+            opens: 2,
+            focused_seconds: 42,
+            background_seconds: 15,
+            modes: vec![
+                ActivityMode {
+                    mode: "view".into(),
+                    url: "https://example.com/article?keep=1&secret=2".into(),
+                },
+                ActivityMode {
+                    mode: "review".into(),
+                    url: "https://example.com/article/files?secret=2".into(),
+                },
+            ],
+            trails: vec![ActivityTrail {
+                from_artifact_id: Some("web:example/source".into()),
+                from_url: Some("https://example.com/source?secret=2".into()),
+                transition: "link".into(),
+            }],
+            refs: vec![ActivityRef {
+                artifact_type: "jira.issue".into(),
+                value: "PROJ-1".into(),
+            }],
+        }
+    }
+
+    fn record_activity(store: &CaptureStore, event: &ActivityEvent) -> CaptureOutcome {
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        store.record_activity(
+            CapturePolicy {
+                enabled: true,
+                sites: &sites,
+                strip_params: &["secret".into()],
+                near_repeat_secs: 300,
+            },
+            event,
+        )
+    }
+
+    #[test]
+    fn activity_is_measured_markdown_and_replay_is_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let event = activity();
+        let CaptureOutcome::Persisted { relative_path } = record_activity(&store, &event) else {
+            panic!("expected persisted activity");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        assert!(markdown.contains("focused 42s · background 15s · opened 2 time(s)"));
+        assert!(markdown.contains("modes view, review"));
+        assert!(markdown.contains(" kind=activity data="));
+        assert!(!markdown.contains("secret=2"));
+        let encoded = markdown
+            .split(" data=")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap();
+        let stored: ActivityEvent = serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+        assert_eq!(stored.url, "https://example.com/article?keep=1");
+        assert_eq!(stored.modes[0].url, "https://example.com/article?keep=1");
+        assert_eq!(stored.modes[1].url, "https://example.com/article/files");
+        assert_eq!(
+            stored.trails[0].from_url.as_deref(),
+            Some("https://example.com/source")
+        );
+        assert_eq!(
+            record_activity(&store, &event),
+            CaptureOutcome::Suppressed {
+                reason: "duplicate_event".into()
+            }
+        );
+    }
+
+    #[test]
+    fn empty_or_oversized_activity_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut event = activity();
+        event.opens = 0;
+        event.focused_seconds = 0;
+        event.background_seconds = 0;
+        event.modes.clear();
+        assert_eq!(
+            record_activity(&store, &event),
+            CaptureOutcome::Rejected {
+                reason: "empty_activity".into()
+            }
+        );
+        event.focused_seconds = 7_201;
+        assert_eq!(
+            record_activity(&store, &event),
+            CaptureOutcome::Rejected {
+                reason: "invalid_activity".into()
+            }
+        );
+    }
+
+    #[test]
+    fn why_events_append_once_and_escape_markdown() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let why = WhyEvent {
+            event_id: Uuid::new_v4().to_string(),
+            artifact_id: "web:example/article".into(),
+            url: "https://example.com/article".into(),
+            occurred_at: OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&Rfc3339)
+                .unwrap(),
+            incognito: false,
+            text: "Fix [release] blocker".into(),
+        };
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        let policy = || CapturePolicy {
+            enabled: true,
+            sites: &sites,
+            strip_params: &[],
+            near_repeat_secs: 300,
+        };
+        let CaptureOutcome::Persisted { relative_path } = store.record_why(policy(), &why) else {
+            panic!("expected persisted why event");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        assert!(markdown.contains("Why: Fix \\[release\\] blocker"));
+        assert!(markdown.contains(" kind=why data="));
+        assert_eq!(
+            store.record_why(policy(), &why),
+            CaptureOutcome::Suppressed {
+                reason: "duplicate_event".into()
+            }
+        );
     }
 
     #[test]
