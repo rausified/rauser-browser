@@ -805,13 +805,26 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     if !(trusted_current && current.capture_enabled) && next.capture_enabled {
         lines.push("Turn on automatic visit logging.".to_owned());
     }
-    for (index, adapter) in next.adapters.artifacts.iter().enumerate() {
+    let mut last_prior_adapter = None;
+    for adapter in &next.adapters.artifacts {
         if preserving_inert_adapters {
             continue;
         }
-        // Config order decides which overlapping rule wins, so moving an
-        // otherwise unchanged adapter is itself a policy change.
-        let unchanged = trusted_adapters && current.adapters.artifacts.get(index) == Some(adapter);
+        // Removing an earlier adapter shifts every following array index but
+        // does not widen any survivor. Match the stable adapter identity
+        // instead. The matched prior indexes must still increase: config
+        // order decides which overlapping rule wins, so a real reorder is a
+        // policy change even when the adapter bytes are otherwise unchanged.
+        let prior_index = trusted_adapters
+            .then(|| unique_adapter_index(&current.adapters.artifacts, adapter))
+            .flatten();
+        let unchanged = prior_index.is_some_and(|index| {
+            current.adapters.artifacts.get(index) == Some(adapter)
+                && last_prior_adapter.is_none_or(|last| index > last)
+        });
+        if let Some(index) = prior_index {
+            last_prior_adapter = Some(index);
+        }
         if unchanged {
             continue;
         }
@@ -898,6 +911,27 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
         }
     }
     lines
+}
+
+fn unique_adapter_index(
+    adapters: &[serde_json::Value],
+    candidate: &serde_json::Value,
+) -> Option<usize> {
+    let identity = adapter_approval_identity(candidate)?;
+    let mut matches = adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, adapter)| adapter_approval_identity(adapter) == Some(identity));
+    let (index, _) = matches.next()?;
+    matches.next().is_none().then_some(index)
+}
+
+fn adapter_approval_identity(value: &serde_json::Value) -> Option<(&str, &str, &str)> {
+    Some((
+        value.get("origin")?.as_str()?,
+        value.get("type")?.as_str()?,
+        value.get("id")?.as_str()?,
+    ))
 }
 
 fn site_covers(prior: &SiteConfig, next: &SiteConfig) -> bool {
@@ -1189,6 +1223,72 @@ mod tests {
         assert!(lines.iter().any(|line| {
             line.contains("every account") && line.contains("separate Chrome profile")
         }));
+        assert!(authorize(&current, &next, None, None).is_err());
+    }
+
+    fn unscoped_adapter(index: usize) -> serde_json::Value {
+        json!({
+            "type": "gdoc",
+            "origin": "https://docs.google.com",
+            "unscoped": "acknowledged",
+            "match": [{
+                "path": format!("/kind-{index}/{{id:int}}"),
+            }],
+            "id": format!("gdoc:{{host}}/kind-{index}/{{id}}"),
+        })
+    }
+
+    #[test]
+    fn removing_an_adapter_does_not_reconfirm_shifted_survivors() {
+        let adapters = (0..31).map(unscoped_adapter).collect::<Vec<_>>();
+        let current = ConfigSnapshot {
+            sites: vec![SiteConfig {
+                origin: "https://docs.google.com".into(),
+                path_prefix: "/".into(),
+            }],
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: adapters.clone(),
+            },
+            ..crate::config::empty_config()
+        };
+        let next = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: adapters.into_iter().skip(1).collect(),
+            },
+            ..current.clone()
+        };
+        crate::config::validate(&current).unwrap();
+        crate::config::validate(&next).unwrap();
+
+        assert!(approval_lines(&current, &next).is_empty());
+        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
+    }
+
+    #[test]
+    fn reordering_adapters_still_needs_confirmation() {
+        let current = ConfigSnapshot {
+            sites: vec![SiteConfig {
+                origin: "https://docs.google.com".into(),
+                path_prefix: "/".into(),
+            }],
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: vec![unscoped_adapter(0), unscoped_adapter(1)],
+            },
+            ..crate::config::empty_config()
+        };
+        let mut next = current.clone();
+        next.adapters.artifacts.swap(0, 1);
+
+        crate::config::validate(&current).unwrap();
+        crate::config::validate(&next).unwrap();
+        assert!(
+            approval_lines(&current, &next)
+                .iter()
+                .any(|line| line.contains("Enable or change"))
+        );
         assert!(authorize(&current, &next, None, None).is_err());
     }
 
