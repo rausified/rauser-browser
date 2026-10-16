@@ -543,7 +543,10 @@ impl ConfigStore {
         if json.len() > MAX_CONFIG_BYTES {
             bail!("configuration exceeds the 64 KiB size limit");
         }
-        validate(&next)?;
+        // Full adapter validation happens against the freshly read current
+        // document under the config lock below. Base fields are never allowed
+        // to use the invalid-adapter repair exception.
+        validate_base(&next)?;
         if let Some(commit) = &harness_commit
             && (next.agent.as_ref() != Some(&commit.agent)
                 || !next.agent_denylist_confirmed
@@ -558,13 +561,20 @@ impl ConfigStore {
             self.adopt(current);
             return Ok(None);
         }
-        validate_adapter_transition_with_history(
-            &current.config,
-            &next,
-            &current.retired_adapter_contracts,
-        )?;
-        let retired_adapter_contracts =
-            updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next);
+        validate_update(&current.config, &next)?;
+        let adapters_unchanged = current.config.adapters == next.adapters;
+        if !adapters_unchanged {
+            validate_adapter_transition_with_history(
+                &current.config,
+                &next,
+                &current.retired_adapter_contracts,
+            )?;
+        }
+        let retired_adapter_contracts = if adapters_unchanged {
+            current.retired_adapter_contracts.clone()
+        } else {
+            updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next)
+        };
 
         let agent = match &harness_commit {
             Some(commit) => {
@@ -655,9 +665,10 @@ impl ConfigStore {
         self.issue = None;
         self.root_identity = next_identity;
         self.agent = agent;
-        self.adapter_issue = None;
-        self.adapter_warnings = validate_adapters(&self.config)
-            .expect("a configuration validated immediately before it was committed");
+        (self.adapter_issue, self.adapter_warnings) = match validate_adapters(&self.config) {
+            Ok(warnings) => (None, warnings),
+            Err(error) => (Some(error.to_string()), Vec::new()),
+        };
         if let Err(error) = sync_parent(parent) {
             eprintln!(
                 "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
@@ -1153,6 +1164,23 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
+/// Validate an extension-authored update without making an already-inert
+/// adapter document block unrelated settings. The exception is deliberately
+/// narrow: only the exact adapter bytes from an already-invalid policy may
+/// remain invalid. Any adapter edit, or a base-policy change that would turn a
+/// previously valid adapter document invalid, still has to pass the full
+/// authoritative adapter validation.
+pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
+    validate_base(next)?;
+    let preserving_inert_adapters = current.adapters == next.adapters
+        && validate_adapters(current).is_err()
+        && validate_adapters(next).is_err();
+    if !preserving_inert_adapters {
+        validate_adapters(next)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     if config.sites.len() > MAX_SITES {
         bail!("site allowlist exceeds the 128-entry limit");
@@ -1192,7 +1220,7 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
-fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
+pub(crate) fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
     let document = compile_adapters(config)?;
     for (index, adapter) in document.adapters().iter().enumerate() {
         if !config
@@ -1273,11 +1301,13 @@ fn validate_adapter_transition_with_history(
         validate_active_id_transition(current, next)?;
     }
 
-    let (removed, added) = if current_is_valid {
-        adapter_contract_delta(current, next)
+    let current_contracts = if current_is_valid {
+        adapter_contracts(current)
     } else {
-        (Vec::new(), adapter_contracts(next))
+        individually_valid_adapter_contracts(current)
     };
+    let (removed, added) =
+        adapter_contract_delta_between(current_contracts, adapter_contracts(next));
     for candidate in &added {
         let Some((origin, id)) = adapter_contract_identity(candidate) else {
             continue;
@@ -1372,12 +1402,10 @@ fn adapter_contract_type(value: &serde_json::Value) -> Option<&str> {
 
 /// Pair unchanged contracts first, then pair recognition edits that retain the
 /// same origin, type, and ID. What remains is a real retirement or introduction.
-fn adapter_contract_delta(
-    current: &ConfigSnapshot,
-    next: &ConfigSnapshot,
+fn adapter_contract_delta_between(
+    current: Vec<serde_json::Value>,
+    next: Vec<serde_json::Value>,
 ) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let current = adapter_contracts(current);
-    let next = adapter_contracts(next);
     let mut current_matched = vec![false; current.len()];
     let mut next_matched = vec![false; next.len()];
 
@@ -1435,6 +1463,17 @@ fn validate_adapter_history(history: &[serde_json::Value]) -> Result<()> {
     Ok(())
 }
 
+/// Preserve every contract an older host can validate independently, even
+/// when another entry or a future document format makes the whole policy
+/// inert. This is only a conservative record-key freeze: these contracts are
+/// never used for capture until the complete document validates.
+fn individually_valid_adapter_contracts(config: &ConfigSnapshot) -> Vec<serde_json::Value> {
+    adapter_contracts(config)
+        .into_iter()
+        .filter(|contract| validate_adapter_history(std::slice::from_ref(contract)).is_ok())
+        .collect()
+}
+
 fn adapter_contracts_overlap(
     previous: &serde_json::Value,
     candidate: &serde_json::Value,
@@ -1464,17 +1503,17 @@ fn updated_adapter_history(
         .filter(|contract| !active.contains(contract))
         .cloned()
         .collect();
-    if validate_adapters(current).is_ok() {
-        // Recognition edits that retain an ID also retire the old shape. Keep
-        // it for the same reason as a wholly removed adapter: a later update
-        // must not be able to assign that old route a new record key.
-        for contract in adapter_contracts(current) {
-            if active.contains(&contract) {
-                continue;
-            }
-            if !updated.contains(&contract) {
-                updated.push(contract);
-            }
+    // Recognition edits that retain an ID also retire the old shape. Keep it
+    // for the same reason as a wholly removed adapter: a later update must not
+    // be able to assign that old route a new record key. If the whole current
+    // document is invalid, retain the contracts this host can still validate
+    // independently; they remain inert and are used only as migration guards.
+    for contract in individually_valid_adapter_contracts(current) {
+        if active.contains(&contract) {
+            continue;
+        }
+        if !updated.contains(&contract) {
+            updated.push(contract);
         }
     }
     updated
@@ -2309,6 +2348,93 @@ mod tests {
             fs::read(&path).unwrap(),
             before,
             "loading must not rewrite config"
+        );
+    }
+
+    #[test]
+    fn unrelated_update_preserves_then_repairs_an_unsupported_adapter_document() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
+        );
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let next = ConfigSnapshot {
+            agent_denylist: vec!["bank.example".into()],
+            ..store.snapshot().clone()
+        };
+
+        store.update(next, &revision).unwrap().unwrap();
+
+        let mut reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot().adapters.format, 2);
+        assert_eq!(reloaded.snapshot().agent_denylist, ["bank.example"]);
+        assert!(reloaded.adapter_issue().is_some());
+
+        let revision = reloaded.revision().to_owned();
+        let repaired = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: Vec::new(),
+            },
+            ..reloaded.snapshot().clone()
+        };
+        reloaded.update(repaired, &revision).unwrap().unwrap();
+
+        let repaired = loaded(&path);
+        assert_eq!(repaired.snapshot().adapters.format, 1);
+        assert!(repaired.snapshot().adapters.artifacts.is_empty());
+        assert_eq!(repaired.adapter_issue(), None);
+    }
+
+    #[test]
+    fn resetting_an_invalid_document_preserves_its_known_id_contracts() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let original = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            )],
+        );
+        store.update(original, MISSING_REVISION).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, text.replacen("format = 1", "format = 2", 1)).unwrap();
+        store.refresh().unwrap();
+        assert!(store.adapter_issue().is_some());
+
+        let reset = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: Vec::new(),
+            },
+            ..store.snapshot().clone()
+        };
+        let revision = store.revision().to_owned();
+        let revision = store.update(reset, &revision).unwrap().unwrap();
+        let remapped = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/changed/{id}",
+            )],
+        );
+
+        let error = store.update(remapped, &revision).unwrap_err().to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
         );
     }
 

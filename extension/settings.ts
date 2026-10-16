@@ -142,20 +142,22 @@ export class ConfigSession {
 
   /** config_updated carries no agent status, so read it after a save. A
    * newer revision belongs to another page, whose lease change reloads.
-   * The save itself has committed, so a failed read only blanks the status. */
-  private async refreshDerivedStatus(): Promise<void> {
+   * The save itself has committed, but an unverified adapter status keeps the
+   * worker policy suspended. */
+  private async refreshDerivedStatus(): Promise<boolean> {
     try {
       const latest = await this.readHostConfig();
       if (latest.revision === this.revision) {
+        this.configIssue = latest.config_issue;
         this.agentStatus = latest.agent_status;
         this.adapterIssue = latest.adapter_issue;
         this.adapterWarnings = latest.adapter_warnings;
+        return true;
       }
     } catch {
       this.agentStatus = null;
-      this.adapterIssue = null;
-      this.adapterWarnings = [];
     }
+    return false;
   }
 
   async applyHostConfig(response: Awaited<ReturnType<ConfigSession["readHostConfig"]>>): Promise<void> {
@@ -233,13 +235,14 @@ export class ConfigSession {
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);
-    this.configIssue = null;
-    this.adapterIssue = null;
-    this.adapterWarnings = [];
     onCommitted?.();
     this.onChange();
-    await this.installHostPolicy(resumeAfterConfirmation, resumeAfterPauseToken);
-    await this.refreshDerivedStatus();
+    const statusVerified = await this.refreshDerivedStatus();
+    if (statusVerified && this.configIssue === null && this.adapterIssue === null) {
+      await this.installHostPolicy(resumeAfterConfirmation, resumeAfterPauseToken);
+    } else {
+      await worker<WorkerStatus>({ kind: "suspend_policy" });
+    }
     await this.refreshStatus();
   }
 
@@ -295,12 +298,12 @@ export class ConfigSession {
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);
-    this.configIssue = null;
-    this.adapterIssue = null;
-    this.adapterWarnings = [];
     this.onChange();
-    await this.installHostPolicy();
-    await this.refreshDerivedStatus();
+    const statusVerified = await this.refreshDerivedStatus();
+    if (statusVerified && this.configIssue === null && this.adapterIssue === null) {
+      await this.installHostPolicy();
+    }
+    else await worker<WorkerStatus>({ kind: "suspend_policy" });
     await this.refreshStatus();
   }
 
@@ -355,7 +358,10 @@ export class ConfigSession {
       async (latest) => {
         await this.saveConfig({ ...latest.config, capture_enabled: false }, null);
       },
-      async () => { await this.installHostPolicy(); },
+      async (latest) => {
+        if (latest.adapter_issue) await worker<WorkerStatus>({ kind: "suspend_policy" });
+        else await this.installHostPolicy();
+      },
       (error) => error instanceof HostError && error.code === "conflict",
     );
   }

@@ -351,6 +351,25 @@ test("pause re-reads a conflicting host revision before clearing the local block
   assert.equal(host.config.capture_enabled, false);
 });
 
+test("pause can disable capture while adapter policy is invalid", async () => {
+  const host = {
+    revision: "r2", config: { capture_enabled: true }, config_issue: null,
+    adapter_issue: "unsupported adapter format 2",
+  };
+  let saved = false;
+  await finishHostPause(
+    async () => structuredClone(host),
+    async () => undefined,
+    async (snapshot) => {
+      assert.equal(snapshot.adapter_issue, "unsupported adapter format 2");
+      saved = true;
+    },
+    async () => assert.fail("enabled capture must be saved as disabled"),
+    () => false,
+  );
+  assert.equal(saved, true);
+});
+
 test("a re-enabled origin clears only its old revocation after a matching lease and live grant", async () => {
   values.clear();
   sessionValues.clear();
@@ -871,6 +890,52 @@ test("a host that cannot be started reports the session disconnected", async () 
   await recovered;
   assert.equal(session.connected, true);
   session.host.disconnect();
+});
+
+test("a post-save folder issue suspends policy instead of installing a lease", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  ports.length = 0;
+  const origin = "https://changed-folder.example";
+  grants.set(exactPattern(origin), true);
+  const saved = configResult({ request_id: "fixture" }, origin).config;
+  const session = new ConfigSession(() => undefined);
+  session.config = structuredClone(saved);
+  session.revision = "r1";
+  const previousSendMessage = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = async (request) => ({ ok: true, value: await send(request) });
+
+  try {
+    const saving = session.saveConfig(structuredClone(saved), null);
+    const port = ports[0];
+    let request = await sentOn(port, 1);
+    assert.equal(request.type, "confirm_config");
+    port.reply({
+      type: "config_confirmed", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      consent_token: "consent", summary: "No additional capture access is requested.",
+    });
+    request = await sentOn(port, 2);
+    assert.equal(request.type, "update_config");
+    port.reply({
+      type: "config_updated", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      revision: "r2", config: saved,
+    });
+    request = await sentOn(port, 3);
+    assert.equal(request.type, "get_config");
+    port.reply(configResult(request, origin, {
+      revision: "r2",
+      config: saved,
+      config_issue: "The selected notes folder is unavailable or changed.",
+    }));
+    await saving;
+
+    assert.equal(values.get(storageKey("policy_v1")), null);
+    assert.match(session.configIssue, /unavailable or changed/);
+  } finally {
+    chrome.runtime.sendMessage = previousSendMessage;
+    session.host.disconnect();
+  }
 });
 
 test("unaddressed host errors and version mismatches reach the caller", async () => {
