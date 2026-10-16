@@ -2,7 +2,99 @@
 
 ## Current state
 
-M0 is merged. M1 development code adds a Chrome side panel and settings page, opt-in site capture, native folder selection and consent, and durable visit IDs. The side panel was then reworked, before M2 (DESIGN.md §12.2 step 4): page notes are no longer create-only with sibling review drafts. The panel follows the active tab, loads that page's note on any HTTP(S) page (not gated by the logging allowlist), and autosaves the whole note about a second after typing stops, on tab change, and on panel close, via new `load_note`/`save_note` protocol messages (protocol version 3) that reuse `get_config`/`update_config`'s revision-check pattern. A save based on a stale version is refused; the host returns the note's current content and the panel shows a copy-out of the text it could not save. The first note on a page the extension has no standing Chrome access to starts from the toolbar action, the `note` keyboard command, or a page context-menu entry, which brings `activeTab` and `contextMenus` forward from M2 (and raises `minimum_chrome_version` to 116). The capture housekeeping controls from M1 collapsed into a one-line, expandable capture strip. The answer card, Summary section, and full omnibar are not built (M2/M3). M2 step 1 (harness setup) has started: protocol version 4 adds `summaries_dir`, the agent denylist and its host-only confirmation, `log_incognito` (always false), a host-validated harness entry, `agent_status` in `get_config`, and a `check_agent` readiness gate (host/src/privacy.rs holds denylist validation and matching). `host/src/harness.rs` holds harness discovery on an injected search path, bounded runs (cleared environment, host-owned 0700 work directory, output caps, timeout, process-group kill), the `--help` flag and Codex feature checks, and the setup probe, tested with fake harness scripts. `discover_harnesses` and `confirm_harness_setup` wire it to the protocol: the host offers what it found, shows a native confirmation, runs the probe, and mints the single-use harness token that alone can set the harness entry and `agent_denylist_confirmed` (host/src/consent.rs). Codex setup runs `codex --version`, `codex exec --help`, and `codex features list` with the reviewed extra disables, under the user's own `HOME` and `CODEX_HOME` (passed whenever the host has it); features list gets an empty host-owned `CODEX_HOME` instead, because runs ignore the user's config.toml. Every harness run gets its own new work directory, removed afterwards; its confirmation and the settings page say that the user's Codex instructions and skills can shape its output (§14). The settings page ("AI harness (optional)") drives setup: it detects harnesses, lets the user pick optional environment names and a summaries folder, edits the AI privacy list (`extension/agent.ts` normalizes entries; suggestions only fill the box), and removes the harness. No AI command exists yet, so nothing runs a harness beyond setup's own checks and probe. The headless smoke run covers setup with fake harnesses on a pinned `PATH` and a cleared host environment. The service worker delivers buffered visits and renews its policy lease itself, from `alarms` and at browser startup, so capture no longer depends on opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the worker to sync now. The rest of the agent integration, search index, signed installers, Chrome Web Store listing, and public release do not exist yet. M1 still needs interactive Chrome checks on macOS, the only supported platform (DESIGN.md §13; Windows support was dropped, §14). M1.5a has also begun: the adapter-template language (`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a TypeScript twin (`extension/adapter-templates.ts`) checked against each other via the shared vectors in `protocol/adapter-templates/vectors.json` (`npm run test:adapter-diff`). Protocol version 5 now carries its first real product integration: `ConfigSnapshot.adapters` round-trips as `[adapters] format = 1` plus `[[artifacts]]`, the host validates it with the Rust engine and the enabled site origins, `get_config` reports overlap warnings or an adapter-only policy issue, and adapter additions and edits enter native confirmation (including the every-account disclosure for unscoped shared origins). A missing table defaults to an empty format-1 document; an unsupported format is preserved while automatic capture is suspended. Existing adapter IDs are frozen until alias migrations exist. The worker lease, TypeScript prefilter, host recognition of delivered events, and artifact activity log remain unbuilt, so capture still uses the M1 visit path. DESIGN.md's principle 9 (standalone product) now governs this repo: no file, build step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or Astrolabe exist, even though development happens inside the ENDURANCE vault. No AMOS inventory entry or feature briefing exists yet for Brauser (checked via `grep -ril "brauser\|rauserBrowser" AMOS/inventory AMOS_docs` from the ENDURANCE root); creating one is a separate follow-up, not covered here. Use [DESIGN.md](DESIGN.md) for intended behavior and update it when implementation changes a contract.
+M0 is merged. M1 development code adds a Chrome side panel and settings page,
+opt-in site capture, native folder selection and consent, and durable visit IDs.
+The side panel was then reworked, before M2 (DESIGN.md §12.2 step 4): page
+notes are no longer create-only with sibling review drafts. The panel follows
+the active tab, loads that page's note on any HTTP(S) page (not gated by the
+logging allowlist), and autosaves the whole note about a second after typing
+stops, on tab change, and on panel close, via `load_note`/`save_note` protocol
+messages (protocol version 3) that reuse `get_config`/`update_config`'s
+revision-check pattern. A save based on a stale version is refused; the host
+returns the note's current content and the panel shows a copy-out of the text
+it could not save. The first note on a page the extension has no standing
+Chrome access to starts from the toolbar action, the `note` keyboard command,
+or a page context-menu entry, which brings `activeTab` and `contextMenus`
+forward from M2 (and raises `minimum_chrome_version` to 116). The capture
+housekeeping controls from M1 collapsed into a one-line, expandable capture
+strip. The answer card, Summary section, and full omnibar are not built
+(M2/M3).
+
+M2 step 1 (harness setup) is built. Protocol version 4 adds `summaries_dir`,
+the agent denylist and its host-only confirmation, `log_incognito` (always
+false), a host-validated harness entry, `agent_status` in `get_config`, and a
+`check_agent` readiness gate (`host/src/privacy.rs` holds denylist validation
+and matching). `host/src/harness.rs` holds harness discovery on an injected
+search path, bounded runs (cleared environment, host-owned 0700 work directory,
+output caps, timeout, process-group kill), the `--help` flag and Codex feature
+checks, and the setup probe, tested with fake harness scripts.
+`discover_harnesses` and `confirm_harness_setup` wire it to the protocol: the
+host offers what it found, shows a native confirmation, runs the probe, and
+mints the single-use harness token that alone can set the harness entry and
+`agent_denylist_confirmed` (`host/src/consent.rs`). Codex setup runs
+`codex --version`, `codex exec --help`, and `codex features list` with the
+reviewed extra disables, under the user's own `HOME` and `CODEX_HOME` (passed
+whenever the host has it); features list gets an empty host-owned `CODEX_HOME`
+instead, because runs ignore the user's `config.toml`. Every harness run gets
+its own new work directory, removed afterwards; its confirmation and the
+settings page say that the user's Codex instructions and skills can shape its
+output (§14). The settings page ("AI harness (optional)") drives setup: it
+detects harnesses, lets the user pick optional environment names and a
+summaries folder, edits the AI privacy list (`extension/agent.ts` normalizes
+entries; suggestions only fill the box), and removes the harness. No AI
+command exists yet, so nothing runs a harness beyond setup's own checks and
+probe. The headless smoke run covers setup with fake harnesses on a pinned
+`PATH` and a cleared host environment.
+
+M1.5a is in progress on protocol version 5. The adapter-template language
+(`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a
+TypeScript twin (`extension/adapter-templates.ts`) checked against each other
+via the shared vectors in `protocol/adapter-templates/vectors.json`
+(`npm run test:adapter-diff`). `ConfigSnapshot.adapters` round-trips as
+`[adapters] format = 1` plus `[[artifacts]]`; the host validates it with the
+Rust engine and enabled site origins, reports overlap warnings or an
+adapter-only policy issue, and puts adapter additions and edits behind native
+confirmation (including the every-account disclosure for unscoped shared
+origins). A missing table defaults to an empty format-1 document; an
+unsupported format or unknown future `[adapters]` key is preserved while
+automatic capture is suspended.
+Existing adapter IDs are frozen until alias migrations exist. Settings has the
+adapter review workspace and development starter drafts for Jira Cloud,
+SharePoint/OneDrive, and scoped GitHub origins; the drafts still require the
+documented live-tool checks before release certification.
+
+The confirmed adapter document now travels in the worker's revisioned policy
+lease. The TypeScript worker validates and compiles it before buffering and
+prefilters unrecognized or out-of-scope navigations; the host independently
+rechecks each delivered event with the Rust engine before vault I/O. Automatic
+capture records offset-qualified hourly artifact activity instead of creating
+new M1 visit rows: cold opens, focused and background time, modes, refs, and
+trails freeze into idempotent `activity` events, with append-only `why` events
+for explicit context. Older buffered M1 visits still drain after upgrade. The
+worker groups up to 64 same-local-day records under a stable batch ID and
+overflow snapshot; the host validates the complete batch, then uses one
+compact crash-recovery intent, one append, and one log sync. Queue pressure
+coalesces compatible undispatched activity without exceeding the byte cap,
+lights the toolbar badge at 80%, and leaves durable overflow evidence. The
+index and artifact-file generation, artifact panel card, Recent list, worklog
+view, and record keys remain unfinished.
+
+The service worker delivers buffered events and renews its policy lease
+itself, from `alarms` and at browser startup, so capture does not depend on
+opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the
+worker to sync now. The rest of the agent integration, search index, signed
+installers, Chrome Web Store listing, and public release do not exist yet. M1
+still needs interactive Chrome checks on macOS, the only supported platform
+(DESIGN.md §13; Windows support was dropped, §14).
+
+DESIGN.md's principle 9 (standalone product) governs this repo: no file, build
+step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or Astrolabe
+exist, even though development happens inside the ENDURANCE vault. No AMOS
+inventory entry or feature briefing exists yet for Brauser (checked via
+`grep -ril "brauser\|rauserBrowser" AMOS/inventory AMOS_docs` from the ENDURANCE
+root); creating one is a separate follow-up, not covered here. Use
+[DESIGN.md](DESIGN.md) for intended behavior and update it when implementation
+changes a contract.
 
 ## Repository map
 

@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, AdapterDocument, SiteConfig, VisitEvent, VisitOutcome,
+  ActivityEvent, AdapterDocument, OverflowMarker, SiteConfig, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
 import {
   compileDocument,
@@ -41,6 +41,10 @@ export interface QueuedVisit {
   // All records in one native delivery retain its ID across retries, making
   // both the log append and an attached overflow marker idempotent.
   batch_id?: string;
+  // The overflow evidence sent with this batch is frozen too. Without this,
+  // drops that happen after a lost acknowledgement could be folded into a
+  // replay whose batch ID already names a smaller marker in the log.
+  batch_overflow?: OverflowMarker | null;
 }
 
 export interface QueueState {
@@ -278,6 +282,15 @@ export function isQueuedVisit(value: unknown): value is QueuedVisit {
     visit.opens === undefined && visit.focused_seconds === undefined &&
     visit.background_seconds === undefined && visit.modes === undefined &&
     visit.trails === undefined && visit.refs === undefined;
+  const overflow = item.batch_overflow;
+  const marker = typeof overflow === "object" && overflow !== null
+    ? overflow as Record<string, unknown>
+    : null;
+  const batchOverflow = overflow === undefined || overflow === null || (marker !== null &&
+    typeof marker.count === "number" && Number.isInteger(marker.count) &&
+    marker.count > 0 && marker.count <= 0xffff_ffff &&
+    typeof marker.first_occurred_at === "string" &&
+    typeof marker.last_occurred_at === "string");
   return (
     typeof item.dedupe_key === "string" &&
     typeof item.attempts === "number" &&
@@ -288,6 +301,7 @@ export function isQueuedVisit(value: unknown): value is QueuedVisit {
     (item.tab_id === undefined || (typeof item.tab_id === "number" && Number.isInteger(item.tab_id))) &&
     (item.dispatched === undefined || typeof item.dispatched === "boolean") &&
     (item.batch_id === undefined || typeof item.batch_id === "string") &&
+    batchOverflow &&
     common && (legacy || activity)
   );
 }

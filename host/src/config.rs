@@ -62,6 +62,7 @@ pub struct ConfigStore {
     issue: Option<String>,
     root_identity: Option<String>,
     agent: AgentView,
+    adapter_extensions: BTreeMap<String, toml::Value>,
     adapter_issue: Option<String>,
     adapter_warnings: Option<Vec<AdapterWarning>>,
     adapter_document: Option<AdapterTemplates>,
@@ -74,6 +75,7 @@ struct DiskState {
     needs_backup: bool,
     root_identity: Option<String>,
     agent: AgentView,
+    adapter_extensions: BTreeMap<String, toml::Value>,
     retired_adapter_contracts: Vec<serde_json::Value>,
 }
 
@@ -259,6 +261,7 @@ impl ConfigStore {
         self.issue = Some("The configuration file cannot be read or is not a regular file. Fix or remove it, then reload this page.".into());
         self.root_identity = None;
         self.agent = AgentView::default();
+        self.adapter_extensions.clear();
         self.adapter_issue = None;
         self.adapter_warnings = Some(Vec::new());
         self.adapter_document = None;
@@ -303,6 +306,7 @@ impl ConfigStore {
             issue: None,
             root_identity: None,
             agent: AgentView::default(),
+            adapter_extensions: BTreeMap::new(),
             adapter_issue: None,
             adapter_warnings: Some(Vec::new()),
             adapter_document: Some(AdapterTemplates::default()),
@@ -316,6 +320,7 @@ impl ConfigStore {
         self.issue = state.issue;
         self.root_identity = state.root_identity;
         self.agent = state.agent;
+        self.adapter_extensions = state.adapter_extensions;
         if revision_changed {
             self.set_adapter_policy(false);
         }
@@ -404,6 +409,26 @@ impl ConfigStore {
     }
 
     fn set_adapter_policy(&mut self, include_warnings: bool) {
+        if !self.adapter_extensions.is_empty() {
+            let keys = self
+                .adapter_extensions
+                .keys()
+                .take(8)
+                .map(|key| format!("{key:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if self.adapter_extensions.len() > 8 {
+                ", …"
+            } else {
+                ""
+            };
+            self.adapter_issue = Some(format!(
+                "The adapter table contains unsupported keys ({keys}{more}); automatic capture is paused until the adapter document is repaired."
+            ));
+            self.adapter_warnings = Some(Vec::new());
+            self.adapter_document = None;
+            return;
+        }
         match compile_validated_adapters(&self.config) {
             Ok(document) => {
                 self.adapter_issue = None;
@@ -622,6 +647,25 @@ impl ConfigStore {
         }
         validate_update(&current.config, &next)?;
         let adapters_unchanged = current.config.adapters == next.adapters;
+        let empty_adapter_document = AdapterDocument {
+            format: 1,
+            artifacts: Vec::new(),
+        };
+        // A remove-all repair of an otherwise empty document is identical on
+        // the wire because future `[adapters]` keys stay host-only. Treat an
+        // exact no-op config update as that explicit narrowing; real unrelated
+        // edits continue to preserve fields this host does not understand.
+        let clear_adapter_extensions = !current.adapter_extensions.is_empty()
+            && next.adapters == empty_adapter_document
+            && (!adapters_unchanged || current.config == next);
+        if !current.adapter_extensions.is_empty()
+            && !adapters_unchanged
+            && !clear_adapter_extensions
+        {
+            bail!(
+                "unsupported adapter-table keys can only be removed by resetting the whole adapter document"
+            );
+        }
         if !adapters_unchanged {
             validate_adapter_transition_with_history(
                 &current.config,
@@ -633,6 +677,11 @@ impl ConfigStore {
             current.retired_adapter_contracts.clone()
         } else {
             updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next)
+        };
+        let adapter_extensions = if clear_adapter_extensions {
+            BTreeMap::new()
+        } else {
+            current.adapter_extensions.clone()
         };
 
         let agent = match &harness_commit {
@@ -686,6 +735,7 @@ impl ConfigStore {
             next_identity.clone(),
             &agent,
             retired_adapter_contracts,
+            adapter_extensions.clone(),
         ))
         .context("serializing config TOML")?;
         if serialized.len() > MAX_CONFIG_BYTES {
@@ -724,6 +774,7 @@ impl ConfigStore {
         self.issue = None;
         self.root_identity = next_identity;
         self.agent = agent;
+        self.adapter_extensions = adapter_extensions;
         self.set_adapter_policy(true);
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
@@ -780,14 +831,18 @@ struct StoredConfig {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct StoredAdapters {
     format: u32,
+    #[serde(default, flatten)]
+    extensions: BTreeMap<String, toml::Value>,
 }
 
 impl Default for StoredAdapters {
     fn default() -> Self {
-        Self { format: 1 }
+        Self {
+            format: 1,
+            extensions: BTreeMap::new(),
+        }
     }
 }
 
@@ -888,6 +943,7 @@ impl StoredConfig {
         root_identity: Option<String>,
         agent: &AgentView,
         retired_adapter_contracts: Vec<serde_json::Value>,
+        adapter_extensions: BTreeMap<String, toml::Value>,
     ) -> Self {
         Self {
             storage: value.storage.clone().map(StoredStorage::from),
@@ -908,6 +964,7 @@ impl StoredConfig {
             harness_record: agent.record_table.clone(),
             adapters: StoredAdapters {
                 format: value.adapters.format,
+                extensions: adapter_extensions,
             },
             artifacts: value.adapters.artifacts.clone(),
             adapter_id_history: retired_adapter_contracts,
@@ -953,6 +1010,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity: None,
                 agent: AgentView::default(),
+                adapter_extensions: BTreeMap::new(),
                 retired_adapter_contracts: Vec::new(),
             });
         }
@@ -992,6 +1050,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             agent: AgentView::default(),
+            adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
         });
     }
@@ -1002,6 +1061,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         Ok(mut stored) => {
             let root_identity = stored.root_identity.clone();
             let retired_adapter_contracts = std::mem::take(&mut stored.adapter_id_history);
+            let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
             let root_unconfirmed = stored.storage.is_some()
                 && (!stored.root_picker_confirmed || root_identity.is_none());
             let agent = AgentView::parse(stored.agent.take(), stored.harness_record.take());
@@ -1020,6 +1080,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     needs_backup: true,
                     root_identity: None,
                     agent,
+                    adapter_extensions: BTreeMap::new(),
                     retired_adapter_contracts: Vec::new(),
                 });
             }
@@ -1042,6 +1103,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity,
                 agent,
+                adapter_extensions,
                 retired_adapter_contracts,
             })
         }
@@ -1052,6 +1114,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             agent: AgentView::default(),
+            adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
         }),
     }
@@ -2442,6 +2505,93 @@ mod tests {
     }
 
     #[test]
+    fn unknown_adapter_table_keys_only_suspend_adapter_policy() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 1\nfuture_mode = \"semantic\"\n",
+        );
+        let before = fs::read(&path).unwrap();
+        let mut store = loaded(&path);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "loading must not rewrite config"
+        );
+
+        assert_eq!(store.config_issue(), None);
+        assert!(store.configured(), "notes remain configured and usable");
+        assert!(
+            store
+                .adapter_issue()
+                .is_some_and(|issue| issue.contains("future_mode"))
+        );
+
+        let revision = store.revision().to_owned();
+        let next = ConfigSnapshot {
+            agent_denylist: vec!["bank.example".into()],
+            ..store.snapshot().clone()
+        };
+        store.update(next, &revision).unwrap().unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.contains("future_mode = \"semantic\""), "{after}");
+
+        let mut reloaded = loaded(&path);
+        let revision = reloaded.revision().to_owned();
+        let reset = reloaded.snapshot().clone();
+        reloaded.update(reset, &revision).unwrap().unwrap();
+        let repaired = fs::read_to_string(&path).unwrap();
+        assert!(!repaired.contains("future_mode"), "{repaired}");
+        assert_eq!(reloaded.adapter_issue(), None);
+    }
+
+    #[test]
+    fn unknown_adapter_table_keys_refuse_partial_adapter_replacement() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 1\nfuture_mode = \"semantic\"\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
+        );
+        let before = fs::read(&path).unwrap();
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let mut partial_replacement = store.snapshot().clone();
+        partial_replacement.adapters.artifacts[0]["match"] =
+            json!([{ "path": "/tickets/{id:int}" }]);
+
+        let error = store
+            .update(partial_replacement, &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("resetting the whole adapter document"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        let reset = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: Vec::new(),
+            },
+            ..store.snapshot().clone()
+        };
+        store.update(reset, &revision).unwrap().unwrap();
+        let repaired = fs::read_to_string(&path).unwrap();
+        assert!(!repaired.contains("future_mode"), "{repaired}");
+        assert!(!repaired.contains("[[artifacts]]"), "{repaired}");
+        assert_eq!(store.adapter_issue(), None);
+    }
+
+    #[test]
     fn unrelated_update_preserves_then_repairs_an_unsupported_adapter_document() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
@@ -3312,6 +3462,7 @@ mod tests {
                 None,
                 &AgentView::default(),
                 Vec::new(),
+                BTreeMap::new(),
             ))
             .unwrap(),
         )

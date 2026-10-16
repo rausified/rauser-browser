@@ -19,6 +19,8 @@ jobs:
           python-version: "3.11"
       - name: Verify generated protocol types
         run: python protocol/generate.py --check
+      - name: Check contributor status documentation
+        run: python scripts/check_current_state.py
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Build Rust workspace

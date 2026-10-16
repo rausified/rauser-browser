@@ -246,26 +246,34 @@ function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
   const existing = queue.items.find((item) =>
     item.dispatched !== true && isActivityEvent(item.event) &&
     item.event.artifact_id === event.artifact_id &&
+    item.event.artifact_type === event.artifact_type &&
     item.event.occurred_at === event.occurred_at);
   if (!existing || !isActivityEvent(existing.event)) return false;
-  existing.event.opens = Math.min(100_000, existing.event.opens + event.opens);
-  existing.event.focused_seconds = Math.min(7_200,
-    existing.event.focused_seconds + event.focused_seconds);
-  existing.event.background_seconds = Math.min(7_200,
-    existing.event.background_seconds + event.background_seconds);
-  existing.event.title = event.title ?? existing.event.title;
-  existing.event.url = event.url;
-  existing.event.modes = [...existing.event.modes, ...event.modes]
+  const merged = structuredClone(existing.event);
+  merged.opens = Math.min(100_000, merged.opens + event.opens);
+  merged.focused_seconds = Math.min(7_200,
+    merged.focused_seconds + event.focused_seconds);
+  merged.background_seconds = Math.min(7_200,
+    merged.background_seconds + event.background_seconds);
+  merged.title = event.title ?? merged.title;
+  merged.url = event.url;
+  merged.modes = [...merged.modes, ...event.modes]
     .filter((mode, index, all) => all.findIndex((other) =>
       other.mode === mode.mode && other.url === mode.url) === index).slice(0, 3);
-  existing.event.trails = [...existing.event.trails, ...event.trails]
+  merged.trails = [...merged.trails, ...event.trails]
     .filter((trail, index, all) => all.findIndex((other) =>
       other.transition === trail.transition &&
       other.from_artifact_id === trail.from_artifact_id && other.from_url === trail.from_url) === index)
     .slice(0, 10);
-  existing.event.refs = [...existing.event.refs, ...event.refs]
+  merged.refs = [...merged.refs, ...event.refs]
     .filter((ref, index, all) => all.findIndex((other) =>
       other.artifact_type === ref.artifact_type && other.value === ref.value) === index).slice(0, 20);
+  const before = existing.event;
+  existing.event = merged;
+  if (queueBytes(queue) > MAX_QUEUE_BYTES) {
+    existing.event = before;
+    return false;
+  }
   return true;
 }
 
@@ -732,21 +740,36 @@ async function takeReady(): Promise<ReadyBatch | null> {
   const batch = ready.filter((item) =>
     first.batch_id ? item.batch_id === batchId :
       item.batch_id === undefined && item.event.occurred_at.startsWith(localDay)).slice(0, 64);
-  // Freeze these events before they are sent to the host.
-  if (batch.some((item) => item.dispatched !== true || item.batch_id !== batchId)) {
-    for (const item of batch) {
-      item.dispatched = true;
-      item.batch_id = batchId;
-    }
-    await writeQueue(queue);
-  }
-  const overflow = queue.overflow_count > 0 && queue.overflow_first_at && queue.overflow_last_at
+  const carrier = batch[0];
+  if (!carrier) return null;
+  const currentOverflow = queue.overflow_count > 0 &&
+      queue.overflow_first_at && queue.overflow_last_at
     ? {
       count: queue.overflow_count,
       first_occurred_at: queue.overflow_first_at,
       last_occurred_at: queue.overflow_last_at,
     }
     : null;
+  const storedOverflow = batch.find((item) => item.batch_overflow !== undefined);
+  // A batch created by an older extension has no recoverable overflow
+  // snapshot. Replaying it without a marker is conservative: existing
+  // overflow stays visible for a later fresh batch instead of risking an
+  // acknowledgement that clears evidence the host never wrote.
+  const overflow = first.batch_id === undefined
+    ? currentOverflow
+    : storedOverflow?.batch_overflow ?? null;
+  // Freeze these events before they are sent to the host.
+  if (batch.some((item) => item.dispatched !== true || item.batch_id !== batchId ||
+      storedOverflow === undefined)) {
+    for (const item of batch) {
+      item.dispatched = true;
+      item.batch_id = batchId;
+    }
+    // One carrier is enough; ackBatch moves it if a partial retry ever drops
+    // this item while retaining another member of the batch.
+    if (storedOverflow === undefined) carrier.batch_overflow = overflow;
+    await writeQueue(queue);
+  }
   return { batch_id: batchId, items: batch, overflow };
 }
 
@@ -781,7 +804,22 @@ async function ackBatch(
     }
   }
   queue.items = retained;
-  if (overflowRecorded) {
+  const retryingBatch = retained.filter((item) => item.batch_id === batch.batch_id);
+  const retryCarrier = retryingBatch[0];
+  if (retryCarrier && overflowRecorded) {
+    for (const item of retryingBatch) delete item.batch_overflow;
+    retryCarrier.batch_overflow = null;
+  } else if (retryCarrier &&
+      !retryingBatch.some((item) => item.batch_overflow !== undefined)) {
+    retryCarrier.batch_overflow = batch.overflow;
+  }
+  // Dismiss can reset the counters while this batch is in the host. Only
+  // subtract the frozen snapshot when the live range still starts with it;
+  // otherwise every current drop happened after that reset and is new.
+  const snapshotStillCounted = batch.overflow !== null &&
+    queue.overflow_count >= batch.overflow.count &&
+    queue.overflow_first_at === batch.overflow.first_occurred_at;
+  if (overflowRecorded && snapshotStillCounted) {
     const recorded = batch.overflow?.count ?? 0;
     queue.overflow_count = Math.max(0, queue.overflow_count - recorded);
     if (queue.overflow_count === 0) {

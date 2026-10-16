@@ -6,6 +6,7 @@ export type StarterKind = "jira" | "sharepoint" | "github";
 export interface StarterOffer {
   key: string;
   kind: StarterKind;
+  artifact_type: string;
   label: string;
   description: string;
   origin: string;
@@ -111,6 +112,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
     return [{
       key: `jira:${site.origin}`,
       kind,
+      artifact_type: "jira.issue",
       label: "Jira issues",
       description: "Issue pages and board modals become one artifact per Jira key.",
       origin: site.origin,
@@ -122,6 +124,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
     return [{
       key: `sharepoint:${site.origin}`,
       kind,
+      artifact_type: "sharepoint.doc",
       label: site.origin.includes("-my.sharepoint.com")
         ? "OneDrive for work documents"
         : "SharePoint documents",
@@ -137,6 +140,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
       {
         key: "github.pr",
         kind,
+        artifact_type: "github.pr",
         label: "GitHub pull requests",
         description: "Pull request routes share one artifact; files use review mode, while commits and checks use view mode.",
         origin: site.origin,
@@ -146,6 +150,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
       {
         key: "github.issue",
         kind,
+        artifact_type: "github.issue",
         label: "GitHub issues",
         description: "Issue pages are captured only for the organizations you name.",
         origin: site.origin,
@@ -159,5 +164,5 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
 
 export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): boolean {
   return adapters.some((adapter) =>
-    adapter.type === offer.adapter?.type && adapter.origin === offer.origin);
+    adapter.type === offer.artifact_type && adapter.origin === offer.origin);
 }

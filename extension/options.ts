@@ -400,7 +400,7 @@ function currentStarterOffer(site: SiteConfig, key: string): StarterOffer | null
 function setStarterButtonState(button: HTMLButtonElement, site: SiteConfig, key: string): void {
   const offer = currentStarterOffer(site, key);
   const configured = offer ? offerConfigured(offer) : false;
-  button.dataset.available = String(offer?.adapter !== null && !configured);
+  button.dataset.available = String(Boolean(offer?.adapter) && !configured);
   button.textContent = configured ? "Already configured" : "Review starter…";
   const repairing = session.configIssue !== null || session.adapterIssue !== null;
   button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";

@@ -103,7 +103,7 @@ root path. Picker cancellation leaves config unchanged.
 `confirm_config` supplies the expected revision, exact proposed snapshot, and
 picker token when the root changes. The host presents its own confirmation for
 capture expansion, including a new or wider site rule, enabling logging,
-retaining formerly stripped query parameters, or shortening repeat suppression.
+or retaining formerly stripped query parameters.
 Changing the profile or any content location within the chosen folder also
 needs native confirmation, so an extension cannot silently redirect writes.
 `config_confirmed` carries a five-minute, single-use `consent_token` bound to
@@ -111,7 +111,14 @@ the current snapshot, revision, and exact proposed snapshot. `update_config`
 requires it for these changes. Both tokens are required-nullable fields: send
 `null` when one is unnecessary. Narrowing capture can proceed immediately.
 
-`record_visit` carries one immutable `VisitEvent` with a UUID event ID,
+`record_batch` carries 1 to 64 immutable visit or activity events from one
+local calendar day, a stable UUID batch ID, and an optional bounded overflow
+marker. `batch_recorded` returns one outcome per event plus whether the
+overflow marker is durable. The extension persists the batch ID and exact
+overflow snapshot before sending so a lost acknowledgement replays the same
+request. The host appends every surviving entry under one compact intent and
+one log sync. `record_visit` remains as the upgrade path for older queues and
+carries one immutable `VisitEvent` with a UUID event ID,
 original URL, nullable title, timestamp, and incognito flag. The timestamp
 is RFC 3339 with seconds precision and either `Z` or the local `+HH:MM`/`-HH:MM`
 offset; the host files the visit under that offset's calendar date. The host

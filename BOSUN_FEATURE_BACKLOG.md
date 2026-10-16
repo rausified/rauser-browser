@@ -107,10 +107,12 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   document on `ConfigStore` for each on-disk revision, reusing it across all
   event evidence checks, and running the pairwise warning scan only for
   settings reads or immediately after a successful commit.
-- [ ] `brwr-7sb` **AGENTS.md "Current state" is stale.** It says the worker lease, the
+- [x] `brwr-7sb` **AGENTS.md "Current state" is stale.** It says the worker lease, the
   TypeScript prefilter, and host recognition are unbuilt, but they shipped.
-  Update it to match README.md and DESIGN.md.
-- [ ] `brwr-5fg` Smaller ones from the same review:
+  Fixed by aligning AGENTS.md, README.md, and DESIGN.md with the shipped lease,
+  defense-in-depth recognition, and hourly activity boundary, protected by a
+  whitespace-tolerant CI documentation regression.
+- [x] `brwr-5fg` Smaller ones from the same review:
   - In `setStarterButtonState` (options.ts), `offer?.adapter !== null` is true
     when `offer` is null.
   - `hasAdapter` (starter-adapters.ts) can't see an existing GitHub adapter
@@ -118,6 +120,9 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   - `StoredAdapters` uses `deny_unknown_fields`, so a newer `[adapters]` key
     makes the whole config unreadable (backup-and-rewrite) instead of just
     suspending adapter policy.
+  Fixed all three: starter availability now requires a real draft, installed
+  GitHub types are detected without typed scope, and future adapter-table keys
+  are preserved host-side as an adapter-only issue with explicit reset repair.
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
   expected count in `scripts/smoke-macos.mjs` in the same commit. The smoke run
@@ -139,13 +144,10 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   change, browser restart with a pending total, idle/lock, discarded tabs,
   reloads, restored sessions, SPA route changes, board-modal switches, and the
   map-rebuild cases listed in §12.2 step 6.4 and §5.1.
-- `brwr-6at` (in progress; see In Progress below) **M1.5a step 6.5 — Delivery and durability.** One write, one sync, and
-  one intent record per delivery batch; the compact intent index replacing
-  M1's one-intent-file-per-visit journal; buffer-pressure coalescing, the 80%
-  badge, and overflow accounting in the strip and the log. Retire
-  `near_repeat_secs` (accepted and ignored in old configs, dropped from the v5
-  schema, confirmation line removed). Test two `/log` entries for one URL a
-  minute apart, both recorded.
+- [x] **M1.5a step 6.5 — Delivery and durability.** Current delivery
+  now groups same-day records into bounded, replay-stable batches backed by
+  one compact intent and append. Pressure coalescing, the 80% badge, durable
+  overflow evidence, and near-repeat retirement are built and verified.
 - [ ] `brwr-xeh` **M1.5a step 6.6 — Index tables and artifact files.** `artifacts`,
   `visits`, and `edges` tables in `index.db`; lazy regeneration from the dirty
   set with skip-if-unchanged and Timeline rollups (§6.7); `brauser reindex`
@@ -205,6 +207,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   children read the request first. Make the fixture obey the real handshake
   and exercise it repeatedly; this was discovered during the current cycle's
   final Rust verification and does not affect the shipped worker change.
+- [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
+  drop that races the last in-flight batch stays counted and visible, but its
+  marker currently waits for another authorized event to provide a safe log
+  anchor. Make that evidence independently deliverable without accepting an
+  unvalidated URL or vault path.
 
 ### Cookie's own proposals (only after the plan work above)
 
@@ -229,13 +236,13 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## In Progress / This Iteration
 
-- [ ] `brwr-6at` **M1.5a step 6.5 — Delivery and durability.** Replace per-event delivery
-  and intents with one bounded batch, add pressure coalescing and the 80%
-  badge, carry overflow evidence into the append-only log, and retire
-  configurable near-repeat suppression without breaking older config files.
+- None. The next plan item is `brwr-xeh` (M1.5a step 6.6).
 
 ## Shipped
 
+- **Category:** Reliability. `brwr-6at` **Ship bounded, crash-recoverable activity batches (2026-10-16).** The service worker now sends up to 64 same-local-day records under a replay-stable batch ID and exact overflow snapshot, while the native host validates every event before publishing the survivors through one compact intent, one append, and one log sync. Queue pressure coalesces only compatible undispatched hours that still fit the hard byte cap, lights the toolbar badge at 80%, and carries dropped-hour count and range into the append-only log; lost acknowledgements cannot erase newer overflow. The retired near-repeat window is gone from protocol, consent, new config writes, and log scanning, so deliberate `/log` actions are never collapsed, while old configs and queues still drain safely. **Metrics:** 271 Rust tests and 8 extension suites passing; 6 durability regressions, with full protocol generation, current-state consistency, build, test, format, both clippy gates, clean npm install, typecheck, lint, extension checks, and queue export green.
+- **Category:** Bug Fix. **Finish the remaining adapter review repairs (2026-10-16).** Starter cards now recognize an installed GitHub pull-request or issue adapter before any organization scope is typed, and a missing draft can no longer become clickable through JavaScript's `undefined !== null` edge. The native host treats unknown future keys inside `[adapters]` as an adapter-only policy issue instead of an unreadable whole config: capture stays suspended, notes and other settings remain usable, unrelated saves preserve the unknown values, and the explicit remove-all repair clears them. **Metrics:** 267 Rust tests and 8 extension suites passing; 3 new failing-first regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
+- **Category:** Documentation & Process. **Align contributor status with shipped artifact capture (2026-10-16).** AGENTS.md now describes the active revisioned worker lease, TypeScript prefilter, independent native-host recognition, and measured hourly activity instead of telling contributors those paths are unbuilt. README and DESIGN.md name the same product boundary and separate it from the unfinished delivery, index, and panel slices; a whitespace-tolerant CI check prevents the obsolete claims from returning. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new documentation regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile native adapter policy once per configuration revision (2026-10-16).** The native host now keeps one validated Rust adapter document with each adopted config revision and reuses it for visits, hourly activities, mode and trail evidence, and why records instead of reparsing the complete policy for every check. Unchanged Hello, note, capture, and settings refreshes retain the compiled document; conservative pairwise overlap warnings run only when settings requests them or immediately after a successful commit, while invalid revisions still suspend capture fail-closed. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new failing-first compile/overlap hot-path regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile adapter policy once per worker revision (2026-10-16).** The service worker now validates and compiles a stored adapter document once when its host revision is first restored, then reuses that prepared document across policy reads and artifact matches instead of rebuilding the grammar and serializing the full policy on every navigation. Every non-expired install message still compiles independently at the untrusted boundary, expired installs are rejected before they can replace the active matcher, malformed cold-start policy stays inert, and site and live-grant gates remain ahead of evaluation. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new cache and navigation-hot-path regressions including failing-first compile-cache and rejected-install proofs, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Security & Privacy. **Narrow host policy after Chrome revokes access during adapter repair (2026-10-16).** Settings now writes revoked origins out of the host's site allowlist even when an invalid or future adapter document has already suspended capture. The revisioned update preserves that unsupported document without structural changes for explicit repair, disables capture when its final site disappears, rechecks revocations under the configuration lock so a stale snapshot cannot remove a concurrently re-enabled site, and acknowledges revocations only after the host is already narrow. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new failing-first settings regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
@@ -254,6 +261,28 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
+- Every PR #34 deploy blocker and M1.5a step 6.5 are now closed. The next
+  highest-priority ready plan item is `brwr-xeh`, the index tables, lazy
+  artifact-file generation, and `brauser reindex` foundation.
+- An overflow that appears while the final queued batch is in flight is now
+  preserved rather than over-acknowledged, but it needs a later artifact event
+  before it has a validated log anchor. `brwr-m64` records the follow-up for an
+  independently deliverable marker; do not solve it by letting the extension
+  choose a file or smuggle an unchecked URL into the host.
+- Step 6.6 can use the batch boundary as the natural dirty-index transaction:
+  derive affected artifact IDs from the same canonical payloads after the log
+  sync, but keep the Markdown markers as the rebuild authority so index loss
+  or corruption never weakens the append-only source of truth.
+- A configured GitHub starter can now identify itself without draft scope, but
+  the scope input intentionally remains blank because pull-request and issue
+  adapters may have different owner lists. The `brwr-ac1` coherent first-tool
+  setup should make that distinction visible rather than guessing one shared
+  editable value from existing policy.
+- The current-state CI check now protects lease delivery, worker prefiltering,
+  native-host rechecking, hourly activity, and batched durable delivery. When
+  indexing or the artifact panel ships, update all three summaries and extend
+  the protected fact set in the same cycle rather than weakening or deleting
+  the check.
 - The worker and host now use the same lifecycle rule for prepared adapter
   policy: a host configuration revision is the cache identity, and untrusted
   replacement input must validate before it can replace the active matcher.
@@ -278,7 +307,10 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   adapter state. Keep their shared policy-state outcomes aligned until the old
   entry points have had a release to drain and can be removed; event-shape and
   artifact-identity validation can remain specific to each payload.
-- Automatic capture now emits measured activity, while the legacy visit path exists only to drain pre-upgrade queue entries. Step 6.5 should batch new activity writes and compact intents without removing that compatibility until old queues have had a release to drain.
+- Automatic capture now emits measured activity through bounded batches and a
+  compact intent, while the legacy visit path exists only to drain pre-upgrade
+  queue entries. Remove that compatibility only after old queues have had a
+  release to drain.
 - The headless macOS smoke flow was updated to confirm and install a fixture adapter through native messaging. It could not be executed on this Linux VM; run `npm run smoke:macos:headless` on macOS before relying on that new end-to-end step.
 - Protocol v5 currently freezes an existing adapter's `id` template before any alias migration exists. When activity events land, replace that conservative guard with the designed activity-aware migration and explicit alias events rather than relaxing it in place.
 - The adapter workspace now resolves overlap indices to type names and previews fixed probes. It deliberately has no URL-shape sample or already-recognized-artifact re-map count yet; those inputs arrive with Create adapter in M1.5b step 7.6 and should extend this review rather than create a second editor.
