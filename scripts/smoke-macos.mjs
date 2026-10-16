@@ -1742,7 +1742,7 @@ async function run() {
         const pids = (await commandOutput("/usr/bin/pgrep", ["-f", `${options.host} __dialog-`]).catch(() => ""))
           .split("\n").filter(Boolean);
         requireCondition(pids.length === 0, "A dialog process is still running");
-        requireCondition(dialogsShown === 13, `Expected thirteen scripted dialogs; answered ${dialogsShown}`);
+        requireCondition(dialogsShown === 14, `Expected fourteen scripted dialogs; answered ${dialogsShown}`);
         requireCondition(!(await maybeLstat(path.join(dialogs, "answer"))), "An unused scripted answer remains");
         await nothingOnScreen();
       });
