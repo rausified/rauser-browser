@@ -1,4 +1,5 @@
-import type { SiteConfig, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import type { AdapterDocument, SiteConfig, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import { validateDocument } from "./adapter-templates.js";
 import { storageKey } from "./brand.js";
 
 export const POLICY_LEASE_MS = 24 * 60 * 60 * 1_000;
@@ -14,6 +15,7 @@ export interface PolicyLease {
   expires_at: number;
   capture_enabled: boolean;
   sites: SiteConfig[];
+  adapters: AdapterDocument;
 }
 
 export interface QueuedVisit {
@@ -146,20 +148,34 @@ export function siteMatchesUrl(site: SiteConfig, url: URL): boolean {
 export function isPolicyLease(value: unknown): value is PolicyLease {
   if (typeof value !== "object" || value === null) return false;
   const lease = value as Record<string, unknown>;
+  const sites = lease.sites;
+  const adapters = lease.adapters;
+  const adapterValidation = validateDocument(adapters);
   return (
     typeof lease.revision === "string" &&
     lease.revision.length > 0 &&
     typeof lease.expires_at === "number" &&
     Number.isFinite(lease.expires_at) &&
     typeof lease.capture_enabled === "boolean" &&
-    Array.isArray(lease.sites) &&
-    lease.sites.every(
+    Array.isArray(sites) &&
+    sites.every(
       (site: unknown) =>
         typeof site === "object" &&
         site !== null &&
         typeof (site as Record<string, unknown>).origin === "string" &&
         typeof (site as Record<string, unknown>).path_prefix === "string",
-    )
+    ) &&
+    typeof adapters === "object" &&
+    adapters !== null &&
+    "ok" in adapterValidation &&
+    Array.isArray((adapters as Record<string, unknown>).artifacts) &&
+    ((adapters as Record<string, unknown>).artifacts as unknown[]).every((artifact) =>
+      typeof artifact === "object" && artifact !== null &&
+      typeof (artifact as Record<string, unknown>).origin === "string" &&
+      sites.some((site: unknown) =>
+        typeof site === "object" && site !== null &&
+        (site as Record<string, unknown>).origin ===
+          (artifact as Record<string, unknown>).origin))
   );
 }
 

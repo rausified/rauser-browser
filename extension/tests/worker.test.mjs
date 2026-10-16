@@ -133,12 +133,22 @@ async function flush() {
   await send({ kind: "get_pending_ids" });
 }
 
+function artifact(origin, extra = {}) {
+  return {
+    type: "test.item", origin,
+    match: [{ path: "/items/{id:token}" }],
+    id: "test:{host}/{id}",
+    ...extra,
+  };
+}
+
 function lease(origin) {
   return {
     revision: "host-revision",
     expires_at: Date.now() + 60_000,
     capture_enabled: true,
     sites: [{ origin, path_prefix: "/" }],
+    adapters: { format: 1, artifacts: [artifact(origin)] },
   };
 }
 
@@ -166,7 +176,7 @@ test("config repair suspends capture without losing visits, while confirmed revo
   grants.set("https://second.example:443/*", true);
   values.set(storageKey("queue_v1"), {
     version: 1,
-    items: [visit("first", `${firstOrigin}/a`), visit("second", `${secondOrigin}/b`)],
+    items: [visit("first", `${firstOrigin}/items/a`), visit("second", `${secondOrigin}/items/b`)],
     overflow_count: 3,
     rejected_count: 2,
     last_error: null,
@@ -179,6 +189,7 @@ test("config repair suspends capture without losing visits, while confirmed revo
       { origin: firstOrigin, path_prefix: "/" },
       { origin: secondOrigin, path_prefix: "/" },
     ],
+    adapters: { format: 1, artifacts: [artifact(firstOrigin), artifact(secondOrigin)] },
   });
 
   const suspended = await send({ kind: "suspend_policy" });
@@ -202,7 +213,7 @@ test("config repair suspends capture without losing visits, while confirmed revo
   const ids = await send({ kind: "get_pending_ids" });
   assert.deepEqual(ids, ["second"]);
   const nextQueue = values.get(storageKey("queue_v1"));
-  nextQueue.items.push(visit("later", `${secondOrigin}/later`));
+  nextQueue.items.push(visit("later", `${secondOrigin}/items/later`));
   values.set(storageKey("queue_v1"), nextQueue);
   const discarded = await send({ kind: "discard_pending", event_ids: ids });
   assert.equal(discarded.queued, 1);
@@ -215,12 +226,7 @@ test("a newer local pause cannot be resumed by an older enable confirmation", as
   values.clear();
   grants.clear();
   grants.set("https://first.example:443/*", true);
-  const lease = {
-    revision: "host-revision",
-    expires_at: Date.now() + 60_000,
-    capture_enabled: true,
-    sites: [{ origin: "https://first.example", path_prefix: "/" }],
-  };
+  const candidateLease = lease("https://first.example");
 
   const previous = await send({ kind: "get_status" });
   const paused = await send({ kind: "pause_capture" });
@@ -229,7 +235,7 @@ test("a newer local pause cannot be resumed by an older enable confirmation", as
 
   const stale = await send({
     kind: "install_policy",
-    lease,
+    lease: candidateLease,
     resume_after_confirmation: true,
     resume_after_pause_token: previous.pause_token,
   });
@@ -238,12 +244,12 @@ test("a newer local pause cannot be resumed by an older enable confirmation", as
 
   const resumed = await send({
     kind: "install_policy",
-    lease,
+    lease: candidateLease,
     resume_after_confirmation: true,
     resume_after_pause_token: paused.pause_token,
   });
   assert.equal(resumed.pause_pending, false);
-  assert.equal(resumed.policy_expires_at, lease.expires_at);
+  assert.equal(resumed.policy_expires_at, candidateLease.expires_at);
 });
 
 test("a delayed lease refresh reads the host after a site removal commits", async () => {
@@ -314,6 +320,7 @@ test("a re-enabled origin clears only its old revocation after a matching lease 
     expires_at: Date.now() + 60_000,
     capture_enabled: true,
     sites: [{ origin, path_prefix: "/" }],
+    adapters: { format: 1, artifacts: [artifact(origin)] },
   });
   values.set(storageKey("revocations_v1"), [origin]);
   grants.set(pattern, true);
@@ -337,11 +344,11 @@ test("a committed page takes its title only until the panel receives the visit",
   const origin = "https://title.example";
   grants.set("https://title.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
-  tabs.set(7, { id: 7, url: `${origin}/a`, title: "Previous page", incognito: false });
+  tabs.set(7, { id: 7, url: `${origin}/items/a`, title: "Previous page", incognito: false });
 
   onCommitted({
     tabId: 7, frameId: 0, documentId: "doc-1", documentLifecycle: "active",
-    url: `${origin}/a`, timeStamp: Date.now(),
+    url: `${origin}/items/a`, timeStamp: Date.now(),
   });
   await flush();
   const [queued] = values.get(storageKey("queue_v1")).items;
@@ -351,12 +358,12 @@ test("a committed page takes its title only until the panel receives the visit",
   assert.ok(queued.retry_after > Date.now(), "an untitled visit waits for its title");
   assert.match(queued.event.occurred_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
 
-  onTabUpdated(7, { title: "x".repeat(400) }, { id: 7, url: `${origin}/a#part`, incognito: false });
+  onTabUpdated(7, { title: "x".repeat(400) }, { id: 7, url: `${origin}/items/a#part`, incognito: false });
   await flush();
   assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "x".repeat(300));
 
-  onTabUpdated(7, { title: "Other tab" }, { id: 8, url: `${origin}/b`, incognito: false });
-  onTabUpdated(8, { title: "Other tab" }, { id: 8, url: `${origin}/a`, incognito: false });
+  onTabUpdated(7, { title: "Other tab" }, { id: 8, url: `${origin}/items/b`, incognito: false });
+  onTabUpdated(8, { title: "Other tab" }, { id: 8, url: `${origin}/items/a`, incognito: false });
   await flush();
   assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "x".repeat(300));
 
@@ -368,7 +375,7 @@ test("a committed page takes its title only until the panel receives the visit",
   assert.equal(pending.length, 1);
   assert.equal(values.get(storageKey("queue_v1")).items[0].dispatched, true);
 
-  onTabUpdated(7, { title: "Too late" }, { id: 7, url: `${origin}/a`, incognito: false });
+  onTabUpdated(7, { title: "Too late" }, { id: 7, url: `${origin}/items/a`, incognito: false });
   await flush();
   assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "x".repeat(300));
 });
@@ -381,12 +388,12 @@ test("a stored visit without a dispatch flag is never patched", async () => {
   values.set(storageKey("policy_v1"), lease(origin));
   values.set(storageKey("queue_v1"), {
     version: 1,
-    items: [{ ...visit("legacy", `${origin}/a`), tab_id: 3 }],
+    items: [{ ...visit("legacy", `${origin}/items/a`), tab_id: 3 }],
     overflow_count: 0,
     rejected_count: 0,
     last_error: null,
   });
-  onTabUpdated(3, { title: "Late title" }, { id: 3, url: `${origin}/a`, incognito: false });
+  onTabUpdated(3, { title: "Late title" }, { id: 3, url: `${origin}/items/a`, incognito: false });
   await flush();
   assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, null);
   const status = await send({ kind: "get_status" });
@@ -399,25 +406,94 @@ test("a navigation outside every enabled site skips grant checks and tab reads",
   tabs.clear();
   grants.set("https://enabled.example:443/*", true);
   values.set(storageKey("policy_v1"), lease("https://enabled.example"));
-  tabs.set(4, { id: 4, url: "https://other.example/x", title: "Other", incognito: false });
+  tabs.set(4, { id: 4, url: "https://other.example/items/x", title: "Other", incognito: false });
   const checks = permissionChecks;
   const reads = tabReads;
   onCommitted({
     tabId: 4, frameId: 0, documentId: "doc-2", documentLifecycle: "active",
-    url: "https://other.example/x", timeStamp: Date.now(),
+    url: "https://other.example/items/x", timeStamp: Date.now(),
   });
   await flush();
   assert.equal(permissionChecks, checks);
   assert.equal(tabReads, reads);
   assert.equal(values.get(storageKey("queue_v1")), undefined);
 
-  tabs.set(4, { id: 4, url: "https://enabled.example/y", title: "Old", incognito: false });
+  tabs.set(4, { id: 4, url: "https://enabled.example/items/y", title: "Old", incognito: false });
   onCommitted({
     tabId: 4, frameId: 0, documentId: "doc-3", documentLifecycle: "active",
-    url: "https://enabled.example/y", timeStamp: Date.now(),
+    url: "https://enabled.example/items/y", timeStamp: Date.now(),
   });
   await flush();
   assert.ok(permissionChecks > checks);
+  assert.equal(values.get(storageKey("queue_v1")).items.length, 1);
+});
+
+test("adapter rules, scope, and Chrome grants all fail closed before buffering", async () => {
+  values.clear();
+  grants.clear();
+  tabs.clear();
+  const origin = "https://scoped.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin),
+    adapters: {
+      format: 1,
+      artifacts: [{
+        type: "test.item", origin,
+        match: [{ path: "/teams/{owner:name|lower}/items/{id:token}" }],
+        id: "test:{host}/{owner}/{id}",
+        scope: { owner: ["acme"] },
+      }],
+    },
+  });
+  const initialChecks = permissionChecks;
+  const initialReads = tabReads;
+
+  tabs.set(20, { id: 20, url: `${origin}/search`, title: "Search", incognito: false });
+  onCommitted({
+    tabId: 20, frameId: 0, documentId: "not-artifact", documentLifecycle: "active",
+    url: `${origin}/search`, timeStamp: Date.now(),
+  });
+  tabs.set(21, { id: 21, url: `${origin}/teams/personal/items/7`, title: "Personal", incognito: false });
+  onCommitted({
+    tabId: 21, frameId: 0, documentId: "out-of-scope", documentLifecycle: "active",
+    url: `${origin}/teams/personal/items/7`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(permissionChecks, initialChecks, "unrecognized URLs never prompt a grant check");
+  assert.equal(tabReads, initialReads, "unrecognized URLs never expose tab metadata");
+  assert.equal(values.get(storageKey("queue_v1")), undefined);
+
+  tabs.set(22, { id: 22, url: `${origin}/teams/acme/items/7`, title: "Work", incognito: false });
+  onCommitted({
+    tabId: 22, frameId: 0, documentId: "recognized-but-ungranted", documentLifecycle: "active",
+    url: `${origin}/teams/acme/items/7`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.ok(permissionChecks > initialChecks, "a recognized URL reaches the live grant gate");
+  assert.equal(tabReads, initialReads, "a missing grant is refused before reading the tab");
+  assert.equal(values.get(storageKey("queue_v1")).items.length, 0);
+  assert.deepEqual(values.get(storageKey("policy_v1")).sites, []);
+  assert.deepEqual(values.get(storageKey("policy_v1")).adapters.artifacts, []);
+  assert.notEqual((await send({ kind: "get_status" })).policy_expires_at, null);
+
+  grants.set("https://scoped.example:443/*", true);
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin),
+    adapters: {
+      format: 1,
+      artifacts: [{
+        type: "test.item", origin,
+        match: [{ path: "/teams/{owner:name|lower}/items/{id:token}" }],
+        id: "test:{host}/{owner}/{id}",
+        scope: { owner: ["acme"] },
+      }],
+    },
+  });
+  onCommitted({
+    tabId: 22, frameId: 0, documentId: "recognized-and-granted", documentLifecycle: "active",
+    url: `${origin}/teams/acme/items/7`, timeStamp: Date.now(),
+  });
+  await flush();
   assert.equal(values.get(storageKey("queue_v1")).items.length, 1);
 });
 
@@ -429,7 +505,7 @@ test("a successful ack clears retry state but keeps notices until dismissed", as
   values.set(storageKey("policy_v1"), lease(origin));
   values.set(storageKey("queue_v1"), {
     version: 1,
-    items: [visit("one", `${origin}/1`), visit("two", `${origin}/2`)],
+    items: [visit("one", `${origin}/items/1`), visit("two", `${origin}/items/2`)],
     overflow_count: 2,
     rejected_count: 1,
     last_error: "Visit queue is full; newer visits were not buffered",
@@ -505,11 +581,11 @@ test("an SPA route change waits for its new title before the panel can send it",
   grants.set("https://spa.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   // pushState has run, but the app has not set the new route's title yet.
-  tabs.set(9, { id: 9, url: `${origin}/b`, title: "Route A", incognito: false });
+  tabs.set(9, { id: 9, url: `${origin}/items/b`, title: "Route A", incognito: false });
 
   onHistoryStateUpdated({
     tabId: 9, frameId: 0, documentId: "doc-spa", documentLifecycle: "active",
-    url: `${origin}/b`, timeStamp: Date.now(),
+    url: `${origin}/items/b`, timeStamp: Date.now(),
   });
   await flush();
   const [queued] = values.get(storageKey("queue_v1")).items;
@@ -517,7 +593,7 @@ test("an SPA route change waits for its new title before the panel can send it",
   assert.ok(queued.retry_after > Date.now(), "a history update waits for its title");
   assert.deepEqual(await send({ kind: "get_pending" }), []);
 
-  onTabUpdated(9, { title: "Route B" }, { id: 9, url: `${origin}/b`, incognito: false });
+  onTabUpdated(9, { title: "Route B" }, { id: 9, url: `${origin}/items/b`, incognito: false });
   await flush();
   assert.equal(values.get(storageKey("queue_v1")).items[0].event.title, "Route B");
 });
@@ -531,7 +607,7 @@ test("a retry notice clears once nothing is left to retry, and on dismissal", as
     values.set(storageKey("policy_v1"), lease(origin));
     values.set(storageKey("queue_v1"), {
       version: 1,
-      items: ids.map((id) => visit(id, `${origin}/${id}`)),
+      items: ids.map((id) => visit(id, `${origin}/items/${id}`)),
       overflow_count: 0,
       rejected_count: 0,
       last_error: null,
@@ -784,7 +860,7 @@ function configResult(request, origin, overrides = {}) {
       },
       capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [], near_repeat_secs: 300,
       agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
-      adapters: { format: 1, artifacts: [] },
+      adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,
     agent_status: { state: "not_set_up", harness_version: null, message: "Set up" },
@@ -822,10 +898,10 @@ test("the worker registers its periodic sync alarm and syncs on browser startup"
 test("with no extension page open, the worker delivers a captured visit itself", async () => {
   const origin = "https://background.example";
   resetSync(origin, 2 * HOUR_MS);
-  tabs.set(9, { id: 9, url: `${origin}/issue`, title: "Issue", incognito: false });
+  tabs.set(9, { id: 9, url: `${origin}/items/issue`, title: "Issue", incognito: false });
   onCommitted({
     tabId: 9, frameId: 0, documentId: "doc-bg", documentLifecycle: "active",
-    url: `${origin}/issue`, timeStamp: Date.now(),
+    url: `${origin}/items/issue`, timeStamp: Date.now(),
   });
   await flush();
   assert.ok(alarms.has(DELIVER_ALARM), "a capture schedules a delivery");
@@ -838,7 +914,7 @@ test("with no extension page open, the worker delivers a captured visit itself",
   const port = await until(() => ports[0], "the worker to start the host");
   const request = await sentOn(port, 1);
   assert.equal(request.type, "record_visit");
-  assert.equal(request.event.url, `${origin}/issue`);
+  assert.equal(request.event.url, `${origin}/items/issue`);
   port.reply(recorded(request));
   await until(() => values.get(storageKey("queue_v1")).items.length === 0, "the queue to drain");
   await until(() => port.closed, "the host connection to close");
@@ -872,7 +948,7 @@ test("the worker renews a lease near expiry from the host config", async () => {
 test("a renewal that finds a host config issue suspends capture but keeps visits", async () => {
   const origin = "https://issue.example";
   resetSync(origin, 60_000);
-  queueWith({ ...visit("kept", `${origin}/a`), retry_after: Date.now() + HOUR_MS });
+  queueWith({ ...visit("kept", `${origin}/items/a`), retry_after: Date.now() + HOUR_MS });
   onAlarm({ name: SYNC_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   port.reply(configResult(await sentOn(port, 1), origin, { config_issue: "config.toml is newer" }));
@@ -883,7 +959,7 @@ test("a renewal that finds a host config issue suspends capture but keeps visits
 test("a renewal that finds an adapter policy issue suspends capture but keeps visits", async () => {
   const origin = "https://adapter-issue.example";
   resetSync(origin, 60_000);
-  queueWith({ ...visit("kept-adapter", `${origin}/a`), retry_after: Date.now() + HOUR_MS });
+  queueWith({ ...visit("kept-adapter", `${origin}/items/a`), retry_after: Date.now() + HOUR_MS });
   onAlarm({ name: SYNC_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   port.reply(configResult(await sentOn(port, 1), origin, {
@@ -896,7 +972,7 @@ test("a renewal that finds an adapter policy issue suspends capture but keeps vi
 test("a host that cannot start is reported, and visits wait to retry", async () => {
   const origin = "https://down.example";
   resetSync(origin, 60_000);
-  queueWith(visit("waiting", `${origin}/a`));
+  queueWith(visit("waiting", `${origin}/items/a`));
   onAlarm({ name: SYNC_ALARM });
   const first = await until(() => ports[0], "the worker to start the host");
   await sentOn(first, 1);
@@ -920,7 +996,7 @@ test("a host that cannot start is reported, and visits wait to retry", async () 
 test("a delivery the host never answers is reported even when no renewal was due", async () => {
   const origin = "https://gone.example";
   resetSync(origin, 12 * HOUR_MS);
-  queueWith(visit("unsent", `${origin}/a`));
+  queueWith(visit("unsent", `${origin}/items/a`));
   onAlarm({ name: SYNC_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   assert.equal((await sentOn(port, 1)).type, "record_visit");
@@ -950,23 +1026,57 @@ test("after the lease lapsed, browsing sites that are not enabled starts no host
 test("after the lease lapsed, the first navigation renews it and is still captured", async () => {
   const origin = "https://morning.example";
   resetSync(origin, -1_000);
-  tabs.set(11, { id: 11, url: `${origin}/first`, title: "First", incognito: false });
+  tabs.set(11, { id: 11, url: `${origin}/items/first`, title: "First", incognito: false });
   onCommitted({
     tabId: 11, frameId: 0, documentId: "doc-morning", documentLifecycle: "active",
-    url: `${origin}/first`, timeStamp: Date.now(),
+    url: `${origin}/items/first`, timeStamp: Date.now(),
   });
   const port = await until(() => ports[0], "the worker to start the host");
   const request = await sentOn(port, 1);
   assert.equal(request.type, "get_config");
   port.reply(configResult(request, origin));
   await until(() => values.get(storageKey("queue_v1"))?.items.length === 1, "the visit to be buffered");
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.url, `${origin}/first`);
+  assert.equal(values.get(storageKey("queue_v1")).items[0].event.url, `${origin}/items/first`);
+});
+
+test("an older cached lease renews once instead of permanently disabling background capture", async () => {
+  const origin = "https://upgrade.example";
+  resetSync(origin, 2 * HOUR_MS);
+  const legacy = values.get(storageKey("policy_v1"));
+  delete legacy.adapters;
+  values.set(storageKey("policy_v1"), legacy);
+  tabs.set(13, { id: 13, url: `${origin}/items/migrated`, title: "Migrated", incognito: false });
+
+  onCommitted({
+    tabId: 13, frameId: 0, documentId: "doc-upgrade", documentLifecycle: "active",
+    url: `${origin}/items/migrated`, timeStamp: Date.now(),
+  });
+  const port = await until(() => ports[0], "the worker to renew an older lease");
+  const request = await sentOn(port, 1);
+  assert.equal(request.type, "get_config");
+  port.reply(configResult(request, origin));
+  await until(() => values.get(storageKey("queue_v1"))?.items.length === 1,
+    "the first post-upgrade artifact to be buffered");
+  assert.equal(values.get(storageKey("queue_v1")).items[0].event.url,
+    `${origin}/items/migrated`);
+  assert.equal(values.get(storageKey("policy_v1")).adapters.artifacts.length, 1);
+});
+
+test("a local pause still blocks migration of an older cached lease", async () => {
+  const origin = "https://paused-upgrade.example";
+  resetSync(origin, 2 * HOUR_MS);
+  const legacy = values.get(storageKey("policy_v1"));
+  delete legacy.adapters;
+  values.set(storageKey("policy_v1"), legacy);
+  values.set(storageKey("pause_pending_v1"), true);
+  await send({ kind: "sync_now" });
+  assert.equal(ports.length, 0);
 });
 
 test("the panel's send-now request waits for the worker's delivery", async () => {
   const origin = "https://now.example";
   resetSync(origin, 2 * HOUR_MS);
-  queueWith(visit("now", `${origin}/a`));
+  queueWith(visit("now", `${origin}/items/a`));
   const answered = send({ kind: "sync_now" });
   const port = await until(() => ports[0], "the worker to start the host");
   port.reply(recorded(await sentOn(port, 1)));
