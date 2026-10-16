@@ -33,3 +33,8 @@ BOSUN_FEATURE_BACKLOG.md.bak-*
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+.bosun_cycle_telemetry.jsonl
+.bosun_driver_halt.json
+.bosun_driver_halt.json.tmp
+.bosun_remediation_log.jsonl
+.bosun_remote_assistant_*.log
