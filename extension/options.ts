@@ -1,8 +1,9 @@
 import type {
-  ConfigSnapshot, HarnessAdapter, HarnessOffer, SiteConfig, StorageConfig,
+  AdapterDocument, ConfigSnapshot, HarnessAdapter, HarnessOffer, SiteConfig, StorageConfig,
 } from "../protocol/ts/generated.js";
 import { exactOriginPattern, isHttpUrl, type WorkerStatus } from "./model.js";
 import {
+  adaptersForSites,
   ConfigSession,
   describe,
   element,
@@ -24,6 +25,17 @@ import {
   removeDenylistEntry,
 } from "./agent.js";
 import { forgetNoteOrigin, noteOrigins, pruneNoteOrigins } from "./grants.js";
+import {
+  adapterLabel,
+  adapterOrigin,
+  exampleUrl,
+  newAdapter,
+  overlapText,
+  parseAdapterJson,
+  previewDocument,
+  validateAdapterDocument,
+  type AdapterObject,
+} from "./adapter-review.js";
 
 const status = element<HTMLDivElement>("status");
 const folderPath = element<HTMLOutputElement>("folder-path");
@@ -33,6 +45,18 @@ const sitePath = element<HTMLInputElement>("site-path");
 const enableButton = element<HTMLButtonElement>("enable-site");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
 const sitesList = element<HTMLUListElement>("sites-list");
+const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
+const adapterList = element<HTMLDivElement>("adapter-list");
+const newAdapterButton = element<HTMLButtonElement>("new-adapter");
+const adapterEditor = element<HTMLDivElement>("adapter-editor");
+const adapterEditorHeading = element<HTMLHeadingElement>("adapter-editor-heading");
+const adapterJson = element<HTMLTextAreaElement>("adapter-json");
+const adapterValidation = element<HTMLOutputElement>("adapter-validation");
+const adapterPreviewUrl = element<HTMLInputElement>("adapter-preview-url");
+const adapterPreviewTitle = element<HTMLInputElement>("adapter-preview-title");
+const adapterPreview = element<HTMLUListElement>("adapter-preview");
+const saveAdapterButton = element<HTMLButtonElement>("save-adapter");
+const cancelAdapterButton = element<HTMLButtonElement>("cancel-adapter");
 const agentState = element<HTMLParagraphElement>("agent-state");
 const detectButton = element<HTMLButtonElement>("detect-harnesses");
 const offersList = element<HTMLUListElement>("harness-offers");
@@ -64,6 +88,7 @@ const envChoices = new Map<string, boolean>();
 // sent with the setup request, which shows them in the native confirmation.
 let pendingDenylist: string[] | null = null;
 let summariesEdited = false;
+let adapterEdit: number | "new" | null = null;
 
 // The host binds a folder selection and each harness offer to the revision it
 // was made at, so any save, from this page or another, makes them unusable.
@@ -133,6 +158,13 @@ function updateControls(): void {
   for (const button of sitesList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing;
   }
+  newAdapterButton.disabled = !connected || busy || repairing || !session.config?.sites.length;
+  for (const button of adapterList.querySelectorAll("button")) {
+    button.disabled = !connected || busy || repairing || button.dataset.boundary === "true";
+  }
+  saveAdapterButton.disabled = !connected || busy || repairing ||
+    adapterCandidate() === null;
+  cancelAdapterButton.disabled = busy;
   const idle = connected && !busy;
   detectButton.disabled = !idle || session.configIssue !== null;
   setupButton.disabled = !idle || !session.config?.storage || selectedOffer() === null;
@@ -280,6 +312,266 @@ function renderAgent(): void {
   }
 }
 
+function objectValue(value: unknown): AdapterObject | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as AdapterObject
+    : null;
+}
+
+function textValue(value: unknown, fallback = "Not configured"): string {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function ruleDescription(raw: unknown, index: number): string {
+  const rule = objectValue(raw);
+  if (!rule) return `Rule ${index + 1}: invalid rule`;
+  const parts = [`Rule ${index + 1}: ${textValue(rule.path, "missing path")}`];
+  const query = objectValue(rule.query);
+  if (query && Object.keys(query).length) {
+    parts.push(`query ${Object.entries(query).map(([key, value]) => `${key}=${String(value)}`).join(", ")}`);
+  }
+  if (Array.isArray(rule.absent) && rule.absent.length) parts.push(`without ${rule.absent.join(", ")}`);
+  if (typeof rule.mode === "string") parts.push(`mode ${rule.mode}`);
+  return parts.join(" · ");
+}
+
+function scopeDescription(adapter: AdapterObject): string {
+  const scope = objectValue(adapter.scope);
+  if (scope) {
+    const entries = Object.entries(scope).map(([name, values]) =>
+      `${name}: ${Array.isArray(values) ? values.join(", ") : String(values)}`);
+    return `Scope: ${entries.join("; ") || "empty"}.`;
+  }
+  if (adapter.unscoped === "acknowledged") {
+    return "Scope: every matching account in this Chrome profile (explicitly acknowledged).";
+  }
+  return "Scope: this origin is not classified as a shared-account origin.";
+}
+
+function titleDescription(adapter: AdapterObject): string {
+  if (Array.isArray(adapter.title)) return `Titles: ${adapter.title.map(String).join("; ")}`;
+  if (typeof adapter.title === "string") return `Title: ${adapter.title}`;
+  return "Title: uses the whole tab title.";
+}
+
+function fieldsDescription(adapter: AdapterObject): string {
+  const fields = objectValue(adapter.fields);
+  if (!fields || Object.keys(fields).length === 0) return "Tier 1 fields: none.";
+  return `Tier 1 fields (M1.5b): ${Object.entries(fields)
+    .map(([name, selector]) => `${name} ← ${String(selector)}`).join("; ")}.`;
+}
+
+function addText(parent: HTMLElement, tag: string, text: string, className?: string): HTMLElement {
+  const child = document.createElement(tag);
+  child.textContent = text;
+  if (className) child.className = className;
+  parent.append(child);
+  return child;
+}
+
+function renderAdapters(): void {
+  const adapters = session.config?.adapters.artifacts ?? [];
+  adapterOverlaps.replaceChildren();
+  for (const warning of session.adapterWarnings) {
+    addText(adapterOverlaps, "p", overlapText(warning, adapters));
+  }
+
+  adapterList.replaceChildren();
+  if (!adapters.length) addText(adapterList, "p", "No adapters configured. Add one after enabling its site above.");
+  adapters.forEach((adapter, index) => {
+    const card = document.createElement("article");
+    card.className = "adapter-card";
+    addText(card, "h3", adapterLabel(adapter, index));
+    addText(card, "p", `${textValue(adapter.origin, "Invalid origin")} · ID ${textValue(adapter.id, "missing")}`);
+    const rules = document.createElement("ul");
+    rules.className = "plain-list";
+    if (Array.isArray(adapter.match)) {
+      adapter.match.forEach((rule, ruleIndex) => addText(rules, "li", ruleDescription(rule, ruleIndex)));
+    } else {
+      addText(rules, "li", "No readable match rules.");
+    }
+    card.append(rules);
+    addText(card, "p", scopeDescription(adapter));
+    addText(card, "p", titleDescription(adapter));
+    addText(card, "p", fieldsDescription(adapter));
+
+    const actions = document.createElement("div");
+    actions.className = "adapter-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit and preview";
+    edit.addEventListener("click", () => beginAdapterEdit(index));
+    actions.append(edit);
+    for (const [label, offset] of [["Move up", -1], ["Move down", 1]] as const) {
+      const move = document.createElement("button");
+      move.type = "button";
+      move.className = "secondary";
+      move.textContent = label;
+      move.dataset.boundary = String(index + offset < 0 || index + offset >= adapters.length);
+      move.addEventListener("click", () => void moveAdapter(index, offset));
+      actions.append(move);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${adapterLabel(adapter, index)}`);
+    remove.addEventListener("click", () => void removeAdapter(index));
+    actions.append(remove);
+    card.append(actions);
+    adapterList.append(card);
+  });
+}
+
+type CandidateResult =
+  | { ok: true; adapter: AdapterObject; document: AdapterDocument }
+  | { ok: false; message: string };
+
+function readAdapterCandidate(): CandidateResult {
+  if (adapterEdit === null || !session.config) return { ok: false, message: "No adapter is being edited." };
+  if (session.config.adapters.format !== 1) {
+    return { ok: false, message: `Adapter format ${session.config.adapters.format} cannot be edited by this build.` };
+  }
+  const parsed = parseAdapterJson(adapterJson.value);
+  if (!parsed.ok) return parsed;
+  const origin = adapterOrigin(parsed.adapter);
+  if (!origin || !session.config.sites.some((site) => site.origin === origin)) {
+    return { ok: false, message: "Enable this adapter's exact origin in Private capture setup first." };
+  }
+  const artifacts = [...session.config.adapters.artifacts];
+  if (adapterEdit === "new") artifacts.push(parsed.adapter);
+  else if (artifacts[adapterEdit]) artifacts[adapterEdit] = parsed.adapter;
+  else return { ok: false, message: "This adapter changed on another settings page. Reload and try again." };
+  const document = { format: 1, artifacts };
+  const problem = validateAdapterDocument(document);
+  return problem ? { ok: false, message: problem } : { ok: true, adapter: parsed.adapter, document };
+}
+
+function adapterCandidate(): CandidateResult | null {
+  const result = readAdapterCandidate();
+  return result.ok ? result : null;
+}
+
+function matchText(result: { match: false; reason: string } | {
+  match: true; type: string; artifact_id: string; rule: number; title?: string; mode: string | null;
+}): string {
+  if (!result.match) return `No match (${result.reason})`;
+  const details = [`${result.type} rule ${result.rule + 1}`, result.artifact_id];
+  if (result.title) details.push(`title “${result.title}”`);
+  if (result.mode) details.push(`mode ${result.mode}`);
+  return `Matches ${details.join(" · ")}`;
+}
+
+function refreshAdapterEditor(): void {
+  if (adapterEdit === null) return;
+  const candidate = readAdapterCandidate();
+  adapterValidation.classList.toggle("warning", !candidate.ok);
+  adapterValidation.textContent = candidate.ok
+    ? "Valid here. The native host will validate the complete configuration again before saving."
+    : candidate.message;
+  adapterPreview.replaceChildren();
+  if (!candidate.ok) {
+    addText(adapterPreview, "li", "Fix the definition to see its match preview.");
+    updateControls();
+    return;
+  }
+  const preview = previewDocument(
+    candidate.document,
+    adapterPreviewUrl.value,
+    adapterPreviewTitle.value,
+    true,
+    adapterOrigin(candidate.adapter) ?? undefined,
+  );
+  if (!preview.ok) {
+    addText(adapterPreview, "li", preview.message);
+    updateControls();
+    return;
+  }
+  const probeMatches = preview.rows.filter((row) => row.probe && row.result.match).length;
+  addText(adapterPreview, "li", probeMatches === 0
+    ? "All fixed non-artifact probes stay unmatched."
+    : `${probeMatches} fixed non-artifact probe${probeMatches === 1 ? " matches" : "s match"}; review before saving.`,
+  probeMatches ? "probe-match" : undefined);
+  for (const row of preview.rows) {
+    const item = addText(adapterPreview, "li", `${row.probe ? "Probe" : "Example"}: ${row.url} — ${matchText(row.result)}`);
+    if (row.probe && row.result.match) item.className = "probe-match";
+  }
+  updateControls();
+}
+
+function beginAdapterEdit(index: number | "new"): void {
+  if (!session.config || busy) return;
+  const adapter = index === "new"
+    ? newAdapter(session.config.sites[0]?.origin ?? "https://example.com")
+    : session.config.adapters.artifacts[index];
+  if (!adapter) return;
+  adapterEdit = index;
+  adapterEditor.hidden = false;
+  adapterEditorHeading.textContent = index === "new"
+    ? "Add and review adapter"
+    : `Edit and review ${adapterLabel(adapter, index)}`;
+  adapterJson.value = JSON.stringify(adapter, null, 2);
+  adapterPreviewUrl.value = exampleUrl(adapter);
+  adapterPreviewTitle.value = "";
+  refreshAdapterEditor();
+}
+
+function closeAdapterEditor(): void {
+  adapterEdit = null;
+  adapterEditor.hidden = true;
+  adapterJson.value = "";
+  adapterValidation.textContent = "";
+  adapterPreview.replaceChildren();
+  updateControls();
+}
+
+async function saveAdapterDocument(document: AdapterDocument, success: string): Promise<void> {
+  if (!session.config || busy) return;
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({ ...session.config!, adapters: document }, null));
+    closeAdapterEditor();
+    show(success);
+  } catch (error) {
+    show(`Could not save artifact adapters: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
+async function saveAdapter(): Promise<void> {
+  const candidate = readAdapterCandidate();
+  if (!candidate.ok) {
+    refreshAdapterEditor();
+    return;
+  }
+  const action = adapterEdit === "new" ? "added" : "updated";
+  await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`);
+}
+
+async function removeAdapter(index: number): Promise<void> {
+  const config = session.config;
+  if (!config || busy || !config.adapters.artifacts[index]) return;
+  const label = adapterLabel(config.adapters.artifacts[index]!, index);
+  const artifacts = config.adapters.artifacts.filter((_adapter, adapterIndex) => adapterIndex !== index);
+  await saveAdapterDocument({ format: 1, artifacts }, `${label} adapter removed; its pages are no longer captured.`);
+}
+
+async function moveAdapter(index: number, offset: -1 | 1): Promise<void> {
+  const config = session.config;
+  const target = index + offset;
+  if (!config || busy || target < 0 || target >= config.adapters.artifacts.length) return;
+  const artifacts = [...config.adapters.artifacts];
+  const current = artifacts[index]!;
+  artifacts[index] = artifacts[target]!;
+  artifacts[target] = current;
+  await saveAdapterDocument({ format: 1, artifacts },
+    `${adapterLabel(current, index)} moved ${offset < 0 ? "earlier" : "later"} in match precedence.`);
+}
+
 function renderConfig(): void {
   const config = session.config;
   folderPath.textContent = picker?.path ?? config?.storage?.root ?? "None selected";
@@ -309,6 +601,7 @@ function renderConfig(): void {
       sitesList.append(item);
     }
   }
+  renderAdapters();
   renderAgent();
   updateControls();
 }
@@ -604,6 +897,7 @@ async function removeSite(site: SiteConfig): Promise<void> {
   let permissionFailure: string | null = null;
   let permissionRetained: string | null = null;
   let keptForNotes = false;
+  let removedAdapters = 0;
   let refreshAfter = false;
   try {
     // The worker serializes this with navigation capture and persists a local
@@ -613,10 +907,13 @@ async function removeSite(site: SiteConfig): Promise<void> {
     renderConfig();
     await withConfigMutationLock(async () => {
       const sites = baseConfig.sites.filter((entry) => !sameSite(entry, site));
+      const adapters = adaptersForSites(baseConfig, sites);
+      removedAdapters = baseConfig.adapters.artifacts.length - adapters.artifacts.length;
       try {
         await session.saveConfig({
           ...baseConfig,
           sites,
+          adapters,
           capture_enabled: baseConfig.capture_enabled && sites.length > 0,
         }, null, () => {
           hostCommitted = true;
@@ -679,7 +976,9 @@ async function removeSite(site: SiteConfig): Promise<void> {
         : "";
       show(`${[hostFailure, permissionFailure, permissionRetained].filter(Boolean).join(" ")}${next}${grant}`, true);
     } else if (hostCommitted) {
-      show(`Removed ${site.origin}${site.path_prefix}.${keptForNotes
+      show(`Removed ${site.origin}${site.path_prefix}.${removedAdapters
+        ? ` Also removed ${removedAdapters} adapter${removedAdapters === 1 ? "" : "s"} for that origin.`
+        : ""}${keptForNotes
         ? " Chrome access for this site is kept for its page notes."
         : ""}`);
     } else {
@@ -848,6 +1147,12 @@ for (const suggestion of SUGGESTED_EXCLUSIONS) {
 }
 
 detectButton.addEventListener("click", () => void detectHarnesses());
+newAdapterButton.addEventListener("click", () => beginAdapterEdit("new"));
+saveAdapterButton.addEventListener("click", () => void saveAdapter());
+cancelAdapterButton.addEventListener("click", closeAdapterEditor);
+adapterJson.addEventListener("input", refreshAdapterEditor);
+adapterPreviewUrl.addEventListener("input", refreshAdapterEditor);
+adapterPreviewTitle.addEventListener("input", refreshAdapterEditor);
 setupButton.addEventListener("click", () => void setupHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
 denylistAddButton.addEventListener("click", () => void addExclusion());

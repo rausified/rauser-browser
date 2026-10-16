@@ -82,12 +82,12 @@ function fire(listeners, permissions) {
   setTimeout(() => { for (const listener of listeners) listener(permissions); }, 0);
 }
 
-function install({ sites = [SITE], grants = [], storage = {}, host = {}, workerStatus = {} } = {}) {
+function install({ sites = [SITE], adapters = [], grants = [], storage = {}, host = {}, workerStatus = {} } = {}) {
   const elements = new Map();
   const state = {
     grants: new Set(grants),
     storage: new Map(Object.entries(storage)),
-    config: configWith(sites),
+    config: { ...configWith(sites), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
     added: [],
@@ -97,6 +97,11 @@ function install({ sites = [SITE], grants = [], storage = {}, host = {}, workerS
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
     ["site-path", "input"], ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
+    ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
+    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
+    ["adapter-validation", "output"], ["adapter-preview-url", "input"],
+    ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
+    ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
     ["summaries-dir", "input"], ["denylist-input", "input"], ["denylist-preview", "output"],
     ["denylist-add", "button"], ["denylist-suggestions", "div"], ["denylist-list", "ul"],
@@ -105,6 +110,7 @@ function install({ sites = [SITE], grants = [], storage = {}, host = {}, workerS
     elements.set(id, new FakeElement(tag));
   }
   elements.get("site-path").value = "/";
+  elements.get("adapter-editor").hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
 
   function hostReply(request) {
@@ -223,6 +229,7 @@ async function until(condition, what) {
 
 const statusText = () => env.elements.get("status").textContent;
 const idle = () => !env.elements.get("choose-folder").disabled;
+const nodeText = (node) => [node.textContent, ...(node.children ?? []).map(nodeText)].join(" ");
 
 async function openSettings({ connected = true } = {}) {
   loads += 1;
@@ -281,6 +288,18 @@ test("removing a logging site keeps an origin grant the side panel made for note
   assert.match(statusText(), /kept for its page notes/);
 });
 
+test("removing an origin's final site removes its adapters in the same host update", async () => {
+  const adapter = {
+    type: "work.item", origin: SITE.origin,
+    match: [{ path: "/items/{id:int}" }], id: "work.item:{host}/{id}",
+  };
+  const state = install({ grants: ["webNavigation", PATTERN], adapters: [adapter] });
+  await openSettings();
+  await removeListedSite();
+  assert.deepEqual(state.config.adapters.artifacts, []);
+  assert.match(statusText(), /Also removed 1 adapter for that origin/);
+});
+
 test("a notes grant Chrome no longer holds does not protect a later logging grant", async () => {
   const state = install({ sites: [], storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] } });
   await openSettings();
@@ -332,6 +351,91 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
   });
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
+});
+
+test("adapter workspace previews and saves a new adapter through native confirmation", async () => {
+  const saves = [];
+  const state = install({
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  assert.equal(env.elements.get("new-adapter").disabled, false);
+
+  env.elements.get("new-adapter").click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.match(env.elements.get("adapter-json").value, /"origin": "https:\/\/a\.com"/);
+  assert.equal(env.elements.get("save-adapter").disabled, false);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /All fixed non-artifact probes stay unmatched/);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /work\.item:a\.com\/123456/);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the adapter save");
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].consent_token, "consent");
+  assert.equal(state.config.adapters.artifacts[0].type, "work.item");
+  assert.match(statusText(), /adapter added/);
+});
+
+test("adapter workspace names overlaps and highlights a matching safety probe", async () => {
+  const search = {
+    type: "work.search", origin: "https://a.com",
+    match: [{ path: "/search", query: { q: "{id:token}" } }],
+    id: "work.search:{host}/{id}", fields: { status: ".status" },
+  };
+  const issue = {
+    type: "work.issue", origin: "https://a.com",
+    match: [{ path: "/issues/{id:int}" }], id: "work.issue:{host}/{id}",
+  };
+  install({
+    adapters: [search, issue],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: null,
+        adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
+      }),
+    },
+  });
+  await openSettings();
+  assert.match(nodeText(env.elements.get("adapter-overlaps")),
+    /work\.search rule 1 may overlap work\.issue rule 1; work\.search wins/);
+  assert.match(nodeText(env.elements.get("adapter-list")), /Tier 1 fields \(M1\.5b\): status ← \.status/);
+
+  const [edit] = env.elements.get("adapter-list").querySelectorAll("button");
+  edit.click();
+  assert.match(nodeText(env.elements.get("adapter-preview")), /fixed non-artifact probe matches/);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /https:\/\/a\.com\/search\?q=x — Matches work\.search/);
+});
+
+test("adapter workspace edits, reorders, and removes through revisioned saves", async () => {
+  const issue = {
+    type: "work.issue", origin: "https://a.com",
+    match: [{ path: "/issues/{id:int}" }], id: "work.issue:{host}/{id}",
+  };
+  const search = {
+    type: "work.search", origin: "https://a.com",
+    match: [{ path: "/search", query: { q: "{id:token}" } }], id: "work.search:{host}/{id}",
+  };
+  const state = install({ adapters: [issue, search] });
+  await openSettings();
+
+  // Each card has Edit, Move up, Move down, Remove.
+  env.elements.get("adapter-list").querySelectorAll("button")[2].click();
+  await until(() => state.config.adapters.artifacts[0].type === "work.search" && idle(), "the reorder");
+
+  env.elements.get("adapter-list").querySelectorAll("button")[0].click();
+  const edited = JSON.parse(env.elements.get("adapter-json").value);
+  edited.title = "{title} - Search";
+  env.elements.get("adapter-json").value = JSON.stringify(edited, null, 2);
+  env.elements.get("adapter-json").dispatch("input");
+  assert.equal(env.elements.get("save-adapter").disabled, false);
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts[0].title === "{title} - Search" && idle(), "the edit");
+
+  env.elements.get("adapter-list").querySelectorAll("button")[7].click();
+  await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the removal");
+  assert.equal(state.config.adapters.artifacts[0].type, "work.search");
+  assert.ok(state.revision >= 4);
 });
 
 test("a failed hello reports the host as unavailable", async () => {

@@ -37,6 +37,18 @@ export function sameSite(left: SiteConfig, right: SiteConfig): boolean {
   return left.origin === right.origin && left.path_prefix === right.path_prefix;
 }
 
+/** Keep host configuration valid when an origin loses its final enabled site.
+ * A site rule can narrow one origin by path, while adapters are origin-wide,
+ * so adapters remain until every site entry for that origin is gone. */
+export function adaptersForSites(config: ConfigSnapshot, sites: SiteConfig[]): ConfigSnapshot["adapters"] {
+  const origins = new Set(sites.map((site) => site.origin));
+  return {
+    format: config.adapters.format,
+    artifacts: config.adapters.artifacts.filter((adapter) =>
+      typeof adapter.origin === "string" && origins.has(adapter.origin)),
+  };
+}
+
 export async function withConfigMutationLock<T>(action: () => Promise<T>): Promise<T> {
   if (!navigator.locks?.request) {
     throw new Error("Chrome cannot coordinate configuration and permission changes on this page");
@@ -311,6 +323,7 @@ export class ConfigSession {
         await this.saveConfig({
           ...latest.config,
           sites,
+          adapters: adaptersForSites(latest.config, sites),
           capture_enabled: latest.config.capture_enabled && sites.length > 0,
         }, null);
       } else {
