@@ -112,7 +112,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   Fixed by aligning AGENTS.md, README.md, and DESIGN.md with the shipped lease,
   defense-in-depth recognition, and hourly activity boundary, protected by a
   whitespace-tolerant CI documentation regression.
-- [ ] `brwr-5fg` Smaller ones from the same review:
+- [x] `brwr-5fg` Smaller ones from the same review:
   - In `setStarterButtonState` (options.ts), `offer?.adapter !== null` is true
     when `offer` is null.
   - `hasAdapter` (starter-adapters.ts) can't see an existing GitHub adapter
@@ -120,6 +120,9 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   - `StoredAdapters` uses `deny_unknown_fields`, so a newer `[adapters]` key
     makes the whole config unreadable (backup-and-rewrite) instead of just
     suspending adapter policy.
+  Fixed all three: starter availability now requires a real draft, installed
+  GitHub types are detected without typed scope, and future adapter-table keys
+  are preserved host-side as an adapter-only issue with explicit reset repair.
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
   expected count in `scripts/smoke-macos.mjs` in the same commit. The smoke run
@@ -238,6 +241,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Shipped
 
+- **Category:** Bug Fix. **Finish the remaining adapter review repairs (2026-10-16).** Starter cards now recognize an installed GitHub pull-request or issue adapter before any organization scope is typed, and a missing draft can no longer become clickable through JavaScript's `undefined !== null` edge. The native host treats unknown future keys inside `[adapters]` as an adapter-only policy issue instead of an unreadable whole config: capture stays suspended, notes and other settings remain usable, unrelated saves preserve the unknown values, and the explicit remove-all repair clears them. **Metrics:** 267 Rust tests and 8 extension suites passing; 3 new failing-first regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Documentation & Process. **Align contributor status with shipped artifact capture (2026-10-16).** AGENTS.md now describes the active revisioned worker lease, TypeScript prefilter, independent native-host recognition, and measured hourly activity instead of telling contributors those paths are unbuilt. README and DESIGN.md name the same product boundary and separate it from the unfinished delivery, index, and panel slices; a whitespace-tolerant CI check prevents the obsolete claims from returning. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new documentation regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile native adapter policy once per configuration revision (2026-10-16).** The native host now keeps one validated Rust adapter document with each adopted config revision and reuses it for visits, hourly activities, mode and trail evidence, and why records instead of reparsing the complete policy for every check. Unchanged Hello, note, capture, and settings refreshes retain the compiled document; conservative pairwise overlap warnings run only when settings requests them or immediately after a successful commit, while invalid revisions still suspend capture fail-closed. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new failing-first compile/overlap hot-path regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile adapter policy once per worker revision (2026-10-16).** The service worker now validates and compiles a stored adapter document once when its host revision is first restored, then reuses that prepared document across policy reads and artifact matches instead of rebuilding the grammar and serializing the full policy on every navigation. Every non-expired install message still compiles independently at the untrusted boundary, expired installs are rejected before they can replace the active matcher, malformed cold-start policy stays inert, and site and live-grant gates remain ahead of evaluation. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new cache and navigation-hot-path regressions including failing-first compile-cache and rejected-install proofs, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
@@ -257,6 +261,14 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
+- Every PR #34 deploy blocker is now closed. The next cycle can return to the
+  already-started `brwr-6at` delivery-and-durability slice before taking new
+  ready plan work.
+- A configured GitHub starter can now identify itself without draft scope, but
+  the scope input intentionally remains blank because pull-request and issue
+  adapters may have different owner lists. The `brwr-ac1` coherent first-tool
+  setup should make that distinction visible rather than guessing one shared
+  editable value from existing policy.
 - The current-state CI check deliberately protects only the shipped M1.5a
   boundary that regressed: lease delivery, worker prefiltering, native-host
   rechecking, and hourly activity. When delivery, indexing, or the artifact

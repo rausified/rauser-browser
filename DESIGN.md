@@ -751,8 +751,12 @@ adapter table in an older config becomes an empty format-1 document. An
 unsupported or malformed adapter format is kept in the snapshot and left
 unchanged on disk, but suspends automatic capture through a separate
 `adapter_issue`, without blocking page notes or AI settings. Adapter additions
-and edits use the existing revision-bound native config confirmation. An open
-adapter edit is keyed by its origin, type, and ID rather than its array
+and edits use the existing revision-bound native config confirmation. Unknown
+future keys inside `[adapters]` follow the same adapter-only failure boundary:
+the host keeps them outside the wire snapshot, preserves them across unrelated
+settings updates, and removes them only through the explicit whole-document
+repair; they never turn the complete config into a backup-and-rewrite repair.
+An open adapter edit is keyed by its origin, type, and ID rather than its array
 position; after another settings page publishes a revision, harmless reordering
 follows the same adapter, while a changed, removed, or ambiguous target disables
 Save until the user closes the stale editor and reviews the current version.

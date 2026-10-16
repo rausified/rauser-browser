@@ -56,7 +56,8 @@ Rust engine and enabled site origins, reports overlap warnings or an
 adapter-only policy issue, and puts adapter additions and edits behind native
 confirmation (including the every-account disclosure for unscoped shared
 origins). A missing table defaults to an empty format-1 document; an
-unsupported format is preserved while automatic capture is suspended.
+unsupported format or unknown future `[adapters]` key is preserved while
+automatic capture is suspended.
 Existing adapter IDs are frozen until alias migrations exist. Settings has the
 adapter review workspace and development starter drafts for Jira Cloud,
 SharePoint/OneDrive, and scoped GitHub origins; the drafts still require the
