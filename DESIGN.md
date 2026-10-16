@@ -751,8 +751,12 @@ adapter table in an older config becomes an empty format-1 document. An
 unsupported or malformed adapter format is kept in the snapshot and left
 unchanged on disk, but suspends automatic capture through a separate
 `adapter_issue`, without blocking page notes or AI settings. Adapter additions
-and edits use the existing revision-bound native config confirmation. While an
-adapter issue is present, a revisioned update may echo only that exact inert
+and edits use the existing revision-bound native config confirmation. An open
+adapter edit is keyed by its origin, type, and ID rather than its array
+position; after another settings page publishes a revision, harmless reordering
+follows the same adapter, while a changed, removed, or ambiguous target disables
+Save until the user closes the stale editor and reviews the current version.
+While an adapter issue is present, a revisioned update may echo only that exact inert
 document so folder, AI-privacy, harness, and pause controls remain usable; any
 adapter change must replace it with a fully valid document. Settings offers a
 single remove-invalid-rules action, and re-reads `adapter_issue` after every
