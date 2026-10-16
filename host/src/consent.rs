@@ -788,8 +788,8 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     // repair makes effective.
     let trusted_adapters = config::validate(current).is_ok();
     let preserving_inert_adapters = current.adapters == next.adapters
-        && config::validate_adapters(current).is_err()
-        && config::validate_adapters(next).is_err();
+        && !config::adapter_policy_valid(current)
+        && !config::adapter_policy_valid(next);
     // Adding an exclusion takes effect at once. Removing or replacing one
     // weakens privacy and needs confirmation, confirmed list or not (§7.3).
     // These come first: sites the caller adds cannot push them down the dialog.

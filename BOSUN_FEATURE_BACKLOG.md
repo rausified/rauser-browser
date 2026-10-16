@@ -99,11 +99,14 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   cache: stored leases compile once per worker revision, matching does no
   adapter serialization, every non-expired untrusted install still validates
   afresh, and an expired install cannot alter the active revision's matcher.
-- [ ] `brwr-mwg` **Quadratic overlap scan on every host refresh** (host/src/config.rs
+- [x] `brwr-mwg` **Quadratic overlap scan on every host refresh** (host/src/config.rs
   ~950, ~1226). `read_disk_state` computes `overlap_report` on every Hello,
   GetConfig, LoadNote, SaveNote, and RecordVisit, and `adapter_matches`
   recompiles. Compute warnings only for GetConfig and post-commit, and reuse
-  one compiled Document per revision.
+  one compiled Document per revision. Fixed by keeping one validated Rust
+  document on `ConfigStore` for each on-disk revision, reusing it across all
+  event evidence checks, and running the pairwise warning scan only for
+  settings reads or immediately after a successful commit.
 - [ ] `brwr-7sb` **AGENTS.md "Current state" is stale.** It says the worker lease, the
   TypeScript prefilter, and host recognition are unbuilt, but they shipped.
   Update it to match README.md and DESIGN.md.
@@ -233,6 +236,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Shipped
 
+- **Category:** Performance & Resource Bounds. **Compile native adapter policy once per configuration revision (2026-10-16).** The native host now keeps one validated Rust adapter document with each adopted config revision and reuses it for visits, hourly activities, mode and trail evidence, and why records instead of reparsing the complete policy for every check. Unchanged Hello, note, capture, and settings refreshes retain the compiled document; conservative pairwise overlap warnings run only when settings requests them or immediately after a successful commit, while invalid revisions still suspend capture fail-closed. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new failing-first compile/overlap hot-path regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile adapter policy once per worker revision (2026-10-16).** The service worker now validates and compiles a stored adapter document once when its host revision is first restored, then reuses that prepared document across policy reads and artifact matches instead of rebuilding the grammar and serializing the full policy on every navigation. Every non-expired install message still compiles independently at the untrusted boundary, expired installs are rejected before they can replace the active matcher, malformed cold-start policy stays inert, and site and live-grant gates remain ahead of evaluation. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new cache and navigation-hot-path regressions including failing-first compile-cache and rejected-install proofs, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Security & Privacy. **Narrow host policy after Chrome revokes access during adapter repair (2026-10-16).** Settings now writes revoked origins out of the host's site allowlist even when an invalid or future adapter document has already suspended capture. The revisioned update preserves that unsupported document without structural changes for explicit repair, disables capture when its final site disappears, rechecks revocations under the configuration lock so a stale snapshot cannot remove a concurrently re-enabled site, and acknowledges revocations only after the host is already narrow. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new failing-first settings regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** Bug Fix. **Keep recognized capture queued while adapter policy needs repair (2026-10-16).** The native host now returns a retryable result when a transient invalid or future adapter document interrupts legacy visits, single hourly activities, or the current mixed delivery batch, so the worker retains every recognized event and any overflow evidence until policy is repaired. An intentional capture pause and a valid policy miss remain terminal, preserving immediate user control and defense-in-depth filtering. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 failing-first ingress regressions (+2 net tests), with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
@@ -250,6 +254,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
+- The worker and host now use the same lifecycle rule for prepared adapter
+  policy: a host configuration revision is the cache identity, and untrusted
+  replacement input must validate before it can replace the active matcher.
+  Keep future index and panel reads on this prepared host document rather than
+  reintroducing snapshot-level compile helpers as new native messages arrive.
 - Worker policy revisions are SHA-256 identities for the host configuration,
   so they are the right cache key for compiled adapter templates. Test fixtures
   must preserve that invariant: reusing one fake revision for different

@@ -18,6 +18,12 @@ use sha2::{Digest, Sha256};
 use url::Url;
 use uuid::Uuid;
 
+#[cfg(test)]
+thread_local! {
+    static ADAPTER_COMPILE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ADAPTER_OVERLAP_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
 use crate::privacy;
@@ -57,7 +63,8 @@ pub struct ConfigStore {
     root_identity: Option<String>,
     agent: AgentView,
     adapter_issue: Option<String>,
-    adapter_warnings: Vec<AdapterWarning>,
+    adapter_warnings: Option<Vec<AdapterWarning>>,
+    adapter_document: Option<AdapterTemplates>,
 }
 
 struct DiskState {
@@ -67,8 +74,6 @@ struct DiskState {
     needs_backup: bool,
     root_identity: Option<String>,
     agent: AgentView,
-    adapter_issue: Option<String>,
-    adapter_warnings: Vec<AdapterWarning>,
     retired_adapter_contracts: Vec<serde_json::Value>,
 }
 
@@ -255,7 +260,8 @@ impl ConfigStore {
         self.root_identity = None;
         self.agent = AgentView::default();
         self.adapter_issue = None;
-        self.adapter_warnings.clear();
+        self.adapter_warnings = Some(Vec::new());
+        self.adapter_document = None;
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -298,18 +304,21 @@ impl ConfigStore {
             root_identity: None,
             agent: AgentView::default(),
             adapter_issue: None,
-            adapter_warnings: Vec::new(),
+            adapter_warnings: Some(Vec::new()),
+            adapter_document: Some(AdapterTemplates::default()),
         }
     }
 
     fn adopt(&mut self, state: DiskState) {
+        let revision_changed = self.revision != state.revision;
         self.config = state.config;
         self.revision = state.revision;
         self.issue = state.issue;
         self.root_identity = state.root_identity;
         self.agent = state.agent;
-        self.adapter_issue = state.adapter_issue;
-        self.adapter_warnings = state.adapter_warnings;
+        if revision_changed {
+            self.set_adapter_policy(false);
+        }
     }
 
     pub fn snapshot(&self) -> &ConfigSnapshot {
@@ -359,8 +368,54 @@ impl ConfigStore {
         self.adapter_issue.as_deref()
     }
 
-    pub fn adapter_warnings(&self) -> &[AdapterWarning] {
-        &self.adapter_warnings
+    pub fn adapter_warnings(&mut self) -> &[AdapterWarning] {
+        if self.adapter_warnings.is_none() {
+            self.adapter_warnings = Some(
+                self.adapter_document
+                    .as_ref()
+                    .map(adapter_warnings)
+                    .unwrap_or_default(),
+            );
+        }
+        self.adapter_warnings.as_deref().unwrap_or_default()
+    }
+
+    /// Evaluate with the document compiled for the current on-disk revision.
+    /// The worker's lease check is a privacy prefilter, never an authorization
+    /// decision the privileged host trusts.
+    pub(crate) fn adapter_matches(&self, url: &str, title: Option<&str>) -> Result<bool> {
+        Ok(self.adapter_document()?.evaluate(url, title).is_ok())
+    }
+
+    pub(crate) fn adapter_match(
+        &self,
+        url: &str,
+        title: Option<&str>,
+    ) -> Result<adapter_templates::Match> {
+        self.adapter_document()?
+            .evaluate(url, title)
+            .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
+    }
+
+    fn adapter_document(&self) -> Result<&AdapterTemplates> {
+        self.adapter_document
+            .as_ref()
+            .context("adapter policy is unavailable")
+    }
+
+    fn set_adapter_policy(&mut self, include_warnings: bool) {
+        match compile_validated_adapters(&self.config) {
+            Ok(document) => {
+                self.adapter_issue = None;
+                self.adapter_warnings = include_warnings.then(|| adapter_warnings(&document));
+                self.adapter_document = Some(document);
+            }
+            Err(error) => {
+                self.adapter_issue = Some(error.to_string());
+                self.adapter_warnings = Some(Vec::new());
+                self.adapter_document = None;
+            }
+        }
     }
 
     /// Re-read config.toml. On failure the store becomes inert rather than
@@ -554,7 +609,11 @@ impl ConfigStore {
         {
             bail!("harness setup does not match this configuration");
         }
-        let parent = self.path.parent().context("config path has no parent")?;
+        let parent = self
+            .path
+            .parent()
+            .context("config path has no parent")?
+            .to_path_buf();
         let _lock_file = self.lock_current()?;
         let current = read_disk_state(&self.path)?;
         if expected_revision != current.revision {
@@ -636,7 +695,7 @@ impl ConfigStore {
         // Repair must preserve the exact unreadable file. A no-clobber,
         // durable backup is created before the replacement can be published.
         if current.needs_backup {
-            backup_invalid(parent, &self.path, &current.revision)?;
+            backup_invalid(&parent, &self.path, &current.revision)?;
             // A local editor might ignore our lock. Do not replace bytes that
             // changed while the backup was being made.
             let after_backup = read_disk_state(&self.path)?;
@@ -665,11 +724,8 @@ impl ConfigStore {
         self.issue = None;
         self.root_identity = next_identity;
         self.agent = agent;
-        (self.adapter_issue, self.adapter_warnings) = match validate_adapters(&self.config) {
-            Ok(warnings) => (None, warnings),
-            Err(error) => (Some(error.to_string()), Vec::new()),
-        };
-        if let Err(error) = sync_parent(parent) {
+        self.set_adapter_policy(true);
+        if let Err(error) = sync_parent(&parent) {
             eprintln!(
                 "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
             );
@@ -897,8 +953,6 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity: None,
                 agent: AgentView::default(),
-                adapter_issue: None,
-                adapter_warnings: Vec::new(),
                 retired_adapter_contracts: Vec::new(),
             });
         }
@@ -938,8 +992,6 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             agent: AgentView::default(),
-            adapter_issue: None,
-            adapter_warnings: Vec::new(),
             retired_adapter_contracts: Vec::new(),
         });
     }
@@ -968,15 +1020,9 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     needs_backup: true,
                     root_identity: None,
                     agent,
-                    adapter_issue: None,
-                    adapter_warnings: Vec::new(),
                     retired_adapter_contracts: Vec::new(),
                 });
             }
-            let (adapter_issue, adapter_warnings) = match validate_adapters(&config) {
-                Ok(warnings) => (None, warnings),
-                Err(error) => (Some(error.to_string()), Vec::new()),
-            };
             // The settings themselves are valid. A folder that is missing or
             // no longer matches its stored identity (an unmounted drive, or a
             // remount with a new device number) blocks vault I/O and needs
@@ -996,8 +1042,6 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity,
                 agent,
-                adapter_issue,
-                adapter_warnings,
                 retired_adapter_contracts,
             })
         }
@@ -1008,8 +1052,6 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             agent: AgentView::default(),
-            adapter_issue: None,
-            adapter_warnings: Vec::new(),
             retired_adapter_contracts: Vec::new(),
         }),
     }
@@ -1160,7 +1202,7 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
 /// Callers open the root only after authorization; see `validate_persisted`.
 pub fn validate(config: &ConfigSnapshot) -> Result<()> {
     validate_base(config)?;
-    validate_adapters(config)?;
+    compile_validated_adapters(config)?;
     Ok(())
 }
 
@@ -1173,10 +1215,10 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
 pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     validate_base(next)?;
     let preserving_inert_adapters = current.adapters == next.adapters
-        && validate_adapters(current).is_err()
-        && validate_adapters(next).is_err();
+        && compile_validated_adapters(current).is_err()
+        && compile_validated_adapters(next).is_err();
     if !preserving_inert_adapters {
-        validate_adapters(next)?;
+        compile_validated_adapters(next)?;
     }
     Ok(())
 }
@@ -1220,7 +1262,13 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
+#[cfg(test)]
+fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
+    let document = compile_validated_adapters(config)?;
+    Ok(adapter_warnings(&document))
+}
+
+fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
     let document = compile_adapters(config)?;
     for (index, adapter) in document.adapters().iter().enumerate() {
         if !config
@@ -1234,7 +1282,17 @@ pub(crate) fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWa
             );
         }
     }
-    Ok(document
+    Ok(document)
+}
+
+pub(crate) fn adapter_policy_valid(config: &ConfigSnapshot) -> bool {
+    compile_validated_adapters(config).is_ok()
+}
+
+fn adapter_warnings(document: &AdapterTemplates) -> Vec<AdapterWarning> {
+    #[cfg(test)]
+    ADAPTER_OVERLAP_COUNT.set(ADAPTER_OVERLAP_COUNT.get() + 1);
+    document
         .overlap_report()
         .into_iter()
         .take(MAX_ADAPTER_WARNINGS)
@@ -1244,37 +1302,18 @@ pub(crate) fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWa
             second_adapter: pair.second.0 as u32,
             second_rule: pair.second.1 as u32,
         })
-        .collect())
+        .collect()
 }
 
 fn compile_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
+    #[cfg(test)]
+    ADAPTER_COMPILE_COUNT.set(ADAPTER_COMPILE_COUNT.get() + 1);
     let json =
         serde_json::to_value(&config.adapters).context("serializing the adapter configuration")?;
     let value: AdapterValue =
         serde_json::from_value(json).context("reading the adapter configuration")?;
     AdapterTemplates::from_value(&value)
         .map_err(|error| anyhow::anyhow!("adapter configuration is invalid: {error}"))
-}
-
-/// Re-run the authoritative adapter engine for every delivered browser event.
-/// The worker's lease check is a privacy prefilter, never an authorization
-/// decision the privileged host trusts.
-pub(crate) fn adapter_matches(
-    config: &ConfigSnapshot,
-    url: &str,
-    title: Option<&str>,
-) -> Result<bool> {
-    Ok(compile_adapters(config)?.evaluate(url, title).is_ok())
-}
-
-pub(crate) fn adapter_match(
-    config: &ConfigSnapshot,
-    url: &str,
-    title: Option<&str>,
-) -> Result<adapter_templates::Match> {
-    compile_adapters(config)?
-        .evaluate(url, title)
-        .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
 }
 
 /// Artifact IDs are record keys. Alias events are not implemented until
@@ -1296,7 +1335,7 @@ fn validate_adapter_transition_with_history(
     retired: &[serde_json::Value],
 ) -> Result<()> {
     validate_adapter_history(retired)?;
-    let current_is_valid = validate_adapters(current).is_ok();
+    let current_is_valid = adapter_policy_valid(current);
     if current_is_valid {
         validate_active_id_transition(current, next)?;
     }
@@ -2029,6 +2068,57 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_refresh_and_matching_reuse_compiled_adapter_policy() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let config = adapter_config(
+            "https://work.example",
+            vec![
+                adapter(
+                    "https://work.example",
+                    "work.issue",
+                    "/issues/{id:int}",
+                    "work.issue:{host}/{id}",
+                ),
+                adapter(
+                    "https://work.example",
+                    "work.ticket",
+                    "/issues/{id:int}",
+                    "work.ticket:{host}/{id}",
+                ),
+            ],
+        );
+        store.update(config, MISSING_REVISION).unwrap().unwrap();
+        let mut store = loaded(&path);
+
+        ADAPTER_COMPILE_COUNT.set(0);
+        ADAPTER_OVERLAP_COUNT.set(0);
+        store.refresh().unwrap();
+        assert!(
+            store
+                .adapter_matches("https://work.example/issues/42", Some("Issue 42"))
+                .unwrap()
+        );
+        assert!(
+            store
+                .adapter_matches("https://work.example/issues/43", Some("Issue 43"))
+                .unwrap()
+        );
+
+        assert_eq!(ADAPTER_COMPILE_COUNT.get(), 0);
+        assert_eq!(ADAPTER_OVERLAP_COUNT.get(), 0);
+
+        assert_eq!(store.adapter_warnings().len(), 1);
+        assert_eq!(ADAPTER_COMPILE_COUNT.get(), 0);
+        assert_eq!(ADAPTER_OVERLAP_COUNT.get(), 1);
+        store.refresh().unwrap();
+        assert_eq!(store.adapter_warnings().len(), 1);
+        assert_eq!(ADAPTER_COMPILE_COUNT.get(), 0);
+        assert_eq!(ADAPTER_OVERLAP_COUNT.get(), 1);
+    }
+
+    #[test]
     fn existing_adapter_id_template_cannot_change_before_migrations_exist() {
         let current = adapter_config(
             "https://work.example",
@@ -2330,7 +2420,7 @@ mod tests {
             "[adapters]\nformat = 2\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
         );
         let before = fs::read(&path).unwrap();
-        let store = loaded(&path);
+        let mut store = loaded(&path);
         assert_eq!(store.config_issue(), None);
         assert!(
             store.configured(),
