@@ -201,6 +201,7 @@ fn dispatch(
         }
         Request::GetConfig(value) => {
             let _ = config.refresh();
+            let adapter_warnings = config.adapter_warnings().to_vec();
             Response::ConfigResult(ConfigResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -209,7 +210,7 @@ fn dispatch(
                 config_issue: config.config_issue().map(str::to_owned),
                 agent_status: config.agent_status(),
                 adapter_issue: config.adapter_issue().map(str::to_owned),
-                adapter_warnings: config.adapter_warnings().to_vec(),
+                adapter_warnings,
             })
         }
         Request::UpdateConfig(value) => {
@@ -537,11 +538,7 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     if config.adapter_issue().is_some() {
         return retryable("adapter policy is unavailable");
     }
-    match config::adapter_matches(
-        config.snapshot(),
-        &value.event.url,
-        value.event.title.as_deref(),
-    ) {
+    match config.adapter_matches(&value.event.url, value.event.title.as_deref()) {
         Ok(true) => {}
         Ok(false) => {
             return Response::VisitRecorded(VisitRecorded {
@@ -643,11 +640,7 @@ fn record_activity(
             None,
         );
     }
-    let matched = match config::adapter_match(
-        config.snapshot(),
-        &value.event.url,
-        value.event.title.as_deref(),
-    ) {
+    let matched = match config.adapter_match(&value.event.url, value.event.title.as_deref()) {
         Ok(matched) => matched,
         Err(_) => {
             return answer(
@@ -667,7 +660,7 @@ fn record_activity(
         );
     }
     for mode in &value.event.modes {
-        match config::adapter_match(config.snapshot(), &mode.url, None) {
+        match config.adapter_match(&mode.url, None) {
             Ok(evidence)
                 if evidence.artifact_id == value.event.artifact_id
                     && evidence
@@ -685,7 +678,7 @@ fn record_activity(
     for trail in &value.event.trails {
         match (&trail.from_artifact_id, &trail.from_url) {
             (None, None) => {}
-            (Some(id), Some(url)) => match config::adapter_match(config.snapshot(), url, None) {
+            (Some(id), Some(url)) => match config.adapter_match(url, None) {
                 Ok(source) if &source.artifact_id == id => {}
                 _ => {
                     return answer(
@@ -877,14 +870,13 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
     for event in &accepted {
         let policy_result = match event {
             Accepted::Visit(event) => {
-                match config::adapter_matches(config.snapshot(), &event.url, event.title.as_deref())
-                {
+                match config.adapter_matches(&event.url, event.title.as_deref()) {
                     Ok(true) => Ok(()),
                     Ok(false) => Err((VisitOutcome::Suppressed, "not_an_artifact")),
                     Err(_) => Err((VisitOutcome::Retryable, "adapter policy is unavailable")),
                 }
             }
-            Accepted::Activity(event) => check_activity_policy(config.snapshot(), event),
+            Accepted::Activity(event) => check_activity_policy(config, event),
         };
         match policy_result {
             Ok(()) => durable.push(event),
@@ -983,22 +975,23 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
 }
 
 fn check_activity_policy(
-    snapshot: &brauser_protocol::ConfigSnapshot,
+    config: &ConfigStore,
     event: &brauser_protocol::ActivityEvent,
 ) -> std::result::Result<(), (VisitOutcome, &'static str)> {
-    if !snapshot.capture_enabled {
+    if !config.snapshot().capture_enabled {
         return Err((VisitOutcome::Suppressed, "capture_disabled"));
     }
     if !activity_shape_is_valid(event) {
         return Err((VisitOutcome::Rejected, "invalid_activity"));
     }
-    let matched = config::adapter_match(snapshot, &event.url, event.title.as_deref())
+    let matched = config
+        .adapter_match(&event.url, event.title.as_deref())
         .map_err(|_| (VisitOutcome::Suppressed, "not_an_artifact"))?;
     if matched.artifact_id != event.artifact_id || matched.artifact_type != event.artifact_type {
         return Err((VisitOutcome::Rejected, "artifact_identity_mismatch"));
     }
     for mode in &event.modes {
-        match config::adapter_match(snapshot, &mode.url, None) {
+        match config.adapter_match(&mode.url, None) {
             Ok(evidence)
                 if evidence.artifact_id == event.artifact_id
                     && evidence
@@ -1010,7 +1003,7 @@ fn check_activity_policy(
     for trail in &event.trails {
         match (&trail.from_artifact_id, &trail.from_url) {
             (None, None) => {}
-            (Some(id), Some(url)) => match config::adapter_match(snapshot, url, None) {
+            (Some(id), Some(url)) => match config.adapter_match(url, None) {
                 Ok(source) if &source.artifact_id == id => {}
                 _ => return Err((VisitOutcome::Rejected, "trail_identity_mismatch")),
             },
@@ -1059,7 +1052,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
             None,
         );
     }
-    let matched = match config::adapter_match(config.snapshot(), &value.event.url, None) {
+    let matched = match config.adapter_match(&value.event.url, None) {
         Ok(matched) if matched.artifact_id == value.event.artifact_id => matched,
         _ => {
             return answer(
