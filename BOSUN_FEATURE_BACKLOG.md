@@ -19,14 +19,15 @@ plan. You may still add proposals and notes at cycle end — just don't build
 them ahead of the plan.
 
 **Beads is the machine queue (2026-10-16).** `.beads/issues.jsonl` holds one
-bead per open item below, with these rules encoded in priority and
-dependencies: Known Issues are P0 and chained in listed order, plan work is P1
-and chained in §12.2 order, and Cookie's proposals are P3 and blocked until the
-plan work Cookie can do on this VM is done. So `bd ready` offers exactly the
-item this file says to take next. **[human]** items depend on the deferred
-`brwr-hpo` HUMAN GATE bead. Do not close the gate to make them ready. Every
-open item here carries its bead id; `scripts/check_queue_consistency.py`
-refuses a launch when the two disagree.
+bead per open item below, structured like Privateer's queue. Known Issues
+are P1 and plan work is P2. Cookie's proposals are P3, so none of them outranks
+plan work. Dependencies are only the real ones (8.2 waits for 6.5-6.7, then
+8.3, 8.4, 8.5 in turn), so `bd ready` shows every Known Issue at once. **Take
+them in the order listed here, per the rule above.** **[human]** items carry
+the `human` label (`bd human list`) and depend on the deferred `brwr-hpo`
+HUMAN GATE bead. Do not close the gate to make them ready. Every open item
+here carries its bead id; `scripts/check_queue_consistency.py` refuses a
+launch when the two disagree.
 
 **Known issues come before plan work (set by John, 2026-10-16).** While any
 item under "Known Issues (Blocking Deploy)" is unchecked, take the first one
