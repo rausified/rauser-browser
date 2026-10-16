@@ -180,15 +180,15 @@ Their line numbers predate step 6.6, so re-check them.
   regenerate ownership-checked, skip-if-unchanged artifact Markdown with
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
-- [ ] `brwr-qsq` **Replace the hand-written SQLite snapshot with an incremental
+- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental
   real-SQLite index.** Step 6.6 shipped a custom SQLite file writer
   (`build_sqlite`) because the sandbox can't fetch crates. Every delivery
   re-derives all history, rewrites a whole-history `index-state.json` (64 MiB
   cap), and rewrites all of `index.db`. Move to `rusqlite` (bundled) with
   incremental upserts in transactions, keeping the log authoritative and
   `brauser reindex` as the rebuild. This is required for M3 FTS5. It is
-  blocked on **[human]** `brwr-dep`, which adds the crate outside the sandbox.
-- [ ] `brwr-dep` **[human] Add `rusqlite` (bundled) to the workspace and warm
+  blocked on **[human]** `brwr-mff`, which adds the crate outside the sandbox.
+- [ ] `brwr-mff` **[human] Add `rusqlite` (bundled) to the workspace and warm
   the VM's cargo cache.** Update `Cargo.toml` and `Cargo.lock`, pass
   `cargo deny`, and run `cargo fetch` on the VM so in-sandbox builds work
   offline.
