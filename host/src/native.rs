@@ -5,13 +5,14 @@ use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    AgentChecked, ConfigConfirmed, ConfigResult, ConfigUpdated, ErrorCode, ErrorResponse,
-    FolderChosen, HarnessSetupConfirmed, HarnessesDiscovered, HelloResult, NoteConflict,
-    NoteLoaded, NoteSaved, PROTOCOL_VERSION, Request, Response, VisitOutcome, VisitRecorded,
+    ActivityRecorded, AgentChecked, ConfigConfirmed, ConfigResult, ConfigUpdated, ErrorCode,
+    ErrorResponse, FolderChosen, HarnessSetupConfirmed, HarnessesDiscovered, HelloResult,
+    NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION, Request, Response, VisitOutcome,
+    VisitRecorded, WhyRecorded,
 };
 
 use crate::brand::NAMESPACE;
-use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore};
+use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore};
 use crate::consent::ConsentAuthority;
 use crate::dialog::{self, DialogText};
@@ -373,6 +374,8 @@ fn dispatch(
             }
         }
         Request::RecordVisit(value) => record_visit(value, config),
+        Request::RecordActivity(value) => record_activity(value, config),
+        Request::RecordWhy(value) => record_why(value, config),
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
         Request::CheckAgent(value) => check_agent(value, config),
@@ -596,6 +599,242 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     })
 }
 
+fn record_activity(
+    value: brauser_protocol::RecordActivityRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let event_id = value.event.event_id.clone();
+    let answer = |outcome, reason: Option<String>, relative_path: Option<String>| {
+        Response::ActivityRecorded(ActivityRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id.clone(),
+            event_id: event_id.clone(),
+            outcome,
+            reason,
+            relative_path,
+        })
+    };
+    let _config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return answer(
+                VisitOutcome::Retryable,
+                Some("configuration is unavailable".into()),
+                None,
+            );
+        }
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return answer(
+            VisitOutcome::Retryable,
+            Some("configuration is unavailable or needs repair".into()),
+            None,
+        );
+    }
+    if config.adapter_issue().is_some() || !config.snapshot().capture_enabled {
+        return answer(
+            VisitOutcome::Suppressed,
+            Some("capture_disabled".into()),
+            None,
+        );
+    }
+    // Serde enforces types, not the JSON Schema's maxItems limits. Reject
+    // oversized collections before replaying adapter evaluation for each
+    // claimed mode or trail from this untrusted native message.
+    if !activity_shape_is_valid(&value.event) {
+        return answer(
+            VisitOutcome::Rejected,
+            Some("invalid_activity".into()),
+            None,
+        );
+    }
+    let matched = match config::adapter_match(
+        config.snapshot(),
+        &value.event.url,
+        value.event.title.as_deref(),
+    ) {
+        Ok(matched) => matched,
+        Err(_) => {
+            return answer(
+                VisitOutcome::Suppressed,
+                Some("not_an_artifact".into()),
+                None,
+            );
+        }
+    };
+    if matched.artifact_id != value.event.artifact_id
+        || matched.artifact_type != value.event.artifact_type
+    {
+        return answer(
+            VisitOutcome::Rejected,
+            Some("artifact_identity_mismatch".into()),
+            None,
+        );
+    }
+    for mode in &value.event.modes {
+        match config::adapter_match(config.snapshot(), &mode.url, None) {
+            Ok(evidence)
+                if evidence.artifact_id == value.event.artifact_id
+                    && evidence
+                        .mode
+                        .is_some_and(|found| found.as_str() == mode.mode) => {}
+            _ => {
+                return answer(
+                    VisitOutcome::Rejected,
+                    Some("activity_mode_mismatch".into()),
+                    None,
+                );
+            }
+        }
+    }
+    for trail in &value.event.trails {
+        match (&trail.from_artifact_id, &trail.from_url) {
+            (None, None) => {}
+            (Some(id), Some(url)) => match config::adapter_match(config.snapshot(), url, None) {
+                Ok(source) if &source.artifact_id == id => {}
+                _ => {
+                    return answer(
+                        VisitOutcome::Rejected,
+                        Some("trail_identity_mismatch".into()),
+                        None,
+                    );
+                }
+            },
+            _ => {
+                return answer(
+                    VisitOutcome::Rejected,
+                    Some("trail_identity_mismatch".into()),
+                    None,
+                );
+            }
+        }
+    }
+    let expected_refs = matched.title.as_ref().map(|title| &title.refs);
+    if value.event.refs.iter().any(|supplied| {
+        !expected_refs.is_some_and(|refs| {
+            refs.iter().any(|expected| {
+                expected.artifact_type == supplied.artifact_type && expected.value == supplied.value
+            })
+        })
+    }) {
+        return answer(
+            VisitOutcome::Rejected,
+            Some("activity_refs_mismatch".into()),
+            None,
+        );
+    }
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return answer(
+            VisitOutcome::Retryable,
+            Some("choose a notes folder before capture".into()),
+            None,
+        );
+    };
+    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+        Ok(store) => store,
+        Err(_) => {
+            return answer(
+                VisitOutcome::Retryable,
+                Some("notes folder is unavailable".into()),
+                None,
+            );
+        }
+    };
+    let policy = CapturePolicy {
+        enabled: true,
+        sites: &config.snapshot().sites,
+        strip_params: &config.snapshot().strip_params,
+        near_repeat_secs: 0,
+    };
+    let (outcome, reason, relative_path) = match store.record_activity(policy, &value.event) {
+        CaptureOutcome::Persisted { relative_path } => (
+            VisitOutcome::Persisted,
+            None,
+            Some(relative_path.to_string_lossy().into_owned()),
+        ),
+        CaptureOutcome::Suppressed { reason } => (VisitOutcome::Suppressed, Some(reason), None),
+        CaptureOutcome::Rejected { reason } => (VisitOutcome::Rejected, Some(reason), None),
+        CaptureOutcome::Retryable { message } => (VisitOutcome::Retryable, Some(message), None),
+    };
+    answer(outcome, reason, relative_path)
+}
+
+fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStore) -> Response {
+    let event_id = value.event.event_id.clone();
+    let answer = |outcome, reason: Option<String>, relative_path: Option<String>| {
+        Response::WhyRecorded(WhyRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id.clone(),
+            event_id: event_id.clone(),
+            outcome,
+            reason,
+            relative_path,
+        })
+    };
+    let _config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return answer(
+                VisitOutcome::Retryable,
+                Some("configuration is unavailable".into()),
+                None,
+            );
+        }
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return answer(
+            VisitOutcome::Retryable,
+            Some("configuration is unavailable or needs repair".into()),
+            None,
+        );
+    }
+    let matched = match config::adapter_match(config.snapshot(), &value.event.url, None) {
+        Ok(matched) if matched.artifact_id == value.event.artifact_id => matched,
+        _ => {
+            return answer(
+                VisitOutcome::Suppressed,
+                Some("not_an_artifact".into()),
+                None,
+            );
+        }
+    };
+    let _ = matched;
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return answer(
+            VisitOutcome::Retryable,
+            Some("choose a notes folder before capture".into()),
+            None,
+        );
+    };
+    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+        Ok(store) => store,
+        Err(_) => {
+            return answer(
+                VisitOutcome::Retryable,
+                Some("notes folder is unavailable".into()),
+                None,
+            );
+        }
+    };
+    let policy = CapturePolicy {
+        enabled: config.snapshot().capture_enabled,
+        sites: &config.snapshot().sites,
+        strip_params: &config.snapshot().strip_params,
+        near_repeat_secs: 0,
+    };
+    let (outcome, reason, relative_path) = match store.record_why(policy, &value.event) {
+        CaptureOutcome::Persisted { relative_path } => (
+            VisitOutcome::Persisted,
+            None,
+            Some(relative_path.to_string_lossy().into_owned()),
+        ),
+        CaptureOutcome::Suppressed { reason } => (VisitOutcome::Suppressed, Some(reason), None),
+        CaptureOutcome::Rejected { reason } => (VisitOutcome::Rejected, Some(reason), None),
+        CaptureOutcome::Retryable { message } => (VisitOutcome::Retryable, Some(message), None),
+    };
+    answer(outcome, reason, relative_path)
+}
+
 /// Resolve the canonical URL and vault shared by `load_note` and `save_note`.
 /// Notes work on any HTTP(S) page (§5.3): unlike visit logging, this never
 /// checks the site allowlist. The error is a small `(code, message)` pair,
@@ -765,8 +1004,8 @@ fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
 mod tests {
     use super::*;
     use brauser_protocol::{
-        ConfigSnapshot, GetConfigRequest, HelloRequest, RecordVisitRequest, UpdateConfigRequest,
-        VisitEvent,
+        ActivityEvent, ActivityMode, ActivityTrail, ConfigSnapshot, GetConfigRequest, HelloRequest,
+        RecordActivityRequest, RecordVisitRequest, UpdateConfigRequest, VisitEvent,
     };
     use std::io::Cursor;
 
@@ -1495,6 +1734,122 @@ scope = { owner = ["acme"] }
                 assert_ne!(recorded.reason.as_deref(), Some("not_an_artifact"));
             }
             other => panic!("expected a recognized visit result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_revalidates_activity_identity_and_trail_sources() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_minute(0)
+            .unwrap()
+            .replace_second(0)
+            .unwrap()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let event = |artifact_id: &str, trails: Vec<ActivityTrail>| ActivityEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: artifact_id.into(),
+            artifact_type: "work.item".into(),
+            url: "https://work.example/items/7".into(),
+            title: Some("Work item".into()),
+            occurred_at: occurred_at.clone(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 3,
+            background_seconds: 0,
+            modes: Vec::new(),
+            trails,
+            refs: Vec::new(),
+        };
+        let invoke = |config: &mut ConfigStore, event| {
+            record_activity(
+                RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "activity-1".into(),
+                    event,
+                },
+                config,
+            )
+        };
+        let mut config = loaded(&path);
+        match invoke(&mut config, event("work:work.example/7", Vec::new())) {
+            Response::ActivityRecorded(recorded) => {
+                assert_ne!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_ne!(recorded.outcome, VisitOutcome::Rejected);
+            }
+            other => panic!("expected accepted activity, got {other:?}"),
+        }
+        match invoke(&mut config, event("work:work.example/8", Vec::new())) {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(
+                    recorded.reason.as_deref(),
+                    Some("artifact_identity_mismatch")
+                );
+            }
+            other => panic!("expected rejected activity, got {other:?}"),
+        }
+        let mut oversized_modes = event("work:work.example/7", Vec::new());
+        oversized_modes.modes = (0..4)
+            .map(|_| ActivityMode {
+                mode: "view".into(),
+                url: "https://work.example/items/7".into(),
+            })
+            .collect();
+        match invoke(&mut config, oversized_modes) {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(recorded.reason.as_deref(), Some("invalid_activity"));
+            }
+            other => panic!("expected oversized activity rejection, got {other:?}"),
+        }
+        let mut hostile_mode = event("work:work.example/7", Vec::new());
+        hostile_mode.modes.push(ActivityMode {
+            mode: "edit".into(),
+            url: "https://work.example/items/7".into(),
+        });
+        match invoke(&mut config, hostile_mode) {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(recorded.reason.as_deref(), Some("activity_mode_mismatch"));
+            }
+            other => panic!("expected rejected mode evidence, got {other:?}"),
+        }
+        let hostile_trail = ActivityTrail {
+            from_artifact_id: Some("work:work.example/99".into()),
+            from_url: Some("https://work.example/items/2".into()),
+            transition: "link".into(),
+        };
+        match invoke(
+            &mut config,
+            event("work:work.example/7", vec![hostile_trail]),
+        ) {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(recorded.reason.as_deref(), Some("trail_identity_mismatch"));
+            }
+            other => panic!("expected rejected trail, got {other:?}"),
         }
     }
 

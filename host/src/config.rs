@@ -1226,6 +1226,16 @@ pub(crate) fn adapter_matches(
     Ok(compile_adapters(config)?.evaluate(url, title).is_ok())
 }
 
+pub(crate) fn adapter_match(
+    config: &ConfigSnapshot,
+    url: &str,
+    title: Option<&str>,
+) -> Result<adapter_templates::Match> {
+    compile_adapters(config)?
+        .evaluate(url, title)
+        .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
+}
+
 /// Artifact IDs are record keys. Alias events are not implemented until
 /// M1.5b, so an existing adapter's ID template is immutable for now. This is
 /// intentionally stricter than the eventual activity-aware migration: it

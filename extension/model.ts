@@ -1,4 +1,6 @@
-import type { AdapterDocument, SiteConfig, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import type {
+  ActivityEvent, AdapterDocument, SiteConfig, VisitEvent, VisitOutcome,
+} from "../protocol/ts/generated.js";
 import { validateDocument } from "./adapter-templates.js";
 import { storageKey } from "./brand.js";
 
@@ -19,7 +21,9 @@ export interface PolicyLease {
 }
 
 export interface QueuedVisit {
-  event: VisitEvent;
+  // VisitEvent remains accepted only so an upgrade can drain M1's durable
+  // queue. New automatic capture produces ActivityEvent records.
+  event: VisitEvent | ActivityEvent;
   dedupe_key: string;
   attempts: number;
   retry_after: number;
@@ -44,6 +48,7 @@ export interface QueueState {
 
 export interface WorkerStatus {
   queued: number;
+  live_activity: number;
   next_retry_at: number | null;
   overflow_count: number;
   rejected_count: number;
@@ -68,6 +73,7 @@ export type WorkerRequest =
   | { kind: "discard_pending"; event_ids: string[] }
   | { kind: "remove_site"; site: SiteConfig }
   | { kind: "get_pending" }
+  | { kind: "get_activity" }
   | { kind: "ack_visit"; event_id: string; outcome: VisitOutcome; reason: string | null }
   | { kind: "get_status" }
   | { kind: "sync_now" }
@@ -185,6 +191,40 @@ export function isQueuedVisit(value: unknown): value is QueuedVisit {
   const event = item.event;
   if (typeof event !== "object" || event === null) return false;
   const visit = event as Record<string, unknown>;
+  const common =
+    typeof visit.event_id === "string" &&
+    typeof visit.url === "string" &&
+    (visit.title === null || typeof visit.title === "string") &&
+    typeof visit.occurred_at === "string" &&
+    visit.incognito === false;
+  const activity =
+    typeof visit.artifact_id === "string" &&
+    typeof visit.artifact_type === "string" &&
+    typeof visit.opens === "number" &&
+    typeof visit.focused_seconds === "number" &&
+    typeof visit.background_seconds === "number" &&
+    Number.isInteger(visit.opens) && visit.opens >= 0 &&
+    Number.isInteger(visit.focused_seconds) && visit.focused_seconds >= 0 &&
+    Number.isInteger(visit.background_seconds) && visit.background_seconds >= 0 &&
+    Array.isArray(visit.modes) && visit.modes.length <= 3 &&
+    visit.modes.every((mode) => typeof mode === "object" && mode !== null &&
+      ["view", "edit", "review"].includes(String((mode as Record<string, unknown>).mode)) &&
+      typeof (mode as Record<string, unknown>).url === "string") &&
+    Array.isArray(visit.trails) && visit.trails.length <= 10 &&
+    visit.trails.every((trail) => typeof trail === "object" && trail !== null &&
+      (typeof (trail as Record<string, unknown>).from_artifact_id === "string" ||
+        (trail as Record<string, unknown>).from_artifact_id === null) &&
+      (typeof (trail as Record<string, unknown>).from_url === "string" ||
+        (trail as Record<string, unknown>).from_url === null) &&
+      typeof (trail as Record<string, unknown>).transition === "string") &&
+    Array.isArray(visit.refs) && visit.refs.length <= 20 &&
+    visit.refs.every((ref) => typeof ref === "object" && ref !== null &&
+      typeof (ref as Record<string, unknown>).artifact_type === "string" &&
+      typeof (ref as Record<string, unknown>).value === "string");
+  const legacy = visit.artifact_id === undefined && visit.artifact_type === undefined &&
+    visit.opens === undefined && visit.focused_seconds === undefined &&
+    visit.background_seconds === undefined && visit.modes === undefined &&
+    visit.trails === undefined && visit.refs === undefined;
   return (
     typeof item.dedupe_key === "string" &&
     typeof item.attempts === "number" &&
@@ -194,10 +234,6 @@ export function isQueuedVisit(value: unknown): value is QueuedVisit {
     Number.isFinite(item.retry_after) &&
     (item.tab_id === undefined || (typeof item.tab_id === "number" && Number.isInteger(item.tab_id))) &&
     (item.dispatched === undefined || typeof item.dispatched === "boolean") &&
-    typeof visit.event_id === "string" &&
-    typeof visit.url === "string" &&
-    (visit.title === null || typeof visit.title === "string") &&
-    typeof visit.occurred_at === "string" &&
-    visit.incognito === false
+    common && (legacy || activity)
   );
 }

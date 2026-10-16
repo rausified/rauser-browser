@@ -118,6 +118,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "config_confirmed":
       return typeof value.consent_token === "string" && typeof value.summary === "string";
     case "visit_recorded":
+    case "activity_recorded":
+    case "why_recorded":
       return typeof value.event_id === "string" &&
         ["persisted", "suppressed", "rejected", "retryable"].includes(String(value.outcome)) &&
         stringOrNull(value.reason) && stringOrNull(value.relative_path);
