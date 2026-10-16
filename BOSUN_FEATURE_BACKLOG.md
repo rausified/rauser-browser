@@ -144,7 +144,9 @@ Their line numbers predate step 6.6, so re-check them.
 - [ ] `brwr-1fo` **Bidi and zero-width characters spoof log rows.**
   `safe_markdown_line` strips control chars but not Unicode format chars
   (U+202E, U+200B–U+200F, U+2066–U+2069, U+FEFF), so a hostile title can
-  visually disguise an entry.
+  visually disguise an entry. Step 6.6's artifact renderer
+  (`index.rs::safe_markdown`) has the same gap. Cover both with one shared
+  sanitizer.
 - [ ] `brwr-992` **Activity checks are duplicated across delivery paths.**
   `record_activity` (native.rs ~640–717) re-implements `check_activity_policy`
   (~977–1020); unify so single and batch delivery can't drift. Take after the
