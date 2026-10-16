@@ -76,8 +76,11 @@ overflow snapshot; the host validates the complete batch, then uses one
 compact crash-recovery intent, one append, and one log sync. Queue pressure
 coalesces compatible undispatched activity without exceeding the byte cap,
 lights the toolbar badge at 80%, and leaves durable overflow evidence. The
-index and artifact-file generation, artifact panel card, Recent list, worklog
-view, and record keys remain unfinished.
+native host now updates a rebuildable SQLite `index.db` only after durable log
+delivery and lazily regenerates ownership-checked artifact Markdown at
+connection boundaries. `brauser reindex` recreates both from the owned log
+markers. The artifact panel card, Recent list, worklog view, record keys, and
+the settings-facing update-files action remain unfinished.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on

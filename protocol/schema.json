@@ -551,6 +551,7 @@
         "log_dir",
         "pages_dir",
         "later_dir",
+        "artifacts_dir",
         "summaries_dir"
       ],
       "properties": {
@@ -573,6 +574,11 @@
         "later_dir": {
           "type": "string",
           "minLength": 1
+        },
+        "artifacts_dir": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
         },
         "summaries_dir": {
           "oneOf": [

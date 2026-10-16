@@ -64,7 +64,7 @@ function statusFor(overrides = {}) {
 function configWith(sites) {
   return {
     storage: {
-      root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
+      root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: null,
     },
     capture_enabled: sites.length > 0,

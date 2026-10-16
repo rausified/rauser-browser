@@ -20,7 +20,7 @@ fn storage(summaries: Option<&str>) -> String {
         format!(r#","summaries_dir":{value}"#)
     });
     format!(
-        r#""storage":{{"root":"/tmp/notes","profile":"neutral","log_dir":"log","pages_dir":"pages","later_dir":"later"{summaries}}},"#
+        r#""storage":{{"root":"/tmp/notes","profile":"neutral","log_dir":"log","pages_dir":"pages","later_dir":"later","artifacts_dir":"artifacts"{summaries}}},"#
     )
 }
 
@@ -66,6 +66,18 @@ fn v5_config_requires_summaries_dir_key() {
     assert!(serde_json::from_str::<Request>(&update(&config(&storage(Some("null"))))).is_ok());
     assert!(
         serde_json::from_str::<Request>(&update(&config(&storage(Some(r#""summaries""#))))).is_ok()
+    );
+}
+
+#[test]
+fn v5_config_requires_artifacts_dir_key() {
+    let complete = storage(Some("null"));
+    assert!(serde_json::from_str::<Request>(&update(&config(&complete))).is_ok());
+    assert!(
+        serde_json::from_str::<Request>(&update(&config(
+            &complete.replace(r#","artifacts_dir":"artifacts""#, "")
+        )))
+        .is_err()
     );
 }
 

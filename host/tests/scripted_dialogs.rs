@@ -208,6 +208,7 @@ fn harness_confirmation_text_round_trips() {
         log_dir: "log".into(),
         pages_dir: "pages".into(),
         later_dir: "later".into(),
+        artifacts_dir: "artifacts".into(),
         summaries_dir: summaries.map(str::to_owned),
     };
     let current = ConfigSnapshot {

@@ -55,6 +55,9 @@ def main() -> int:
         "AGENTS.md delivery": "delivery-and-durability step",
         "README.md delivery": "delivery compaction, the index",
         "DESIGN.md delivery": "delivery and durability, indexing",
+        "AGENTS.md index": "index and artifact-file generation",
+        "README.md index": "the index and artifact files",
+        "DESIGN.md index": "indexing, record keys",
     }
     bodies = {
         "AGENTS.md": agents,
@@ -63,6 +66,9 @@ def main() -> int:
         "AGENTS.md delivery": agents,
         "README.md delivery": readme,
         "DESIGN.md delivery": design,
+        "AGENTS.md index": agents,
+        "README.md index": readme,
+        "DESIGN.md index": design,
     }
     for filename, claim in stale_claims.items():
         body = bodies[filename]
@@ -86,8 +92,14 @@ def main() -> int:
         errors.append("README.md Status no longer records shipped batched delivery")
     if "hourly artifact activity" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped artifact activity")
-    if "batched durable delivery merged" not in normalized(design):
+    if "batched durable delivery" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped delivery durability")
+    if "rebuildable sqlite `index.db`" not in normalized(agents):
+        errors.append("AGENTS.md Current state no longer records shipped artifact indexing")
+    if "disposable sqlite artifact index" not in normalized(readme):
+        errors.append("README.md Status no longer records shipped artifact indexing")
+    if "rebuildable indexing" not in normalized(design):
+        errors.append("DESIGN.md status no longer records shipped artifact indexing")
 
     for error in errors:
         print(error, file=sys.stderr)
