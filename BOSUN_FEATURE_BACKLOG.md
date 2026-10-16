@@ -56,13 +56,16 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   origin), then enforce it. Fixed with host-owned durable recognition/ID
   contracts: overlapping routes cannot return under a new ID or type, while
   the original ID and genuinely disjoint routes remain available.
-- [ ] `brwr-rhg` **No repair path while `adapter_issue` is set** (host/src/consent.rs
+- [x] `brwr-rhg` **No repair path while `adapter_issue` is set** (host/src/consent.rs
   ~336, extension/options.ts ~161 and ~517). Every write that echoes the stored
   adapter document fails full `validate()`. That includes harness setup,
   denylist, and folder changes, and the UI disables every adapter control and
   refuses format != 1. This breaks the "notes and AI settings remain usable
   during adapter repair" contract. Non-adapter writes must succeed, and the UI
-  needs a way to replace or remove the bad document.
+  needs a way to replace or remove the bad document. Fixed by allowing only an
+  exact invalid-document echo for unrelated writes, keeping those controls and
+  Pause usable, and offering a revisioned remove-all repair that stays
+  fail-closed until the host re-reports a valid policy.
 - [ ] `brwr-99f` **Adapter editor keys on a stale array index** (extension/options.ts
   ~528). If another tab or a lease change reloads `session.config` while the
   editor is open, Save overwrites whatever adapter now sits at that index, with
@@ -192,6 +195,10 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   when notes or another site purpose already needs it. This removes today's
   confusing intermediate state where a site is enabled but records nothing
   until a second adapter save and confirmation.
+- [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The immediate repair
+  path removes the entire invalid document. Add copy-out and a whole-document,
+  format-1 replacement workspace so a user can salvage valid rules without
+  asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
 
@@ -202,6 +209,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Shipped
 
+- **Category:** Bug Fix. **Restore settings and recovery while adapter policy is invalid (2026-10-16).** The host now permits unrelated settings and harness setup to carry forward only the exact already-inert adapter document, while every adapter edit still requires a fully valid replacement. Settings keeps folder, AI-privacy, harness, and Pause controls usable, offers a clear remove-all repair action, and re-reads host adapter status before publishing any worker lease so the recovery path remains fail-closed. **Metrics:** 259 Rust tests and 8 extension suites passing; 5 new regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** Bug Fix. **Keep adapter record keys frozen across removal and type changes (2026-10-16).** Removing or changing an adapter now persists its minimal recognition and ID contract in host-owned config state that never crosses the extension protocol. A type or ID swap and a later remove/edit/re-add on an overlapping route are both refused until alias migrations exist, while restoring the exact contract or introducing a genuinely disjoint route remains valid; disjoint same-ID reuse cannot erase older route history, and the history survives host restart and is replaced atomically with config. **Metrics:** 256 Rust tests and 8 extension suites passing; 3 regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** Bug Fix. **Allow one same-type adapter to be removed without misclassifying its sibling (2026-10-16).** Adapter transition validation now compares counted ID-template sets for each origin and artifact type, so deleting either member of a same-type pair is a legitimate narrowing instead of a false frozen-ID edit. Additions and reorderings still work, while a real template replacement—including one hidden among siblings—remains refused until alias migrations exist. **Metrics:** 253 Rust tests and 8 extension suites passing; 1 new regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** New Capability. **Replace navigation rows with measured hourly artifact activity (2026-10-16).** Automatic capture now measures cold opens, focused and background time, modes, refs, and capped trail sources in durable offset-qualified hourly totals instead of producing a row for every navigation. The worker rebuilds recognized tab state after a restart, handles idle, focus, SPA, reload, discarded-tab, and daylight-saving boundaries, preserves upgrade-era visits, and exposes live versus pending activity in the panel; the host independently revalidates artifact identity, mode evidence, title refs, and every trail before an idempotent append. Activity and `why` markers retain a canonical machine payload for the coming index without exposing stripped URL parameters, while the human log stays concise and M1 markers remain readable. **Metrics:** 249 Rust tests and 8 extension suites passing; full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
@@ -225,3 +233,4 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 - Step 6.6's index reader should treat the hex marker payload as the authority and the Markdown sentence as presentation only. It must keep reading older visit markers, reject malformed or oversized activity payloads without losing the rest of a log, and apply the same URL-normalization assumptions as the writer.
 - Real idle/lock transitions and cross-application focus accounting remain outside headless proof. When John next requests the interactive macOS pass, compare one known reading interval and one terminal-away interval with the panel's live focused/background totals before calling the engagement labels field-verified.
 - Removed adapter recognition/ID contracts now remain as compact host-owned `adapter_id_history` entries until their exact ID is restored. M1.5b alias migrations should consume or supersede this conservative history explicitly, rather than merely relaxing the transition check and reopening the orphaning path.
+- Adapter-only repair now keeps the invalid document byte-for-structure and makes destructive reset explicit, but it cannot selectively salvage rules. `brwr-jnj` tracks a copy-out and full-document replacement workspace; it must never auto-downgrade or reinterpret an unsupported future format.
