@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{SiteConfig, StorageConfig, VisitEvent};
+use brauser_protocol::{
+    ActivityEvent, OverflowMarker, SiteConfig, StorageConfig, VisitEvent, WhyEvent,
+};
 use cap_std::fs::{Dir, OpenOptions};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -28,10 +30,10 @@ use crate::vault::{
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
 const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_BATCH_INTENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_URL_BYTES: usize = 8192;
 const MAX_TITLE_BYTES: usize = 2048;
 const MAX_STRIP_RULES: usize = 64;
-const MAX_NEAR_REPEAT_SECS: u64 = 24 * 60 * 60;
 const MAX_FUTURE_SECS: i64 = 5 * 60;
 const MAX_PAST_SECS: i64 = 30 * 24 * 60 * 60;
 /// Real-world UTC offsets range from -12:00 to +14:00.
@@ -60,11 +62,45 @@ struct VisitIntent {
     offset: u64,
 }
 
+/// The compact journal has at most one in-flight batch because the capture
+/// lock serializes every writer. Keeping the exact bounded append makes a
+/// crash recoverable without retaining one file forever for every event.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchIntent {
+    version: u8,
+    batch_id: String,
+    root_path: String,
+    root_identity: String,
+    relative_log: String,
+    event_hashes: Vec<String>,
+    entry: String,
+    offset: u64,
+}
+
+pub enum CaptureBatchEvent<'a> {
+    Visit(&'a VisitEvent),
+    Activity(&'a ActivityEvent),
+}
+
+pub struct CaptureBatchOutcome {
+    pub events: Vec<(String, CaptureOutcome)>,
+    pub overflow_recorded: bool,
+}
+
+struct BatchEntry {
+    event_id: String,
+    event_hash: String,
+    timestamp: OffsetDateTime,
+    entry: String,
+    overflow: bool,
+}
+
+#[derive(Clone, Copy)]
 pub struct CapturePolicy<'a> {
     pub enabled: bool,
     pub sites: &'a [SiteConfig],
     pub strip_params: &'a [String],
-    pub near_repeat_secs: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,6 +109,48 @@ pub enum CaptureOutcome {
     Suppressed { reason: String },
     Rejected { reason: String },
     Retryable { message: String },
+}
+
+struct EventRendering<'a> {
+    body: Option<&'a str>,
+    marker_metadata: Option<&'a str>,
+}
+
+/// Check the generated schema's activity caps before any caller iterates
+/// attacker-controlled collections or replays adapter matching for them.
+pub(crate) fn activity_shape_is_valid(event: &ActivityEvent) -> bool {
+    event.opens <= 100_000
+        && event.focused_seconds <= 7_200
+        && event.background_seconds <= 7_200
+        && event.modes.len() <= 3
+        && event.trails.len() <= 10
+        && event.refs.len() <= 20
+        && event.artifact_id.len() <= 512
+        && event.artifact_type.len() <= 64
+        && event.modes.iter().all(|mode| {
+            matches!(mode.mode.as_str(), "view" | "edit" | "review")
+                && !mode.url.is_empty()
+                && mode.url.len() <= MAX_URL_BYTES
+        })
+        && event.trails.iter().all(|trail| {
+            !trail.transition.is_empty()
+                && trail.transition.len() <= 64
+                && trail
+                    .from_artifact_id
+                    .as_ref()
+                    .is_none_or(|value| value.len() <= 512)
+                && trail
+                    .from_url
+                    .as_ref()
+                    .is_none_or(|value| value.len() <= MAX_URL_BYTES)
+                && trail.from_artifact_id.is_some() == trail.from_url.is_some()
+        })
+        && event.refs.iter().all(|reference| {
+            !reference.artifact_type.is_empty()
+                && reference.artifact_type.len() <= 64
+                && !reference.value.is_empty()
+                && reference.value.len() <= 512
+        })
 }
 
 impl CaptureStore {
@@ -110,6 +188,479 @@ impl CaptureStore {
     }
 
     pub fn record(&self, policy: CapturePolicy<'_>, event: &VisitEvent) -> CaptureOutcome {
+        self.record_entry(policy, event, None, None)
+    }
+
+    pub fn record_activity(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &ActivityEvent,
+    ) -> CaptureOutcome {
+        if !activity_shape_is_valid(event) {
+            return CaptureOutcome::Rejected {
+                reason: "invalid_activity".into(),
+            };
+        }
+        let modes = event
+            .modes
+            .iter()
+            .map(|mode| mode.mode.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut measures = Vec::new();
+        if event.focused_seconds > 0 {
+            measures.push(format!("focused {}s", event.focused_seconds));
+        }
+        if event.background_seconds > 0 {
+            measures.push(format!("background {}s", event.background_seconds));
+        }
+        if event.opens > 0 {
+            measures.push(format!("opened {} time(s)", event.opens));
+        }
+        if !modes.is_empty() {
+            measures.push(format!("modes {modes}"));
+        }
+        if measures.is_empty() {
+            return CaptureOutcome::Rejected {
+                reason: "empty_activity".into(),
+            };
+        }
+        let body = format!(
+            "{} — {} — {}",
+            event.occurred_at,
+            safe_title(event.title.as_deref()),
+            measures.join(" · ")
+        );
+        let mut payload = event.clone();
+        for mode in &mut payload.modes {
+            let source = match parse_page_url(&mode.url) {
+                Ok(source) => source,
+                Err(reason) => return CaptureOutcome::Rejected { reason },
+            };
+            match is_authorized(&source, policy.sites) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return CaptureOutcome::Rejected {
+                        reason: "mode_site_not_allowed".into(),
+                    };
+                }
+                Err(message) => return CaptureOutcome::Retryable { message },
+            }
+            mode.url = match normalize_url(source, policy.strip_params) {
+                Ok(normalized) => normalized,
+                Err(message) => return CaptureOutcome::Retryable { message },
+            };
+        }
+        for trail in &mut payload.trails {
+            let Some(raw_source) = trail.from_url.as_deref() else {
+                continue;
+            };
+            let source = match parse_page_url(raw_source) {
+                Ok(source) => source,
+                Err(reason) => return CaptureOutcome::Rejected { reason },
+            };
+            match is_authorized(&source, policy.sites) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return CaptureOutcome::Rejected {
+                        reason: "trail_site_not_allowed".into(),
+                    };
+                }
+                Err(message) => return CaptureOutcome::Retryable { message },
+            }
+            trail.from_url = match normalize_url(source, policy.strip_params) {
+                Ok(normalized) => Some(normalized),
+                Err(message) => return CaptureOutcome::Retryable { message },
+            };
+        }
+        let visit = VisitEvent {
+            event_id: event.event_id.clone(),
+            url: event.url.clone(),
+            title: event.title.clone(),
+            occurred_at: event.occurred_at.clone(),
+            incognito: event.incognito,
+        };
+        let marker = match serde_json::to_value(payload) {
+            Ok(value) => value,
+            Err(_) => {
+                return CaptureOutcome::Rejected {
+                    reason: "invalid_activity".into(),
+                };
+            }
+        };
+        self.record_entry(policy, &visit, Some(&body), Some(("activity", marker)))
+    }
+
+    pub fn record_why(&self, policy: CapturePolicy<'_>, event: &WhyEvent) -> CaptureOutcome {
+        let text = safe_markdown_line(Some(&event.text), 500);
+        if text == "Untitled"
+            || event.artifact_id.is_empty()
+            || event.artifact_id.len() > 512
+            || event.text.chars().count() > 500
+        {
+            return CaptureOutcome::Rejected {
+                reason: "invalid_why".into(),
+            };
+        }
+        let body = format!("{} — Why: {}", event.occurred_at, text);
+        let visit = VisitEvent {
+            event_id: event.event_id.clone(),
+            url: event.url.clone(),
+            title: Some(event.text.clone()),
+            occurred_at: event.occurred_at.clone(),
+            incognito: event.incognito,
+        };
+        let marker = match serde_json::to_value(event) {
+            Ok(value) => value,
+            Err(_) => {
+                return CaptureOutcome::Rejected {
+                    reason: "invalid_why".into(),
+                };
+            }
+        };
+        self.record_entry(policy, &visit, Some(&body), Some(("why", marker)))
+    }
+
+    /// Append the durable evidence for worker-side buffer loss. The batch ID
+    /// is the marker's stable event ID, so retrying the same batch cannot add
+    /// the notice twice.
+    pub fn record_overflow(
+        &self,
+        policy: CapturePolicy<'_>,
+        batch_id: &str,
+        anchor_url: &str,
+        overflow: &OverflowMarker,
+    ) -> CaptureOutcome {
+        if overflow.count == 0
+            || parse_event_time(&overflow.first_occurred_at).is_err()
+            || parse_event_time(&overflow.last_occurred_at).is_err()
+            || overflow.first_occurred_at > overflow.last_occurred_at
+        {
+            return CaptureOutcome::Rejected {
+                reason: "invalid_overflow_marker".into(),
+            };
+        }
+        let body = format!(
+            "{} — Capture overflow: {} completed activity hour(s) were dropped between {} and {}",
+            overflow.last_occurred_at,
+            overflow.count,
+            overflow.first_occurred_at,
+            overflow.last_occurred_at
+        );
+        let marker = match serde_json::to_value(overflow) {
+            Ok(value) => value,
+            Err(_) => {
+                return CaptureOutcome::Rejected {
+                    reason: "invalid_overflow_marker".into(),
+                };
+            }
+        };
+        let event = VisitEvent {
+            event_id: batch_id.to_owned(),
+            url: anchor_url.to_owned(),
+            title: None,
+            occurred_at: overflow.last_occurred_at.clone(),
+            incognito: false,
+        };
+        self.record_entry(policy, &event, Some(&body), Some(("overflow", marker)))
+    }
+
+    /// Validate a complete native delivery first, then publish its surviving
+    /// records with one append and one log sync. Events in a batch must share
+    /// a local calendar day; the worker enforces that boundary before send.
+    pub fn record_batch(
+        &self,
+        policy: CapturePolicy<'_>,
+        batch_id: &str,
+        events: &[CaptureBatchEvent<'_>],
+        overflow: Option<&OverflowMarker>,
+    ) -> CaptureBatchOutcome {
+        let mut results = Vec::with_capacity(events.len());
+        let mut prepared = Vec::with_capacity(events.len() + usize::from(overflow.is_some()));
+        for event in events {
+            let (id, candidate) = match event {
+                CaptureBatchEvent::Visit(event) => (
+                    event.event_id.clone(),
+                    self.prepare_batch_entry(policy, event, None, None, false),
+                ),
+                CaptureBatchEvent::Activity(event) => {
+                    let id = event.event_id.clone();
+                    (id, self.prepare_batch_activity(policy, event))
+                }
+            };
+            match candidate {
+                Ok(entry) => prepared.push(entry),
+                Err(outcome) => results.push((id, outcome)),
+            }
+        }
+
+        if let (Some(overflow), Some(anchor)) = (overflow, events.first()) {
+            let anchor_url = match anchor {
+                CaptureBatchEvent::Visit(event) => &event.url,
+                CaptureBatchEvent::Activity(event) => &event.url,
+            };
+            let valid = overflow.count > 0
+                && parse_event_time(&overflow.first_occurred_at).is_ok()
+                && parse_event_time(&overflow.last_occurred_at).is_ok()
+                && overflow.first_occurred_at <= overflow.last_occurred_at;
+            if valid {
+                let body = format!(
+                    "{} — Capture overflow: {} completed activity hour(s) were dropped between {} and {}",
+                    overflow.last_occurred_at,
+                    overflow.count,
+                    overflow.first_occurred_at,
+                    overflow.last_occurred_at
+                );
+                let marker = serde_json::to_value(overflow).ok();
+                let anchor_time = match anchor {
+                    CaptureBatchEvent::Visit(event) => event.occurred_at.clone(),
+                    CaptureBatchEvent::Activity(event) => event.occurred_at.clone(),
+                };
+                let event = VisitEvent {
+                    event_id: batch_id.to_owned(),
+                    url: anchor_url.clone(),
+                    title: None,
+                    occurred_at: anchor_time,
+                    incognito: false,
+                };
+                if let Ok(entry) = self.prepare_batch_entry(
+                    policy,
+                    &event,
+                    Some(&body),
+                    marker.map(|value| ("overflow", value)),
+                    true,
+                ) {
+                    prepared.push(entry);
+                }
+            }
+        }
+
+        if prepared.is_empty() {
+            return CaptureBatchOutcome {
+                events: results,
+                overflow_recorded: false,
+            };
+        }
+        match self.append_batch(batch_id, &prepared) {
+            Ok(outcomes) => {
+                let mut overflow_recorded = false;
+                for (entry, outcome) in prepared.into_iter().zip(outcomes) {
+                    if entry.overflow {
+                        overflow_recorded = matches!(
+                            outcome,
+                            CaptureOutcome::Persisted { .. } | CaptureOutcome::Suppressed { .. }
+                        );
+                    } else {
+                        results.push((entry.event_id, outcome));
+                    }
+                }
+                CaptureBatchOutcome {
+                    events: results,
+                    overflow_recorded,
+                }
+            }
+            Err(error) => {
+                for entry in prepared {
+                    if !entry.overflow {
+                        results.push((
+                            entry.event_id,
+                            CaptureOutcome::Retryable {
+                                message: error.to_string(),
+                            },
+                        ));
+                    }
+                }
+                CaptureBatchOutcome {
+                    events: results,
+                    overflow_recorded: false,
+                }
+            }
+        }
+    }
+
+    fn prepare_batch_entry(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &VisitEvent,
+        custom_body: Option<&str>,
+        marker_payload: Option<(&str, serde_json::Value)>,
+        overflow: bool,
+    ) -> std::result::Result<BatchEntry, CaptureOutcome> {
+        if !policy.enabled {
+            return Err(CaptureOutcome::Suppressed {
+                reason: "capture_disabled".into(),
+            });
+        }
+        if event.incognito {
+            return Err(CaptureOutcome::Suppressed {
+                reason: "incognito".into(),
+            });
+        }
+        let event_id = parse_event_id(&event.event_id)
+            .map_err(|reason| CaptureOutcome::Rejected { reason })?;
+        let timestamp = parse_event_time(&event.occurred_at)
+            .map_err(|reason| CaptureOutcome::Rejected { reason })?;
+        check_event_window(timestamp).map_err(|reason| CaptureOutcome::Rejected { reason })?;
+        if event.url.len() > MAX_URL_BYTES {
+            return Err(CaptureOutcome::Rejected {
+                reason: "url_too_long".into(),
+            });
+        }
+        if event
+            .title
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_TITLE_BYTES)
+        {
+            return Err(CaptureOutcome::Rejected {
+                reason: "title_too_long".into(),
+            });
+        }
+        let original =
+            parse_page_url(&event.url).map_err(|reason| CaptureOutcome::Rejected { reason })?;
+        match is_authorized(&original, policy.sites) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(CaptureOutcome::Rejected {
+                    reason: "site_not_allowed".into(),
+                });
+            }
+            Err(message) => return Err(CaptureOutcome::Retryable { message }),
+        }
+        let normalized = normalize_url(original, policy.strip_params)
+            .map_err(|message| CaptureOutcome::Retryable { message })?;
+        let marker_metadata = match marker_payload {
+            Some((kind, mut payload)) => {
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("url".into(), serde_json::Value::String(normalized.clone()));
+                }
+                let json = serde_json::to_vec(&payload).map_err(|_| CaptureOutcome::Rejected {
+                    reason: "invalid_event_metadata".into(),
+                })?;
+                format!(" kind={kind} data={}", hex::encode(json))
+            }
+            None => String::new(),
+        };
+        let title = safe_title(event.title.as_deref());
+        let body = custom_body.map_or_else(
+            || format!("{} — {} — <{}>", event.occurred_at, title, normalized),
+            |prefix| format!("{prefix} — <{normalized}>"),
+        );
+        let event_hash = sha256_hex(event_id.as_bytes());
+        let url_hash = sha256_hex(normalized.as_bytes());
+        let entry = format!(
+            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
+            event.occurred_at, marker_metadata
+        );
+        Ok(BatchEntry {
+            event_id,
+            event_hash,
+            timestamp,
+            entry,
+            overflow,
+        })
+    }
+
+    fn prepare_batch_activity(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &ActivityEvent,
+    ) -> std::result::Result<BatchEntry, CaptureOutcome> {
+        if !activity_shape_is_valid(event) {
+            return Err(CaptureOutcome::Rejected {
+                reason: "invalid_activity".into(),
+            });
+        }
+        let modes = event
+            .modes
+            .iter()
+            .map(|mode| mode.mode.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut measures = Vec::new();
+        if event.focused_seconds > 0 {
+            measures.push(format!("focused {}s", event.focused_seconds));
+        }
+        if event.background_seconds > 0 {
+            measures.push(format!("background {}s", event.background_seconds));
+        }
+        if event.opens > 0 {
+            measures.push(format!("opened {} time(s)", event.opens));
+        }
+        if !modes.is_empty() {
+            measures.push(format!("modes {modes}"));
+        }
+        if measures.is_empty() {
+            return Err(CaptureOutcome::Rejected {
+                reason: "empty_activity".into(),
+            });
+        }
+        let mut payload = event.clone();
+        for mode in &mut payload.modes {
+            let source =
+                parse_page_url(&mode.url).map_err(|reason| CaptureOutcome::Rejected { reason })?;
+            match is_authorized(&source, policy.sites) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(CaptureOutcome::Rejected {
+                        reason: "mode_site_not_allowed".into(),
+                    });
+                }
+                Err(message) => return Err(CaptureOutcome::Retryable { message }),
+            }
+            mode.url = normalize_url(source, policy.strip_params)
+                .map_err(|message| CaptureOutcome::Retryable { message })?;
+        }
+        for trail in &mut payload.trails {
+            let Some(raw_source) = trail.from_url.as_deref() else {
+                continue;
+            };
+            let source =
+                parse_page_url(raw_source).map_err(|reason| CaptureOutcome::Rejected { reason })?;
+            match is_authorized(&source, policy.sites) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(CaptureOutcome::Rejected {
+                        reason: "trail_site_not_allowed".into(),
+                    });
+                }
+                Err(message) => return Err(CaptureOutcome::Retryable { message }),
+            }
+            trail.from_url = Some(
+                normalize_url(source, policy.strip_params)
+                    .map_err(|message| CaptureOutcome::Retryable { message })?,
+            );
+        }
+        let body = format!(
+            "{} — {} — {}",
+            event.occurred_at,
+            safe_title(event.title.as_deref()),
+            measures.join(" · ")
+        );
+        let marker = serde_json::to_value(payload).map_err(|_| CaptureOutcome::Rejected {
+            reason: "invalid_activity".into(),
+        })?;
+        self.prepare_batch_entry(
+            policy,
+            &VisitEvent {
+                event_id: event.event_id.clone(),
+                url: event.url.clone(),
+                title: event.title.clone(),
+                occurred_at: event.occurred_at.clone(),
+                incognito: event.incognito,
+            },
+            Some(&body),
+            Some(("activity", marker)),
+            false,
+        )
+    }
+
+    fn record_entry(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &VisitEvent,
+        custom_body: Option<&str>,
+        marker_payload: Option<(&str, serde_json::Value)>,
+    ) -> CaptureOutcome {
         if !policy.enabled {
             return CaptureOutcome::Suppressed {
                 reason: "capture_disabled".into(),
@@ -162,17 +713,31 @@ impl CaptureStore {
             Ok(value) => value,
             Err(message) => return CaptureOutcome::Retryable { message },
         };
-        if policy.near_repeat_secs > MAX_NEAR_REPEAT_SECS {
-            return CaptureOutcome::Retryable {
-                message: "near-repeat window exceeds 24 hours".into(),
-            };
-        }
+        let marker_metadata = match marker_payload {
+            Some((kind, mut payload)) => {
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("url".into(), serde_json::Value::String(normalized.clone()));
+                }
+                match serde_json::to_vec(&payload) {
+                    Ok(json) => Some(format!(" kind={kind} data={}", hex::encode(json))),
+                    Err(_) => {
+                        return CaptureOutcome::Rejected {
+                            reason: "invalid_event_metadata".into(),
+                        };
+                    }
+                }
+            }
+            None => None,
+        };
         match self.record_authorized(
             &event_id,
             timestamp,
             &normalized,
             event,
-            policy.near_repeat_secs,
+            EventRendering {
+                body: custom_body,
+                marker_metadata: marker_metadata.as_deref(),
+            },
         ) {
             Ok(outcome) => outcome,
             Err(error) => CaptureOutcome::Retryable {
@@ -187,7 +752,7 @@ impl CaptureStore {
         timestamp: OffsetDateTime,
         normalized_url: &str,
         event: &VisitEvent,
-        near_repeat_secs: u64,
+        rendering: EventRendering<'_>,
     ) -> Result<CaptureOutcome> {
         let lock_parent = self
             .lock_path
@@ -206,9 +771,14 @@ impl CaptureStore {
         let event_hash = sha256_hex(event_id.as_bytes());
         let url_hash = sha256_hex(normalized_url.as_bytes());
         let title = safe_title(event.title.as_deref());
+        let body = rendering.body.map_or_else(
+            || format!("{} — {} — <{}>", event.occurred_at, title, normalized_url),
+            |prefix| format!("{prefix} — <{normalized_url}>"),
+        );
         let entry = format!(
-            "\n- {} — {} — <{}>\n{MARKER_PREFIX}{event_hash} url={url_hash} at={} -->\n",
-            event.occurred_at, title, normalized_url, event.occurred_at
+            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
+            event.occurred_at,
+            rendering.marker_metadata.unwrap_or("")
         );
         let journal_path = self.journal_path(&event_hash);
         if let Some(intent) = read_intent(&journal_path)? {
@@ -264,7 +834,7 @@ impl CaptureStore {
             &event_hash,
             &url_hash,
             timestamp.unix_timestamp(),
-            near_repeat_secs,
+            0,
         )?;
         if scan.duplicate {
             // A previous attempt may have written this marker but failed its
@@ -275,20 +845,6 @@ impl CaptureStore {
             publish_intent(&journal_path, &intent)?;
             return Ok(CaptureOutcome::Suppressed {
                 reason: "duplicate_event".into(),
-            });
-        }
-        if scan.near_repeat {
-            file.sync_all()
-                .context("syncing near-repeat source entry")?;
-            return Ok(CaptureOutcome::Suppressed {
-                reason: "near_repeat".into(),
-            });
-        }
-        if near_repeat_secs > 0
-            && self.adjacent_near_repeat(timestamp, &url_hash, near_repeat_secs)?
-        {
-            return Ok(CaptureOutcome::Suppressed {
-                reason: "near_repeat".into(),
             });
         }
 
@@ -426,6 +982,217 @@ impl CaptureStore {
         })
     }
 
+    fn append_batch(&self, batch_id: &str, entries: &[BatchEntry]) -> Result<Vec<CaptureOutcome>> {
+        let lock_parent = self
+            .lock_path
+            .parent()
+            .context("capture lock path has no parent")?;
+        fs::create_dir_all(lock_parent).context("creating capture lock directory")?;
+        let lock_file = StdOpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .context("opening capture lock")?;
+        lock_file.lock().context("locking capture log")?;
+
+        self.recover_batch_intent()?;
+        let (relative_dir, filename) = self.log_parts(entries[0].timestamp);
+        if entries.iter().any(|entry| {
+            self.log_parts(entry.timestamp) != (relative_dir.clone(), filename.clone())
+        }) {
+            bail!("capture batch crosses a local calendar-day boundary");
+        }
+        let new_log = !self.root.exists(relative_dir.join(&filename));
+        self.root
+            .create_dir_all(&relative_dir)
+            .context("creating daily log directory")?;
+        if new_log {
+            sync_directory_chain(&self.root, &relative_dir)
+                .context("syncing daily log parent directories")?;
+        }
+        let day_dir = self
+            .root
+            .open_dir(&relative_dir)
+            .context("opening daily log directory")?;
+        if !ensure_daily_log(&day_dir, &filename)? {
+            bail!("daily log name conflicts with an unowned file");
+        }
+        let metadata = day_dir
+            .symlink_metadata(&filename)
+            .context("reading daily log metadata")?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_LOG_BYTES
+        {
+            bail!("daily log is unavailable or full");
+        }
+        sync_directory(&day_dir).context("syncing daily log directory before acknowledgement")?;
+        let mut file = day_dir
+            .open_with(&filename, OpenOptions::new().read(true).append(true))
+            .context("opening owned daily log")?;
+
+        let mut outcomes = Vec::with_capacity(entries.len());
+        let mut combined = String::new();
+        let mut appended = Vec::new();
+        for entry in entries {
+            file.seek(SeekFrom::Start(0))?;
+            let scan = scan_log(&mut file, &entry.event_hash, "", 0, 0)?;
+            if scan.duplicate {
+                outcomes.push(Some(CaptureOutcome::Suppressed {
+                    reason: "duplicate_event".into(),
+                }));
+            } else {
+                combined.push_str(&entry.entry);
+                appended.push(outcomes.len());
+                outcomes.push(None);
+            }
+        }
+        if combined.is_empty() {
+            file.sync_all().context("syncing replayed capture batch")?;
+            return Ok(outcomes.into_iter().map(Option::unwrap).collect());
+        }
+        if metadata.len().saturating_add(combined.len() as u64) > MAX_LOG_BYTES {
+            return Ok(outcomes
+                .into_iter()
+                .map(|outcome| {
+                    outcome.unwrap_or_else(|| CaptureOutcome::Rejected {
+                        reason: "daily_log_full".into(),
+                    })
+                })
+                .collect());
+        }
+        let relative_log = relative_dir.join(&filename);
+        let intent = BatchIntent {
+            version: 2,
+            batch_id: batch_id.to_owned(),
+            root_path: self
+                .root_path
+                .to_str()
+                .context("notes path is not UTF-8")?
+                .to_owned(),
+            root_identity: self.root_identity.clone(),
+            relative_log: relative_log
+                .to_str()
+                .context("log path is not UTF-8")?
+                .to_owned(),
+            event_hashes: entries
+                .iter()
+                .map(|entry| entry.event_hash.clone())
+                .collect(),
+            entry: combined.clone(),
+            offset: metadata.len(),
+        };
+        publish_batch_intent(&self.batch_intent_path(), &intent)?;
+        if let Err(error) = file
+            .write_all(combined.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            roll_back_append(
+                &day_dir,
+                Path::new(&filename),
+                metadata.len(),
+                combined.as_bytes(),
+            );
+            return Err(error).context("appending capture batch");
+        }
+        sync_directory(&day_dir).context("syncing daily log directory")?;
+        clear_batch_intent(&self.batch_intent_path())?;
+        for index in appended {
+            outcomes[index] = Some(CaptureOutcome::Persisted {
+                relative_path: relative_log.clone(),
+            });
+        }
+        Ok(outcomes.into_iter().map(Option::unwrap).collect())
+    }
+
+    fn batch_intent_path(&self) -> PathBuf {
+        self.journal_dir.join("index-v2.json")
+    }
+
+    fn recover_batch_intent(&self) -> Result<()> {
+        let path = self.batch_intent_path();
+        let Some(intent) = read_batch_intent(&path)? else {
+            return Ok(());
+        };
+        if intent.version != 2
+            || intent.event_hashes.is_empty()
+            || intent.offset > MAX_LOG_BYTES
+            || intent.entry.len() > MAX_BATCH_INTENT_BYTES
+        {
+            bail!("capture batch intent is invalid; manual repair is required");
+        }
+        let relative_log = checked_relative_dir(&intent.relative_log)?;
+        let parent = relative_log
+            .parent()
+            .context("capture batch intent has no log directory")?;
+        let filename = relative_log
+            .file_name()
+            .context("capture batch intent has no log filename")?;
+        let (root, _) =
+            open_selected_root(Path::new(&intent.root_path), Some(&intent.root_identity)).context(
+                "original notes folder changed; choose it again or discard the queued batch",
+            )?;
+        let day_dir = root
+            .open_dir(parent)
+            .context("original daily log is unavailable; manual repair is required")?;
+        if !existing_log_is_owned(
+            &day_dir,
+            filename.to_str().context("log filename is not UTF-8")?,
+        )? {
+            bail!("original daily log is not owned by {APP_NAME}");
+        }
+        let metadata = day_dir
+            .symlink_metadata(filename)
+            .context("reading original daily log")?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_LOG_BYTES
+        {
+            bail!("original daily log changed; manual repair is required");
+        }
+        let mut file = day_dir
+            .open_with(filename, OpenOptions::new().read(true).append(true))
+            .context("opening original daily log")?;
+        let mut complete = true;
+        for hash in &intent.event_hashes {
+            file.seek(SeekFrom::Start(0))?;
+            complete &= scan_log(&mut file, hash, "", 0, 0)?.duplicate;
+        }
+        if !complete {
+            if self.root_identity != intent.root_identity || metadata.len() < intent.offset {
+                bail!("capture batch belongs to a changed notes folder or log");
+            }
+            file.seek(SeekFrom::Start(intent.offset))?;
+            let mut region = Vec::new();
+            file.read_to_end(&mut region)?;
+            if region.len() > intent.entry.len()
+                || region != intent.entry.as_bytes()[..region.len()]
+            {
+                bail!(
+                    "daily log was edited after a capture batch intent; manual repair is required"
+                );
+            }
+            if let Err(error) = file
+                .write_all(&intent.entry.as_bytes()[region.len()..])
+                .and_then(|()| file.sync_all())
+            {
+                roll_back_append(
+                    &day_dir,
+                    Path::new(filename),
+                    intent.offset,
+                    intent.entry.as_bytes(),
+                );
+                return Err(error).context("completing interrupted capture batch");
+            }
+        } else {
+            file.sync_all().context("syncing replayed capture batch")?;
+        }
+        sync_directory(&day_dir).context("syncing original daily log directory")?;
+        clear_batch_intent(&path)
+    }
+
     fn log_parts(&self, timestamp: OffsetDateTime) -> (PathBuf, String) {
         let year = timestamp.year();
         let month = timestamp.month() as u8;
@@ -435,64 +1202,6 @@ impl CaptureStore {
             .join(format!("{year:04}"))
             .join(format!("{month:02}"));
         (relative_dir, format!("{year:04}-{month:02}-{day:02}.md"))
-    }
-
-    fn adjacent_near_repeat(
-        &self,
-        timestamp: OffsetDateTime,
-        url_hash: &str,
-        near_repeat_secs: u64,
-    ) -> Result<bool> {
-        let seconds_today = u64::from(timestamp.hour()) * 3600
-            + u64::from(timestamp.minute()) * 60
-            + u64::from(timestamp.second());
-        let mut adjacent = Vec::new();
-        if seconds_today <= near_repeat_secs {
-            adjacent.push(timestamp - time::Duration::days(1));
-        }
-        if 86_400 - seconds_today <= near_repeat_secs {
-            adjacent.push(timestamp + time::Duration::days(1));
-        }
-        for day in adjacent {
-            let (relative_dir, filename) = self.log_parts(day);
-            let dir = match self.root.open_dir(&relative_dir) {
-                Ok(dir) => dir,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error).context("opening adjacent daily log"),
-            };
-            let metadata = match dir.symlink_metadata(&filename) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error).context("checking adjacent daily log"),
-            };
-            // Near-repeat is best effort; an oversized neighbour is not scanned.
-            if metadata.file_type().is_symlink()
-                || !metadata.is_file()
-                || metadata.len() > MAX_LOG_BYTES
-            {
-                continue;
-            }
-            if !existing_log_is_owned(&dir, &filename)? {
-                continue;
-            }
-            sync_directory(&dir).context("syncing adjacent daily log before acknowledgement")?;
-            let mut file = dir
-                .open_with(&filename, OpenOptions::new().read(true).append(true))
-                .context("reading adjacent daily log")?;
-            let scan = scan_log(
-                &mut file,
-                "",
-                url_hash,
-                timestamp.unix_timestamp(),
-                near_repeat_secs,
-            )?;
-            if scan.near_repeat {
-                file.sync_all()
-                    .context("syncing adjacent near-repeat source entry")?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 }
 
@@ -730,6 +1439,75 @@ fn publish_intent(path: &Path, intent: &VisitIntent) -> Result<()> {
     result
 }
 
+fn read_batch_intent(path: &Path) -> Result<Option<BatchIntent>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("checking capture batch intent"),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_BATCH_INTENT_BYTES as u64
+    {
+        bail!("capture batch intent is invalid; manual repair is required");
+    }
+    let bytes = fs::read(path).context("reading capture batch intent")?;
+    serde_json::from_slice(&bytes)
+        .context("capture batch intent is malformed; manual repair is required")
+        .map(Some)
+}
+
+fn publish_batch_intent(path: &Path, intent: &BatchIntent) -> Result<()> {
+    let bytes = serde_json::to_vec(intent).context("serializing capture batch intent")?;
+    if bytes.len() > MAX_BATCH_INTENT_BYTES {
+        bail!("capture batch intent exceeds its size limit");
+    }
+    let parent = path
+        .parent()
+        .context("capture batch intent has no parent")?;
+    fs::create_dir_all(parent).context("creating capture batch intent directory")?;
+    if let Some(state_parent) = parent.parent() {
+        sync_state_directory(state_parent)?;
+    }
+    sync_state_directory(parent)?;
+    let temporary = parent.join(format!(".{NAMESPACE}-batch-intent-{}.tmp", Uuid::new_v4()));
+    let mut options = StdOpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .context("creating capture batch intent temporary file")?;
+    let result = (|| -> Result<()> {
+        file.write_all(&bytes)
+            .context("writing capture batch intent")?;
+        file.sync_all().context("syncing capture batch intent")?;
+        drop(file);
+        fs::rename(&temporary, path).context("publishing capture batch intent")?;
+        sync_state_directory(parent).context("syncing capture batch intent directory")
+    })();
+    if let Err(error) = fs::remove_file(&temporary)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        eprintln!("{NAMESPACE}: warning: could not remove batch intent temporary file: {error}");
+    }
+    result
+}
+
+fn clear_batch_intent(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => sync_state_directory(
+            path.parent()
+                .context("capture batch intent has no parent")?,
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("clearing capture batch intent"),
+    }
+}
+
 #[cfg(not(windows))]
 fn sync_state_directory(path: &Path) -> Result<()> {
     fs::File::open(path)
@@ -901,7 +1679,7 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
     let rest = line.strip_prefix(MARKER_PREFIX)?;
     let (id, rest) = rest.split_once(" url=")?;
     let (url, rest) = rest.split_once(" at=")?;
-    let timestamp = rest.strip_suffix(" -->")?;
+    let timestamp = rest.strip_suffix(" -->")?.split(' ').next()?;
     if id.len() != 64 || url.len() != 64 {
         return None;
     }
@@ -910,9 +1688,13 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
 }
 
 fn safe_title(value: Option<&str>) -> String {
+    safe_markdown_line(value, 300)
+}
+
+fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
     let title = value.unwrap_or("Untitled").trim();
     let mut out = String::new();
-    for ch in title.chars().take(300) {
+    for ch in title.chars().take(limit) {
         if ch.is_control() {
             out.push(' ');
         } else {
@@ -932,6 +1714,7 @@ fn safe_title(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
 
     fn storage(root: &Path, log_dir: &str) -> StorageConfig {
         StorageConfig {
@@ -947,7 +1730,7 @@ mod tests {
     fn event() -> VisitEvent {
         VisitEvent {
             event_id: Uuid::new_v4().to_string(),
-            url: "https://example.com/article?keep=1".into(),
+            url: "https://example.com/article?keep=1&secret=2".into(),
             title: Some("Article".into()),
             occurred_at: OffsetDateTime::now_utc()
                 .replace_nanosecond(0)
@@ -968,10 +1751,257 @@ mod tests {
                 enabled: true,
                 sites: &sites,
                 strip_params: &[],
-                near_repeat_secs: 0,
             },
             event,
         )
+    }
+
+    fn activity() -> ActivityEvent {
+        ActivityEvent {
+            event_id: Uuid::new_v4().to_string(),
+            artifact_id: "web:example/article".into(),
+            artifact_type: "web.page".into(),
+            url: "https://example.com/article?keep=1".into(),
+            title: Some("Article".into()),
+            occurred_at: OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&Rfc3339)
+                .unwrap(),
+            incognito: false,
+            opens: 2,
+            focused_seconds: 42,
+            background_seconds: 15,
+            modes: vec![
+                ActivityMode {
+                    mode: "view".into(),
+                    url: "https://example.com/article?keep=1&secret=2".into(),
+                },
+                ActivityMode {
+                    mode: "review".into(),
+                    url: "https://example.com/article/files?secret=2".into(),
+                },
+            ],
+            trails: vec![ActivityTrail {
+                from_artifact_id: Some("web:example/source".into()),
+                from_url: Some("https://example.com/source?secret=2".into()),
+                transition: "link".into(),
+            }],
+            refs: vec![ActivityRef {
+                artifact_type: "jira.issue".into(),
+                value: "PROJ-1".into(),
+            }],
+        }
+    }
+
+    fn record_activity(store: &CaptureStore, event: &ActivityEvent) -> CaptureOutcome {
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        store.record_activity(
+            CapturePolicy {
+                enabled: true,
+                sites: &sites,
+                strip_params: &["secret".into()],
+            },
+            event,
+        )
+    }
+
+    #[test]
+    fn activity_is_measured_markdown_and_replay_is_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let event = activity();
+        let CaptureOutcome::Persisted { relative_path } = record_activity(&store, &event) else {
+            panic!("expected persisted activity");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        assert!(markdown.contains("focused 42s · background 15s · opened 2 time(s)"));
+        assert!(markdown.contains("modes view, review"));
+        assert!(markdown.contains(" kind=activity data="));
+        assert!(!markdown.contains("secret=2"));
+        let encoded = markdown
+            .split(" data=")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap();
+        let stored: ActivityEvent = serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+        assert_eq!(stored.url, "https://example.com/article?keep=1");
+        assert_eq!(stored.modes[0].url, "https://example.com/article?keep=1");
+        assert_eq!(stored.modes[1].url, "https://example.com/article/files");
+        assert_eq!(
+            stored.trails[0].from_url.as_deref(),
+            Some("https://example.com/source")
+        );
+        assert_eq!(
+            record_activity(&store, &event),
+            CaptureOutcome::Suppressed {
+                reason: "duplicate_event".into()
+            }
+        );
+    }
+
+    #[test]
+    fn batch_appends_visits_and_overflow_once_with_a_compact_intent() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let first = event();
+        let mut second = first.clone();
+        second.event_id = Uuid::new_v4().to_string();
+        let first_time = parse_event_time(&first.occurred_at).unwrap();
+        second.occurred_at = (first_time + time::Duration::minutes(1))
+            .format(&Rfc3339)
+            .unwrap();
+        let overflow = OverflowMarker {
+            count: 3,
+            first_occurred_at: first.occurred_at.clone(),
+            last_occurred_at: second.occurred_at.clone(),
+        };
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        let policy = || CapturePolicy {
+            enabled: true,
+            sites: &sites,
+            strip_params: &[],
+        };
+        let batch_id = Uuid::new_v4().to_string();
+        let events = [
+            CaptureBatchEvent::Visit(&first),
+            CaptureBatchEvent::Visit(&second),
+        ];
+        let outcome = store.record_batch(policy(), &batch_id, &events, Some(&overflow));
+        assert!(outcome.overflow_recorded, "events: {:?}", outcome.events);
+        assert_eq!(outcome.events.len(), 2);
+        assert!(
+            outcome
+                .events
+                .iter()
+                .all(|(_, outcome)| matches!(outcome, CaptureOutcome::Persisted { .. }))
+        );
+        assert!(
+            !store.batch_intent_path().exists(),
+            "successful batch clears the compact intent"
+        );
+
+        let (_, relative) = store.log_parts(first_time);
+        let log = root
+            .path()
+            .join("log")
+            .join(format!("{:04}", first_time.year()))
+            .join(format!("{:02}", first_time.month() as u8))
+            .join(relative);
+        let markdown = fs::read_to_string(log).unwrap();
+        assert_eq!(markdown.matches("\n- ").count(), 3);
+        assert!(markdown.contains("Capture overflow: 3 completed activity hour(s)"));
+
+        let replay = store.record_batch(policy(), &batch_id, &events, Some(&overflow));
+        assert!(replay.overflow_recorded);
+        assert!(replay.events.iter().all(|(_, outcome)| matches!(outcome,
+            CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")));
+    }
+
+    #[test]
+    fn two_manual_logs_for_one_url_a_minute_apart_are_both_recorded() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let first = event();
+        let mut second = first.clone();
+        second.event_id = Uuid::new_v4().to_string();
+        second.occurred_at = (parse_event_time(&first.occurred_at).unwrap()
+            + time::Duration::minutes(1))
+        .format(&Rfc3339)
+        .unwrap();
+        assert!(matches!(
+            record(&store, &first),
+            CaptureOutcome::Persisted { .. }
+        ));
+        assert!(matches!(
+            record(&store, &second),
+            CaptureOutcome::Persisted { .. }
+        ));
+    }
+
+    #[test]
+    fn empty_or_oversized_activity_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut event = activity();
+        event.opens = 0;
+        event.focused_seconds = 0;
+        event.background_seconds = 0;
+        event.modes.clear();
+        assert_eq!(
+            record_activity(&store, &event),
+            CaptureOutcome::Rejected {
+                reason: "empty_activity".into()
+            }
+        );
+        event.focused_seconds = 7_201;
+        assert_eq!(
+            record_activity(&store, &event),
+            CaptureOutcome::Rejected {
+                reason: "invalid_activity".into()
+            }
+        );
+    }
+
+    #[test]
+    fn why_events_append_once_and_escape_markdown() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let why = WhyEvent {
+            event_id: Uuid::new_v4().to_string(),
+            artifact_id: "web:example/article".into(),
+            url: "https://example.com/article".into(),
+            occurred_at: OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&Rfc3339)
+                .unwrap(),
+            incognito: false,
+            text: "Fix [release] blocker".into(),
+        };
+        let sites = [SiteConfig {
+            origin: "https://example.com".into(),
+            path_prefix: "/".into(),
+        }];
+        let policy = || CapturePolicy {
+            enabled: true,
+            sites: &sites,
+            strip_params: &[],
+        };
+        let CaptureOutcome::Persisted { relative_path } = store.record_why(policy(), &why) else {
+            panic!("expected persisted why event");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        assert!(markdown.contains("Why: Fix \\[release\\] blocker"));
+        assert!(markdown.contains(" kind=why data="));
+        assert_eq!(
+            store.record_why(policy(), &why),
+            CaptureOutcome::Suppressed {
+                reason: "duplicate_event".into()
+            }
+        );
     }
 
     #[test]

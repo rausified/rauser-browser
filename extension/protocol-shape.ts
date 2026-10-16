@@ -90,8 +90,6 @@ export function isConfig(value: unknown): boolean {
       typeof (site as Record<string, unknown>).origin === "string" &&
       typeof (site as Record<string, unknown>).path_prefix === "string") &&
     isStringArray(config.strip_params) &&
-    typeof config.near_repeat_secs === "number" &&
-    Number.isInteger(config.near_repeat_secs) &&
     isStringArray(config.agent_denylist) &&
     typeof config.agent_denylist_confirmed === "boolean" &&
     config.log_incognito === false &&
@@ -118,9 +116,20 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "config_confirmed":
       return typeof value.consent_token === "string" && typeof value.summary === "string";
     case "visit_recorded":
+    case "activity_recorded":
+    case "why_recorded":
       return typeof value.event_id === "string" &&
         ["persisted", "suppressed", "rejected", "retryable"].includes(String(value.outcome)) &&
         stringOrNull(value.reason) && stringOrNull(value.relative_path);
+    case "batch_recorded":
+      return typeof value.batch_id === "string" && typeof value.overflow_recorded === "boolean" &&
+        Array.isArray(value.results) && value.results.length <= 64 &&
+        value.results.every((result) => typeof result === "object" && result !== null &&
+          typeof (result as Record<string, unknown>).event_id === "string" &&
+          ["persisted", "suppressed", "rejected", "retryable"]
+            .includes(String((result as Record<string, unknown>).outcome)) &&
+          stringOrNull((result as Record<string, unknown>).reason) &&
+          stringOrNull((result as Record<string, unknown>).relative_path));
     case "note_loaded":
       return typeof value.exists === "boolean" && typeof value.revision === "string" &&
         typeof value.title === "string" && typeof value.body === "string";

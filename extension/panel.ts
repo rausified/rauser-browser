@@ -41,7 +41,7 @@ let replaying = false;
 let tickRunning = false;
 let closed = false;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-// The worker delivers visits and renews its lease on its own; the panel only
+// The worker delivers capture records and renews its lease on its own; the panel only
 // polls to show the queue and to settle Chrome grant revocations.
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
@@ -89,15 +89,23 @@ function renderSetupWarning(): void {
 }
 
 function renderQueue(state: WorkerStatus): void {
-  queueSummary.textContent = `${state.queued} pending visit${state.queued === 1 ? "" : "s"}.`;
+  queueSummary.textContent =
+    `${state.live_activity} live hour total${state.live_activity === 1 ? "" : "s"} · ` +
+    `${state.queued} pending capture record${state.queued === 1 ? "" : "s"}.`;
   const captureOn = session.config?.capture_enabled === true && session.configIssue === null &&
     session.adapterIssue === null &&
     state.pause_pending !== true;
   captureStripSummary.textContent =
-    `${captureOn ? "●" : "○"} Capture ${captureOn ? "on" : "off"} · ${state.queued} pending`;
+    `${captureOn ? "●" : "○"} Capture ${captureOn ? "on" : "off"} · ` +
+    `${state.live_activity} live · ${state.queued} pending`;
   const messages: string[] = [];
-  if (state.overflow_count) messages.push(`${state.overflow_count} newer visits could not be buffered.`);
-  if (state.rejected_count) messages.push(`${state.rejected_count} visits were rejected by host policy.`);
+  if (state.overflow_count) {
+    const range = state.overflow_first_at && state.overflow_last_at
+      ? ` from ${state.overflow_first_at} through ${state.overflow_last_at}`
+      : "";
+    messages.push(`${state.overflow_count} completed activity hours${range} could not be buffered; this will be marked in the log on the next delivery.`);
+  }
+  if (state.rejected_count) messages.push(`${state.rejected_count} capture records were rejected by host policy.`);
   if (state.last_error) messages.push(state.last_error);
   if (state.retry_error) messages.push(`Retrying: ${state.retry_error}`);
   if (state.host_error) messages.push(`The native host could not be reached in the background: ${state.host_error}`);
@@ -108,7 +116,7 @@ function renderQueue(state: WorkerStatus): void {
     messages.push("Some sites are locally off until their removal is saved in the host.");
   }
   if (!state.navigation_ready && session.config?.capture_enabled) {
-    messages.push("Chrome navigation listener is unavailable; visit buffering has not started.");
+    messages.push("Chrome navigation listener is unavailable; activity capture has not started.");
   }
   queueWarning.textContent = messages.join(" ");
   // Open the strip on its own once there is something worth surfacing.
@@ -171,7 +179,7 @@ function scheduleReload(): void {
   }, 250);
 }
 
-/** Ask the worker to send pending visits now instead of at its next sync. */
+/** Ask the worker to send pending capture records now instead of at its next sync. */
 async function replayVisits(): Promise<void> {
   if (closed || changing()) return;
   replaying = true;
@@ -179,7 +187,7 @@ async function replayVisits(): Promise<void> {
   try {
     await worker<WorkerStatus>({ kind: "sync_now" });
   } catch (error) {
-    show(`Visit replay stopped: ${describe(error)}`, true);
+    show(`Capture delivery stopped: ${describe(error)}`, true);
   } finally {
     replaying = false;
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
@@ -208,7 +216,7 @@ async function pauseCapture(): Promise<void> {
   updateControls();
   try {
     await session.pauseCapture();
-    show("Capture paused. Pending visits cleared. Enable a site in settings to resume.");
+    show("Capture paused. Pending capture records cleared. Enable a site in settings to resume.");
   } catch (error) {
     show(`Could not pause capture: ${describe(error)}`, true);
   } finally {
@@ -226,13 +234,13 @@ async function discardPendingVisits(): Promise<void> {
     const eventIds = await worker<string[]>({ kind: "get_pending_ids" });
     if (!eventIds.length) return;
     const count = eventIds.length;
-    if (!window.confirm(`Discard ${count} pending visit${count === 1 ? "" : "s"}? This cannot be undone.`)) {
+    if (!window.confirm(`Discard ${count} pending capture record${count === 1 ? "" : "s"}? This cannot be undone.`)) {
       return;
     }
     await worker<WorkerStatus>({ kind: "discard_pending", event_ids: eventIds });
-    show("Selected pending visits discarded.");
+    show("Selected pending capture records discarded.");
   } catch (error) {
-    show(`Could not discard pending visits: ${describe(error)}`, true);
+    show(`Could not discard pending capture records: ${describe(error)}`, true);
   } finally {
     busy = false;
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));

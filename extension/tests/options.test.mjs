@@ -69,7 +69,6 @@ function configWith(sites) {
     capture_enabled: sites.length > 0,
     sites,
     strip_params: [],
-    near_repeat_secs: 60,
     agent_denylist: [],
     agent_denylist_confirmed: false,
     log_incognito: false,

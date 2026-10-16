@@ -15,6 +15,9 @@ interface ChromePermissionSet {
 interface ChromeTab {
   id?: number;
   windowId?: number;
+  active?: boolean;
+  status?: string;
+  discarded?: boolean;
   url?: string;
   title?: string;
   incognito: boolean;
@@ -31,6 +34,13 @@ interface ChromeTabChangeInfo {
   status?: string;
 }
 
+interface ChromeStorageArea {
+  get(keys: string | string[]): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+  remove?(keys: string | string[]): Promise<void>;
+  setAccessLevel?(options: { accessLevel: "TRUSTED_CONTEXTS" }): Promise<void>;
+}
+
 interface ChromeNavigationDetails {
   tabId: number;
   frameId: number;
@@ -38,6 +48,8 @@ interface ChromeNavigationDetails {
   documentLifecycle?: string;
   url: string;
   timeStamp: number;
+  transitionType?: string;
+  transitionQualifiers?: string[];
 }
 
 interface ChromeMessageSender {
@@ -80,6 +92,10 @@ interface ChromeApi {
     setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
     open(options: { tabId?: number; windowId?: number }): Promise<void>;
   };
+  action: {
+    setBadgeText(details: { text: string }): Promise<void>;
+    setBadgeBackgroundColor(details: { color: string }): Promise<void>;
+  };
   commands: {
     onCommand: {
       addListener(listener: (command: string, tab?: ChromeTab) => void): void;
@@ -103,12 +119,11 @@ interface ChromeApi {
     onAdded: { addListener(listener: (permissions: ChromePermissionSet) => void): void };
   };
   storage: {
-    local: {
-      get(keys: string | string[]): Promise<Record<string, unknown>>;
-      set(items: Record<string, unknown>): Promise<void>;
+    local: ChromeStorageArea & {
       remove(keys: string | string[]): Promise<void>;
       setAccessLevel(options: { accessLevel: "TRUSTED_CONTEXTS" }): Promise<void>;
     };
+    session: ChromeStorageArea;
     onChanged: {
       addListener(
         listener: (
@@ -120,7 +135,7 @@ interface ChromeApi {
   };
   tabs: {
     get(tabId: number): Promise<ChromeTab>;
-    query(queryInfo: { active: boolean; currentWindow: boolean }): Promise<ChromeTab[]>;
+    query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<ChromeTab[]>;
     onUpdated: {
       addListener(
         listener: (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => void,
@@ -129,10 +144,29 @@ interface ChromeApi {
     onActivated: {
       addListener(listener: (info: ChromeTabActivatedInfo) => void): void;
     };
+    onRemoved?: { addListener(listener: (tabId: number) => void): void };
+    onReplaced?: { addListener(listener: (addedTabId: number, removedTabId: number) => void): void };
   };
   webNavigation?: {
     onCommitted: { addListener(listener: (details: ChromeNavigationDetails) => void): void };
     onHistoryStateUpdated: { addListener(listener: (details: ChromeNavigationDetails) => void): void };
+    onCreatedNavigationTarget?: {
+      addListener(listener: (details: { sourceTabId: number; tabId: number }) => void): void;
+    };
+    onTabReplaced?: {
+      addListener(listener: (details: { tabId: number; replacedTabId: number }) => void): void;
+    };
+    getFrame?(details: { tabId: number; frameId: number }): Promise<{ url?: string } | null>;
+  };
+  windows?: {
+    WINDOW_ID_NONE: number;
+    getLastFocused(): Promise<{ id?: number; focused: boolean }>;
+    onFocusChanged: { addListener(listener: (windowId: number) => void): void };
+  };
+  idle?: {
+    setDetectionInterval(seconds: number): void;
+    queryState(seconds: number): Promise<"active" | "idle" | "locked">;
+    onStateChanged: { addListener(listener: (state: "active" | "idle" | "locked") => void): void };
   };
 }
 

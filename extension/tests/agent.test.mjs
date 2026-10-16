@@ -13,7 +13,7 @@ const config = {
     root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
     summaries_dir: "summaries",
   },
-  capture_enabled: false, sites: [], strip_params: [], near_repeat_secs: 300,
+  capture_enabled: false, sites: [], strip_params: [],
   agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
   adapters: { format: 1, artifacts: [] },
 };
