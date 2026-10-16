@@ -96,10 +96,18 @@ function show(message: string, warning = false): void {
 }
 
 function showConfigState(): void {
-  const problem = setupProblem(session.config, session.configIssue);
-  if (session.configIssue) show(problem!, true);
+  const policyIssue = session.configIssue ?? session.adapterIssue;
+  const problem = setupProblem(session.config, policyIssue);
+  if (policyIssue) show(problem!, true);
   else if (problem) {
     show(`${problem} ${session.config?.storage ? "Enable" : "Choose a folder and enable"} a site to begin.`);
+  }
+  else if (session.adapterWarnings.length) {
+    const count = session.adapterWarnings.length;
+    show(
+      `Capture is enabled, but ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
+      true,
+    );
   }
   else show("Capture is enabled for the listed sites.");
 }
@@ -117,7 +125,7 @@ function updateControls(): void {
   const connected = session.connected;
   // Only a save with a new folder selection can succeed while the host
   // configuration needs repair, so Pause and Remove wait for that repair.
-  const repairing = session.configIssue !== null;
+  const repairing = session.configIssue !== null || session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
   enableButton.disabled = !connected || busy || preflight === null ||
     (!picker && needsFolderPick());
@@ -568,7 +576,7 @@ function enableSite(): void {
 }
 
 async function pauseCapture(): Promise<void> {
-  if (!session.config || session.configIssue) return;
+  if (!session.config || session.configIssue || session.adapterIssue) return;
   busy = true;
   updateControls();
   try {
@@ -585,7 +593,7 @@ async function pauseCapture(): Promise<void> {
 
 async function removeSite(site: SiteConfig): Promise<void> {
   const baseConfig = session.config;
-  if (busy || !baseConfig || !session.revision || session.configIssue ||
+  if (busy || !baseConfig || !session.revision || session.configIssue || session.adapterIssue ||
       !baseConfig.sites.some((entry) => sameSite(entry, site))) return;
   busy = true;
   updateControls();
@@ -629,11 +637,13 @@ async function removeSite(site: SiteConfig): Promise<void> {
           // refreshing its worker lease, so inspect the host again before
           // removing the shared grant.
           const latest = await session.readHostConfig();
-          if (latest.config_issue) {
+          if (latest.config_issue || latest.adapter_issue) {
             await worker<WorkerStatus>({ kind: "suspend_policy" });
             session.config = latest.config;
             session.revision = latest.revision;
             session.configIssue = latest.config_issue;
+            session.adapterIssue = latest.adapter_issue;
+            session.adapterWarnings = latest.adapter_warnings;
             renderConfig();
             permissionRetained = "Chrome access was retained while the host configuration needs repair.";
           } else if (latest.revision !== committedRevision) {

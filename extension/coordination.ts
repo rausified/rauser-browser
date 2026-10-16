@@ -12,7 +12,11 @@ export async function withLatestHostState<T>(
   });
 }
 
-export async function finishHostPause<T extends { config: { capture_enabled: boolean }; config_issue: string | null }>(
+export async function finishHostPause<T extends {
+  config: { capture_enabled: boolean };
+  config_issue: string | null;
+  adapter_issue: string | null;
+}>(
   read: () => Promise<T>,
   pauseLocally: () => Promise<void>,
   saveDisabled: (state: T) => Promise<void>,
@@ -25,7 +29,9 @@ export async function finishHostPause<T extends { config: { capture_enabled: boo
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const state = await read();
     await pauseLocally();
-    if (state.config_issue) throw new Error(state.config_issue);
+    if (state.config_issue || state.adapter_issue) {
+      throw new Error(state.config_issue ?? state.adapter_issue ?? "adapter policy is invalid");
+    }
     if (!state.config.capture_enabled) {
       await installDisabled(state);
       return;

@@ -35,7 +35,7 @@ const SCRIPTED_DIALOGS_ENV = `${BINARY_NAME.toUpperCase()}_SCRIPTED_DIALOGS`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 const EXTENSION_ID = /^[a-p]{32}$/;
 const CLAUDE_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "claude_help.txt");
 const CODEX_EXEC_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "codex_exec_help.txt");

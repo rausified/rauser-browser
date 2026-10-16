@@ -196,6 +196,8 @@ fn dispatch(
                 revision: config.revision().to_owned(),
                 config_issue: config.config_issue().map(str::to_owned),
                 agent_status: config.agent_status(),
+                adapter_issue: config.adapter_issue().map(str::to_owned),
+                adapter_warnings: config.adapter_warnings().to_vec(),
             })
         }
         Request::UpdateConfig(value) => {
@@ -214,6 +216,15 @@ fn dispatch(
                 );
             }
             if let Err(validation_error) = config::validate(&value.config) {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &validation_error.to_string(),
+                );
+            }
+            if let Err(validation_error) =
+                config::validate_adapter_transition(config.snapshot(), &value.config)
+            {
                 return error(
                     &value.request_id,
                     ErrorCode::InvalidConfig,
@@ -322,6 +333,15 @@ fn dispatch(
                 );
             }
             if let Err(validation_error) = config::validate(&value.config) {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &validation_error.to_string(),
+                );
+            }
+            if let Err(validation_error) =
+                config::validate_adapter_transition(config.snapshot(), &value.config)
+            {
                 return error(
                     &value.request_id,
                     ErrorCode::InvalidConfig,
@@ -504,6 +524,16 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     };
     if config.refresh().is_err() || config.config_issue().is_some() {
         return retryable("configuration is unavailable or needs repair");
+    }
+    if config.adapter_issue().is_some() {
+        return Response::VisitRecorded(VisitRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            event_id,
+            outcome: VisitOutcome::Suppressed,
+            reason: Some("adapter_policy_invalid".into()),
+            relative_path: None,
+        });
     }
     if !config.snapshot().capture_enabled {
         return Response::VisitRecorded(VisitRecorded {
@@ -716,7 +746,10 @@ fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brauser_protocol::{ConfigSnapshot, GetConfigRequest, HelloRequest, UpdateConfigRequest};
+    use brauser_protocol::{
+        ConfigSnapshot, GetConfigRequest, HelloRequest, RecordVisitRequest, UpdateConfigRequest,
+        VisitEvent,
+    };
     use std::io::Cursor;
 
     fn encoded_request(request: Request) -> Vec<u8> {
@@ -767,6 +800,7 @@ mod tests {
                     agent_denylist_confirmed: false,
                     log_incognito: false,
                     agent: None,
+                    adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
                 consent_token: None,
@@ -962,6 +996,7 @@ mod tests {
                 agent_denylist_confirmed: false,
                 log_incognito: false,
                 agent: None,
+                adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(
                 Request::UpdateConfig(UpdateConfigRequest {
@@ -1319,6 +1354,42 @@ mod tests {
         let mut store = ConfigStore::for_test(path.to_path_buf());
         store.refresh().unwrap();
         store
+    }
+
+    #[test]
+    fn invalid_adapter_policy_suppresses_a_visit_before_vault_io() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n",
+        );
+        let response = record_visit(
+            RecordVisitRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "visit-1".into(),
+                event: VisitEvent {
+                    event_id: "not-even-a-uuid".into(),
+                    url: "https://work.example/issues/1".into(),
+                    title: Some("Issue 1".into()),
+                    occurred_at: "not-a-timestamp".into(),
+                    incognito: false,
+                },
+            },
+            &mut loaded(&path),
+        );
+        match response {
+            Response::VisitRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_eq!(recorded.reason.as_deref(), Some("adapter_policy_invalid"));
+            }
+            other => panic!("expected a suppressed visit, got {other:?}"),
+        }
     }
 
     fn refused(response: &Response) -> (ErrorCode, &str) {

@@ -74,6 +74,7 @@ function configWith(sites) {
     agent_denylist_confirmed: false,
     log_incognito: false,
     agent: null,
+    adapters: { format: 1, artifacts: [] },
   };
 }
 
@@ -116,6 +117,7 @@ function install({ sites = [SITE], grants = [], storage = {}, host = {}, workerS
         return {
           type: "config_result", revision: String(state.revision), config: state.config,
           config_issue: state.configIssue, agent_status: AGENT_STATUS,
+          adapter_issue: null, adapter_warnings: [],
         };
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
@@ -296,13 +298,40 @@ test("a settings load failure after hello is not reported as a missing host", as
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "config.json is unreadable",
-        agent_status: AGENT_STATUS,
+        agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
       }),
     },
   });
   await openSettings();
   assert.doesNotMatch(statusText(), /Native host unavailable/);
   assert.match(statusText(), /config\.json is unreadable/);
+});
+
+test("adapter policy problems and overlap warnings are visible in settings", async () => {
+  install({
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
+        adapter_warnings: [],
+      }),
+    },
+  });
+  await openSettings();
+  assert.match(statusText(), /unsupported adapter format 2/);
+  assert.equal(env.elements.get("pause-capture").disabled, true);
+
+  install({
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: null,
+        adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
+      }),
+    },
+  });
+  await openSettings();
+  assert.match(statusText(), /1 adapter rule overlap needs review/);
 });
 
 test("a failed hello reports the host as unavailable", async () => {

@@ -55,6 +55,23 @@ function isAgentStatus(value: unknown): boolean {
     stringOrNull(status.harness_version) && stringOrNull(status.message);
 }
 
+function isAdapterDocument(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const document = value as Record<string, unknown>;
+  return typeof document.format === "number" && Number.isInteger(document.format) &&
+    document.format >= 1 && Array.isArray(document.artifacts) && document.artifacts.length <= 64 &&
+    document.artifacts.every((artifact: unknown) =>
+      typeof artifact === "object" && artifact !== null && !Array.isArray(artifact));
+}
+
+function isAdapterWarning(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const warning = value as Record<string, unknown>;
+  return ["first_adapter", "first_rule", "second_adapter", "second_rule"]
+    .every((key) => typeof warning[key] === "number" && Number.isInteger(warning[key]) &&
+      (warning[key] as number) >= 0);
+}
+
 export function isConfig(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const config = value as Record<string, unknown>;
@@ -78,7 +95,7 @@ export function isConfig(value: unknown): boolean {
     isStringArray(config.agent_denylist) &&
     typeof config.agent_denylist_confirmed === "boolean" &&
     config.log_incognito === false &&
-    isAgent(config.agent);
+    isAgent(config.agent) && isAdapterDocument(config.adapters);
 }
 
 export function isResponseShape(value: Record<string, unknown>): boolean {
@@ -91,7 +108,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         typeof value.configured === "boolean" && stringOrNull(value.config_issue);
     case "config_result":
       return typeof value.revision === "string" && isConfig(value.config) &&
-        stringOrNull(value.config_issue) && isAgentStatus(value.agent_status);
+        stringOrNull(value.config_issue) && isAgentStatus(value.agent_status) &&
+        stringOrNull(value.adapter_issue) && Array.isArray(value.adapter_warnings) &&
+        value.adapter_warnings.length <= 256 && value.adapter_warnings.every(isAdapterWarning);
     case "config_updated":
       return typeof value.revision === "string" && isConfig(value.config);
     case "folder_chosen":
