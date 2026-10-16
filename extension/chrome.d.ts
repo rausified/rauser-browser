@@ -92,6 +92,10 @@ interface ChromeApi {
     setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
     open(options: { tabId?: number; windowId?: number }): Promise<void>;
   };
+  action: {
+    setBadgeText(details: { text: string }): Promise<void>;
+    setBadgeBackgroundColor(details: { color: string }): Promise<void>;
+  };
   commands: {
     onCommand: {
       addListener(listener: (command: string, tab?: ChromeTab) => void): void;

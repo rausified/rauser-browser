@@ -108,7 +108,6 @@ pub struct ConfigSnapshot {
     pub capture_enabled: bool,
     pub sites: Vec<SiteConfig>,
     pub strip_params: Vec<String>,
-    pub near_repeat_secs: u32,
     pub agent_denylist: Vec<String>,
     pub agent_denylist_confirmed: bool,
     pub log_incognito: bool,
@@ -218,6 +217,17 @@ pub struct RecordActivityRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RecordBatchRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub batch_id: String,
+    pub events: Vec<CaptureBatchItem>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub overflow: Option<OverflowMarker>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecordWhyRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -298,6 +308,16 @@ pub struct ActivityRecorded {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct BatchRecorded {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub batch_id: String,
+    pub results: Vec<BatchEventResult>,
+    pub overflow_recorded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WhyRecorded {
     pub protocol_version: u32,
     pub request_id: String,
@@ -368,6 +388,42 @@ pub struct VisitEvent {
     pub title: Option<String>,
     pub occurred_at: String,
     pub incognito: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureBatchItem {
+    pub kind: CaptureEventKind,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub visit: Option<VisitEvent>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub activity: Option<ActivityEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OverflowMarker {
+    pub count: u32,
+    pub first_occurred_at: String,
+    pub last_occurred_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchEventResult {
+    pub event_id: String,
+    pub outcome: VisitOutcome,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureEventKind {
+    Visit,
+    Activity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -517,6 +573,7 @@ pub enum Request {
     ConfirmConfig(ConfirmConfigRequest),
     RecordVisit(RecordVisitRequest),
     RecordActivity(RecordActivityRequest),
+    RecordBatch(RecordBatchRequest),
     RecordWhy(RecordWhyRequest),
     LoadNote(LoadNoteRequest),
     SaveNote(SaveNoteRequest),
@@ -535,6 +592,7 @@ impl Request {
             Self::ConfirmConfig(value) => value.protocol_version,
             Self::RecordVisit(value) => value.protocol_version,
             Self::RecordActivity(value) => value.protocol_version,
+            Self::RecordBatch(value) => value.protocol_version,
             Self::RecordWhy(value) => value.protocol_version,
             Self::LoadNote(value) => value.protocol_version,
             Self::SaveNote(value) => value.protocol_version,
@@ -553,6 +611,7 @@ impl Request {
             Self::ConfirmConfig(value) => &value.request_id,
             Self::RecordVisit(value) => &value.request_id,
             Self::RecordActivity(value) => &value.request_id,
+            Self::RecordBatch(value) => &value.request_id,
             Self::RecordWhy(value) => &value.request_id,
             Self::LoadNote(value) => &value.request_id,
             Self::SaveNote(value) => &value.request_id,
@@ -573,6 +632,7 @@ pub enum Response {
     ConfigConfirmed(ConfigConfirmed),
     VisitRecorded(VisitRecorded),
     ActivityRecorded(ActivityRecorded),
+    BatchRecorded(BatchRecorded),
     WhyRecorded(WhyRecorded),
     NoteLoaded(NoteLoaded),
     NoteSaved(NoteSaved),
@@ -593,6 +653,7 @@ impl Response {
             Self::ConfigConfirmed(value) => value.protocol_version,
             Self::VisitRecorded(value) => value.protocol_version,
             Self::ActivityRecorded(value) => value.protocol_version,
+            Self::BatchRecorded(value) => value.protocol_version,
             Self::WhyRecorded(value) => value.protocol_version,
             Self::NoteLoaded(value) => value.protocol_version,
             Self::NoteSaved(value) => value.protocol_version,
@@ -613,6 +674,7 @@ impl Response {
             Self::ConfigConfirmed(value) => &value.request_id,
             Self::VisitRecorded(value) => &value.request_id,
             Self::ActivityRecorded(value) => &value.request_id,
+            Self::BatchRecorded(value) => &value.request_id,
             Self::WhyRecorded(value) => &value.request_id,
             Self::NoteLoaded(value) => &value.request_id,
             Self::NoteSaved(value) => &value.request_id,

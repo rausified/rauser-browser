@@ -5,7 +5,7 @@ const PRIVACY: &str = r#""agent_denylist":[],"agent_denylist_confirmed":false,"l
 
 fn config(storage: &str) -> String {
     format!(
-        r#"{{{storage}"capture_enabled":false,"sites":[],"strip_params":["utm_*","fbclid","gclid"],"near_repeat_secs":300,{PRIVACY}}}"#
+        r#"{{{storage}"capture_enabled":false,"sites":[],"strip_params":["utm_*","fbclid","gclid"],{PRIVACY}}}"#
     )
 }
 
@@ -213,4 +213,26 @@ fn activity_and_why_messages_require_complete_bounded_shapes() {
         );
         assert!(serde_json::from_str::<Response>(&response).is_ok());
     }
+}
+
+#[test]
+fn capture_batch_requires_typed_items_and_correlated_results() {
+    let visit = r#"{"event_id":"00000000-0000-4000-8000-000000000001","url":"https://work.example/items/7","title":"Item 7","occurred_at":"2026-10-16T10:00:00+00:00","incognito":false}"#;
+    let request = format!(
+        r#"{{"type":"record_batch","protocol_version":5,"request_id":"r1","batch_id":"00000000-0000-4000-8000-000000000099","events":[{{"kind":"visit","visit":{visit},"activity":null}}],"overflow":{{"count":2,"first_occurred_at":"2026-10-16T08:00:00+00:00","last_occurred_at":"2026-10-16T09:00:00+00:00"}}}}"#
+    );
+    assert!(serde_json::from_str::<Request>(&request).is_ok());
+    assert!(
+        serde_json::from_str::<Request>(
+            &request.replace(r#""activity":null"#, r#""activity":{visit}"#)
+        )
+        .is_err()
+    );
+
+    let response = r#"{"type":"batch_recorded","protocol_version":5,"request_id":"r1","batch_id":"00000000-0000-4000-8000-000000000099","results":[{"event_id":"00000000-0000-4000-8000-000000000001","outcome":"persisted","reason":null,"relative_path":"log/day.md"}],"overflow_recorded":true}"#;
+    assert!(serde_json::from_str::<Response>(response).is_ok());
+    assert!(
+        serde_json::from_str::<Response>(&response.replace(r#","overflow_recorded":true"#, ""))
+            .is_err()
+    );
 }

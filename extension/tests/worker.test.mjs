@@ -32,6 +32,7 @@ let onStartup;
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
+let badgeText = "";
 
 function storageArea(entries) {
   return {
@@ -75,6 +76,10 @@ function fakePort() {
 }
 
 globalThis.chrome = {
+  action: {
+    async setBadgeText({ text }) { badgeText = text; },
+    async setBadgeBackgroundColor() {},
+  },
   runtime: {
     id: "test-extension",
     getURL: (path) => `chrome-extension://test-extension/${path}`,
@@ -845,7 +850,7 @@ test("a host that cannot be started reports the session disconnected", async () 
   let changes = 0;
   const session = new ConfigSession(() => { changes += 1; });
   session.config = {
-    storage: null, capture_enabled: false, sites: [], strip_params: [], near_repeat_secs: 0,
+    storage: null, capture_enabled: false, sites: [], strip_params: [],
   };
   session.revision = "r1";
   assert.equal(session.connected, true);
@@ -903,7 +908,7 @@ test("host config shape requires every v5 privacy, agent, and adapter key", () =
       root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
       summaries_dir: null,
     },
-    capture_enabled: false, sites: [], strip_params: [], near_repeat_secs: 300,
+    capture_enabled: false, sites: [], strip_params: [],
     agent_denylist: ["bank.example"], agent_denylist_confirmed: false, log_incognito: false,
     agent: null,
     adapters: { format: 1, artifacts: [] },
@@ -993,18 +998,14 @@ async function until(check, label) {
 
 const sentOn = (port, count) => until(() => port.sent.length >= count && port.sent[count - 1], `host request ${count}`);
 
-function recorded(request, outcome = "persisted", reason = null) {
+function batchRecorded(request, outcome = "persisted", reason = null, overflowRecorded = false) {
   return {
-    type: "visit_recorded", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
-    event_id: request.event.event_id, outcome, reason, relative_path: outcome === "persisted" ? "log/day.md" : null,
-  };
-}
-
-function activityRecorded(request, outcome = "persisted", reason = null) {
-  return {
-    type: "activity_recorded", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
-    event_id: request.event.event_id, outcome, reason,
-    relative_path: outcome === "persisted" ? "log/day.md" : null,
+    type: "batch_recorded", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    batch_id: request.batch_id, overflow_recorded: overflowRecorded,
+    results: request.events.map((item) => ({
+      event_id: (item.activity ?? item.visit).event_id, outcome, reason,
+      relative_path: outcome === "persisted" ? "log/day.md" : null,
+    })),
   };
 }
 
@@ -1017,7 +1018,7 @@ function configResult(request, origin, overrides = {}) {
         root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
         summaries_dir: null,
       },
-      capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [], near_repeat_secs: 300,
+      capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [],
       agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
@@ -1036,6 +1037,7 @@ function resetSync(origin, expiresIn) {
   tabs.clear();
   alarms.clear();
   ports.length = 0;
+  badgeText = "";
   grants.set(exactPattern(origin), true);
   values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() + expiresIn });
 }
@@ -1046,7 +1048,8 @@ function exactPattern(origin) {
 
 function queueWith(...items) {
   values.set(storageKey("queue_v1"), {
-    version: 1, items, overflow_count: 0, rejected_count: 0, last_error: null, retry_error: null,
+    version: 1, items, overflow_count: 0, overflow_first_at: null, overflow_last_at: null,
+    rejected_count: 0, last_error: null, retry_error: null,
   });
 }
 
@@ -1069,10 +1072,11 @@ test("with no extension page open, the worker freezes and delivers a completed a
   onAlarm({ name: DELIVER_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   const request = await sentOn(port, 1);
-  assert.equal(request.type, "record_activity");
-  assert.equal(request.event.url, `${origin}/items/issue`);
-  assert.equal(request.event.opens, 1);
-  port.reply(activityRecorded(request));
+  assert.equal(request.type, "record_batch");
+  assert.equal(request.events[0].kind, "activity");
+  assert.equal(request.events[0].activity.url, `${origin}/items/issue`);
+  assert.equal(request.events[0].activity.opens, 1);
+  port.reply(batchRecorded(request));
   await until(() => values.get(storageKey("queue_v1")).items.length === 0, "the queue to drain");
   await until(() => port.closed, "the host connection to close");
   assert.equal((await send({ kind: "get_status" })).host_error, null);
@@ -1173,7 +1177,7 @@ test("a delivery the host never answers is reported even when no renewal was due
   queueWith(visit("unsent", `${origin}/items/a`));
   onAlarm({ name: SYNC_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
-  assert.equal((await sentOn(port, 1)).type, "record_visit");
+  assert.equal((await sentOn(port, 1)).type, "record_batch");
   port.drop();
   const status = await until(async () => {
     const current = await send({ kind: "get_status" });
@@ -1290,7 +1294,47 @@ test("the panel's send-now request waits for the worker's delivery", async () =>
   queueWith(visit("now", `${origin}/items/a`));
   const answered = send({ kind: "sync_now" });
   const port = await until(() => ports[0], "the worker to start the host");
-  port.reply(recorded(await sentOn(port, 1)));
+  port.reply(batchRecorded(await sentOn(port, 1)));
   const status = await answered;
   assert.equal(status.queued, 0);
+});
+
+test("one native batch drains multiple records and durably acknowledges overflow", async () => {
+  const origin = "https://batch.example";
+  resetSync(origin, 2 * HOUR_MS);
+  queueWith(visit("first", `${origin}/items/a`), visit("second", `${origin}/items/b`));
+  const queue = values.get(storageKey("queue_v1"));
+  queue.overflow_count = 4;
+  queue.overflow_first_at = "2026-10-16T08:00:00+00:00";
+  queue.overflow_last_at = "2026-10-16T11:00:00+00:00";
+  values.set(storageKey("queue_v1"), queue);
+
+  const answered = send({ kind: "sync_now" });
+  const port = await until(() => ports[0], "the batched host delivery");
+  const request = await sentOn(port, 1);
+  assert.equal(request.type, "record_batch");
+  assert.equal(request.events.length, 2);
+  assert.deepEqual(request.overflow, {
+    count: 4,
+    first_occurred_at: "2026-10-16T08:00:00+00:00",
+    last_occurred_at: "2026-10-16T11:00:00+00:00",
+  });
+  port.reply(batchRecorded(request, "persisted", null, true));
+  const status = await answered;
+  assert.equal(status.queued, 0);
+  assert.equal(status.overflow_count, 0);
+  assert.equal(status.overflow_first_at, null);
+  assert.equal(status.overflow_last_at, null);
+});
+
+test("queue pressure turns on the toolbar badge at eighty percent", async () => {
+  const origin = "https://pressure.example";
+  resetSync(origin, 2 * HOUR_MS);
+  queueWith(...Array.from({ length: 206 }, (_, index) =>
+    visit(`pressure-${index}`, `${origin}/items/${index}`)));
+  await send({ kind: "discard_pending", event_ids: ["pressure-205"] });
+  assert.equal(badgeText, "!");
+  await send({ kind: "discard_pending", event_ids:
+    Array.from({ length: 205 }, (_, index) => `pressure-${index}`) });
+  assert.equal(badgeText, "");
 });

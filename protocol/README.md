@@ -32,7 +32,7 @@ or newer TOML file yields an inert empty snapshot, its raw-file revision, and a
 backs up those exact bytes before replacing the file.
 
 `ConfigSnapshot.storage` must be present: use `null` only to explicitly clear
-the selected notes folder. `sites`, `strip_params`, and `near_repeat_secs` are
+the selected notes folder. `sites` and `strip_params` are
 also required. The generated Rust deserializer rejects omitted nullable fields,
 matching the JSON Schema requirement. Existing M0 TOML defaults to an empty
 site list, `utm_*`/`fbclid`/`gclid` stripping, and a 300-second repeat window.

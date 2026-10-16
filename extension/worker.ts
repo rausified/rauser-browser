@@ -129,7 +129,9 @@ function ensureTrustedStorage(): Promise<void> {
   storageReady ??= Promise.all([
     chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
     chrome.storage.session.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }),
-  ]).then(() => undefined);
+  ]).then(async () => {
+    await updatePressureBadge(await readQueue());
+  });
   return storageReady;
 }
 
@@ -196,6 +198,10 @@ async function readQueue(): Promise<QueueState> {
     !Array.isArray(state.items) ||
     !state.items.every(isQueuedVisit) ||
     typeof state.overflow_count !== "number" ||
+    !(state.overflow_first_at === undefined || state.overflow_first_at === null ||
+      typeof state.overflow_first_at === "string") ||
+    !(state.overflow_last_at === undefined || state.overflow_last_at === null ||
+      typeof state.overflow_last_at === "string") ||
     typeof state.rejected_count !== "number" ||
     !(state.last_error === null || typeof state.last_error === "string") ||
     !(state.retry_error === undefined || state.retry_error === null ||
@@ -204,11 +210,62 @@ async function readQueue(): Promise<QueueState> {
     throw new Error("Capture queue is unreadable; capture is paused");
   }
   // Queues stored before retry_error existed kept retry failures in last_error.
-  return { ...(value as QueueState), retry_error: (state.retry_error as string | null | undefined) ?? null };
+  return {
+    ...(value as QueueState),
+    overflow_first_at: (state.overflow_first_at as string | null | undefined) ?? null,
+    overflow_last_at: (state.overflow_last_at as string | null | undefined) ?? null,
+    retry_error: (state.retry_error as string | null | undefined) ?? null,
+  };
 }
 
 async function writeQueue(state: QueueState): Promise<void> {
   await chrome.storage.local.set({ [QUEUE_KEY]: state });
+  await updatePressureBadge(state);
+}
+
+function queueBytes(state: QueueState): number {
+  return encoder.encode(JSON.stringify(state.items)).length;
+}
+
+function underPressure(state: QueueState): boolean {
+  return state.items.length >= Math.ceil(MAX_QUEUED_VISITS * 0.8) ||
+    queueBytes(state) >= Math.ceil(MAX_QUEUE_BYTES * 0.8);
+}
+
+async function updatePressureBadge(state: QueueState): Promise<void> {
+  const warning = underPressure(state) || state.overflow_count > 0;
+  await chrome.action.setBadgeBackgroundColor({ color: "#b45309" });
+  await chrome.action.setBadgeText({ text: warning ? "!" : "" });
+}
+
+/** Fold a duplicate, not-yet-dispatched hourly total instead of consuming a
+ * second queue slot. This repairs duplicate freezes after worker interruption
+ * without ever mutating a record the host may already have hashed. */
+function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
+  const existing = queue.items.find((item) =>
+    item.dispatched !== true && isActivityEvent(item.event) &&
+    item.event.artifact_id === event.artifact_id &&
+    item.event.occurred_at === event.occurred_at);
+  if (!existing || !isActivityEvent(existing.event)) return false;
+  existing.event.opens = Math.min(100_000, existing.event.opens + event.opens);
+  existing.event.focused_seconds = Math.min(7_200,
+    existing.event.focused_seconds + event.focused_seconds);
+  existing.event.background_seconds = Math.min(7_200,
+    existing.event.background_seconds + event.background_seconds);
+  existing.event.title = event.title ?? existing.event.title;
+  existing.event.url = event.url;
+  existing.event.modes = [...existing.event.modes, ...event.modes]
+    .filter((mode, index, all) => all.findIndex((other) =>
+      other.mode === mode.mode && other.url === mode.url) === index).slice(0, 3);
+  existing.event.trails = [...existing.event.trails, ...event.trails]
+    .filter((trail, index, all) => all.findIndex((other) =>
+      other.transition === trail.transition &&
+      other.from_artifact_id === trail.from_artifact_id && other.from_url === trail.from_url) === index)
+    .slice(0, 10);
+  existing.event.refs = [...existing.event.refs, ...event.refs]
+    .filter((ref, index, all) => all.findIndex((other) =>
+      other.artifact_type === ref.artifact_type && other.value === ref.value) === index).slice(0, 20);
+  return true;
 }
 
 /** Freeze completed local hours and move them into the durable delivery
@@ -227,10 +284,16 @@ async function freezeActivity(now = Date.now()): Promise<number> {
     const item: QueuedVisit = {
       event, dedupe_key: event.event_id, attempts: 0, retry_after: 0, dispatched: false,
     };
+    if (underPressure(queue) && coalesceActivity(queue, event)) {
+      accepted += 1;
+      continue;
+    }
     const next = [...queue.items, item];
     if (next.length > MAX_QUEUED_VISITS ||
         encoder.encode(JSON.stringify(next)).length > MAX_QUEUE_BYTES) {
-      queue.overflow_count += 1;
+      queue.overflow_count = Math.min(0xffff_ffff, queue.overflow_count + 1);
+      queue.overflow_first_at ??= event.occurred_at;
+      queue.overflow_last_at = event.occurred_at;
       queue.last_error = "Activity queue is full; completed hours were not buffered";
       continue;
     }
@@ -244,6 +307,7 @@ async function freezeActivity(now = Date.now()): Promise<number> {
     }),
     activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: activityContext(activity) }),
   ]);
+  await updatePressureBadge(queue);
   return accepted;
 }
 
@@ -626,6 +690,8 @@ async function currentStatus(
     live_activity: activity.totals.length,
     next_retry_at: nextRetryAt,
     overflow_count: visits.overflow_count,
+    overflow_first_at: visits.overflow_first_at,
+    overflow_last_at: visits.overflow_last_at,
     rejected_count: visits.rejected_count,
     last_error: visits.last_error,
     // A retry notice describes a visit still waiting to retry. Once rejection,
@@ -641,23 +707,99 @@ async function currentStatus(
   };
 }
 
-/** The visits ready to send now, frozen so no later title patch changes them. */
-async function takeReady(): Promise<QueuedVisit[]> {
+interface ReadyBatch {
+  batch_id: string;
+  items: QueuedVisit[];
+  overflow: { count: number; first_occurred_at: string; last_occurred_at: string } | null;
+}
+
+/** Take one stable bounded batch. Items retain their batch ID across retry, so
+ * a lost acknowledgement resends exactly the request the host saw. */
+async function takeReady(): Promise<ReadyBatch | null> {
   const lease = await reconcileGrants();
-  if (!lease || lease.expires_at <= Date.now() || !lease.capture_enabled) return [];
+  if (!lease || lease.expires_at <= Date.now() || !lease.capture_enabled) return null;
   const queue = await readQueue();
   const ready = queue.items.filter(
     (item) =>
       item.retry_after <= Date.now() && matchingArtifact(lease, item.event.url) !== null,
   );
+  const first = ready[0];
+  if (!first) return null;
+  const batchId = first.batch_id ?? crypto.randomUUID();
+  const localDay = first.event.occurred_at.slice(0, 10);
+  const batch = ready.filter((item) =>
+    first.batch_id ? item.batch_id === batchId :
+      item.batch_id === undefined && item.event.occurred_at.startsWith(localDay)).slice(0, 64);
   // Freeze these events before they are sent to the host.
-  if (ready.some((item) => item.dispatched !== true)) {
-    for (const item of ready) item.dispatched = true;
+  if (batch.some((item) => item.dispatched !== true || item.batch_id !== batchId)) {
+    for (const item of batch) {
+      item.dispatched = true;
+      item.batch_id = batchId;
+    }
     await writeQueue(queue);
   }
-  return ready;
+  const overflow = queue.overflow_count > 0 && queue.overflow_first_at && queue.overflow_last_at
+    ? {
+      count: queue.overflow_count,
+      first_occurred_at: queue.overflow_first_at,
+      last_occurred_at: queue.overflow_last_at,
+    }
+    : null;
+  return { batch_id: batchId, items: batch, overflow };
 }
 
+async function ackBatch(
+  batch: ReadyBatch,
+  results: Array<{ event_id: string; outcome: VisitOutcome; reason: string | null }>,
+  overflowRecorded: boolean,
+): Promise<WorkerStatus> {
+  const queue = await readQueue();
+  const expected = new Set(batch.items.map((item) => item.event.event_id));
+  if (results.length !== expected.size || results.some((result) => !expected.has(result.event_id))) {
+    throw new Error("Host returned outcomes for a different capture batch");
+  }
+  const byId = new Map(results.map((result) => [result.event_id, result]));
+  const retained: QueuedVisit[] = [];
+  for (const item of queue.items) {
+    if (item.batch_id !== batch.batch_id) {
+      retained.push(item);
+      continue;
+    }
+    const result = byId.get(item.event.event_id);
+    if (!result) throw new Error("Host omitted a capture batch outcome");
+    if (result.outcome === "retryable") {
+      item.attempts += 1;
+      item.retry_after = Date.now() +
+        Math.min(60 * 60_000, 5_000 * 2 ** Math.min(item.attempts, 10));
+      queue.retry_error = result.reason ?? "The host could not save this capture batch yet";
+      retained.push(item);
+    } else if (result.outcome === "rejected") {
+      queue.rejected_count += 1;
+      queue.last_error = result.reason ?? "A capture record was rejected by host policy";
+    }
+  }
+  queue.items = retained;
+  if (overflowRecorded) {
+    const recorded = batch.overflow?.count ?? 0;
+    queue.overflow_count = Math.max(0, queue.overflow_count - recorded);
+    if (queue.overflow_count === 0) {
+      queue.overflow_first_at = null;
+      queue.overflow_last_at = null;
+    } else if (batch.overflow) {
+      // New drops arrived while the host was writing. Their precise first
+      // hour was not in the acknowledged snapshot; retain a conservative
+      // range beginning at the last hour already marked rather than losing
+      // evidence or clearing the newer count.
+      queue.overflow_first_at = batch.overflow.last_occurred_at;
+    }
+  }
+  if (!queue.items.some((entry) => entry.attempts > 0)) queue.retry_error = null;
+  await writeQueue(queue);
+  return currentStatus(null, queue);
+}
+
+// Kept for open extension pages from the previous build while they drain an
+// in-flight single-record acknowledgement during an upgrade.
 async function ackVisit(
   eventId: string,
   outcome: VisitOutcome,
@@ -676,8 +818,6 @@ async function ackVisit(
       queue.rejected_count += 1;
       queue.last_error = reason ?? "A capture record was rejected by host policy";
     }
-    // last_error holds purge, overflow, and rejection notices. Only the
-    // user dismisses those; retry_error lapses with the last retrying visit.
     if (!queue.items.some((entry) => entry.attempts > 0)) queue.retry_error = null;
   }
   await writeQueue(queue);
@@ -757,35 +897,33 @@ async function renewPolicy(host: HostClient): Promise<void> {
 
 /** Send due visits; returns why the host could not be reached, if it could not. */
 async function deliverPending(host: HostClient): Promise<string | null> {
-  for (let processed = 0; processed < MAX_QUEUED_VISITS; processed += 1) {
+  for (let processed = 0; processed < MAX_QUEUED_VISITS; processed += 64) {
     // Re-read eligibility before each send so a site removal or Chrome grant
     // revocation cannot keep draining a stale pending snapshot.
-    const [item] = await serialize(takeReady);
-    if (!item) return null;
-    let outcome: VisitOutcome;
-    let reason: string | null;
+    const batch = await serialize(takeReady);
+    if (!batch) return null;
     let failure: string | null = null;
     try {
-      const response = isActivityEvent(item.event)
-        ? await host.call({
-          type: "record_activity", protocol_version: PROTOCOL_VERSION,
-          request_id: newRequestId(), event: item.event,
-        }, "activity_recorded")
-        : await host.call({
-          type: "record_visit", protocol_version: PROTOCOL_VERSION,
-          request_id: newRequestId(), event: item.event,
-        }, "visit_recorded");
-      if (response.event_id !== item.event.event_id) {
-        throw new Error("Host acknowledged a different visit ID");
+      const response = await host.call({
+        type: "record_batch", protocol_version: PROTOCOL_VERSION,
+        request_id: newRequestId(), batch_id: batch.batch_id,
+        events: batch.items.map((item) => isActivityEvent(item.event)
+          ? { kind: "activity", visit: null, activity: item.event }
+          : { kind: "visit", visit: item.event, activity: null }),
+        overflow: batch.overflow,
+      }, "batch_recorded");
+      if (response.batch_id !== batch.batch_id) {
+        throw new Error("Host acknowledged a different capture batch");
       }
-      outcome = response.outcome;
-      reason = response.reason;
+      await serialize(() => ackBatch(batch, response.results, response.overflow_recorded));
+      if (response.results.some((result) => result.outcome === "retryable")) return null;
     } catch (error) {
-      outcome = "retryable";
-      reason = failure = describe(error);
+      failure = describe(error);
+      await serialize(() => ackBatch(batch, batch.items.map((item) => ({
+        event_id: item.event.event_id, outcome: "retryable", reason: failure,
+      })), false));
+      return failure;
     }
-    await serialize(() => ackVisit(item.event.event_id, outcome, reason));
-    if (outcome === "retryable") return failure;
   }
   return null;
 }
@@ -881,7 +1019,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       return currentStatus(null, queue);
     }
     case "get_pending":
-      return takeReady();
+      return (await takeReady())?.items ?? [];
     case "get_activity": {
       await freezeActivity();
       return (await readActivity()).totals;
@@ -898,6 +1036,8 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       queue.last_error = null;
       queue.retry_error = null;
       queue.overflow_count = 0;
+      queue.overflow_first_at = null;
+      queue.overflow_last_at = null;
       queue.rejected_count = 0;
       await writeQueue(queue);
       return currentStatus(null, queue);
