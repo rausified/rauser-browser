@@ -5,10 +5,10 @@ use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ActivityRecorded, AgentChecked, ConfigConfirmed, ConfigResult, ConfigUpdated, ErrorCode,
-    ErrorResponse, FolderChosen, HarnessSetupConfirmed, HarnessesDiscovered, HelloResult,
-    NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION, Request, Response, VisitOutcome,
-    VisitRecorded, WhyRecorded,
+    ActivityRecorded, AgentChecked, BatchEventResult, BatchRecorded, CaptureEventKind,
+    ConfigConfirmed, ConfigResult, ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen,
+    HarnessSetupConfirmed, HarnessesDiscovered, HelloResult, NoteConflict, NoteLoaded, NoteSaved,
+    PROTOCOL_VERSION, Request, Response, VisitOutcome, VisitRecorded, WhyRecorded,
 };
 
 use crate::brand::NAMESPACE;
@@ -375,6 +375,7 @@ fn dispatch(
         }
         Request::RecordVisit(value) => record_visit(value, config),
         Request::RecordActivity(value) => record_activity(value, config),
+        Request::RecordBatch(value) => record_batch(value, config),
         Request::RecordWhy(value) => record_why(value, config),
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
@@ -577,7 +578,6 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
         enabled: config.snapshot().capture_enabled,
         sites: &config.snapshot().sites,
         strip_params: &config.snapshot().strip_params,
-        near_repeat_secs: u64::from(config.snapshot().near_repeat_secs),
     };
     let (outcome, reason, relative_path) = match store.record(policy, &value.event) {
         CaptureOutcome::Persisted { relative_path } => (
@@ -744,7 +744,6 @@ fn record_activity(
         enabled: true,
         sites: &config.snapshot().sites,
         strip_params: &config.snapshot().strip_params,
-        near_repeat_secs: 0,
     };
     let (outcome, reason, relative_path) = match store.record_activity(policy, &value.event) {
         CaptureOutcome::Persisted { relative_path } => (
@@ -757,6 +756,262 @@ fn record_activity(
         CaptureOutcome::Retryable { message } => (VisitOutcome::Retryable, Some(message), None),
     };
     answer(outcome, reason, relative_path)
+}
+
+/// Deliver a bounded set of frozen capture records in one native exchange.
+/// Legacy single-record messages remain accepted for extension upgrades, but
+/// the current worker uses this response to apply all terminal acknowledgments
+/// to its queue in one storage update.
+fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut ConfigStore) -> Response {
+    if value.events.is_empty() || value.events.len() > 64 {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "a capture batch must contain 1 to 64 events",
+        );
+    }
+    if uuid::Uuid::parse_str(&value.batch_id).is_err() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "batch_id must be a UUID",
+        );
+    }
+
+    enum Accepted {
+        Visit(brauser_protocol::VisitEvent),
+        Activity(brauser_protocol::ActivityEvent),
+    }
+    let mut accepted = Vec::with_capacity(value.events.len());
+    let mut event_ids = std::collections::HashSet::with_capacity(value.events.len());
+    for item in value.events {
+        let accepted_event = match (item.kind, item.visit, item.activity) {
+            (CaptureEventKind::Visit, Some(event), None) => {
+                if !event_ids.insert(event.event_id.clone()) {
+                    return error(
+                        &value.request_id,
+                        ErrorCode::InvalidRequest,
+                        "capture batch contains a duplicate event_id",
+                    );
+                }
+                Accepted::Visit(event)
+            }
+            (CaptureEventKind::Activity, None, Some(event)) => {
+                if !event_ids.insert(event.event_id.clone()) {
+                    return error(
+                        &value.request_id,
+                        ErrorCode::InvalidRequest,
+                        "capture batch contains a duplicate event_id",
+                    );
+                }
+                Accepted::Activity(event)
+            }
+            _ => {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidRequest,
+                    "capture batch item does not match its kind",
+                );
+            }
+        };
+        accepted.push(accepted_event);
+    }
+
+    let retry_all = |reason: &str| {
+        accepted
+            .iter()
+            .map(|event| {
+                let event_id = match event {
+                    Accepted::Visit(event) => event.event_id.clone(),
+                    Accepted::Activity(event) => event.event_id.clone(),
+                };
+                BatchEventResult {
+                    event_id,
+                    outcome: VisitOutcome::Retryable,
+                    reason: Some(reason.to_owned()),
+                    relative_path: None,
+                }
+            })
+            .collect()
+    };
+    let _config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return Response::BatchRecorded(BatchRecorded {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                batch_id: value.batch_id,
+                results: retry_all("configuration is unavailable"),
+                overflow_recorded: false,
+            });
+        }
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return Response::BatchRecorded(BatchRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            batch_id: value.batch_id,
+            results: retry_all("configuration is unavailable or needs repair"),
+            overflow_recorded: false,
+        });
+    }
+
+    let mut results = Vec::with_capacity(accepted.len());
+    let mut durable = Vec::with_capacity(accepted.len());
+    for event in &accepted {
+        let policy_result = match event {
+            Accepted::Visit(event) => {
+                match config::adapter_matches(config.snapshot(), &event.url, event.title.as_deref())
+                {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err((VisitOutcome::Suppressed, "not_an_artifact")),
+                    Err(_) => Err((VisitOutcome::Retryable, "adapter policy is unavailable")),
+                }
+            }
+            Accepted::Activity(event) => check_activity_policy(config.snapshot(), event),
+        };
+        match policy_result {
+            Ok(()) => durable.push(event),
+            Err((outcome, reason)) => results.push(BatchEventResult {
+                event_id: match event {
+                    Accepted::Visit(event) => event.event_id.clone(),
+                    Accepted::Activity(event) => event.event_id.clone(),
+                },
+                outcome,
+                reason: Some(reason.into()),
+                relative_path: None,
+            }),
+        }
+    }
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        results.extend(durable.into_iter().map(|event| BatchEventResult {
+            event_id: match event {
+                Accepted::Visit(event) => event.event_id.clone(),
+                Accepted::Activity(event) => event.event_id.clone(),
+            },
+            outcome: VisitOutcome::Retryable,
+            reason: Some("choose a notes folder before capture".into()),
+            relative_path: None,
+        }));
+        return Response::BatchRecorded(BatchRecorded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            batch_id: value.batch_id,
+            results,
+            overflow_recorded: false,
+        });
+    };
+    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+        Ok(store) => store,
+        Err(_) => {
+            results.extend(durable.into_iter().map(|event| BatchEventResult {
+                event_id: match event {
+                    Accepted::Visit(event) => event.event_id.clone(),
+                    Accepted::Activity(event) => event.event_id.clone(),
+                },
+                outcome: VisitOutcome::Retryable,
+                reason: Some("notes folder is unavailable".into()),
+                relative_path: None,
+            }));
+            return Response::BatchRecorded(BatchRecorded {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                batch_id: value.batch_id,
+                results,
+                overflow_recorded: false,
+            });
+        }
+    };
+    let capture_events = durable
+        .iter()
+        .map(|event| match event {
+            Accepted::Visit(event) => crate::capture::CaptureBatchEvent::Visit(event),
+            Accepted::Activity(event) => crate::capture::CaptureBatchEvent::Activity(event),
+        })
+        .collect::<Vec<_>>();
+    let outcome = store.record_batch(
+        CapturePolicy {
+            enabled: config.snapshot().capture_enabled,
+            sites: &config.snapshot().sites,
+            strip_params: &config.snapshot().strip_params,
+        },
+        &value.batch_id,
+        &capture_events,
+        value.overflow.as_ref(),
+    );
+    results.extend(outcome.events.into_iter().map(|(event_id, outcome)| {
+        let (outcome, reason, relative_path) = match outcome {
+            CaptureOutcome::Persisted { relative_path } => (
+                VisitOutcome::Persisted,
+                None,
+                Some(relative_path.to_string_lossy().into_owned()),
+            ),
+            CaptureOutcome::Suppressed { reason } => (VisitOutcome::Suppressed, Some(reason), None),
+            CaptureOutcome::Rejected { reason } => (VisitOutcome::Rejected, Some(reason), None),
+            CaptureOutcome::Retryable { message } => (VisitOutcome::Retryable, Some(message), None),
+        };
+        BatchEventResult {
+            event_id,
+            outcome,
+            reason,
+            relative_path,
+        }
+    }));
+    Response::BatchRecorded(BatchRecorded {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: value.request_id,
+        batch_id: value.batch_id,
+        results,
+        overflow_recorded: outcome.overflow_recorded,
+    })
+}
+
+fn check_activity_policy(
+    snapshot: &brauser_protocol::ConfigSnapshot,
+    event: &brauser_protocol::ActivityEvent,
+) -> std::result::Result<(), (VisitOutcome, &'static str)> {
+    if !snapshot.capture_enabled {
+        return Err((VisitOutcome::Suppressed, "capture_disabled"));
+    }
+    if !activity_shape_is_valid(event) {
+        return Err((VisitOutcome::Rejected, "invalid_activity"));
+    }
+    let matched = config::adapter_match(snapshot, &event.url, event.title.as_deref())
+        .map_err(|_| (VisitOutcome::Suppressed, "not_an_artifact"))?;
+    if matched.artifact_id != event.artifact_id || matched.artifact_type != event.artifact_type {
+        return Err((VisitOutcome::Rejected, "artifact_identity_mismatch"));
+    }
+    for mode in &event.modes {
+        match config::adapter_match(snapshot, &mode.url, None) {
+            Ok(evidence)
+                if evidence.artifact_id == event.artifact_id
+                    && evidence
+                        .mode
+                        .is_some_and(|found| found.as_str() == mode.mode) => {}
+            _ => return Err((VisitOutcome::Rejected, "activity_mode_mismatch")),
+        }
+    }
+    for trail in &event.trails {
+        match (&trail.from_artifact_id, &trail.from_url) {
+            (None, None) => {}
+            (Some(id), Some(url)) => match config::adapter_match(snapshot, url, None) {
+                Ok(source) if &source.artifact_id == id => {}
+                _ => return Err((VisitOutcome::Rejected, "trail_identity_mismatch")),
+            },
+            _ => return Err((VisitOutcome::Rejected, "trail_identity_mismatch")),
+        }
+    }
+    let expected_refs = matched.title.as_ref().map(|title| &title.refs);
+    if event.refs.iter().any(|supplied| {
+        !expected_refs.is_some_and(|refs| {
+            refs.iter().any(|expected| {
+                expected.artifact_type == supplied.artifact_type && expected.value == supplied.value
+            })
+        })
+    }) {
+        return Err((VisitOutcome::Rejected, "activity_refs_mismatch"));
+    }
+    Ok(())
 }
 
 fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStore) -> Response {
@@ -820,7 +1075,6 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         enabled: config.snapshot().capture_enabled,
         sites: &config.snapshot().sites,
         strip_params: &config.snapshot().strip_params,
-        near_repeat_secs: 0,
     };
     let (outcome, reason, relative_path) = match store.record_why(policy, &value.event) {
         CaptureOutcome::Persisted { relative_path } => (
@@ -1052,7 +1306,6 @@ mod tests {
                     capture_enabled: false,
                     sites: Vec::new(),
                     strip_params: Vec::new(),
-                    near_repeat_secs: 300,
                     agent_denylist: Vec::new(),
                     agent_denylist_confirmed: false,
                     log_incognito: false,
@@ -1102,7 +1355,6 @@ mod tests {
             capture_enabled: false,
             sites: Vec::new(),
             strip_params: vec!["utm_*".into(), "fbclid".into(), "gclid".into()],
-            near_repeat_secs: 300,
             ..crate::config::empty_config()
         };
         let requests = [
@@ -1248,7 +1500,6 @@ mod tests {
                 capture_enabled: false,
                 sites: Vec::new(),
                 strip_params: Vec::new(),
-                near_repeat_secs: 300,
                 agent_denylist: Vec::new(),
                 agent_denylist_confirmed: false,
                 log_incognito: false,
@@ -1310,7 +1561,6 @@ mod tests {
             capture_enabled: false,
             sites: Vec::new(),
             strip_params: Vec::new(),
-            near_repeat_secs: 300,
             ..crate::config::empty_config()
         };
         let identity = crate::vault::selected_root_identity(root).unwrap();
@@ -2214,7 +2464,6 @@ id = "work:{host}/{id}"
             let offer = session.claude_offer();
             let stale = session.revision();
             let next = ConfigSnapshot {
-                near_repeat_secs: 600,
                 ..session.config.snapshot().clone()
             };
             assert!(matches!(

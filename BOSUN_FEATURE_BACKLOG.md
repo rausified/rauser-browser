@@ -104,7 +104,10 @@ them ahead of the plan.
 
 ## In Progress / This Iteration
 
-- None. The next cycle starts with M1.5a step 6.5 above.
+- **M1.5a step 6.5 — Delivery and durability.** Replace per-event delivery
+  and intents with one bounded batch, add pressure coalescing and the 80%
+  badge, carry overflow evidence into the append-only log, and retire
+  configurable near-repeat suppression without breaking older config files.
 
 ## Shipped
 

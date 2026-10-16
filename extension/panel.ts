@@ -99,7 +99,12 @@ function renderQueue(state: WorkerStatus): void {
     `${captureOn ? "●" : "○"} Capture ${captureOn ? "on" : "off"} · ` +
     `${state.live_activity} live · ${state.queued} pending`;
   const messages: string[] = [];
-  if (state.overflow_count) messages.push(`${state.overflow_count} completed activity hours could not be buffered.`);
+  if (state.overflow_count) {
+    const range = state.overflow_first_at && state.overflow_last_at
+      ? ` from ${state.overflow_first_at} through ${state.overflow_last_at}`
+      : "";
+    messages.push(`${state.overflow_count} completed activity hours${range} could not be buffered; this will be marked in the log on the next delivery.`);
+  }
   if (state.rejected_count) messages.push(`${state.rejected_count} capture records were rejected by host policy.`);
   if (state.last_error) messages.push(state.last_error);
   if (state.retry_error) messages.push(`Retrying: ${state.retry_error}`);
