@@ -774,8 +774,14 @@ change to an existing valid adapter.
 
 **As built (M1.5a step 6.3, 2026-10-16 — lease and recognition slice).** Every
 policy lease now contains the exact confirmed format-1 adapter document. The
-worker validates and compiles it with the TypeScript engine, requires a live
-Chrome grant, and evaluates each original navigation URL before reading tab
+worker validates and compiles it with the TypeScript engine once when a lease
+is installed, or once when that revision is first restored after a worker
+start, then reuses the revision-keyed compiled document without serializing or
+recompiling the policy on each navigation. Every non-expired install message is
+still compiled even when its revision is already cached; an expired message is
+rejected before it can replace the active revision's compiled matcher. The
+worker requires a live Chrome grant and evaluates each original navigation URL
+before reading tab
 metadata or placing page-derived content in `storage.local`; rule misses and
 out-of-scope URLs disappear at that boundary. Locally revoking an origin also
 narrows the leased adapter document, so the narrowed lease remains valid on
