@@ -71,8 +71,13 @@ capture records offset-qualified hourly artifact activity instead of creating
 new M1 visit rows: cold opens, focused and background time, modes, refs, and
 trails freeze into idempotent `activity` events, with append-only `why` events
 for explicit context. Older buffered M1 visits still drain after upgrade. The
-delivery-and-durability step, index and artifact-file generation, artifact
-panel card, Recent list, worklog view, and record keys remain unfinished.
+worker groups up to 64 same-local-day records under a stable batch ID and
+overflow snapshot; the host validates the complete batch, then uses one
+compact crash-recovery intent, one append, and one log sync. Queue pressure
+coalesces compatible undispatched activity without exceeding the byte cap,
+lights the toolbar badge at 80%, and leaves durable overflow evidence. The
+index and artifact-file generation, artifact panel card, Recent list, worklog
+view, and record keys remain unfinished.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
