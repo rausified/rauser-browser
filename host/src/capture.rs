@@ -80,6 +80,43 @@ struct EventRendering<'a> {
     marker_metadata: Option<&'a str>,
 }
 
+/// Check the generated schema's activity caps before any caller iterates
+/// attacker-controlled collections or replays adapter matching for them.
+pub(crate) fn activity_shape_is_valid(event: &ActivityEvent) -> bool {
+    event.opens <= 100_000
+        && event.focused_seconds <= 7_200
+        && event.background_seconds <= 7_200
+        && event.modes.len() <= 3
+        && event.trails.len() <= 10
+        && event.refs.len() <= 20
+        && event.artifact_id.len() <= 512
+        && event.artifact_type.len() <= 64
+        && event.modes.iter().all(|mode| {
+            matches!(mode.mode.as_str(), "view" | "edit" | "review")
+                && !mode.url.is_empty()
+                && mode.url.len() <= MAX_URL_BYTES
+        })
+        && event.trails.iter().all(|trail| {
+            !trail.transition.is_empty()
+                && trail.transition.len() <= 64
+                && trail
+                    .from_artifact_id
+                    .as_ref()
+                    .is_none_or(|value| value.len() <= 512)
+                && trail
+                    .from_url
+                    .as_ref()
+                    .is_none_or(|value| value.len() <= MAX_URL_BYTES)
+                && trail.from_artifact_id.is_some() == trail.from_url.is_some()
+        })
+        && event.refs.iter().all(|reference| {
+            !reference.artifact_type.is_empty()
+                && reference.artifact_type.len() <= 64
+                && !reference.value.is_empty()
+                && reference.value.len() <= 512
+        })
+}
+
 impl CaptureStore {
     pub fn open(storage: &StorageConfig) -> Result<Self> {
         Self::open_checked(storage, None)
@@ -123,39 +160,7 @@ impl CaptureStore {
         policy: CapturePolicy<'_>,
         event: &ActivityEvent,
     ) -> CaptureOutcome {
-        if event.opens > 100_000
-            || event.focused_seconds > 7_200
-            || event.background_seconds > 7_200
-            || event.modes.len() > 3
-            || event.trails.len() > 10
-            || event.refs.len() > 20
-            || event.artifact_id.len() > 512
-            || event.artifact_type.len() > 64
-            || event.modes.iter().any(|mode| {
-                !matches!(mode.mode.as_str(), "view" | "edit" | "review")
-                    || mode.url.is_empty()
-                    || mode.url.len() > MAX_URL_BYTES
-            })
-            || event.trails.iter().any(|trail| {
-                trail.transition.is_empty()
-                    || trail.transition.len() > 64
-                    || trail
-                        .from_artifact_id
-                        .as_ref()
-                        .is_some_and(|value| value.len() > 512)
-                    || trail
-                        .from_url
-                        .as_ref()
-                        .is_some_and(|value| value.len() > MAX_URL_BYTES)
-                    || trail.from_artifact_id.is_some() != trail.from_url.is_some()
-            })
-            || event.refs.iter().any(|reference| {
-                reference.artifact_type.is_empty()
-                    || reference.artifact_type.len() > 64
-                    || reference.value.is_empty()
-                    || reference.value.len() > 512
-            })
-        {
+        if !activity_shape_is_valid(event) {
             return CaptureOutcome::Rejected {
                 reason: "invalid_activity".into(),
             };

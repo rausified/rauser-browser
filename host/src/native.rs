@@ -12,7 +12,7 @@ use brauser_protocol::{
 };
 
 use crate::brand::NAMESPACE;
-use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore};
+use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore};
 use crate::consent::ConsentAuthority;
 use crate::dialog::{self, DialogText};
@@ -635,6 +635,16 @@ fn record_activity(
         return answer(
             VisitOutcome::Suppressed,
             Some("capture_disabled".into()),
+            None,
+        );
+    }
+    // Serde enforces types, not the JSON Schema's maxItems limits. Reject
+    // oversized collections before replaying adapter evaluation for each
+    // claimed mode or trail from this untrusted native message.
+    if !activity_shape_is_valid(&value.event) {
+        return answer(
+            VisitOutcome::Rejected,
+            Some("invalid_activity".into()),
             None,
         );
     }
@@ -1799,6 +1809,20 @@ id = "work:{host}/{id}"
                 );
             }
             other => panic!("expected rejected activity, got {other:?}"),
+        }
+        let mut oversized_modes = event("work:work.example/7", Vec::new());
+        oversized_modes.modes = (0..4)
+            .map(|_| ActivityMode {
+                mode: "view".into(),
+                url: "https://work.example/items/7".into(),
+            })
+            .collect();
+        match invoke(&mut config, oversized_modes) {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(recorded.reason.as_deref(), Some("invalid_activity"));
+            }
+            other => panic!("expected oversized activity rejection, got {other:?}"),
         }
         let mut hostile_mode = event("work:work.example/7", Vec::new());
         hostile_mode.modes.push(ActivityMode {

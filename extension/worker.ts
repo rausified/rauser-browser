@@ -533,6 +533,7 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
     if (hour) {
       hour.title = titleMatch.title ?? title;
       hour.url = mapped.url;
+      hour.refs = [];
       for (const ref of titleMatch.refs ?? []) {
         if (hour.refs.length >= 20) break;
         if (!hour.refs.some((known) => known.artifact_type === ref.type && known.value === ref.value)) {
@@ -1089,9 +1090,18 @@ export async function rebuildActivityMap(): Promise<void> {
   if (!lease?.capture_enabled) return;
   const activity = await readActivity();
   const now = Date.now();
-  // Do not attribute time before this worker established current browser
-  // focus and idle state. Existing hourly totals themselves remain durable.
-  activity.measured_at = now;
+  if (lease.expires_at <= now) {
+    // An expired lease is not authority to measure the restored interval.
+    activity.measured_at = now;
+    await writeActivity(activity);
+    return;
+  }
+  // storage.session survives an ordinary MV3 worker suspension. Settle the
+  // restored interval before refreshing the browser state below; otherwise
+  // every worker restart discards the dwell time since its previous event.
+  // A browser/extension restart clears storage.session, so readActivity()
+  // starts its fresh cursor at now and this remains a no-op in that case.
+  settleActivity(activity, now, () => crypto.randomUUID());
   const [tabs, focused, idle] = await Promise.all([
     chrome.tabs.query({}),
     chrome.windows?.getLastFocused() ?? Promise.resolve({ id: undefined, focused: false }),

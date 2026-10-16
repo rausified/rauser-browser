@@ -174,6 +174,10 @@ export function recordNavigation(
       addDistinct(total.modes, { mode: match.mode, url: context.url },
         (a, b) => a.mode === b.mode, 3);
     }
+    // Refs are evidence from the latest title carried by this event. Keeping
+    // refs from an older title would make the host correctly reject the
+    // aggregate when it re-evaluates only the event's latest URL and title.
+    total.refs = [];
     for (const ref of match.refs ?? []) {
       addDistinct(total.refs, { artifact_type: ref.type, value: ref.value },
         (a, b) => a.artifact_type === b.artifact_type && a.value === b.value, MAX_REFS);

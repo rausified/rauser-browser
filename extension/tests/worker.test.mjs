@@ -580,6 +580,57 @@ test("worker-start map rebuild restores recognized tabs without counting opens",
     "getFrame URLs without a live Chrome grant are never mapped");
 });
 
+test("worker-start map rebuild settles activity restored from storage.session", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  tabs.clear();
+  const origin = "https://worker-wake.example";
+  const start = new Date("2026-10-16T10:15:00Z").getTime();
+  const now = start + 15_000;
+  grants.set("https://worker-wake.example:443/*", true);
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin), expires_at: now + 60_000,
+  });
+  values.set(storageKey("activity_totals_v1"), {
+    version: 1,
+    totals: [{
+      event_id: "00000000-0000-4000-8000-000000000001",
+      artifact_id: "test:worker-wake.example/a", artifact_type: "test.item",
+      hour_start: "2026-10-16T10:00:00+00:00", url: `${origin}/items/a`, title: "A",
+      opens: 1, focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
+    }],
+  });
+  sessionValues.set(storageKey("activity_session_v1"), {
+    version: 1,
+    tabs: {
+      30: {
+        artifact_id: "test:worker-wake.example/a", artifact_type: "test.item",
+        url: `${origin}/items/a`, title: "A", mode: null, window_id: 1,
+      },
+    },
+    pending_sources: {}, active_by_window: { 1: 30 }, last_focused_window: 1,
+    chrome_focused: true, idle: false, measured_at: start,
+  });
+  tabs.set(30, {
+    id: 30, windowId: 1, active: true, status: "complete",
+    url: `${origin}/items/a`, title: "A", incognito: false,
+  });
+
+  const realNow = Date.now;
+  Date.now = () => now;
+  try {
+    await rebuildActivityMap();
+  } finally {
+    Date.now = realNow;
+  }
+
+  const [total] = values.get(storageKey("activity_totals_v1")).totals;
+  assert.equal(total.focused_ms, 15_000,
+    "ordinary service-worker suspension must not discard restored dwell time");
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).measured_at, now);
+});
+
 test("a successful ack clears retry state but keeps notices until dismissed", async () => {
   values.clear();
   sessionValues.clear();

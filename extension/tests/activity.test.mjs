@@ -121,3 +121,19 @@ test("cold opens, routes, reloads, duplicate tabs, back, trails, and replacement
   assert.equal(state.tabs[20].artifact_id, "test:example/b");
   assert.equal(state.tabs[2], undefined);
 });
+
+test("the latest title replaces refs that the host can no longer verify", () => {
+  const start = Date.now();
+  const state = emptyActivityState(start);
+  const withTitle = (title, value) => ({
+    ...match("a", null, title), refs: [{ type: "jira.issue", value }],
+  });
+  recordNavigation(state, nav(1, "https://example.com/items/a", { title: "First" }),
+    withTitle("First", "OLD-1"), start, uuid);
+  recordNavigation(state, nav(1, "https://example.com/items/a", { title: "Second" }),
+    withTitle("Second", "NEW-2"), start + 1, uuid);
+
+  assert.equal(state.totals[0].title, "Second");
+  assert.deepEqual(state.totals[0].refs,
+    [{ artifact_type: "jira.issue", value: "NEW-2" }]);
+});
