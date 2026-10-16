@@ -14,6 +14,9 @@ const match = (id, mode = null, title) => ({
   artifact_id: `test:example/${id}`, mode,
   ...(title === undefined ? {} : { title, title_entry: 0, alias_id: null, refs: [] }),
 });
+// A fixed local mid-hour start, so a test's simulated span never crosses an
+// hour boundary just because the suite happened to run near one.
+const midHour = () => new Date(2026, 9, 16, 10, 10, 0).getTime();
 const nav = (tab_id, url, extra = {}) => ({
   tab_id, window_id: 1, url, title: null, transition: "link", qualifiers: [], reload: false,
   ...extra,
@@ -62,7 +65,7 @@ test("the offset-qualified hour key separates a daylight-saving offset change", 
 });
 
 test("focus, background, idle, lock, and tab removal classify all measured time", () => {
-  const start = Date.now();
+  const start = midHour();
   const state = emptyActivityState(start);
   recordNavigation(state, nav(1, "https://example.com/items/a"), match("a"), start, uuid);
   activateTab(state, 1, 1, start, uuid);
@@ -80,7 +83,7 @@ test("focus, background, idle, lock, and tab removal classify all measured time"
 });
 
 test("cold opens, routes, reloads, duplicate tabs, back, trails, and replacement follow tab identity", () => {
-  const start = Date.now();
+  const start = midHour();
   const state = emptyActivityState(start);
   recordNavigation(state, nav(1, "https://example.com/items/a"), match("a", "view"), start, uuid);
   recordNavigation(state, nav(1, "https://example.com/items/a?mode=files"),
@@ -126,7 +129,7 @@ test("cold opens, routes, reloads, duplicate tabs, back, trails, and replacement
 });
 
 test("the latest title replaces refs that the host can no longer verify", () => {
-  const start = Date.now();
+  const start = midHour();
   const state = emptyActivityState(start);
   const withTitle = (title, value) => ({
     ...match("a", null, title), refs: [{ type: "jira.issue", value }],
