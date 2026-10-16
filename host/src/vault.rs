@@ -53,6 +53,7 @@ impl Vault {
         let pages_dir = checked_relative_dir(&storage.pages_dir)?;
         checked_relative_dir(&storage.log_dir)?;
         checked_relative_dir(&storage.later_dir)?;
+        checked_relative_dir(&storage.artifacts_dir)?;
         if let Some(summaries_dir) = &storage.summaries_dir {
             checked_relative_dir(summaries_dir)?;
         }
@@ -407,6 +408,7 @@ pub(crate) mod tests {
             log_dir: "log".into(),
             pages_dir: pages_dir.into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: None,
         }
     }

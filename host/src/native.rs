@@ -17,6 +17,7 @@ use crate::config::{self, ConfigStore};
 use crate::consent::ConsentAuthority;
 use crate::dialog::{self, DialogText};
 use crate::harness::HarnessEnv;
+use crate::index::ArtifactIndex;
 use crate::note;
 use crate::privacy;
 use crate::vault::Vault;
@@ -61,7 +62,10 @@ pub fn serve_with_context<R: Read, W: Write>(
     loop {
         let body = match read_frame(&mut input) {
             Ok(Some(body)) => body,
-            Ok(None) => return Ok(()),
+            Ok(None) => {
+                regenerate_artifacts(&mut config);
+                return Ok(());
+            }
             Err(FrameError::TooLarge) => {
                 write_frame(
                     &mut output,
@@ -555,7 +559,10 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return retryable("choose a notes folder before capture");
     };
-    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+    let store = match config
+        .dir()
+        .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
+    {
         Ok(store) => store,
         Err(_) => return retryable("notes folder is unavailable"),
     };
@@ -564,7 +571,11 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
         sites: &config.snapshot().sites,
         strip_params: &config.snapshot().strip_params,
     };
-    let (outcome, reason, relative_path) = match store.record(policy, &value.event) {
+    let capture_outcome = store.record(policy, &value.event);
+    if capture_outcome_updates_index(&capture_outcome) {
+        reconcile_index_from_logs(config);
+    }
+    let (outcome, reason, relative_path) = match capture_outcome {
         CaptureOutcome::Persisted { relative_path } => (
             VisitOutcome::Persisted,
             None,
@@ -718,7 +729,10 @@ fn record_activity(
             None,
         );
     };
-    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+    let store = match config
+        .dir()
+        .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
+    {
         Ok(store) => store,
         Err(_) => {
             return answer(
@@ -733,7 +747,13 @@ fn record_activity(
         sites: &config.snapshot().sites,
         strip_params: &config.snapshot().strip_params,
     };
-    let (outcome, reason, relative_path) = match store.record_activity(policy, &value.event) {
+    let capture_outcome = store.record_activity(policy, &value.event);
+    if matches!(&capture_outcome, CaptureOutcome::Persisted { .. }) {
+        update_activity_index(config, &value.event);
+    } else if capture_outcome_is_duplicate(&capture_outcome) {
+        reconcile_index_from_logs(config);
+    }
+    let (outcome, reason, relative_path) = match capture_outcome {
         CaptureOutcome::Persisted { relative_path } => (
             VisitOutcome::Persisted,
             None,
@@ -909,7 +929,10 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
             overflow_recorded: false,
         });
     };
-    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+    let store = match config
+        .dir()
+        .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
+    {
         Ok(store) => store,
         Err(_) => {
             results.extend(durable.into_iter().map(|event| BatchEventResult {
@@ -947,6 +970,44 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
         &capture_events,
         value.overflow.as_ref(),
     );
+    let indexable = outcome
+        .events
+        .iter()
+        .filter_map(|(event_id, result)| {
+            capture_outcome_updates_index(result).then_some(event_id.as_str())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let duplicate_ids = outcome
+        .events
+        .iter()
+        .filter_map(|(event_id, result)| {
+            capture_outcome_is_duplicate(result).then_some(event_id.as_str())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let reconcile = durable.iter().any(|event| match event {
+        Accepted::Visit(event) => indexable.contains(event.event_id.as_str()),
+        Accepted::Activity(event) => duplicate_ids.contains(event.event_id.as_str()),
+    });
+    let activities = durable
+        .iter()
+        .filter_map(|event| match event {
+            Accepted::Activity(event)
+                if !reconcile && indexable.contains(event.event_id.as_str()) =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if reconcile {
+        reconcile_index_from_logs(config);
+    } else if !activities.is_empty()
+        && let Ok(cache_dir) = config.cache_dir()
+        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Err(error) = index.record_activities(activities, &config.snapshot().strip_params)
+    {
+        eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
+    }
     results.extend(outcome.events.into_iter().map(|(event_id, outcome)| {
         let (outcome, reason, relative_path) = match outcome {
             CaptureOutcome::Persisted { relative_path } => (
@@ -1070,7 +1131,10 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
             None,
         );
     };
-    let store = match CaptureStore::open_checked(storage, config.root_identity()) {
+    let store = match config
+        .dir()
+        .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
+    {
         Ok(store) => store,
         Err(_) => {
             return answer(
@@ -1085,7 +1149,17 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         sites: &config.snapshot().sites,
         strip_params: &config.snapshot().strip_params,
     };
-    let (outcome, reason, relative_path) = match store.record_why(policy, &value.event) {
+    let capture_outcome = store.record_why(policy, &value.event);
+    if matches!(&capture_outcome, CaptureOutcome::Persisted { .. })
+        && let Ok(cache_dir) = config.cache_dir()
+        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Err(error) = index.record_why(&value.event, &config.snapshot().strip_params)
+    {
+        eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
+    } else if capture_outcome_is_duplicate(&capture_outcome) {
+        reconcile_index_from_logs(config);
+    }
+    let (outcome, reason, relative_path) = match capture_outcome {
         CaptureOutcome::Persisted { relative_path } => (
             VisitOutcome::Persisted,
             None,
@@ -1096,6 +1170,56 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         CaptureOutcome::Retryable { message } => (VisitOutcome::Retryable, Some(message), None),
     };
     answer(outcome, reason, relative_path)
+}
+
+fn update_activity_index(config: &ConfigStore, event: &brauser_protocol::ActivityEvent) {
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return;
+    };
+    if let Ok(cache_dir) = config.cache_dir()
+        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Err(error) = index.record_activity(event, &config.snapshot().strip_params)
+    {
+        eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
+    }
+}
+
+fn capture_outcome_updates_index(outcome: &CaptureOutcome) -> bool {
+    matches!(outcome, CaptureOutcome::Persisted { .. }) || capture_outcome_is_duplicate(outcome)
+}
+
+fn capture_outcome_is_duplicate(outcome: &CaptureOutcome) -> bool {
+    matches!(outcome, CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")
+}
+
+fn reconcile_index_from_logs(config: &ConfigStore) {
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return;
+    };
+    if let Ok(cache_dir) = config.cache_dir()
+        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Err(error) = index.reconcile_from_logs()
+    {
+        eprintln!("{NAMESPACE}: warning: could not reconcile artifact index: {error:#}");
+    }
+}
+
+fn regenerate_artifacts(config: &mut ConfigStore) {
+    let Ok(_lock) = config.lock_current() else {
+        return;
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return;
+    }
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return;
+    };
+    if let Ok(cache_dir) = config.cache_dir()
+        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Err(error) = index.regenerate_dirty()
+    {
+        eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+    }
 }
 
 /// Resolve the canonical URL and vault shared by `load_note` and `save_note`.
@@ -1571,6 +1695,7 @@ mod tests {
                     log_dir: "log".into(),
                     pages_dir: "pages".into(),
                     later_dir: "later".into(),
+                    artifacts_dir: "artifacts".into(),
                     summaries_dir: None,
                 }),
                 capture_enabled: false,
@@ -1632,6 +1757,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             capture_enabled: false,
@@ -2166,6 +2292,16 @@ scope = { owner = ["acme"] }
             }
             other => panic!("expected a recognized visit result, got {other:?}"),
         }
+        let output = std::process::Command::new("python3")
+            .args([
+                "-c",
+                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
+            ])
+            .arg(config.cache_dir().unwrap().join("index.db"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
     }
 
     #[test]
@@ -2224,13 +2360,44 @@ id = "work:{host}/{id}"
             )
         };
         let mut config = loaded(&path);
-        match invoke(&mut config, event("work:work.example/7", Vec::new())) {
+        let accepted = event("work:work.example/7", Vec::new());
+        match invoke(&mut config, accepted.clone()) {
             Response::ActivityRecorded(recorded) => {
-                assert_ne!(recorded.outcome, VisitOutcome::Suppressed);
-                assert_ne!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(
+                    recorded.outcome,
+                    VisitOutcome::Persisted,
+                    "{:?}",
+                    recorded.reason
+                );
             }
             other => panic!("expected accepted activity, got {other:?}"),
         }
+        assert!(config.cache_dir().unwrap().join("index.db").is_file());
+        let mut forged_retry = accepted;
+        forged_retry.title = Some("Forged retry".into());
+        match invoke(&mut config, forged_retry) {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_eq!(recorded.reason.as_deref(), Some("duplicate_event"));
+            }
+            other => panic!("expected duplicate activity suppression, got {other:?}"),
+        }
+        let output = std::process::Command::new("python3")
+            .args([
+                "-c",
+                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select title from artifacts').fetchone()[0])",
+            ])
+            .arg(config.cache_dir().unwrap().join("index.db"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "Work item"
+        );
+        assert!(!root.join("artifacts").exists());
+        regenerate_artifacts(&mut config);
+        assert!(root.join("artifacts").is_dir());
         match invoke(&mut config, event("work:work.example/8", Vec::new())) {
             Response::ActivityRecorded(recorded) => {
                 assert_eq!(recorded.outcome, VisitOutcome::Rejected);

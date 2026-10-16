@@ -93,6 +93,7 @@ export interface StorageConfig {
   log_dir: string;
   pages_dir: string;
   later_dir: string;
+  artifacts_dir: string;
   summaries_dir: string | null;
 }
 

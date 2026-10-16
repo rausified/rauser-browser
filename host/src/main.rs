@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{Result, bail};
-use brauser_host::{adapters, brand::NAMESPACE, config::ConfigStore, dialog, native};
+use brauser_host::{
+    adapters, brand::NAMESPACE, config::ConfigStore, dialog, index::ArtifactIndex, native,
+};
 
 fn main() {
     if let Err(error) = run() {
@@ -28,6 +30,7 @@ fn run() -> Result<()> {
             println!("{}", ConfigStore::default_path()?.display());
             Ok(())
         }
+        Some("reindex") => reindex(),
         // Chrome supplies its extension origin as a command-line argument to
         // native messaging hosts. The installed manifest, rather than argv,
         // authorizes the stable extension ID.
@@ -40,6 +43,30 @@ fn run() -> Result<()> {
         Some(origin) if origin.starts_with("chrome-extension://") => serve(),
         Some(other) => bail!("unknown command or browser origin: {other}"),
     }
+}
+
+fn reindex() -> Result<()> {
+    let mut config = ConfigStore::load()?;
+    // Serialize the scan and cache replacement with capture/config updates.
+    // Otherwise a concurrent delivery can publish a newer cache and then be
+    // silently replaced by the reindex snapshot that started first.
+    let _lock = config.lock_current()?;
+    config.refresh()?;
+    if let Some(issue) = config.config_issue() {
+        bail!("configuration needs repair: {issue}");
+    }
+    let storage = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("choose a notes folder before reindexing"))?;
+    let report =
+        ArtifactIndex::open_in(storage, config.root_identity(), &config.cache_dir()?)?.reindex()?;
+    println!(
+        "Rebuilt index.db; wrote {}, kept {}, and left {} conflicting artifact file(s).",
+        report.written, report.unchanged, report.conflicts
+    );
+    Ok(())
 }
 
 fn serve() -> Result<()> {

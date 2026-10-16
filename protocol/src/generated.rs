@@ -140,6 +140,7 @@ pub struct StorageConfig {
     pub log_dir: String,
     pub pages_dir: String,
     pub later_dir: String,
+    pub artifacts_dir: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summaries_dir: Option<String>,
 }

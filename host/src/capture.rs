@@ -162,10 +162,10 @@ impl CaptureStore {
     pub fn open_checked(storage: &StorageConfig, expected_identity: Option<&str>) -> Result<Self> {
         let project = ProjectDirs::from("", "", APP_NAME)
             .context("cannot locate this user's application config directory")?;
-        Self::open_at(storage, expected_identity, project.config_dir())
+        Self::open_in(storage, expected_identity, project.config_dir())
     }
 
-    fn open_at(
+    pub fn open_in(
         storage: &StorageConfig,
         expected_identity: Option<&str>,
         state_dir: &Path,
@@ -186,6 +186,15 @@ impl CaptureStore {
             lock_path,
             journal_dir,
         })
+    }
+
+    #[cfg(test)]
+    fn open_at(
+        storage: &StorageConfig,
+        expected_identity: Option<&str>,
+        state_dir: &Path,
+    ) -> Result<Self> {
+        Self::open_in(storage, expected_identity, state_dir)
     }
 
     pub fn record(&self, policy: CapturePolicy<'_>, event: &VisitEvent) -> CaptureOutcome {
@@ -1730,6 +1739,7 @@ mod tests {
             log_dir: log_dir.into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: None,
         }
     }
