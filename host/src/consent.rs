@@ -764,7 +764,7 @@ pub fn harness_confirmation_text(
 /// entry (§7.3). The extension may echo both unchanged or remove the harness;
 /// removing it keeps the confirmation.
 fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
-    let trusted_current = config::validate(current).is_ok();
+    let trusted_current = config::validate_base(current).is_ok();
     let confirmed = trusted_current && current.agent_denylist_confirmed;
     if next.agent_denylist_confirmed != confirmed
         || (next.agent.is_some() && (!trusted_current || next.agent != current.agent))
@@ -780,7 +780,7 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     let mut lines = Vec::new();
     // A hand-edited but unusable config is not a trusted prior grant. Repair
     // must ask again before it makes any of those rules effective.
-    let trusted_current = config::validate(current).is_ok();
+    let trusted_current = config::validate_base(current).is_ok();
     // Adding an exclusion takes effect at once. Removing or replacing one
     // weakens privacy and needs confirmation, confirmed list or not (§7.3).
     // These come first: sites the caller adds cannot push them down the dialog.
@@ -795,6 +795,30 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     }
     if !(trusted_current && current.capture_enabled) && next.capture_enabled {
         lines.push("Turn on automatic visit logging.".to_owned());
+    }
+    for (index, adapter) in next.adapters.artifacts.iter().enumerate() {
+        // Config order decides which overlapping rule wins, so moving an
+        // otherwise unchanged adapter is itself a policy change.
+        let unchanged = trusted_current && current.adapters.artifacts.get(index) == Some(adapter);
+        if unchanged {
+            continue;
+        }
+        let artifact_type = adapter
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let origin = adapter
+            .get("origin")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown origin");
+        lines.push(format!(
+            "Enable or change the {artifact_type:?} artifact adapter on {origin:?}."
+        ));
+        if adapter.get("unscoped").and_then(serde_json::Value::as_str) == Some("acknowledged") {
+            lines.push(format!(
+                "Record every matching artifact from every account on {origin:?} in this Chrome profile. Use a separate Chrome profile for work when personal accounts share this site."
+            ));
+        }
     }
     for site in &next.sites {
         if !trusted_current || !current.sites.iter().any(|prior| site_covers(prior, site)) {
@@ -889,7 +913,8 @@ fn site_covers(prior: &SiteConfig, next: &SiteConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brauser_protocol::StorageConfig;
+    use brauser_protocol::{AdapterDocument, StorageConfig};
+    use serde_json::json;
 
     #[test]
     fn fresh_picker_token_can_reconfirm_the_same_path() {
@@ -990,6 +1015,24 @@ mod tests {
             near_repeat_secs: 600,
             ..current.clone()
         };
+        assert!(approval_lines(&current, &next).is_empty());
+        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
+    }
+
+    #[test]
+    fn adapter_policy_repair_can_echo_an_existing_host_owned_agent() {
+        let mut current = set_up();
+        current.adapters.format = 2;
+        assert!(crate::config::validate(&current).is_err());
+        assert!(crate::config::validate_base(&current).is_ok());
+        let next = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: Vec::new(),
+            },
+            ..current.clone()
+        };
+        check_agent_fields(&current, &next).unwrap();
         assert!(approval_lines(&current, &next).is_empty());
         assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
     }
@@ -1104,6 +1147,38 @@ mod tests {
         );
         assert!(approval_lines(&with(Some("summaries")), &with(None)).is_empty());
         assert!(authorize(&with(None), &with(Some("summaries")), None, None).is_err());
+    }
+
+    #[test]
+    fn unscoped_shared_origin_adapter_confirmation_names_every_account() {
+        let current = ConfigSnapshot {
+            sites: vec![SiteConfig {
+                origin: "https://docs.google.com".into(),
+                path_prefix: "/".into(),
+            }],
+            ..crate::config::empty_config()
+        };
+        let next = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: vec![json!({
+                    "type": "gdoc",
+                    "origin": "https://docs.google.com",
+                    "unscoped": "acknowledged",
+                    "match": [{"path": "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}"}],
+                    "modes": {"edit": "edit", "view": "view", "preview": "view"},
+                    "id": "gdoc:{host}/{id}",
+                })],
+            },
+            ..current.clone()
+        };
+        crate::config::validate(&next).unwrap();
+        let lines = approval_lines(&current, &next);
+        assert!(lines.iter().any(|line| line.contains("gdoc")));
+        assert!(lines.iter().any(|line| {
+            line.contains("every account") && line.contains("separate Chrome profile")
+        }));
+        assert!(authorize(&current, &next, None, None).is_err());
     }
 
     fn storage_at(root: &Path, summaries: Option<&str>) -> StorageConfig {

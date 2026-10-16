@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rausified/rauser-browser/blob/main/protocol/schema.json",
   "title": "Brauser native messaging protocol",
-  "description": "Version 4 messages exchanged by the Chrome extension and native host. Host-owned configuration and consent tokens gate capture and writes.",
+  "description": "Version 5 messages exchanged by the Chrome extension and native host. Host-owned configuration, adapter policy, and consent tokens gate capture and writes.",
   "oneOf": [
     {
       "$ref": "#/$defs/Request"
@@ -106,7 +106,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -129,7 +129,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -157,7 +157,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -227,7 +227,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -262,7 +262,9 @@
         "revision",
         "config",
         "config_issue",
-        "agent_status"
+        "agent_status",
+        "adapter_issue",
+        "adapter_warnings"
       ],
       "properties": {
         "type": {
@@ -270,7 +272,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -297,6 +299,23 @@
         },
         "agent_status": {
           "$ref": "#/$defs/AgentStatus"
+        },
+        "adapter_issue": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "adapter_warnings": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/AdapterWarning"
+          }
         }
       }
     },
@@ -316,7 +335,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -350,7 +369,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -390,7 +409,8 @@
         "agent_denylist",
         "agent_denylist_confirmed",
         "log_incognito",
-        "agent"
+        "agent",
+        "adapters"
       ],
       "properties": {
         "storage": {
@@ -453,6 +473,60 @@
               "type": "null"
             }
           ]
+        },
+        "adapters": {
+          "$ref": "#/$defs/AdapterDocument"
+        }
+      }
+    },
+    "AdapterDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Format-versioned adapter-template document. Artifact objects are validated by the host's adapter-templates engine.",
+      "required": [
+        "format",
+        "artifacts"
+      ],
+      "properties": {
+        "format": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "AdapterWarning": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Two rules that may recognize the same URL; the first configured rule wins.",
+      "required": [
+        "first_adapter",
+        "first_rule",
+        "second_adapter",
+        "second_rule"
+      ],
+      "properties": {
+        "first_adapter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_rule": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "second_adapter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "second_rule": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -618,7 +692,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -644,7 +718,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -688,7 +762,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -715,7 +789,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -747,7 +821,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -789,7 +863,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -826,7 +900,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -860,7 +934,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -895,7 +969,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -950,7 +1024,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -992,7 +1066,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -1031,7 +1105,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -1073,7 +1147,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -1197,7 +1271,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -1231,7 +1305,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -1295,7 +1369,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",
@@ -1328,7 +1402,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string",

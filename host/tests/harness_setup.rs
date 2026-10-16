@@ -11,6 +11,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+use brauser_protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 
 const HOST: &str = env!("CARGO_BIN_EXE_brauser");
@@ -174,7 +175,7 @@ impl Host {
     fn call(&mut self, mut request: Value) -> Value {
         self.next_id += 1;
         let id = format!("r{}", self.next_id);
-        request["protocol_version"] = json!(4);
+        request["protocol_version"] = json!(PROTOCOL_VERSION);
         request["request_id"] = json!(id);
         let body = serde_json::to_vec(&request).unwrap();
         let input = self.input.as_mut().unwrap();

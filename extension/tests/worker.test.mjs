@@ -670,7 +670,7 @@ test("unaddressed host errors and version mismatches reach the caller", async ()
   client.disconnect();
 });
 
-test("host config shape requires every v4 privacy and agent key", () => {
+test("host config shape requires every v5 privacy, agent, and adapter key", () => {
   const config = {
     storage: {
       root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
@@ -679,6 +679,7 @@ test("host config shape requires every v4 privacy and agent key", () => {
     capture_enabled: false, sites: [], strip_params: [], near_repeat_secs: 300,
     agent_denylist: ["bank.example"], agent_denylist_confirmed: false, log_incognito: false,
     agent: null,
+    adapters: { format: 1, artifacts: [] },
   };
   assert.equal(isConfig(config), true);
   const agent = {
@@ -686,7 +687,7 @@ test("host config shape requires every v4 privacy and agent key", () => {
     args: ["-p", "{prompt}"], env_allow: [], timeout_secs: 120,
   };
   assert.equal(isConfig({ ...config, agent }), true);
-  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent"]) {
+  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);
@@ -698,7 +699,10 @@ test("host config shape requires every v4 privacy and agent key", () => {
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
   assert.equal(isConfig({ ...config, storage: { ...m1Storage, summaries_dir: 7 } }), false);
 
-  const result = { type: "config_result", revision: "missing", config, config_issue: null };
+  const result = {
+    type: "config_result", revision: "missing", config, config_issue: null,
+    adapter_issue: null, adapter_warnings: [],
+  };
   assert.equal(isResponseShape(result), false);
   const agentStatus = { state: "not_set_up", harness_version: null, message: "Set up" };
   assert.equal(isResponseShape({ ...result, agent_status: agentStatus }), true);
@@ -780,9 +784,12 @@ function configResult(request, origin, overrides = {}) {
       },
       capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [], near_repeat_secs: 300,
       agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
+      adapters: { format: 1, artifacts: [] },
     },
     config_issue: null,
     agent_status: { state: "not_set_up", harness_version: null, message: "Set up" },
+    adapter_issue: null,
+    adapter_warnings: [],
     ...overrides,
   };
 }
@@ -869,6 +876,19 @@ test("a renewal that finds a host config issue suspends capture but keeps visits
   onAlarm({ name: SYNC_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   port.reply(configResult(await sentOn(port, 1), origin, { config_issue: "config.toml is newer" }));
+  await until(() => values.get(storageKey("policy_v1")) === null, "the lease to be suspended");
+  assert.equal(values.get(storageKey("queue_v1")).items.length, 1);
+});
+
+test("a renewal that finds an adapter policy issue suspends capture but keeps visits", async () => {
+  const origin = "https://adapter-issue.example";
+  resetSync(origin, 60_000);
+  queueWith({ ...visit("kept-adapter", `${origin}/a`), retry_after: Date.now() + HOUR_MS });
+  onAlarm({ name: SYNC_ALARM });
+  const port = await until(() => ports[0], "the worker to start the host");
+  port.reply(configResult(await sentOn(port, 1), origin, {
+    adapter_issue: "unsupported_format",
+  }));
   await until(() => values.get(storageKey("policy_v1")) === null, "the lease to be suspended");
   assert.equal(values.get(storageKey("queue_v1")).items.length, 1);
 });

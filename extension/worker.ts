@@ -534,7 +534,8 @@ async function renewPolicy(host: HostClient): Promise<void> {
     }, "config_result"),
     async (response) => {
       const config = response.config;
-      if (response.config_issue || (!config.storage && config.capture_enabled)) {
+      if (response.config_issue || response.adapter_issue ||
+          (!config.storage && config.capture_enabled)) {
         await serialize(suspendPolicy);
         return;
       }

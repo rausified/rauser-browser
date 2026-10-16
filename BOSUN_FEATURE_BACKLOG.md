@@ -15,18 +15,14 @@ to repeat the spec.
 
 ### M1.5a step 6.3 — Adapter config and lease (DESIGN.md §12.2 step 6.3)
 
-Step 6.1 (Chrome probes) and step 6.2 (the adapter-template engine, both
-Rust and TypeScript) are already merged. Step 6.3 is the next unbuilt piece
-of M1.5a, and it is the first time the adapter-template engine actually gets
-wired into the host and extension — everything before it was pure library
-code with no protocol, config, or UI surface. DESIGN.md's own text splits
-step 6.3 into three dependent parts; the items below follow that split so
-each is a boundable cycle (or a few) rather than one large one. Update
-DESIGN.md's "M0 as built" / "Next steps" narrative (§12.2) as each lands,
-the same way step 6.2 was recorded.
+Step 6.1 (Chrome probes), step 6.2 (the adapter-template engine), and the
+protocol/config slice of step 6.3 are merged. The remaining slices turn the
+now-host-validated config into active artifact recognition. Keep the worker
+prefilter and host re-check close together: the host check is the trust
+boundary, while the worker check prevents unrecognized browsing from ever
+entering durable extension storage.
 
-- [ ] **Protocol v5: `[[artifacts]]` config schema, validated by the adapter-templates crate.** Add the `[[artifacts]]` table and `[adapters] format = 1` to `protocol/schema.json` (bump protocol version 4 → 5; M2 step 1 already took v4) and to the host's config loading, validating with the already-merged `adapter-templates` crate (host/, `adapter-templates/`). Enforce `scope` and the shared-origin list, and surface overlap warnings, per adapter-templates.md §6 and §7.2. Tests (DESIGN.md §12.2 step 6.3): an unsupported `format` suspends policy without deleting any existing data; an `id` change on an adapter with recorded activity is refused (§6.2); an adapter whose origin is not enabled; an unscoped shared-origin adapter whose native confirmation carries the "every account in this profile" disclosure text.
-- [ ] **Native confirmation for adapter config changes, and a policy lease that carries confirmed adapter templates.** Extend the existing native-confirmation pattern (the same shape as the M1 folder picker and M2 harness setup token flow, host/src/consent.rs) to cover adapter config changes per DESIGN.md §7.2. Extend the policy lease (§3.2) so it carries the confirmed adapter templates down to the worker, the same way it already carries the site allowlist.
+- [ ] **Complete adapter review confirmation and carry confirmed templates in the policy lease.** The config slice now puts every addition, edit, or precedence-changing reorder behind the existing revision-bound native token and includes the unscoped shared-origin disclosure. Expand that review to show match rules, scope, Tier 1 fields, sync caution, and a match preview per DESIGN.md §7.2, then extend the policy lease (§3.2) with the exact confirmed templates alongside the site allowlist.
 - [ ] **Worker prefiltering and host re-check.** Wire the TypeScript adapter-templates module (`extension/adapter-templates.ts`) into the worker's capture path so it prefilters navigation events against the leased, confirmed adapter templates before buffering (§3.2) — this is the first real caller of that module outside its own tests. The host must still re-check every delivered event independently and return `suppressed` / `not_an_artifact` for anything that doesn't match, never trusting the worker's prefilter as authoritative. Tests: a simulated compromised worker that delivers an unrecognized URL, or a URL outside the matched adapter's rules or scope, must not be recorded; a `webNavigation` event on an origin the worker was never granted (which Chrome still delivers, DESIGN.md §5.1 Trails) must be dropped before anything is stored.
 
 ## In Progress / This Iteration
@@ -35,4 +31,10 @@ the same way step 6.2 was recorded.
 
 ## Shipped
 
-- None yet.
+- **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
+
+## Notes / Ideas for Later
+
+- The configuration foundation is deliberately useful without pretending artifact logging works yet. The highest-value next move is the end-to-end lease/prefilter/host-recheck slice, not another config-only refinement: it is the point where users first get “Brauser remembers the tickets and docs I work on.”
+- Protocol v5 currently freezes an existing adapter's `id` template before any alias migration exists. When activity events land, replace that conservative guard with the designed activity-aware migration and explicit alias events rather than relaxing it in place.
+- A future adapter editor should explain overlap pairs with adapter names and example URLs, not raw indices. The indices are stable protocol data for the next UI, while settings currently gives a bounded “earlier rule wins” warning.

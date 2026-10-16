@@ -6,10 +6,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+use adapter_templates::{Document as AdapterTemplates, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    AgentConfig, AgentState, AgentStatus, ConfigSnapshot, ErrorCode, HarnessAdapter, SiteConfig,
-    StorageConfig,
+    AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
+    ErrorCode, HarnessAdapter, SiteConfig, StorageConfig,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,7 @@ const MAX_AGENT_ARG_BYTES: usize = 256;
 const MAX_ENV_ALLOW: usize = 32;
 const MAX_ENV_NAME_BYTES: usize = 64;
 const MAX_TIMEOUT_SECS: u32 = 600;
+const MAX_ADAPTER_WARNINGS: usize = 256;
 pub(crate) const DEFAULT_TIMEOUT_SECS: u32 = 120;
 pub(crate) const PROMPT_PLACEHOLDER: &str = "{prompt}";
 const MISSING_REVISION: &str = "missing";
@@ -58,6 +60,8 @@ pub struct ConfigStore {
     issue: Option<String>,
     root_identity: Option<String>,
     agent: AgentView,
+    adapter_issue: Option<String>,
+    adapter_warnings: Vec<AdapterWarning>,
 }
 
 struct DiskState {
@@ -67,6 +71,8 @@ struct DiskState {
     needs_backup: bool,
     root_identity: Option<String>,
     agent: AgentView,
+    adapter_issue: Option<String>,
+    adapter_warnings: Vec<AdapterWarning>,
 }
 
 /// The raw `[agent]` table and harness record as last read from disk, and
@@ -251,6 +257,8 @@ impl ConfigStore {
         self.issue = Some("The configuration file cannot be read or is not a regular file. Fix or remove it, then reload this page.".into());
         self.root_identity = None;
         self.agent = AgentView::default();
+        self.adapter_issue = None;
+        self.adapter_warnings.clear();
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -292,6 +300,8 @@ impl ConfigStore {
             issue: None,
             root_identity: None,
             agent: AgentView::default(),
+            adapter_issue: None,
+            adapter_warnings: Vec::new(),
         }
     }
 
@@ -301,6 +311,8 @@ impl ConfigStore {
         self.issue = state.issue;
         self.root_identity = state.root_identity;
         self.agent = state.agent;
+        self.adapter_issue = state.adapter_issue;
+        self.adapter_warnings = state.adapter_warnings;
     }
 
     pub fn snapshot(&self) -> &ConfigSnapshot {
@@ -341,6 +353,17 @@ impl ConfigStore {
     /// A malformed or newer config is shown to setup, never used for capture.
     pub fn config_issue(&self) -> Option<&str> {
         self.issue.as_deref()
+    }
+
+    /// A malformed or newer adapter document disables automatic capture but
+    /// remains available in the snapshot for repair. Notes and AI settings do
+    /// not depend on adapter recognition and remain usable.
+    pub fn adapter_issue(&self) -> Option<&str> {
+        self.adapter_issue.as_deref()
+    }
+
+    pub fn adapter_warnings(&self) -> &[AdapterWarning] {
+        &self.adapter_warnings
     }
 
     /// Re-read config.toml. On failure the store becomes inert rather than
@@ -538,6 +561,7 @@ impl ConfigStore {
             self.adopt(current);
             return Ok(None);
         }
+        validate_adapter_transition(&current.config, &next)?;
 
         let agent = match &harness_commit {
             Some(commit) => {
@@ -627,6 +651,9 @@ impl ConfigStore {
         self.issue = None;
         self.root_identity = next_identity;
         self.agent = agent;
+        self.adapter_issue = None;
+        self.adapter_warnings = validate_adapters(&self.config)
+            .expect("a configuration validated immediately before it was committed");
         if let Err(error) = sync_parent(parent) {
             eprintln!(
                 "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
@@ -669,6 +696,22 @@ struct StoredConfig {
     agent: Option<toml::Value>,
     #[serde(default)]
     harness_record: Option<toml::Value>,
+    #[serde(default)]
+    adapters: StoredAdapters,
+    #[serde(default)]
+    artifacts: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAdapters {
+    format: u32,
+}
+
+impl Default for StoredAdapters {
+    fn default() -> Self {
+        Self { format: 1 }
+    }
 }
 
 /// The on-disk storage table. Unlike the wire type, `summaries_dir` may be
@@ -785,6 +828,10 @@ impl StoredConfig {
             // never from the extension's snapshot.
             agent: agent.table.clone(),
             harness_record: agent.record_table.clone(),
+            adapters: StoredAdapters {
+                format: value.adapters.format,
+            },
+            artifacts: value.adapters.artifacts.clone(),
         }
     }
 }
@@ -801,6 +848,10 @@ impl From<StoredConfig> for ConfigSnapshot {
             agent_denylist_confirmed: value.agent_denylist_confirmed,
             log_incognito: value.log_incognito,
             agent: None,
+            adapters: AdapterDocument {
+                format: value.adapters.format,
+                artifacts: value.artifacts,
+            },
         }
     }
 }
@@ -824,6 +875,8 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity: None,
                 agent: AgentView::default(),
+                adapter_issue: None,
+                adapter_warnings: Vec::new(),
             });
         }
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
@@ -862,6 +915,8 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             agent: AgentView::default(),
+            adapter_issue: None,
+            adapter_warnings: Vec::new(),
         });
     }
     let parsed = std::str::from_utf8(&contents)
@@ -875,7 +930,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let agent = AgentView::parse(stored.agent.take(), stored.harness_record.take());
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent.clone();
-            if root_unconfirmed || validate(&config).is_err() {
+            if root_unconfirmed || validate_base(&config).is_err() {
                 let issue = if root_unconfirmed {
                     "This notes folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."
                 } else {
@@ -888,8 +943,14 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     needs_backup: true,
                     root_identity: None,
                     agent,
+                    adapter_issue: None,
+                    adapter_warnings: Vec::new(),
                 });
             }
+            let (adapter_issue, adapter_warnings) = match validate_adapters(&config) {
+                Ok(warnings) => (None, warnings),
+                Err(error) => (Some(error.to_string()), Vec::new()),
+            };
             // The settings themselves are valid. A folder that is missing or
             // no longer matches its stored identity (an unmounted drive, or a
             // remount with a new device number) blocks vault I/O and needs
@@ -909,6 +970,8 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity,
                 agent,
+                adapter_issue,
+                adapter_warnings,
             })
         }
         Err(_) => Ok(DiskState {
@@ -918,6 +981,8 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             agent: AgentView::default(),
+            adapter_issue: None,
+            adapter_warnings: Vec::new(),
         }),
     }
 }
@@ -1054,6 +1119,10 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
         agent_denylist_confirmed: false,
         log_incognito: false,
         agent: None,
+        adapters: AdapterDocument {
+            format: 1,
+            artifacts: Vec::new(),
+        },
     }
 }
 
@@ -1063,6 +1132,12 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
 /// whether arbitrary paths exist (and, on Windows, reach out to UNC shares).
 /// Callers open the root only after authorization; see `validate_persisted`.
 pub fn validate(config: &ConfigSnapshot) -> Result<()> {
+    validate_base(config)?;
+    validate_adapters(config)?;
+    Ok(())
+}
+
+pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     if config.sites.len() > MAX_SITES {
         bail!("site allowlist exceeds the 128-entry limit");
     }
@@ -1104,10 +1179,80 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
+fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
+    let json =
+        serde_json::to_value(&config.adapters).context("serializing the adapter configuration")?;
+    let value: AdapterValue =
+        serde_json::from_value(json).context("reading the adapter configuration")?;
+    let document = AdapterTemplates::from_value(&value)
+        .map_err(|error| anyhow::anyhow!("adapter configuration is invalid: {error}"))?;
+    for (index, adapter) in document.adapters().iter().enumerate() {
+        if !config
+            .sites
+            .iter()
+            .any(|site| site.origin == adapter.origin())
+        {
+            bail!(
+                "adapter {index} uses origin {:?}, which is not enabled for capture",
+                adapter.origin()
+            );
+        }
+    }
+    Ok(document
+        .overlap_report()
+        .into_iter()
+        .take(MAX_ADAPTER_WARNINGS)
+        .map(|pair| AdapterWarning {
+            first_adapter: pair.first.0 as u32,
+            first_rule: pair.first.1 as u32,
+            second_adapter: pair.second.0 as u32,
+            second_rule: pair.second.1 as u32,
+        })
+        .collect())
+}
+
+/// Artifact IDs are record keys. Alias events are not implemented until
+/// M1.5b, so an existing adapter's ID template is immutable for now. This is
+/// intentionally stricter than the eventual activity-aware migration: it
+/// makes it impossible for a config edit to orphan activity before the host
+/// has a durable activity index to consult.
+pub(crate) fn validate_adapter_transition(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+) -> Result<()> {
+    if validate_adapters(current).is_err() {
+        return Ok(());
+    }
+    for old in &current.adapters.artifacts {
+        let identity = adapter_identity(old);
+        let Some((origin, artifact_type)) = identity else {
+            continue;
+        };
+        let Some(new) = next
+            .adapters
+            .artifacts
+            .iter()
+            .find(|candidate| adapter_identity(candidate) == Some((origin, artifact_type)))
+        else {
+            continue;
+        };
+        if old.get("id") != new.get("id") {
+            bail!(
+                "the id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn adapter_identity(value: &serde_json::Value) -> Option<(&str, &str)> {
+    Some((value.get("origin")?.as_str()?, value.get("type")?.as_str()?))
+}
+
 /// Validate a config the host itself persisted, including that its notes
 /// folder can be opened. Only call this for a root that is already trusted.
 fn validate_persisted(config: &ConfigSnapshot) -> Result<()> {
-    validate(config)?;
+    validate_base(config)?;
     if let Some(storage) = &config.storage {
         Vault::open(storage).context("notes folder is unavailable")?;
     }
@@ -1449,11 +1594,35 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn loaded(path: &Path) -> ConfigStore {
         let mut store = ConfigStore::for_test(path.to_path_buf());
         store.refresh().unwrap();
         store
+    }
+
+    fn adapter(origin: &str, artifact_type: &str, path: &str, id: &str) -> serde_json::Value {
+        json!({
+            "type": artifact_type,
+            "origin": origin,
+            "match": [{"path": path}],
+            "id": id,
+        })
+    }
+
+    fn adapter_config(origin: &str, artifacts: Vec<serde_json::Value>) -> ConfigSnapshot {
+        ConfigSnapshot {
+            sites: vec![SiteConfig {
+                origin: origin.into(),
+                path_prefix: "/".into(),
+            }],
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts,
+            },
+            ..empty_config()
+        }
     }
 
     fn refusal(store: &ConfigStore) -> (ErrorCode, String) {
@@ -1496,11 +1665,179 @@ mod tests {
         assert!(!snapshot.agent_denylist_confirmed);
         assert!(!snapshot.log_incognito);
         assert_eq!(snapshot.agent, None);
+        assert_eq!(snapshot.adapters.format, 1);
+        assert!(snapshot.adapters.artifacts.is_empty());
+        assert_eq!(store.adapter_issue(), None);
         assert_eq!(
             refusal(&store),
             (ErrorCode::NotConfigured, SET_UP_AGENT.into())
         );
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
+    }
+
+    #[test]
+    fn adapter_config_requires_an_enabled_origin_and_shared_origin_scope() {
+        let jira = adapter(
+            "https://acme.atlassian.net",
+            "jira.issue",
+            "/browse/{key:jira_key}",
+            "jira:{host}/{key}",
+        );
+        let without_site = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: vec![jira.clone()],
+            },
+            ..empty_config()
+        };
+        let error = validate(&without_site).unwrap_err().to_string();
+        assert!(error.contains("not enabled for capture"), "{error}");
+        validate(&adapter_config("https://acme.atlassian.net", vec![jira])).unwrap();
+
+        let github = adapter(
+            "https://github.com",
+            "github.issue",
+            "/{owner:name|lower}/{repo:name}/issues/{number:int}",
+            "github.issue:{host}/{owner}/{repo}/{number}",
+        );
+        let error = validate(&adapter_config("https://github.com", vec![github.clone()]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("shared_origin_unscoped"), "{error}");
+        let mut acknowledged = github;
+        acknowledged["unscoped"] = json!("acknowledged");
+        validate(&adapter_config("https://github.com", vec![acknowledged])).unwrap();
+    }
+
+    #[test]
+    fn adapter_overlap_warnings_name_both_rules() {
+        let config = adapter_config(
+            "https://work.example",
+            vec![
+                adapter(
+                    "https://work.example",
+                    "work.issue",
+                    "/issues/{id:int}",
+                    "work.issue:{host}/{id}",
+                ),
+                adapter(
+                    "https://work.example",
+                    "work.ticket",
+                    "/issues/{id:int}",
+                    "work.ticket:{host}/{id}",
+                ),
+            ],
+        );
+        assert_eq!(
+            validate_adapters(&config).unwrap(),
+            vec![AdapterWarning {
+                first_adapter: 0,
+                first_rule: 0,
+                second_adapter: 1,
+                second_rule: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn existing_adapter_id_template_cannot_change_before_migrations_exist() {
+        let current = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            )],
+        );
+        let next = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.ticket:{host}/{id}",
+            )],
+        );
+        validate(&next).unwrap();
+        let error = validate_adapter_transition(&current, &next)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+        validate_adapter_transition(&current, &current).unwrap();
+    }
+
+    #[test]
+    fn unsupported_adapter_format_is_preserved_and_only_suspends_adapter_policy() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
+        );
+        let before = fs::read(&path).unwrap();
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert!(
+            store.configured(),
+            "notes remain configured for repair and use"
+        );
+        assert_eq!(store.snapshot().adapters.format, 2);
+        assert_eq!(store.snapshot().adapters.artifacts.len(), 1);
+        assert!(
+            store
+                .adapter_issue()
+                .is_some_and(|issue| issue.contains("unsupported_format"))
+        );
+        assert!(store.adapter_warnings().is_empty());
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "loading must not rewrite config"
+        );
+    }
+
+    #[test]
+    fn adapter_document_round_trips_as_adapters_header_and_artifact_tables() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let mut config = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            )],
+        );
+        config.storage = Some(StorageConfig {
+            root: root.to_string_lossy().into_owned(),
+            profile: "neutral".into(),
+            log_dir: "log".into(),
+            pages_dir: "pages".into(),
+            later_dir: "later".into(),
+            summaries_dir: None,
+        });
+        let identity = selected_root_identity(&root).unwrap();
+        store
+            .update_with_root_identity(config.clone(), MISSING_REVISION, Some(&identity))
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[adapters]\nformat = 1"), "{text}");
+        assert!(text.contains("[[artifacts]]"), "{text}");
+        let reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot(), &config);
+        assert_eq!(reloaded.adapter_issue(), None);
     }
 
     #[test]

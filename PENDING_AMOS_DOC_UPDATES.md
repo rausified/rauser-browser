@@ -1,0 +1,3 @@
+# Pending AMOS Documentation Updates
+
+- **Brauser — protocol v5 adapter configuration:** Brauser now persists format-versioned artifact adapters, validates their grammar, origins, scope, and overlaps in the native host, and makes policy faults and precedence warnings visible without disabling page notes or AI settings. Adapter changes require native consent, unscoped shared origins explicitly disclose every-account capture, and unsupported future formats fail closed while remaining intact for repair. This establishes the trusted configuration boundary for the upcoming worker prefilter and host recognition path.

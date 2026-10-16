@@ -73,7 +73,7 @@ function updateControls(): void {
   const state = session.status;
   // While the host configuration needs repair, the host accepts no save or
   // visit, so pausing and sending wait for the repair in settings.
-  const repairing = session.configIssue !== null;
+  const repairing = session.configIssue !== null || session.adapterIssue !== null;
   pauseButton.disabled = !connected || changing() || repairing || config?.capture_enabled !== true;
   replayButton.disabled = !connected || changing() || repairing || config?.capture_enabled !== true ||
     state?.pause_pending === true || (state?.queued ?? 0) === 0;
@@ -83,7 +83,7 @@ function updateControls(): void {
 }
 
 function renderSetupWarning(): void {
-  const problem = setupProblem(session.config, session.configIssue);
+  const problem = setupProblem(session.config, session.configIssue ?? session.adapterIssue);
   setupWarning.hidden = problem === null;
   setupReason.textContent = problem ?? "";
 }
@@ -91,6 +91,7 @@ function renderSetupWarning(): void {
 function renderQueue(state: WorkerStatus): void {
   queueSummary.textContent = `${state.queued} pending visit${state.queued === 1 ? "" : "s"}.`;
   const captureOn = session.config?.capture_enabled === true && session.configIssue === null &&
+    session.adapterIssue === null &&
     state.pause_pending !== true;
   captureStripSummary.textContent =
     `${captureOn ? "●" : "○"} Capture ${captureOn ? "on" : "off"} · ${state.queued} pending`;
@@ -135,7 +136,9 @@ function openSettings(): void {
 
 async function reloadConfig(): Promise<void> {
   const response = await session.reload();
-  if (response.config_issue) show(response.config_issue, true);
+  if (response.config_issue || response.adapter_issue) {
+    show(response.config_issue ?? response.adapter_issue ?? "Adapter policy is invalid.", true);
+  }
   else show(session.config!.capture_enabled
     ? "Capture is enabled for the listed sites."
     : "Capture is off.");
