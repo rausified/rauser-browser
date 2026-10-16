@@ -756,6 +756,11 @@ adapter edit is keyed by its origin, type, and ID rather than its array
 position; after another settings page publishes a revision, harmless reordering
 follows the same adapter, while a changed, removed, or ambiguous target disables
 Save until the user closes the stale editor and reviews the current version.
+The host uses that same stable identity when deriving native-consent changes:
+removing an earlier adapter or site does not re-confirm survivors merely because
+their array indexes shifted. It separately verifies that matched prior indexes
+remain ordered, so an actual precedence-changing reorder still requires native
+confirmation; duplicate identities are treated as changed rather than guessed.
 While an adapter issue is present, a revisioned update may echo only that exact inert
 document so folder, AI-privacy, harness, and pause controls remain usable; any
 adapter change must replace it with a fully valid document. Settings offers a
