@@ -96,7 +96,11 @@ const envChoices = new Map<string, boolean>();
 // sent with the setup request, which shows them in the native confirmation.
 let pendingDenylist: string[] | null = null;
 let summariesEdited = false;
-let adapterEdit: number | "new" | null = null;
+type AdapterEdit =
+  | { kind: "new" }
+  | { kind: "existing"; identity: string; snapshot: string };
+
+let adapterEdit: AdapterEdit | null = null;
 let githubScopeText = "";
 
 // The host binds a folder selection and each harness offer to the revision it
@@ -516,6 +520,25 @@ type CandidateResult =
   | { ok: true; adapter: AdapterObject; document: AdapterDocument }
   | { ok: false; message: string };
 
+function adapterIdentity(adapter: AdapterObject): string | null {
+  const origin = adapterOrigin(adapter);
+  return origin && typeof adapter.type === "string" && typeof adapter.id === "string"
+    ? JSON.stringify([origin, adapter.type, adapter.id])
+    : null;
+}
+
+function adapterSnapshot(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(adapterSnapshot).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${adapterSnapshot(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
 function readAdapterCandidate(): CandidateResult {
   if (adapterEdit === null || !session.config) return { ok: false, message: "No adapter is being edited." };
   if (session.config.adapters.format !== 1) {
@@ -528,9 +551,17 @@ function readAdapterCandidate(): CandidateResult {
     return { ok: false, message: "Enable this adapter's exact origin in Private capture setup first." };
   }
   const artifacts = [...session.config.adapters.artifacts];
-  if (adapterEdit === "new") artifacts.push(parsed.adapter);
-  else if (artifacts[adapterEdit]) artifacts[adapterEdit] = parsed.adapter;
-  else return { ok: false, message: "This adapter changed on another settings page. Reload and try again." };
+  if (adapterEdit.kind === "new") artifacts.push(parsed.adapter);
+  else {
+    const target = adapterEdit;
+    const matches = artifacts
+      .map((adapter, index) => adapterIdentity(adapter) === target.identity ? index : -1)
+      .filter((index) => index >= 0);
+    if (matches.length !== 1 || adapterSnapshot(artifacts[matches[0]!]!) !== target.snapshot) {
+      return { ok: false, message: "This adapter changed on another settings page. Close this editor and review the current version before editing it again." };
+    }
+    artifacts[matches[0]!] = parsed.adapter;
+  }
   const document = { format: 1, artifacts };
   const problem = validateAdapterDocument(document);
   return problem ? { ok: false, message: problem } : { ok: true, adapter: parsed.adapter, document };
@@ -588,8 +619,8 @@ function refreshAdapterEditor(): void {
   updateControls();
 }
 
-function openAdapterEditor(index: number | "new", adapter: AdapterObject, heading: string): void {
-  adapterEdit = index;
+function openAdapterEditor(edit: AdapterEdit, adapter: AdapterObject, heading: string): void {
+  adapterEdit = edit;
   adapterEditor.hidden = false;
   adapterEditorHeading.textContent = heading;
   adapterJson.value = JSON.stringify(adapter, null, 2);
@@ -600,7 +631,7 @@ function openAdapterEditor(index: number | "new", adapter: AdapterObject, headin
 
 function beginAdapterDraft(adapter: AdapterObject, label: string): void {
   if (!session.config || busy) return;
-  openAdapterEditor("new", adapter, `Review ${label} starter`);
+  openAdapterEditor({ kind: "new" }, adapter, `Review ${label} starter`);
 }
 
 function beginAdapterEdit(index: number | "new"): void {
@@ -609,7 +640,10 @@ function beginAdapterEdit(index: number | "new"): void {
     ? newAdapter(session.config.sites[0]?.origin ?? "https://example.com")
     : session.config.adapters.artifacts[index];
   if (!adapter) return;
-  openAdapterEditor(index, adapter, index === "new"
+  const edit: AdapterEdit = index === "new"
+    ? { kind: "new" }
+    : { kind: "existing", identity: adapterIdentity(adapter)!, snapshot: adapterSnapshot(adapter) };
+  openAdapterEditor(edit, adapter, index === "new"
     ? "Add and review adapter"
     : `Edit and review ${adapterLabel(adapter, index)}`);
 }
@@ -646,7 +680,7 @@ async function saveAdapter(): Promise<void> {
     refreshAdapterEditor();
     return;
   }
-  const action = adapterEdit === "new" ? "added" : "updated";
+  const action = adapterEdit?.kind === "new" ? "added" : "updated";
   await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`);
 }
 
@@ -703,7 +737,8 @@ function renderConfig(): void {
   renderStarterGallery();
   renderAdapters();
   renderAgent();
-  updateControls();
+  if (adapterEdit === null) updateControls();
+  else refreshAdapterEditor();
 }
 
 async function reloadConfig(): Promise<void> {
