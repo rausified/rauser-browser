@@ -157,7 +157,7 @@ impl ConsentAuthority {
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
     ) -> Result<Option<ConfigConfirmation>> {
-        config::validate(next)?;
+        config::validate_update(current, next)?;
         self.check_picker(current, revision, next, picker_token)?;
         check_agent_fields(current, next)?;
         let changes = approval_lines(current, next);
@@ -333,7 +333,7 @@ impl ConsentAuthority {
             agent: Some(agent.clone()),
             ..current.clone()
         };
-        config::validate(&after)
+        config::validate_update(current, &after)
             .map_err(|error| SetupError::new(ErrorCode::InvalidConfig, error.to_string()))?;
         let (title, summary) = harness_confirmation_text(&candidate, &after, current)
             .map_err(|error| SetupError::new(ErrorCode::InvalidConfig, error.to_string()))?;
@@ -399,7 +399,7 @@ impl ConsentAuthority {
         consent_token: Option<&str>,
         harness_token: Option<&str>,
     ) -> Result<Authorized> {
-        config::validate(next)?;
+        config::validate_update(current, next)?;
         if let Some(token) = harness_token {
             if picker_token.is_some() || consent_token.is_some() {
                 bail!("a harness setup token cannot be combined with other tokens");
@@ -787,6 +787,9 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     // such as enabling its missing origin must confirm every adapter that the
     // repair makes effective.
     let trusted_adapters = config::validate(current).is_ok();
+    let preserving_inert_adapters = current.adapters == next.adapters
+        && config::validate_adapters(current).is_err()
+        && config::validate_adapters(next).is_err();
     // Adding an exclusion takes effect at once. Removing or replacing one
     // weakens privacy and needs confirmation, confirmed list or not (§7.3).
     // These come first: sites the caller adds cannot push them down the dialog.
@@ -803,6 +806,9 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
         lines.push("Turn on automatic visit logging.".to_owned());
     }
     for (index, adapter) in next.adapters.artifacts.iter().enumerate() {
+        if preserving_inert_adapters {
+            continue;
+        }
         // Config order decides which overlapping rule wins, so moving an
         // otherwise unchanged adapter is itself a policy change.
         let unchanged = trusted_adapters && current.adapters.artifacts.get(index) == Some(adapter);
@@ -1024,6 +1030,20 @@ mod tests {
             ..current.clone()
         };
         check_agent_fields(&current, &next).unwrap();
+        assert!(approval_lines(&current, &next).is_empty());
+        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
+    }
+
+    #[test]
+    fn unrelated_update_can_preserve_an_invalid_adapter_document() {
+        let mut current = crate::config::empty_config();
+        current.adapters.format = 2;
+        let next = ConfigSnapshot {
+            agent_denylist: vec!["bank.example".into()],
+            ..current.clone()
+        };
+
+        assert!(crate::config::validate(&next).is_err());
         assert!(approval_lines(&current, &next).is_empty());
         assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
     }
@@ -2029,6 +2049,31 @@ mod setup_tests {
         let record = authorized.harness_commit.unwrap().record;
         assert_eq!(record.version, "2.1.284");
         assert!(time::OffsetDateTime::parse(&record.probe_passed_at, &Rfc3339).is_ok());
+    }
+
+    #[test]
+    fn harness_setup_preserves_an_invalid_adapter_document() {
+        let mut setup = setup(PASSING_BODY);
+        setup.current.adapters.format = 2;
+        let offer = setup.offer("revision");
+
+        let confirmed = setup
+            .confirm("revision", &offer, &[], accept)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(confirmed.config.adapters, setup.current.adapters);
+        setup
+            .authority
+            .authorize_update(
+                &setup.current,
+                "revision",
+                &confirmed.config,
+                None,
+                None,
+                Some(&confirmed.harness_token),
+            )
+            .unwrap();
     }
 
     #[test]

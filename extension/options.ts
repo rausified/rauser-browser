@@ -54,6 +54,7 @@ const sitesList = element<HTMLUListElement>("sites-list");
 const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
 const adapterList = element<HTMLDivElement>("adapter-list");
 const newAdapterButton = element<HTMLButtonElement>("new-adapter");
+const resetAdaptersButton = element<HTMLButtonElement>("reset-adapters");
 const starterGallery = element<HTMLDivElement>("starter-gallery");
 const adapterEditor = element<HTMLDivElement>("adapter-editor");
 const adapterEditorHeading = element<HTMLHeadingElement>("adapter-editor-heading");
@@ -156,24 +157,27 @@ function needsFolderPick(): boolean {
 
 function updateControls(): void {
   const connected = session.connected;
-  // Only a save with a new folder selection can succeed while the host
-  // configuration needs repair, so Pause and Remove wait for that repair.
-  const repairing = session.configIssue !== null || session.adapterIssue !== null;
+  // A base-config issue needs folder repair. An adapter-only issue keeps
+  // unrelated controls live, but freezes individual adapter edits until the
+  // user removes the invalid document as one revisioned update.
+  const repairing = session.configIssue !== null;
+  const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
   enableButton.disabled = !connected || busy || preflight === null ||
     (!picker && needsFolderPick());
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
   for (const button of sitesList.querySelectorAll("button")) {
-    button.disabled = !connected || busy || repairing;
+    button.disabled = !connected || busy || repairing || repairingAdapters;
   }
-  newAdapterButton.disabled = !connected || busy || repairing || !session.config?.sites.length;
+  newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters || !session.config?.sites.length;
+  resetAdaptersButton.disabled = !connected || busy || repairing || !repairingAdapters;
   for (const button of adapterList.querySelectorAll("button")) {
-    button.disabled = !connected || busy || repairing || button.dataset.boundary === "true";
+    button.disabled = !connected || busy || repairing || repairingAdapters || button.dataset.boundary === "true";
   }
   for (const button of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
-    button.disabled = !connected || busy || repairing || button.dataset.available !== "true";
+    button.disabled = !connected || busy || repairing || repairingAdapters || button.dataset.available !== "true";
   }
-  saveAdapterButton.disabled = !connected || busy || repairing ||
+  saveAdapterButton.disabled = !connected || busy || repairing || repairingAdapters ||
     adapterCandidate() === null;
   cancelAdapterButton.disabled = busy;
   const idle = connected && !busy;
@@ -668,6 +672,7 @@ async function moveAdapter(index: number, offset: -1 | 1): Promise<void> {
 
 function renderConfig(): void {
   const config = session.config;
+  resetAdaptersButton.hidden = session.adapterIssue === null;
   folderPath.textContent = picker?.path ?? config?.storage?.root ?? "None selected";
   sitesList.replaceChildren();
   if (!config?.sites.length) {
@@ -964,7 +969,7 @@ function enableSite(): void {
 }
 
 async function pauseCapture(): Promise<void> {
-  if (!session.config || session.configIssue || session.adapterIssue) return;
+  if (!session.config || session.configIssue) return;
   busy = true;
   updateControls();
   try {
@@ -1243,6 +1248,10 @@ for (const suggestion of SUGGESTED_EXCLUSIONS) {
 
 detectButton.addEventListener("click", () => void detectHarnesses());
 newAdapterButton.addEventListener("click", () => beginAdapterEdit("new"));
+resetAdaptersButton.addEventListener("click", () => void saveAdapterDocument(
+  { format: 1, artifacts: [] },
+  "Invalid adapter rules removed; automatic capture remains off until new rules are added.",
+));
 saveAdapterButton.addEventListener("click", () => void saveAdapter());
 cancelAdapterButton.addEventListener("click", closeAdapterEditor);
 adapterJson.addEventListener("input", refreshAdapterEditor);

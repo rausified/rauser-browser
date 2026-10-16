@@ -351,6 +351,25 @@ test("pause re-reads a conflicting host revision before clearing the local block
   assert.equal(host.config.capture_enabled, false);
 });
 
+test("pause can disable capture while adapter policy is invalid", async () => {
+  const host = {
+    revision: "r2", config: { capture_enabled: true }, config_issue: null,
+    adapter_issue: "unsupported adapter format 2",
+  };
+  let saved = false;
+  await finishHostPause(
+    async () => structuredClone(host),
+    async () => undefined,
+    async (snapshot) => {
+      assert.equal(snapshot.adapter_issue, "unsupported adapter format 2");
+      saved = true;
+    },
+    async () => assert.fail("enabled capture must be saved as disabled"),
+    () => false,
+  );
+  assert.equal(saved, true);
+});
+
 test("a re-enabled origin clears only its old revocation after a matching lease and live grant", async () => {
   values.clear();
   sessionValues.clear();

@@ -97,6 +97,7 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
     ["site-path", "input"], ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
+    ["reset-adapters", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
@@ -337,7 +338,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
   });
   await openSettings();
   assert.match(statusText(), /unsupported adapter format 2/);
-  assert.equal(env.elements.get("pause-capture").disabled, true);
+  assert.equal(env.elements.get("pause-capture").disabled, false);
 
   install({
     host: {
@@ -350,6 +351,44 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
   });
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
+});
+
+test("an unsupported adapter document can be removed without blocking unrelated controls", async () => {
+  const state = install({
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision),
+        config: current.revision === 1
+          ? { ...current.config, adapters: { format: 2, artifacts: [{ future: true }] } }
+          : current.config,
+        config_issue: null, agent_status: AGENT_STATUS,
+        adapter_issue: current.revision === 1 || current.config.adapters.format === 2
+          ? "unsupported adapter format 2"
+          : null,
+        adapter_warnings: [],
+      }),
+    },
+  });
+  await openSettings();
+
+  assert.equal(env.elements.get("pause-capture").disabled, false);
+  assert.equal(env.elements.get("choose-folder").disabled, false);
+  assert.equal(env.elements.get("detect-harnesses").disabled, false);
+  env.elements.get("denylist-input").value = "internal.example";
+  env.elements.get("denylist-input").dispatch("input");
+  assert.equal(env.elements.get("denylist-add").disabled, false);
+  assert.equal(env.elements.get("reset-adapters").disabled, false);
+
+  env.elements.get("pause-capture").click();
+  await until(() => state.config.capture_enabled === false && idle(), "capture to pause");
+  assert.equal(state.config.adapters.format, 2);
+  assert.equal(env.elements.get("reset-adapters").disabled, false);
+
+  env.elements.get("reset-adapters").click();
+
+  await until(() => state.config.adapters.format === 1 && idle(), "the adapter reset");
+  assert.deepEqual(state.config.adapters, { format: 1, artifacts: [] });
+  assert.match(statusText(), /adapter rules removed/);
 });
 
 test("adapter workspace previews and saves a new adapter through native confirmation", async () => {

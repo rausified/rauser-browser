@@ -543,7 +543,10 @@ impl ConfigStore {
         if json.len() > MAX_CONFIG_BYTES {
             bail!("configuration exceeds the 64 KiB size limit");
         }
-        validate(&next)?;
+        // Full adapter validation happens against the freshly read current
+        // document under the config lock below. Base fields are never allowed
+        // to use the invalid-adapter repair exception.
+        validate_base(&next)?;
         if let Some(commit) = &harness_commit
             && (next.agent.as_ref() != Some(&commit.agent)
                 || !next.agent_denylist_confirmed
@@ -558,13 +561,20 @@ impl ConfigStore {
             self.adopt(current);
             return Ok(None);
         }
-        validate_adapter_transition_with_history(
-            &current.config,
-            &next,
-            &current.retired_adapter_contracts,
-        )?;
-        let retired_adapter_contracts =
-            updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next);
+        validate_update(&current.config, &next)?;
+        let adapters_unchanged = current.config.adapters == next.adapters;
+        if !adapters_unchanged {
+            validate_adapter_transition_with_history(
+                &current.config,
+                &next,
+                &current.retired_adapter_contracts,
+            )?;
+        }
+        let retired_adapter_contracts = if adapters_unchanged {
+            current.retired_adapter_contracts.clone()
+        } else {
+            updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next)
+        };
 
         let agent = match &harness_commit {
             Some(commit) => {
@@ -655,9 +665,10 @@ impl ConfigStore {
         self.issue = None;
         self.root_identity = next_identity;
         self.agent = agent;
-        self.adapter_issue = None;
-        self.adapter_warnings = validate_adapters(&self.config)
-            .expect("a configuration validated immediately before it was committed");
+        (self.adapter_issue, self.adapter_warnings) = match validate_adapters(&self.config) {
+            Ok(warnings) => (None, warnings),
+            Err(error) => (Some(error.to_string()), Vec::new()),
+        };
         if let Err(error) = sync_parent(parent) {
             eprintln!(
                 "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
@@ -1153,6 +1164,23 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
+/// Validate an extension-authored update without making an already-inert
+/// adapter document block unrelated settings. The exception is deliberately
+/// narrow: only the exact adapter bytes from an already-invalid policy may
+/// remain invalid. Any adapter edit, or a base-policy change that would turn a
+/// previously valid adapter document invalid, still has to pass the full
+/// authoritative adapter validation.
+pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
+    validate_base(next)?;
+    let preserving_inert_adapters = current.adapters == next.adapters
+        && validate_adapters(current).is_err()
+        && validate_adapters(next).is_err();
+    if !preserving_inert_adapters {
+        validate_adapters(next)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     if config.sites.len() > MAX_SITES {
         bail!("site allowlist exceeds the 128-entry limit");
@@ -1192,7 +1220,7 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
-fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
+pub(crate) fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
     let document = compile_adapters(config)?;
     for (index, adapter) in document.adapters().iter().enumerate() {
         if !config
@@ -2310,6 +2338,47 @@ mod tests {
             before,
             "loading must not rewrite config"
         );
+    }
+
+    #[test]
+    fn unrelated_update_preserves_then_repairs_an_unsupported_adapter_document() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "[adapters]\nformat = 2\n\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n",
+        );
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let next = ConfigSnapshot {
+            agent_denylist: vec!["bank.example".into()],
+            ..store.snapshot().clone()
+        };
+
+        store.update(next, &revision).unwrap().unwrap();
+
+        let mut reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot().adapters.format, 2);
+        assert_eq!(reloaded.snapshot().agent_denylist, ["bank.example"]);
+        assert!(reloaded.adapter_issue().is_some());
+
+        let revision = reloaded.revision().to_owned();
+        let repaired = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: Vec::new(),
+            },
+            ..reloaded.snapshot().clone()
+        };
+        reloaded.update(repaired, &revision).unwrap().unwrap();
+
+        let repaired = loaded(&path);
+        assert_eq!(repaired.snapshot().adapters.format, 1);
+        assert!(repaired.snapshot().adapters.artifacts.is_empty());
+        assert_eq!(repaired.adapter_issue(), None);
     }
 
     #[test]
