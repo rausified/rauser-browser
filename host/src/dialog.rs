@@ -550,8 +550,19 @@ mod tests {
 
         const SHORT: Duration = Duration::from_millis(300);
 
-        fn with_answer(contents: &str) -> tempfile::TempDir {
+        fn private_tempdir() -> tempfile::TempDir {
             let directory = tempfile::tempdir().unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
+            directory
+        }
+
+        fn with_answer(contents: &str) -> tempfile::TempDir {
+            let directory = private_tempdir();
             std::fs::write(directory.path().join(ANSWER_FILE), contents).unwrap();
             directory
         }
@@ -599,7 +610,7 @@ mod tests {
 
         #[test]
         fn answer_directory_must_be_a_private_absolute_directory() {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = private_tempdir();
             assert!(validate_directory(directory.path().to_path_buf()).is_ok());
             assert!(validate_directory("relative/answers".into()).is_err());
             let file = directory.path().join("file");
@@ -620,7 +631,7 @@ mod tests {
 
         #[test]
         fn fails_closed_when_no_answer_arrives() {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = private_tempdir();
             assert!(answer(directory.path(), CONFIRM_COMMAND, "", SHORT).is_err());
         }
     }

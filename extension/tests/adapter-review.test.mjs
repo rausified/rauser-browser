@@ -45,6 +45,34 @@ test("adapter review builds useful example URLs without exposing real activity",
   });
 });
 
+test("generated examples satisfy bounded capture types", () => {
+  const bounded = {
+    type: "work.item",
+    origin: "https://work.example",
+    match: [{
+      path: "/items/{id:token(20,64)}/{page:int(1,2)}/{owner:name(16)}/{project:jira_key(5,8)}/{tail:hex(32)@tail}",
+    }],
+    id: "work.item:{host}/{id}/{page}/{owner}/{project}/{tail}",
+  };
+  const url = exampleUrl(bounded);
+  const preview = previewDocument({ format: 1, artifacts: [bounded] }, url, "", false);
+  assert.equal(preview.ok, true);
+  assert.equal(preview.rows[0].result.match, true, url);
+
+  const gdoc = {
+    type: "gdoc",
+    origin: "https://docs.google.com",
+    unscoped: "acknowledged",
+    match: [{ path: "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}" }],
+    modes: { edit: "edit", view: "view", preview: "view" },
+    id: "gdoc:{host}/{id}",
+  };
+  const gdocUrl = exampleUrl(gdoc);
+  const gdocPreview = previewDocument({ format: 1, artifacts: [gdoc] }, gdocUrl, "", false);
+  assert.equal(gdocPreview.ok, true);
+  assert.equal(gdocPreview.rows[0].result.match, true, gdocUrl);
+});
+
 test("match preview reports IDs and flags a fixed non-artifact probe match", () => {
   const normal = previewDocument(
     { format: 1, artifacts: [JIRA] },

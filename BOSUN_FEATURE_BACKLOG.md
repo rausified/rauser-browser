@@ -44,7 +44,6 @@ to repeat the spec.
 ## Notes / Ideas for Later
 
 - The artifact boundary is now real, but recognized events deliberately still use the M1 visit writer. Step 6.4's hourly attention totals are the next semantic migration; avoid extending the temporary visit format.
-- An enabled M1 site with no adapter now records nothing, as DESIGN.md requires. The settings page does not yet offer an adapter editor, so the next user-facing slice should close that first-use gap rather than adding more invisible config machinery.
 - The headless macOS smoke flow was updated to confirm and install a fixture adapter through native messaging. It could not be executed on this Linux VM; run `npm run smoke:macos:headless` on macOS before relying on that new end-to-end step.
 - Protocol v5 currently freezes an existing adapter's `id` template before any alias migration exists. When activity events land, replace that conservative guard with the designed activity-aware migration and explicit alias events rather than relaxing it in place.
 - The adapter workspace now resolves overlap indices to type names and previews fixed probes. It deliberately has no URL-shape sample or already-recognized-artifact re-map count yet; those inputs arrive with Create adapter in M1.5b step 7.6 and should extend this review rather than create a second editor.

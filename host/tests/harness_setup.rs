@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 const HOST: &str = env!("CARGO_BIN_EXE_brauser");
 const CLAUDE_HELP: &str = include_str!("fixtures/harness/claude_help.txt");
-const PASSING_BODY: &str = r#"cat > "$log/stdin.log"
+const PASSING_BODY: &str = r#"/bin/cat > "$log/stdin.log"
 printf '%s\n' '{"type":"system","subtype":"init","tools":[]}' '{"type":"result","subtype":"success","is_error":false,"result":"OK"}'"#;
 const SECRET_NAME: &str = "ANTHROPIC_API_KEY";
 const SECRET: &str = "sk-test-secret-value";
@@ -33,12 +33,8 @@ impl World {
         let root = tempfile::tempdir().unwrap();
         for dir in ["home", "bin", "log", "dialogs", "notes"] {
             fs::create_dir(root.path().join(dir)).unwrap();
+            fs::set_permissions(root.path().join(dir), fs::Permissions::from_mode(0o700)).unwrap();
         }
-        fs::set_permissions(
-            root.path().join("dialogs"),
-            fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
         let world = Self {
             config: PathBuf::new(),
             root,
@@ -68,11 +64,11 @@ impl World {
 log='{log}'
 for arg in "$@"; do printf '[%s]' "$arg"; done >> "$log/argv.log"
 echo >> "$log/argv.log"
-env | cut -d= -f1 | sort | tr '\n' ' ' >> "$log/env.log"
+/usr/bin/env | /usr/bin/cut -d= -f1 | /usr/bin/sort | /usr/bin/tr '\n' ' ' >> "$log/env.log"
 echo >> "$log/env.log"
 case "$1" in
   --version) echo '2.1.284 (Claude Code)'; exit 0 ;;
-  --help) cat '{help}'; exit 0 ;;
+  --help) /bin/cat '{help}'; exit 0 ;;
 esac
 {body}
 "#,
@@ -88,10 +84,7 @@ esac
         command
             .env_clear()
             .env("HOME", self.path("home"))
-            .env(
-                "PATH",
-                format!("{}:/usr/bin:/bin", self.path("bin").display()),
-            )
+            .env("PATH", self.path("bin"))
             .env("BRAUSER_SCRIPTED_DIALOGS", self.path("dialogs"))
             .env(SECRET_NAME, SECRET);
         command
@@ -216,8 +209,11 @@ impl Host {
         let claude = offers
             .iter()
             .find(|offer| offer["harness_id"] == "claude-code")
-            .unwrap();
-        claude["offer_id"].as_str().unwrap().to_owned()
+            .unwrap_or_else(|| panic!("fake Claude offer was missing: {reply}"));
+        claude["offer_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("fake Claude offer was refused: {claude}"))
+            .to_owned()
     }
 
     fn confirm(&mut self, revision: &str, offer_id: &str) -> Value {

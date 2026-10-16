@@ -189,24 +189,40 @@ function exampleCapture(source: string): string {
   if (source === "*") return "more";
   if (source === "_") return "example";
   const colon = source.indexOf(":");
-  let type = colon < 0 ? "token" : source.slice(colon + 1);
-  if (colon > 0 && source[colon - 1] === "?") type = source.slice(colon + 1);
-  if (type.startsWith("(")) {
-    const separator = type.indexOf("|");
-    const close = type.indexOf(")");
-    return type.slice(1, separator >= 0 ? separator : close);
+  const ctype = colon < 0 ? "token" : source.slice(colon + 1);
+  if (ctype.startsWith("(")) {
+    const separator = ctype.indexOf("|");
+    const close = ctype.indexOf(")");
+    return ctype.slice(1, separator >= 0 ? separator : close);
   }
-  if (type.startsWith("int")) return "123456";
-  if (type.startsWith("jira_key")) return "ABC-123";
-  if (type.startsWith("uuid")) return "123e4567-e89b-12d3-a456-426614174000";
-  if (type.startsWith("hex")) {
-    const open = type.indexOf("(");
-    const close = type.indexOf(")");
-    const length = open >= 0 && close > open ? Number.parseInt(type.slice(open + 1, close), 10) : 32;
-    const hex = "a".repeat(Number.isFinite(length) ? Math.min(Math.max(length, 1), 64) : 32);
-    return type.includes("@tail") ? `example-${hex}` : hex;
+
+  // parseAdapterJson has already validated this ctype. Mirror only the small
+  // part of its grammar needed to choose an in-range example; otherwise a
+  // valid bounded capture such as token(20,64) previews as a rule miss.
+  const parsed = /^(int|hex|token|name|jira_key|uuid)(?:\((\d+)(?:,(\d+))?\))?/.exec(ctype);
+  if (!parsed) return "example-123";
+  const defaults: Readonly<Record<string, readonly [number, number]>> = {
+    int: [1, 19], hex: [1, 64], token: [1, 128], name: [1, 100], jira_key: [1, 255], uuid: [36, 36],
+  };
+  const [defaultMin, defaultMax] = defaults[parsed[1]!]!;
+  const min = parsed[2] === undefined ? defaultMin : Number(parsed[2]);
+  const max = parsed[2] === undefined ? defaultMax : Number(parsed[3] ?? parsed[2]);
+  const fit = (seed: string, fill: string): string => {
+    const length = Math.min(Math.max(seed.length, min), max);
+    return seed.length >= length ? seed.slice(0, length) : seed + fill.repeat(length - seed.length);
+  };
+
+  let value: string;
+  switch (parsed[1]) {
+    case "int": value = fit("123456", "1"); break;
+    case "hex": value = fit("abcdef", "a"); break;
+    case "token": value = fit("example-123", "x"); break;
+    case "name": value = fit("example.name", "x"); break;
+    case "jira_key": value = `${fit("ABC", "A")}-123`; break;
+    case "uuid": value = "123e4567-e89b-12d3-a456-426614174000"; break;
+    default: value = "example-123";
   }
-  return "example-123";
+  return ctype.includes("@tail") ? `example-${value}` : value;
 }
 
 export function newAdapter(origin: string): AdapterObject {
