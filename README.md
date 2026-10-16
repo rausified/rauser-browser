@@ -4,7 +4,7 @@ The Rauser Browser Assistant (Brauser) is a local-first browser assistant design
 
 ## Status
 
-M0 is merged. M1 development code includes a Chrome side panel, opt-in capture, and native folder selection and confirmation. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. M1.5a now makes configured adapter templates active: only recognized artifact URLs pass the worker's private buffer, and the host independently rechecks every delivery. Settings includes a full adapter review workspace and development starter drafts for enabled Jira Cloud, SharePoint/OneDrive, and scoped GitHub origins; the drafts use cross-engine recorded fixtures but still need the live-tool checks documented beside them before release certification. Hourly artifact activity and the Recent view are still unbuilt. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS, the only supported platform (DESIGN.md §13), so it is not yet ready for general download.
+M0 is merged. M1 development code includes a Chrome side panel, opt-in capture, and native folder selection and confirmation. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. M1.5a now makes configured adapter templates active: only recognized artifact URLs pass the worker's private buffer, and the host independently rechecks every delivery. Settings includes a full adapter review workspace and development starter drafts for enabled Jira Cloud, SharePoint/OneDrive, and scoped GitHub origins; the drafts use cross-engine recorded fixtures but still need the live-tool checks documented beside them before release certification. Automatic capture records hourly artifact activity (cold opens, focused and background time, modes, refs, trails, and explicit `why` context); delivery compaction, the index and artifact files, the artifact card, Recent view, worklog, and record keys are still unfinished. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS, the only supported platform (DESIGN.md §13), so it is not yet ready for general download.
 
 Read the [design specification](DESIGN.md) for the architecture, security model, planned features, and release plan.
 
@@ -21,6 +21,7 @@ The pinned Rust toolchain is in `rust-toolchain.toml`. Python 3 generates protoc
 
 ```sh
 python3 protocol/generate.py --check
+python3 scripts/check_current_state.py
 cargo build --locked --workspace --all-targets
 cargo test --locked --workspace
 cargo fmt --all -- --check

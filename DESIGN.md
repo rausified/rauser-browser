@@ -1,6 +1,6 @@
 # Brauser: The Rauser Browser Assistant — Design Specification
 
-> Status: Draft v0.6 · M0 merged, M1 accepted for development on macOS, side-panel rework, M2 step 1 (harness setup), service-worker background delivery, and M1.5a adapter-only capture with settings review UI and first-tool starter-draft gallery merged; live-tool certification and hourly artifact activity are next, no public package yet · Short name "Brauser"; CLI and binary `brauser` · License: Apache-2.0 · Platforms: Google Chrome on macOS only (§13, §14)
+> Status: Draft v0.6 · M0 merged, M1 accepted for development on macOS, side-panel rework, M2 step 1 (harness setup), service-worker background delivery, and M1.5a adapter-only capture with settings review UI, first-tool starter-draft gallery, and hourly artifact activity merged; delivery and durability, indexing, record keys, artifact-facing views, and live-tool certification are next, no public package yet · Short name "Brauser"; CLI and binary `brauser` · License: Apache-2.0 · Platforms: Google Chrome on macOS only (§13, §14)
 >
 > Companion specification: [adapter-templates.md](adapter-templates.md), the adapter-template language artifact adapters are written in (§7.2), built in §12.2 step 6.2.
 
