@@ -69,6 +69,7 @@ struct DiskState {
     agent: AgentView,
     adapter_issue: Option<String>,
     adapter_warnings: Vec<AdapterWarning>,
+    retired_adapter_contracts: Vec<serde_json::Value>,
 }
 
 /// The raw `[agent]` table and harness record as last read from disk, and
@@ -557,7 +558,13 @@ impl ConfigStore {
             self.adopt(current);
             return Ok(None);
         }
-        validate_adapter_transition(&current.config, &next)?;
+        validate_adapter_transition_with_history(
+            &current.config,
+            &next,
+            &current.retired_adapter_contracts,
+        )?;
+        let retired_adapter_contracts =
+            updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next);
 
         let agent = match &harness_commit {
             Some(commit) => {
@@ -609,6 +616,7 @@ impl ConfigStore {
             &next,
             next_identity.clone(),
             &agent,
+            retired_adapter_contracts,
         ))
         .context("serializing config TOML")?;
         if serialized.len() > MAX_CONFIG_BYTES {
@@ -697,6 +705,11 @@ struct StoredConfig {
     adapters: StoredAdapters,
     #[serde(default)]
     artifacts: Vec<serde_json::Value>,
+    /// Host-owned ID contracts for removed adapters. These stay off the wire:
+    /// an extension may re-enable the same contract, but cannot erase the
+    /// evidence needed to detect a remove/edit/re-add ID migration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    adapter_id_history: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -807,6 +820,7 @@ impl StoredConfig {
         value: &ConfigSnapshot,
         root_identity: Option<String>,
         agent: &AgentView,
+        retired_adapter_contracts: Vec<serde_json::Value>,
     ) -> Self {
         Self {
             storage: value.storage.clone().map(StoredStorage::from),
@@ -829,6 +843,7 @@ impl StoredConfig {
                 format: value.adapters.format,
             },
             artifacts: value.adapters.artifacts.clone(),
+            adapter_id_history: retired_adapter_contracts,
         }
     }
 }
@@ -873,6 +888,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 agent: AgentView::default(),
                 adapter_issue: None,
                 adapter_warnings: Vec::new(),
+                retired_adapter_contracts: Vec::new(),
             });
         }
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
@@ -913,6 +929,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             agent: AgentView::default(),
             adapter_issue: None,
             adapter_warnings: Vec::new(),
+            retired_adapter_contracts: Vec::new(),
         });
     }
     let parsed = std::str::from_utf8(&contents)
@@ -921,6 +938,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
     match parsed {
         Ok(mut stored) => {
             let root_identity = stored.root_identity.clone();
+            let retired_adapter_contracts = std::mem::take(&mut stored.adapter_id_history);
             let root_unconfirmed = stored.storage.is_some()
                 && (!stored.root_picker_confirmed || root_identity.is_none());
             let agent = AgentView::parse(stored.agent.take(), stored.harness_record.take());
@@ -941,6 +959,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     agent,
                     adapter_issue: None,
                     adapter_warnings: Vec::new(),
+                    retired_adapter_contracts: Vec::new(),
                 });
             }
             let (adapter_issue, adapter_warnings) = match validate_adapters(&config) {
@@ -968,6 +987,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 agent,
                 adapter_issue,
                 adapter_warnings,
+                retired_adapter_contracts,
             })
         }
         Err(_) => Ok(DiskState {
@@ -979,6 +999,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             agent: AgentView::default(),
             adapter_issue: None,
             adapter_warnings: Vec::new(),
+            retired_adapter_contracts: Vec::new(),
         }),
     }
 }
@@ -1238,9 +1259,48 @@ pub(crate) fn validate_adapter_transition(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
 ) -> Result<()> {
-    if validate_adapters(current).is_err() {
-        return Ok(());
+    validate_adapter_transition_with_history(current, next, &[])
+}
+
+fn validate_adapter_transition_with_history(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+    retired: &[serde_json::Value],
+) -> Result<()> {
+    validate_adapter_history(retired)?;
+    let current_is_valid = validate_adapters(current).is_ok();
+    if current_is_valid {
+        validate_active_id_transition(current, next)?;
     }
+
+    let (removed, added) = if current_is_valid {
+        adapter_contract_delta(current, next)
+    } else {
+        (Vec::new(), adapter_contracts(next))
+    };
+    for candidate in &added {
+        let Some((origin, id)) = adapter_contract_identity(candidate) else {
+            continue;
+        };
+        for previous in retired.iter().chain(&removed) {
+            let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
+                continue;
+            };
+            if origin == previous_origin
+                && id != previous_id
+                && adapter_contracts_overlap(previous, candidate)?
+            {
+                let artifact_type = candidate["type"].as_str().unwrap_or("unknown");
+                bail!(
+                    "the id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_active_id_transition(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     let current_ids = adapter_id_counts(current);
     let next_ids = adapter_id_counts(next);
     for ((origin, artifact_type), old) in current_ids {
@@ -1260,6 +1320,152 @@ pub(crate) fn validate_adapter_transition(
         }
     }
     Ok(())
+}
+
+/// Keep the recognition portion of an adapter with its durable ID. Display,
+/// field, and edge metadata cannot affect which artifact record a URL names.
+fn adapter_contract(value: &serde_json::Value) -> Option<serde_json::Value> {
+    const KEYS: &[&str] = &[
+        "type",
+        "origin",
+        "match",
+        "id",
+        "modes",
+        "scope",
+        "unscoped",
+        "path_case",
+    ];
+    let source = value.as_object()?;
+    let mut contract = serde_json::Map::new();
+    for key in KEYS {
+        if let Some(entry) = source.get(*key) {
+            contract.insert((*key).to_owned(), entry.clone());
+        }
+    }
+    let contract = serde_json::Value::Object(contract);
+    adapter_contract_identity(&contract)?;
+    contract.get("match")?.as_array()?;
+    Some(contract)
+}
+
+fn adapter_contracts(config: &ConfigSnapshot) -> Vec<serde_json::Value> {
+    config
+        .adapters
+        .artifacts
+        .iter()
+        .filter_map(adapter_contract)
+        .collect()
+}
+
+fn adapter_contract_identity(value: &serde_json::Value) -> Option<(&str, &str)> {
+    Some((value.get("origin")?.as_str()?, value.get("id")?.as_str()?))
+}
+
+/// Pair unchanged contracts first, then pair recognition edits that retain the
+/// same origin and ID. What remains is a real retirement or introduction.
+fn adapter_contract_delta(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let current = adapter_contracts(current);
+    let next = adapter_contracts(next);
+    let mut current_matched = vec![false; current.len()];
+    let mut next_matched = vec![false; next.len()];
+
+    for (old_index, old) in current.iter().enumerate() {
+        if let Some((new_index, _)) = next
+            .iter()
+            .enumerate()
+            .find(|(index, new)| !next_matched[*index] && *new == old)
+        {
+            current_matched[old_index] = true;
+            next_matched[new_index] = true;
+        }
+    }
+    for (old_index, old) in current.iter().enumerate() {
+        if current_matched[old_index] {
+            continue;
+        }
+        if let Some((new_index, _)) = next.iter().enumerate().find(|(index, new)| {
+            !next_matched[*index]
+                && adapter_contract_identity(old) == adapter_contract_identity(new)
+        }) {
+            current_matched[old_index] = true;
+            next_matched[new_index] = true;
+        }
+    }
+
+    let removed = current
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, contract)| (!current_matched[index]).then_some(contract))
+        .collect();
+    let added = next
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, contract)| (!next_matched[index]).then_some(contract))
+        .collect();
+    (removed, added)
+}
+
+fn validate_adapter_history(history: &[serde_json::Value]) -> Result<()> {
+    for contract in history {
+        if adapter_contract(contract).as_ref() != Some(contract) {
+            bail!("adapter ID history is invalid");
+        }
+        let config = ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: vec![contract.clone()],
+            },
+            ..empty_config()
+        };
+        compile_adapters(&config).context("adapter ID history is invalid")?;
+    }
+    Ok(())
+}
+
+fn adapter_contracts_overlap(
+    previous: &serde_json::Value,
+    candidate: &serde_json::Value,
+) -> Result<bool> {
+    let config = ConfigSnapshot {
+        adapters: AdapterDocument {
+            format: 1,
+            artifacts: vec![previous.clone(), candidate.clone()],
+        },
+        ..empty_config()
+    };
+    Ok(!compile_adapters(&config)?.overlap_report().is_empty())
+}
+
+fn updated_adapter_history(
+    history: &[serde_json::Value],
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+) -> Vec<serde_json::Value> {
+    let active: HashSet<(String, String)> = adapter_contracts(next)
+        .iter()
+        .filter_map(adapter_contract_identity)
+        .map(|(origin, id)| (origin.to_owned(), id.to_owned()))
+        .collect();
+    let mut updated: Vec<_> = history
+        .iter()
+        .filter(|contract| {
+            adapter_contract_identity(contract)
+                .is_some_and(|(origin, id)| !active.contains(&(origin.to_owned(), id.to_owned())))
+        })
+        .cloned()
+        .collect();
+    if validate_adapters(current).is_ok() {
+        let (removed, _) = adapter_contract_delta(current, next);
+        for contract in removed {
+            if !updated.contains(&contract) {
+                updated.push(contract);
+            }
+        }
+    }
+    updated
 }
 
 fn adapter_id_counts(config: &ConfigSnapshot) -> BTreeMap<(&str, &str), BTreeMap<&str, usize>> {
@@ -1861,6 +2067,74 @@ mod tests {
         );
         validate(&changed).unwrap();
         assert!(validate_adapter_transition(&current, &changed).is_err());
+    }
+
+    #[test]
+    fn removed_adapter_cannot_return_with_a_different_id_template() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let original = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            )],
+        );
+        let revision = store
+            .update(original.clone(), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let remapped = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.ticket",
+                "/issues/{id:int}",
+                "work.ticket:{host}/{id}",
+            )],
+        );
+        let direct_error = store
+            .update(remapped.clone(), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            direct_error.contains("cannot change until artifact migrations"),
+            "{direct_error}"
+        );
+
+        let removed = adapter_config("https://work.example", Vec::new());
+        let revision = store.update(removed, &revision).unwrap().unwrap();
+        assert!(
+            fs::read_to_string(&store.path)
+                .unwrap()
+                .contains("[[adapter_id_history]]")
+        );
+        drop(store);
+        let mut restarted = loaded(&path);
+
+        let error = restarted
+            .update(remapped, &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+
+        let disjoint = adapter_config(
+            "https://work.example",
+            vec![adapter(
+                "https://work.example",
+                "work.ticket",
+                "/tickets/{id:int}",
+                "work.ticket:{host}/{id}",
+            )],
+        );
+        let revision = restarted.update(disjoint, &revision).unwrap().unwrap();
+        restarted.update(original, &revision).unwrap().unwrap();
     }
 
     #[test]
@@ -2679,6 +2953,7 @@ mod tests {
                 &next,
                 None,
                 &AgentView::default(),
+                Vec::new(),
             ))
             .unwrap(),
         )
