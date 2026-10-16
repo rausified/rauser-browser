@@ -3,6 +3,7 @@ import {
   MAX_QUEUE_BYTES,
   MAX_QUEUED_VISITS,
   POLICY_STORAGE_KEY,
+  PolicyLeaseCache,
   TRUSTED_PAGES,
   emptyQueue,
   exactOriginPattern,
@@ -18,7 +19,7 @@ import {
   type WorkerStatus,
 } from "./model.js";
 import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
-import { compileDocument, evaluate, type CompiledDocument, type EvaluateResult } from "./adapter-templates.js";
+import { evaluate, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
@@ -56,7 +57,7 @@ const encoder = new TextEncoder();
 let storageReady: Promise<void> | null = null;
 let sequence: Promise<unknown> = Promise.resolve();
 let navigationReady = false;
-let compiledAdapters: { key: string; doc: CompiledDocument } | null = null;
+const policyLeases = new PolicyLeaseCache();
 
 function activitySessionStorage(): ChromeStorageArea {
   return chrome.storage.session;
@@ -176,12 +177,12 @@ async function readPolicyState(): Promise<{
 }> {
   const stored = await chrome.storage.local.get(POLICY_KEY);
   const value = stored[POLICY_KEY];
-  const valid = isPolicyLease(value);
+  const lease = policyLeases.restore(value);
   return {
-    lease: valid ? value : null,
+    lease,
     // A well-formed lease from the previous extension version is renewed from
     // the host. Missing, suspended, or malformed state stays inert.
-    legacyLease: valid ? null : legacyPolicyLease(value),
+    legacyLease: lease ? null : legacyPolicyLease(value),
   };
 }
 
@@ -497,13 +498,9 @@ function matchingArtifact(
   title?: string,
 ): Extract<EvaluateResult, { match: true }> | null {
   if (!matchingSite(lease, rawUrl)) return null;
-  const key = `${lease.revision}\n${JSON.stringify(lease.adapters)}`;
-  if (compiledAdapters?.key !== key) {
-    const compiled = compileDocument(lease.adapters);
-    if (!compiled.ok) return null;
-    compiledAdapters = { key, doc: compiled.doc };
-  }
-  const found = evaluate(compiledAdapters.doc, rawUrl, title);
+  const compiled = policyLeases.compiledFor(lease);
+  if (!compiled) return null;
+  const found = evaluate(compiled, rawUrl, title);
   return found.match ? found : null;
 }
 
@@ -630,7 +627,7 @@ async function installPolicy(
   resumeAfterConfirmation: boolean,
   resumeAfterPauseToken: string | null,
 ): Promise<WorkerStatus> {
-  if (!isPolicyLease(lease) || lease.expires_at <= Date.now()) {
+  if (!policyLeases.install(lease) || lease.expires_at <= Date.now()) {
     throw new Error("Host policy lease is invalid or expired");
   }
   if (await pausePending()) {

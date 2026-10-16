@@ -92,11 +92,12 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   allowlisted. Revocations must always narrow host policy. Fixed by committing
   the narrower site and capture policy while preserving an invalid/future
   adapter document exactly and suspended for explicit repair.
-- [ ] `brwr-flu` **Full adapter compile on every navigation** (extension/model.ts ~153).
+- [x] `brwr-flu` **Full adapter compile on every navigation** (extension/model.ts ~153).
   `isPolicyLease` runs `validateDocument` on every `readPolicy`, including the
   never-enabled-site fast path, and `matchingArtifact` stringifies the document
-  for its cache key on every call. Validate once at install and cache by
-  revision.
+  for its cache key on every call. Fixed with a revision-keyed compiled-policy
+  cache: stored leases compile once per worker revision, matching does no
+  adapter serialization, and every untrusted install still validates afresh.
 - [ ] `brwr-mwg` **Quadratic overlap scan on every host refresh** (host/src/config.rs
   ~950, ~1226). `read_disk_state` computes `overlap_report` on every Hello,
   GetConfig, LoadNote, SaveNote, and RecordVisit, and `adapter_matches`
@@ -192,8 +193,24 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   **M5 — Release** (installer, store listing, signing and provenance, docs)
   follow M2, per the §12 table. M5 signing and store work is **[human]**.
 
+### Focused quality follow-up
+
+- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
+  child can exit after printing its reply before the parent writes the framed
+  request, intermittently producing `EPIPE` even though production dialog
+  children read the request first. Make the fixture obey the real handshake
+  and exercise it repeatedly; this was discovered during the current cycle's
+  final Rust verification and does not affect the shipped worker change.
+
 ### Cookie's own proposals (only after the plan work above)
 
+- [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
+  person start and end one explicit local session from the panel so a Jira
+  issue, design document, and pull request can appear together under the
+  reason they were opened. Carry the stable session through worker restarts
+  and measured activity into the append-only log and derived worklog; never
+  infer a session from browsing or send it to a service. This should build on
+  the artifact card and worklog after M1.5a rather than delay those foundations.
 - [ ] `brwr-ac1` **Make first-tool setup one coherent transaction.** Let a new user choose
   Jira, SharePoint/OneDrive, or GitHub first, enter the exact tenant and any
   required scope, then request Chrome access and native-confirm the site plus
@@ -215,6 +232,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Shipped
 
+- **Category:** Performance & Resource Bounds. **Compile adapter policy once per worker revision (2026-10-16).** The service worker now validates and compiles a stored adapter document once when its host revision is first restored, then reuses that prepared document across policy reads and artifact matches instead of rebuilding the grammar and serializing the full policy on every navigation. Every install message still compiles independently at the untrusted boundary, malformed cold-start policy stays inert, and site and live-grant gates remain ahead of evaluation. **Metrics:** 265 Rust tests and 8 extension suites passing; 2 new cache and navigation-hot-path regressions including a failing-first compile-cache proof, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Security & Privacy. **Narrow host policy after Chrome revokes access during adapter repair (2026-10-16).** Settings now writes revoked origins out of the host's site allowlist even when an invalid or future adapter document has already suspended capture. The revisioned update preserves that unsupported document without structural changes for explicit repair, disables capture when its final site disappears, rechecks revocations under the configuration lock so a stale snapshot cannot remove a concurrently re-enabled site, and acknowledges revocations only after the host is already narrow. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new failing-first settings regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** Bug Fix. **Keep recognized capture queued while adapter policy needs repair (2026-10-16).** The native host now returns a retryable result when a transient invalid or future adapter document interrupts legacy visits, single hourly activities, or the current mixed delivery batch, so the worker retains every recognized event and any overflow evidence until policy is repaired. An intentional capture pause and a valid policy miss remain terminal, preserving immediate user control and defense-in-depth filtering. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 failing-first ingress regressions (+2 net tests), with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
 - **Category:** Bug Fix. **Let adapter and site removals take effect without re-confirming survivors (2026-10-16).** Native consent now matches adapters by stable origin, type, and ID instead of their mutable array slot, so removing an early adapter or an origin no longer makes every later unscoped rule look newly enabled or overflow the confirmation limit. Relative prior positions are still checked independently, preserving native confirmation for a genuine precedence-changing reorder, and ambiguous duplicate identities fail closed. **Metrics:** 263 Rust tests and 8 extension suites passing; 2 new failing-first and privacy-boundary regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
@@ -231,6 +249,20 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
+- Worker policy revisions are SHA-256 identities for the host configuration,
+  so they are the right cache key for compiled adapter templates. Test fixtures
+  must preserve that invariant: reusing one fake revision for different
+  documents can hide stale-policy bugs or create failures impossible in a real
+  host exchange.
+- The full Rust rerun exposed `brwr-4vb`: the successful-dialog fixture can
+  answer without reading its framed request and race the parent into `EPIPE`.
+  It passed the opening gate, its isolated rerun, and the next complete suite;
+  the production child handshake is unaffected, and the focused fixture repair
+  remains queued instead of being mixed into this deploy-blocker cycle.
+- Once the artifact card and worklog exist, a named focus session could supply
+  the missing human intent that measured attention deliberately does not infer.
+  `brwr-ued` keeps that proposal local and explicit: the user names the work,
+  and Brauser only groups already-authorized artifacts under that name.
 - Legacy `record_visit`, compatibility `record_activity`, and current
   `record_batch` had drifted into three different answers for the same invalid
   adapter state. Keep their shared policy-state outcomes aligned until the old
