@@ -1229,10 +1229,11 @@ pub(crate) fn adapter_match(
 }
 
 /// Artifact IDs are record keys. Alias events are not implemented until
-/// M1.5b, so an existing adapter's ID template is immutable for now. This is
-/// intentionally stricter than the eventual activity-aware migration: it
-/// makes it impossible for a config edit to orphan activity before the host
-/// has a durable activity index to consult.
+/// M1.5b, so an existing adapter's ID template is immutable for now. Compare
+/// the ID-template multisets for each origin and type: removing a member makes
+/// the next set a subset, adding one makes the current set a subset, and a
+/// replacement is the ID edit that must be refused. This is intentionally
+/// stricter than the eventual activity-aware migration.
 pub(crate) fn validate_adapter_transition(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
@@ -1240,28 +1241,40 @@ pub(crate) fn validate_adapter_transition(
     if validate_adapters(current).is_err() {
         return Ok(());
     }
-    for old in &current.adapters.artifacts {
-        let identity = adapter_identity(old);
-        let Some((origin, artifact_type)) = identity else {
+    let current_ids = adapter_id_counts(current);
+    let next_ids = adapter_id_counts(next);
+    for ((origin, artifact_type), old) in current_ids {
+        let Some(new) = next_ids.get(&(origin, artifact_type)) else {
             continue;
         };
-        let mut matching = next
-            .adapters
-            .artifacts
+        let old_is_subset = old
             .iter()
-            .filter(|candidate| adapter_identity(candidate) == Some((origin, artifact_type)));
-        let Some(first) = matching.next() else {
-            continue;
-        };
-        if old.get("id") != first.get("id")
-            && !matching.any(|candidate| old.get("id") == candidate.get("id"))
-        {
+            .all(|(id, count)| new.get(id).is_some_and(|next| next >= count));
+        let new_is_subset = new
+            .iter()
+            .all(|(id, count)| old.get(id).is_some_and(|current| current >= count));
+        if !old_is_subset && !new_is_subset {
             bail!(
                 "the id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
             );
         }
     }
     Ok(())
+}
+
+fn adapter_id_counts(config: &ConfigSnapshot) -> BTreeMap<(&str, &str), BTreeMap<&str, usize>> {
+    let mut groups = BTreeMap::new();
+    for adapter in &config.adapters.artifacts {
+        let (Some(identity), Some(id)) = (adapter_identity(adapter), adapter["id"].as_str()) else {
+            continue;
+        };
+        *groups
+            .entry(identity)
+            .or_insert_with(BTreeMap::new)
+            .entry(id)
+            .or_default() += 1;
+    }
+    groups
 }
 
 fn adapter_identity(value: &serde_json::Value) -> Option<(&str, &str)> {
@@ -1811,6 +1824,43 @@ mod tests {
         let reordered = adapter_config("https://work.example", vec![second, first]);
         validate(&reordered).unwrap();
         validate_adapter_transition(&current, &reordered).unwrap();
+    }
+
+    #[test]
+    fn removing_one_of_two_same_type_adapters_keeps_the_survivor() {
+        let survivor = adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        );
+        let removed = adapter(
+            "https://work.example",
+            "work.issue",
+            "/tickets/{id:int}",
+            "work.issue:{host}/ticket/{id}",
+        );
+        let current = adapter_config("https://work.example", vec![survivor.clone(), removed]);
+        let next = adapter_config("https://work.example", vec![survivor.clone()]);
+        validate(&current).unwrap();
+        validate(&next).unwrap();
+
+        validate_adapter_transition(&current, &next).unwrap();
+
+        let changed = adapter_config(
+            "https://work.example",
+            vec![
+                survivor,
+                adapter(
+                    "https://work.example",
+                    "work.issue",
+                    "/tickets/{id:int}",
+                    "work.issue:{host}/changed/{id}",
+                ),
+            ],
+        );
+        validate(&changed).unwrap();
+        assert!(validate_adapter_transition(&current, &changed).is_err());
     }
 
     #[test]
