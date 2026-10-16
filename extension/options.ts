@@ -36,6 +36,12 @@ import {
   validateAdapterDocument,
   type AdapterObject,
 } from "./adapter-review.js";
+import {
+  hasAdapter,
+  parseGitHubOrganizations,
+  starterOffers,
+  type StarterOffer,
+} from "./starter-adapters.js";
 
 const status = element<HTMLDivElement>("status");
 const folderPath = element<HTMLOutputElement>("folder-path");
@@ -48,6 +54,7 @@ const sitesList = element<HTMLUListElement>("sites-list");
 const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
 const adapterList = element<HTMLDivElement>("adapter-list");
 const newAdapterButton = element<HTMLButtonElement>("new-adapter");
+const starterGallery = element<HTMLDivElement>("starter-gallery");
 const adapterEditor = element<HTMLDivElement>("adapter-editor");
 const adapterEditorHeading = element<HTMLHeadingElement>("adapter-editor-heading");
 const adapterJson = element<HTMLTextAreaElement>("adapter-json");
@@ -89,6 +96,7 @@ const envChoices = new Map<string, boolean>();
 let pendingDenylist: string[] | null = null;
 let summariesEdited = false;
 let adapterEdit: number | "new" | null = null;
+let githubScopeText = "";
 
 // The host binds a folder selection and each harness offer to the revision it
 // was made at, so any save, from this page or another, makes them unusable.
@@ -161,6 +169,9 @@ function updateControls(): void {
   newAdapterButton.disabled = !connected || busy || repairing || !session.config?.sites.length;
   for (const button of adapterList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || button.dataset.boundary === "true";
+  }
+  for (const button of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
+    button.disabled = !connected || busy || repairing || button.dataset.available !== "true";
   }
   saveAdapterButton.disabled = !connected || busy || repairing ||
     adapterCandidate() === null;
@@ -369,6 +380,80 @@ function addText(parent: HTMLElement, tag: string, text: string, className?: str
   return child;
 }
 
+function offerConfigured(offer: StarterOffer): boolean {
+  return hasAdapter(session.config?.adapters.artifacts ?? [], offer);
+}
+
+function currentStarterOffer(site: SiteConfig, key: string): StarterOffer | null {
+  const scope = parseGitHubOrganizations(githubScopeText);
+  return starterOffers(site, scope).find((offer) => offer.key === key) ?? null;
+}
+
+function setStarterButtonState(button: HTMLButtonElement, site: SiteConfig, key: string): void {
+  const offer = currentStarterOffer(site, key);
+  const configured = offer ? offerConfigured(offer) : false;
+  button.dataset.available = String(offer?.adapter !== null && !configured);
+  button.textContent = configured ? "Already configured" : "Review starter…";
+  const repairing = session.configIssue !== null || session.adapterIssue !== null;
+  button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";
+}
+
+function renderStarterGallery(): void {
+  starterGallery.replaceChildren();
+  const sites = session.config?.sites ?? [];
+  const compatible = sites.flatMap((site) => starterOffers(site, parseGitHubOrganizations(githubScopeText))
+    .map((offer) => ({ site, offer })));
+  if (!compatible.length) {
+    addText(starterGallery, "p", "Enable a root-scoped Jira Cloud, SharePoint/OneDrive, or GitHub site to see starter drafts. Narrow path policies stay custom.");
+    return;
+  }
+  let githubScopeRendered = false;
+  for (const { site, offer } of compatible) {
+    const card = document.createElement("article");
+    card.className = "starter-card";
+    addText(card, "h3", offer.label);
+    addText(card, "p", offer.description);
+    addText(card, "small", offer.origin);
+    if (offer.kind === "github" && !githubScopeRendered) {
+      githubScopeRendered = true;
+      const label = document.createElement("label");
+      label.textContent = "Work organizations (comma-separated)";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = githubScopeText;
+      input.placeholder = "acme-corp, partner-org";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      label.append(input);
+      card.append(label);
+      const guidance = addText(card, "small", "Required: GitHub is shared across accounts, so the starter never captures every organization.");
+      guidance.className = parseGitHubOrganizations(githubScopeText) ? "" : "warning";
+      input.addEventListener("input", () => {
+        githubScopeText = input.value;
+        const valid = parseGitHubOrganizations(githubScopeText) !== null;
+        guidance.className = valid ? "" : "warning";
+        for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
+          if (scoped.dataset.siteOrigin === site.origin) {
+            setStarterButtonState(scoped, site, scoped.dataset.starterKey ?? "");
+          }
+        }
+      });
+    }
+    const review = document.createElement("button");
+    review.type = "button";
+    review.dataset.siteOrigin = site.origin;
+    review.dataset.starterKey = offer.key;
+    setStarterButtonState(review, site, offer.key);
+    review.addEventListener("click", () => {
+      const selected = currentStarterOffer(site, offer.key);
+      if (!selected?.adapter || offerConfigured(selected)) return;
+      beginAdapterDraft(selected.adapter, selected.label);
+    });
+    card.append(review);
+    starterGallery.append(card);
+  }
+}
+
 function renderAdapters(): void {
   const adapters = session.config?.adapters.artifacts ?? [];
   adapterOverlaps.replaceChildren();
@@ -499,21 +584,30 @@ function refreshAdapterEditor(): void {
   updateControls();
 }
 
+function openAdapterEditor(index: number | "new", adapter: AdapterObject, heading: string): void {
+  adapterEdit = index;
+  adapterEditor.hidden = false;
+  adapterEditorHeading.textContent = heading;
+  adapterJson.value = JSON.stringify(adapter, null, 2);
+  adapterPreviewUrl.value = exampleUrl(adapter);
+  adapterPreviewTitle.value = "";
+  refreshAdapterEditor();
+}
+
+function beginAdapterDraft(adapter: AdapterObject, label: string): void {
+  if (!session.config || busy) return;
+  openAdapterEditor("new", adapter, `Review ${label} starter`);
+}
+
 function beginAdapterEdit(index: number | "new"): void {
   if (!session.config || busy) return;
   const adapter = index === "new"
     ? newAdapter(session.config.sites[0]?.origin ?? "https://example.com")
     : session.config.adapters.artifacts[index];
   if (!adapter) return;
-  adapterEdit = index;
-  adapterEditor.hidden = false;
-  adapterEditorHeading.textContent = index === "new"
+  openAdapterEditor(index, adapter, index === "new"
     ? "Add and review adapter"
-    : `Edit and review ${adapterLabel(adapter, index)}`;
-  adapterJson.value = JSON.stringify(adapter, null, 2);
-  adapterPreviewUrl.value = exampleUrl(adapter);
-  adapterPreviewTitle.value = "";
-  refreshAdapterEditor();
+    : `Edit and review ${adapterLabel(adapter, index)}`);
 }
 
 function closeAdapterEditor(): void {
@@ -601,6 +695,7 @@ function renderConfig(): void {
       sitesList.append(item);
     }
   }
+  renderStarterGallery();
   renderAdapters();
   renderAgent();
   updateControls();

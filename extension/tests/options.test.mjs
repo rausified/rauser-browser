@@ -97,7 +97,7 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
     ["site-path", "input"], ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
-    ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
+    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
@@ -374,6 +374,47 @@ test("adapter workspace previews and saves a new adapter through native confirma
   assert.equal(saves[0].consent_token, "consent");
   assert.equal(state.config.adapters.artifacts[0].type, "work.item");
   assert.match(statusText(), /adapter added/);
+});
+
+test("a Jira starter resolves the enabled origin and enters preview before save", async () => {
+  const site = { origin: "https://acme.atlassian.net", path_prefix: "/" };
+  const state = install({ sites: [site] });
+  await openSettings();
+  assert.match(nodeText(env.elements.get("starter-gallery")), /Jira issues/);
+
+  const [review] = env.elements.get("starter-gallery").querySelectorAll("button");
+  review.click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.origin, site.origin);
+  assert.equal(draft.type, "jira.issue");
+  assert.match(nodeText(env.elements.get("adapter-preview")), /jira:acme\.atlassian\.net\/ABC-123/);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the Jira starter save");
+  assert.equal(state.config.adapters.artifacts[0].type, "jira.issue");
+  assert.match(nodeText(env.elements.get("starter-gallery")), /Already configured/);
+});
+
+test("GitHub starters stay disabled until an explicit valid organization scope", async () => {
+  const site = { origin: "https://github.com", path_prefix: "/" };
+  install({ sites: [site] });
+  await openSettings();
+  const gallery = env.elements.get("starter-gallery");
+  assert.match(nodeText(gallery), /GitHub pull requests/);
+  const [scope] = gallery.querySelectorAll("input");
+  const [pullRequest, issue] = gallery.querySelectorAll("button");
+  assert.equal(pullRequest.disabled, true);
+  assert.equal(issue.disabled, true);
+
+  scope.value = "Acme-Corp, partner-org";
+  scope.dispatch("input");
+  assert.equal(pullRequest.disabled, false);
+  assert.equal(issue.disabled, false);
+  pullRequest.click();
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.deepEqual(draft.scope, { owner: ["acme-corp", "partner-org"] });
+  assert.equal(draft.unscoped, undefined);
 });
 
 test("adapter workspace names overlaps and highlights a matching safety probe", async () => {

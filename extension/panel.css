@@ -53,6 +53,10 @@ footer { border-top: 1px solid #8885; padding-top: 10px; font-size: .85rem; }
 .capture-strip-body { padding: 0 14px 14px; }
 .sync-caution { border-left: 3px solid #b36b00; padding-left: 10px; }
 .adapter-list { display: grid; gap: 10px; margin: 12px 0; }
+.starter-gallery { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.starter-card { border: 1px solid #24619a66; border-radius: 7px; padding: 12px; }
+.starter-card p { margin: 4px 0 8px; }
+.starter-card input { margin: 4px 0; }
 .adapter-card { border: 1px solid #8885; border-radius: 7px; padding: 12px; }
 .adapter-card h3 { overflow-wrap: anywhere; }
 .adapter-card p { margin: 4px 0 8px; overflow-wrap: anywhere; }
