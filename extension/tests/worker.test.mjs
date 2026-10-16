@@ -597,7 +597,9 @@ test("worker-start map rebuild settles activity restored from storage.session", 
     totals: [{
       event_id: "00000000-0000-4000-8000-000000000001",
       artifact_id: "test:worker-wake.example/a", artifact_type: "test.item",
-      hour_start: "2026-10-16T10:00:00+00:00", url: `${origin}/items/a`, title: "A",
+      // Totals are keyed by local hour, so derive it rather than hardcoding UTC.
+      hour_start: `${localTimestamp(new Date(start)).slice(0, 13)}:00:00${localTimestamp(new Date(start)).slice(19)}`,
+      url: `${origin}/items/a`, title: "A",
       opens: 1, focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
     }],
   });

@@ -26,7 +26,10 @@ test("the built extension requests idle measurement without broad tab access", a
 });
 
 test("hourly activity freezes with a stable ID and survives state restoration", () => {
-  const start = new Date("2026-10-16T10:59:50Z").getTime();
+  // Ten seconds before a *local* hour boundary, so half-hour offsets work too.
+  const boundary = new Date("2026-10-16T10:30:00Z");
+  boundary.setMinutes(60, 0, 0);
+  const start = boundary.getTime() - 10_000;
   const state = emptyActivityState(start);
   recordNavigation(state, nav(1, "https://example.com/items/a"), match("a", "view"), start, uuid);
   activateTab(state, 1, 1, start, uuid);
