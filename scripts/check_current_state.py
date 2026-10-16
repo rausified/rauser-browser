@@ -27,10 +27,19 @@ def section(path: pathlib.Path, heading: str) -> str:
     return match.group("body")
 
 
+def status_line(path: pathlib.Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"^> Status:\s*(?P<body>.+?)\s*$", text, flags=re.MULTILINE)
+    if match is None:
+        raise ValueError(f"{path.name} has no status line")
+    return match.group("body")
+
+
 def main() -> int:
     try:
         agents = section(ROOT / "AGENTS.md", "Current state")
         readme = section(ROOT / "README.md", "Status")
+        design = status_line(ROOT / "DESIGN.md")
     except (OSError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
@@ -42,9 +51,11 @@ def main() -> int:
             "and artifact activity log remain unbuilt"
         ),
         "README.md": "Hourly artifact activity and the Recent view are still unbuilt",
+        "DESIGN.md": "hourly artifact activity are next",
     }
+    bodies = {"AGENTS.md": agents, "README.md": readme, "DESIGN.md": design}
     for filename, claim in stale_claims.items():
-        body = agents if filename == "AGENTS.md" else readme
+        body = bodies[filename]
         if normalized(claim) in normalized(body):
             errors.append(f"{filename} repeats the obsolete claim: {claim!r}")
 
@@ -61,6 +72,8 @@ def main() -> int:
 
     if "records hourly artifact activity" not in normalized(readme):
         errors.append("README.md Status no longer records shipped artifact activity")
+    if "hourly artifact activity merged" not in normalized(design):
+        errors.append("DESIGN.md status no longer records shipped artifact activity")
 
     for error in errors:
         print(error, file=sys.stderr)
