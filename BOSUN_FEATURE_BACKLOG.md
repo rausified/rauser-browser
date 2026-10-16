@@ -18,11 +18,23 @@ for one cycle, split it into ordered sub-items here rather than reordering the
 plan. You may still add proposals and notes at cycle end — just don't build
 them ahead of the plan.
 
+**Resequenced by John, 2026-10-16 (architecture review).** Two product
+decisions are recorded in DESIGN.md §14. First, users never see adapters:
+**Capture Site** in the side panel learns a site's pattern and starts
+capturing, with a plain-language confirmation. That moves Create adapter
+(M1.5b step 7.6), the re-keying it needs, and later agent refinement (step
+7.7) onto the critical path ahead of the rest of M2. Second, Windows support
+is back in scope, starting with Windows CI. The order below already reflects
+this. The goal is to get John using M1.5a daily as soon as possible, so the
+worklog comes first within step 6.7. Treat new adapter-configuration hardening
+findings as P3 unless they describe a concrete user-facing failure.
+
 **Beads is the machine queue (2026-10-16).** `.beads/issues.jsonl` holds one
 bead per open item below, structured like Privateer's queue. Known Issues
 are P1 and plan work is P2. Cookie's proposals are P3, so none of them outranks
-plan work. Dependencies are only the real ones (8.2 waits for 6.5-6.7, then
-8.3, 8.4, 8.5 in turn), so `bd ready` shows every Known Issue at once. **Take
+plan work. Dependencies are only the real ones (for example 8.2 waits for
+6.5-6.7 and the harness-auth decision, then 8.3, 8.4, 8.5 in turn), so
+`bd ready` shows every Known Issue at once. **Take
 them in the order listed here, per the rule above.** **[human]** items carry
 the `human` label (`bd human list`) and depend on the deferred `brwr-hpo`
 HUMAN GATE bead. Do not close the gate to make them ready. Every open item
@@ -154,10 +166,33 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   regenerate ownership-checked, skip-if-unchanged artifact Markdown with
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
-- [ ] `brwr-m40` **M1.5a step 6.7 — Panel, Recent, worklog, and record keys.** The
-  artifact card (§5.7), the one-liner, the Recent tab (one history across
-  tools, grouped by day, type and title filters), and the worklog view with
-  Copy, backed by `get_artifact`, `list_artifacts`, and `worklog`. Record keys
+- [ ] `brwr-qsq` **Replace the hand-written SQLite snapshot with an incremental
+  real-SQLite index.** Step 6.6 shipped a custom SQLite file writer
+  (`build_sqlite`) because the sandbox can't fetch crates. Every delivery
+  re-derives all history, rewrites a whole-history `index-state.json` (64 MiB
+  cap), and rewrites all of `index.db`. Move to `rusqlite` (bundled) with
+  incremental upserts in transactions, keeping the log authoritative and
+  `brauser reindex` as the rebuild. This is required for M3 FTS5. It is
+  blocked on **[human]** `brwr-dep`, which adds the crate outside the sandbox.
+- [ ] `brwr-dep` **[human] Add `rusqlite` (bundled) to the workspace and warm
+  the VM's cargo cache.** Update `Cargo.toml` and `Cargo.lock`, pass
+  `cargo deny`, and run `cargo fetch` on the VM so in-sandbox builds work
+  offline.
+- [ ] `brwr-7vf` **index.db across concurrent host processes.** The panel,
+  settings, and every worker sync each start a host, so `index.db` gets
+  several openers at once. Use WAL, a busy timeout, and one writer at a time
+  for index updates and dirty-set regeneration. Test concurrent hosts with no
+  surfaced `SQLITE_BUSY`, no lost or duplicated rows, and no double
+  regeneration.
+- [ ] `brwr-x0d` **Panel list and streaming-text helper.** A small, tested,
+  framework-free helper for keyed, filterable list rendering and append-only
+  streamed text. Recent, the worklog, the M2 answer card, and the M4 omnibar
+  all build on it. Build it before 6.7.
+- [ ] `brwr-m40` **M1.5a step 6.7 — Panel, Recent, worklog, and record keys.**
+  **Worklog view with Copy first** (the headline MVP feature), then the Recent
+  tab (one history across tools, grouped by day, type and title filters), then
+  the artifact card (§5.7) and the one-liner, backed by `worklog`,
+  `list_artifacts`, and `get_artifact`. Record keys
   (§6.2) land here and **must ship before any M2 summary write**: `load_note`
   and `save_note` resolve and return the key, and older URL-keyed notes are
   listed. Cover every test case named in §12.2 step 6.7.
@@ -165,19 +200,48 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
+- [ ] `brwr-1hj` **Capture Site (step 7.6 moved forward).** A side-panel
+  button, plus the existing context-menu and toolbar entry points for an
+  ungranted tab, that learns the site's artifact pattern with the structural
+  drafter (no agent) and every step 7.6 safety rule. The native confirmation
+  stays, in plain language: what Brauser will remember here, with real example
+  pages it matched, and what it won't (search, dashboards, login, sharing).
+  The JSON editor becomes an advanced view nobody has to open. Tier 1 is not
+  required. Split into ordered sub-items here if it's too big for one cycle.
+- [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
+  hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
+  existing activity, notes, and index rows through explicit append-only
+  alias/re-key events (the needed part of step 7.2). This replaces the
+  conservative ID freeze instead of relaxing it.
 - [ ] `brwr-npy` **§12.2 step 2 — Headless page-load check in CI (optional,
   recommended).** Load the built `extension/dist/` in headless Chrome and open
   the panel and settings page, so a stale-manifest class of failure is caught
   before a manual run.
+- [ ] `brwr-bzx` **Windows CI.** Add a `windows-latest` job for the host build,
+  tests, and clippy, plus the extension checks. Fix code and tests that have
+  assumed macOS/Unix since 2026-10-15, and keep the existing Windows code
+  paths. Interactive Windows checks are separate **[human]** work.
+- [ ] `brwr-9yc` **[human] Decide how a Chrome-spawned host authenticates the
+  AI harness** (DESIGN §14 open M2 question; it affects John's Bedrock setup).
+  Cookie may write an options proposal in §14; John decides. Blocks 8.2.
 - [ ] `brwr-6wz` **M2 step 8.2 — Host invocation.** Start only after 6.4–6.7 are shipped.
   Allowlisted environment, templated argv, page content on stdin inside the
   untrusted-data block, host-owned working directory, timeout, output cap,
   process-tree kill, and the confirmed-install-location check (§7.1), with the
   fake-harness tests and the §7.1 canary listed in step 8.2.
+- [ ] `brwr-jfe` **Concurrent native message loop (before 8.3).** Refactor
+  `serve_with_context` into a stdin reader thread, a worker for long requests,
+  and one serialized writer, reusing `run_bounded`'s thread/mpsc pattern. No
+  protocol change. A short request must be answered while a long one runs,
+  and stdin EOF must tear both down.
 - [ ] `brwr-0cj` **M2 step 8.3 — Streaming protocol.** A reader that stays responsive
   while a harness runs; chunk, `rejected`, error, `cancel`, and
   `summary_result` messages correlated by `request_id` under the 900 KiB cap;
   stdin EOF kills the harness. Takes the next protocol version after v5.
+- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).** After
+  8.2, the configured harness can refine the structural draft under the same
+  isolation, with the same per-rule checks and plain-language confirmation.
+  Capture Site must keep working with no agent configured.
 - [ ] `brwr-0ij` **M2 step 8.4 — Content extraction.** Bundled, pinned Readability-style
   extraction, the `summarize` command, context menu, and toolbar trigger, and
   the §8 permissions. **[human]** sub-step first (`brwr-rva`): the real-Chrome `activeTab`
@@ -190,10 +254,12 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ### Gated plan work (do not start yet)
 
-- **M1.5b (§12.2 step 7.1–7.7)** — aliases, Tier 1 fields (`scripting`),
-  worklog files, the remaining starter adapters, Create adapter with the
-  structural drafter, then agent drafting. DESIGN.md gates this on M1.5a being
-  in daily use for a few weeks; John will lift the gate here when it's time.
+- **M1.5b (§12.2 step 7.1–7.5)**: the rest of aliases, Tier 1 fields
+  (`scripting`), worklog files, and the remaining starter adapters. Create
+  adapter (7.6) and agent drafting (7.7) moved into Plan work above as
+  Capture Site (`brwr-1hj`, `brwr-f45`), along with the re-keying part of
+  7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
+  a few weeks; John will lift the gate here when it's time.
 - **M3 — Related** (FTS5 in `brauser reindex`, related pages, read later),
   **M4 — Omnibar** (built-in commands, free text, custom commands), and
   **M5 — Release** (installer, store listing, signing and provenance, docs)
@@ -212,6 +278,20 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   marker currently waits for another authorized event to provide a safe log
   anchor. Make that evidence independently deliverable without accepting an
   unvalidated URL or vault path.
+- [ ] `brwr-o1l` **Share one authorize-and-open path across delivery entry
+  points.** `record_visit`, `record_activity`, and `record_batch` repeat the
+  lock, refresh, policy, and store setup, and `capture.rs` has twin
+  mode/trail authorization loops. Extract the shared steps and set a removal
+  release for the legacy paths.
+- [ ] `brwr-ahb` **One adapter identity for consent and transition checks.**
+  `consent.rs` and `config.rs` compute identity separately, so the
+  confirmation text could drift from what is enforced.
+- [ ] `brwr-2iz` **Bound `adapter_id_history` inside the 64 KiB config cap.**
+  When it fills, unrelated writes fail with a generic size error. Add a
+  budget, a specific error, and a safe prune, or fold it into `brwr-6x2`.
+- [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
+  dated as-built and probe records to `docs/history.md`, and make AGENTS.md
+  "Current state" a short table.
 
 ### Cookie's own proposals (only after the plan work above)
 
