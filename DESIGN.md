@@ -808,8 +808,11 @@ Chrome-grant revocation reconciled at startup, removes its adapters in the same
 host update so a valid config cannot retain an adapter whose origin is no
 longer enabled. If the adapter document is already invalid or from a future
 format, revocation still removes the site and may turn capture off, but echoes
-the unsupported document byte-for-byte and keeps it suspended until explicit
-repair rather than reinterpreting it.
+the unsupported document without structural changes and keeps it suspended
+until explicit repair rather than reinterpreting it. Reconciliation rechecks
+the worker's revocation markers after acquiring the shared configuration lock,
+so a stale snapshot cannot remove an origin another settings page just
+re-enabled.
 - **M1 compatibility.** M1's `[[sites]]` entries (an exact origin and an optional path prefix) remain valid config that grants an origin but records nothing on their own (§5.1).
 
 ### 7.3 Privacy

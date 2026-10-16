@@ -82,7 +82,9 @@ function fire(listeners, permissions) {
   setTimeout(() => { for (const listener of listeners) listener(permissions); }, 0);
 }
 
-function install({ sites = [SITE], adapters = [], grants = [], storage = {}, host = {}, workerStatus = {} } = {}) {
+function install({
+  sites = [SITE], adapters = [], grants = [], storage = {}, host = {}, worker = {}, workerStatus = {},
+} = {}) {
   const elements = new Map();
   const state = {
     grants: new Set(grants),
@@ -188,6 +190,8 @@ function install({ sites = [SITE], adapters = [], grants = [], storage = {}, hos
       },
       async sendMessage(request) {
         state.workerRequests.push(request);
+        const custom = worker[request.kind]?.(request, state);
+        if (custom !== undefined) return { ok: true, value: custom };
         if (request.kind === "remove_site") {
           return { ok: true, value: statusFor({ ...workerStatus, locally_removed_sites: [request.site] }) };
         }
@@ -382,6 +386,42 @@ test("a stale Chrome revocation cannot reinstall an invalid adapter policy", asy
   assert.equal(state.workerRequests.some((request) => request.kind === "install_policy"), false);
   assert.ok(state.workerRequests.some((request) => request.kind === "suspend_policy"));
   assert.ok(state.workerRequests.some((request) => request.kind === "ack_revocations"));
+});
+
+test("revocation reconciliation does not remove an origin re-enabled while it waits", async () => {
+  const futureAdapters = { format: 2, artifacts: [{ future: true }] };
+  const state = install({
+    sites: [],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision),
+        config: { ...current.config, adapters: futureAdapters }, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
+        adapter_warnings: [],
+      }),
+    },
+    worker: {
+      get_status: (_request, current) => {
+        if (current.revocationObserved) return statusFor();
+        current.revocationObserved = true;
+        // Another settings page acquired the configuration lock first,
+        // re-enabled the origin, installed its revision, and acknowledged the
+        // old revocation before this page entered the lock.
+        current.config = {
+          ...configWith([SITE]),
+          adapters: futureAdapters,
+        };
+        current.revision += 1;
+        return statusFor({ revoked_origins: [SITE.origin] });
+      },
+    },
+  });
+
+  await openSettings();
+
+  assert.deepEqual(state.config.sites, [SITE]);
+  assert.equal(state.config.capture_enabled, true);
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
 });
 
 test("adapter policy problems and overlap warnings are visible in settings", async () => {
