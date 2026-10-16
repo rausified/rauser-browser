@@ -627,7 +627,12 @@ async function installPolicy(
   resumeAfterConfirmation: boolean,
   resumeAfterPauseToken: string | null,
 ): Promise<WorkerStatus> {
-  if (!policyLeases.install(lease) || lease.expires_at <= Date.now()) {
+  // Reject an expired message before it can replace the compiled document for
+  // the active revision. Otherwise the unchanged stored lease would reuse the
+  // rejected message's matcher on its next read.
+  if (typeof lease !== "object" || lease === null ||
+      typeof lease.expires_at !== "number" || lease.expires_at <= Date.now() ||
+      !policyLeases.install(lease)) {
     throw new Error("Host policy lease is invalid or expired");
   }
   if (await pausePending()) {

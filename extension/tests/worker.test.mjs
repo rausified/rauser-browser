@@ -546,6 +546,43 @@ test("matching navigations never serialize the adapter document", async () => {
   assert.equal((await send({ kind: "get_activity" })).length, 2);
 });
 
+test("an expired policy install cannot replace the active revision's compiled adapter", async () => {
+  values.clear();
+  sessionValues.clear();
+  grants.clear();
+  tabs.clear();
+  const origin = "https://expired-install.example";
+  grants.set("https://expired-install.example:443/*", true);
+  const active = lease(origin);
+  values.set(storageKey("policy_v1"), active);
+  await send({ kind: "get_status" });
+
+  const expired = {
+    ...structuredClone(active),
+    expires_at: Date.now() - 1,
+    adapters: {
+      format: 1,
+      artifacts: [artifact(origin, { match: [{ path: "/private/{id:token}" }] })],
+    },
+  };
+  await assert.rejects(send({
+    kind: "install_policy",
+    lease: expired,
+    resume_after_confirmation: false,
+    resume_after_pause_token: null,
+  }), /invalid or expired/);
+
+  tabs.set(33, { id: 33, url: `${origin}/private/secret`, title: "Private", incognito: false });
+  onCommitted({
+    tabId: 33, frameId: 0, documentId: "doc-expired-install", documentLifecycle: "active",
+    url: `${origin}/private/secret`, timeStamp: Date.now(),
+  });
+  await flush();
+
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  assert.deepEqual(values.get(storageKey("policy_v1")), active);
+});
+
 test("adapter rules, scope, and Chrome grants all fail closed before buffering", async () => {
   values.clear();
   sessionValues.clear();
