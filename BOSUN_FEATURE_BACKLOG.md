@@ -107,9 +107,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   document on `ConfigStore` for each on-disk revision, reusing it across all
   event evidence checks, and running the pairwise warning scan only for
   settings reads or immediately after a successful commit.
-- [ ] `brwr-7sb` **AGENTS.md "Current state" is stale.** It says the worker lease, the
+- [x] `brwr-7sb` **AGENTS.md "Current state" is stale.** It says the worker lease, the
   TypeScript prefilter, and host recognition are unbuilt, but they shipped.
-  Update it to match README.md and DESIGN.md.
+  Fixed by aligning AGENTS.md and README.md with the shipped lease,
+  defense-in-depth recognition, and hourly activity boundary, protected by a
+  whitespace-tolerant CI documentation regression.
 - [ ] `brwr-5fg` Smaller ones from the same review:
   - In `setStarterButtonState` (options.ts), `offer?.adapter !== null` is true
     when `offer` is null.
@@ -236,6 +238,7 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Shipped
 
+- **Category:** Documentation & Process. **Align contributor status with shipped artifact capture (2026-10-16).** AGENTS.md now describes the active revisioned worker lease, TypeScript prefilter, independent native-host recognition, and measured hourly activity instead of telling contributors those paths are unbuilt. README names the same product boundary and separates it from the unfinished delivery, index, and panel slices; a whitespace-tolerant CI check prevents the obsolete claims from returning. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new documentation regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile native adapter policy once per configuration revision (2026-10-16).** The native host now keeps one validated Rust adapter document with each adopted config revision and reuses it for visits, hourly activities, mode and trail evidence, and why records instead of reparsing the complete policy for every check. Unchanged Hello, note, capture, and settings refreshes retain the compiled document; conservative pairwise overlap warnings run only when settings requests them or immediately after a successful commit, while invalid revisions still suspend capture fail-closed. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new failing-first compile/overlap hot-path regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Performance & Resource Bounds. **Compile adapter policy once per worker revision (2026-10-16).** The service worker now validates and compiles a stored adapter document once when its host revision is first restored, then reuses that prepared document across policy reads and artifact matches instead of rebuilding the grammar and serializing the full policy on every navigation. Every non-expired install message still compiles independently at the untrusted boundary, expired installs are rejected before they can replace the active matcher, malformed cold-start policy stays inert, and site and live-grant gates remain ahead of evaluation. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new cache and navigation-hot-path regressions including failing-first compile-cache and rejected-install proofs, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Security & Privacy. **Narrow host policy after Chrome revokes access during adapter repair (2026-10-16).** Settings now writes revoked origins out of the host's site allowlist even when an invalid or future adapter document has already suspended capture. The revisioned update preserves that unsupported document without structural changes for explicit repair, disables capture when its final site disappears, rechecks revocations under the configuration lock so a stale snapshot cannot remove a concurrently re-enabled site, and acknowledges revocations only after the host is already narrow. **Metrics:** 265 Rust tests and 8 extension suites passing; 3 new failing-first settings regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, and extension checks green.
@@ -254,6 +257,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
+- The current-state CI check deliberately protects only the shipped M1.5a
+  boundary that regressed: lease delivery, worker prefiltering, native-host
+  rechecking, and hourly activity. When delivery, indexing, or the artifact
+  panel ships, update both summaries and extend the protected fact set in the
+  same cycle rather than weakening or deleting the check.
 - The worker and host now use the same lifecycle rule for prepared adapter
   policy: a host configuration revision is the cache identity, and untrusted
   replacement input must validate before it can replace the active matcher.
