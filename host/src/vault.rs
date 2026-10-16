@@ -372,7 +372,11 @@ impl Drop for TempFileCleanup<'_> {
 
 #[cfg(not(windows))]
 pub(crate) fn sync_directory(dir: &Dir) -> io::Result<()> {
-    dir.try_clone()?.into_std_file().sync_all()?;
+    // cap-std may represent a directory capability with an O_PATH handle on
+    // Linux. That handle is suitable for relative lookup but fsync(2) rejects
+    // it with EBADF, so open the capability itself as a readable directory
+    // before asking the filesystem to persist its entries.
+    dir.open(".")?.sync_all()?;
     Ok(())
 }
 
