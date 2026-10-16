@@ -8,6 +8,8 @@ bd.sock
 bd.sock.startlock
 sync-state.json
 last-touched
+# bd's JSONL auto-import watermark (size/mtime of the last import; per-machine)
+.auto-import-issues.jsonl
 .exclusive-lock
 
 # Daemon runtime (lock, log, pid)
