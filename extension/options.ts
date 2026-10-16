@@ -928,7 +928,7 @@ function enableSite(): void {
           });
           show(session.config?.capture_enabled
             ? "Capture settings changed on another page. Review the current sites."
-            : "Capture was paused on another page. Pending visits were cleared.",
+            : "Capture was paused on another page. Pending capture records were cleared.",
           session.config?.capture_enabled === true);
         } catch (error) {
           show(`Capture is paused locally; the host pause needs attention: ${describe(error)}`, true);
@@ -940,7 +940,7 @@ function enableSite(): void {
         setTimeout(() => chrome.runtime.reload(), 1_000);
         return;
       }
-      show(`Capture enabled for ${parsed.site.origin}${parsed.site.path_prefix}. The side panel sends buffered visits.`);
+      show(`Capture enabled for ${parsed.site.origin}${parsed.site.path_prefix}. The side panel sends buffered activity.`);
     } catch (error) {
       show(`Setup failed: ${describe(error)}`, true);
       if (error instanceof HostError && error.code === "conflict") {
@@ -969,7 +969,7 @@ async function pauseCapture(): Promise<void> {
   updateControls();
   try {
     await session.pauseCapture();
-    show("Capture paused. Pending visits cleared.");
+    show("Capture paused. Pending capture records cleared.");
   } catch (error) {
     show(`Could not pause capture: ${describe(error)}`, true);
   } finally {

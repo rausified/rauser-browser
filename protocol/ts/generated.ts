@@ -138,6 +138,20 @@ export interface RecordVisitRequest {
   event: VisitEvent;
 }
 
+export interface RecordActivityRequest {
+  type: "record_activity";
+  protocol_version: 5;
+  request_id: string;
+  event: ActivityEvent;
+}
+
+export interface RecordWhyRequest {
+  type: "record_why";
+  protocol_version: 5;
+  request_id: string;
+  event: WhyEvent;
+}
+
 export interface LoadNoteRequest {
   type: "load_note";
   protocol_version: 5;
@@ -180,6 +194,26 @@ export interface ConfigConfirmed {
 
 export interface VisitRecorded {
   type: "visit_recorded";
+  protocol_version: 5;
+  request_id: string;
+  event_id: string;
+  outcome: VisitOutcome;
+  reason: string | null;
+  relative_path: string | null;
+}
+
+export interface ActivityRecorded {
+  type: "activity_recorded";
+  protocol_version: 5;
+  request_id: string;
+  event_id: string;
+  outcome: VisitOutcome;
+  reason: string | null;
+  relative_path: string | null;
+}
+
+export interface WhyRecorded {
+  type: "why_recorded";
   protocol_version: 5;
   request_id: string;
   event_id: string;
@@ -239,6 +273,47 @@ export interface VisitEvent {
   incognito: boolean;
 }
 
+export interface ActivityTrail {
+  from_artifact_id: string | null;
+  from_url: string | null;
+  transition: string;
+}
+
+export interface ActivityRef {
+  artifact_type: string;
+  value: string;
+}
+
+export interface ActivityMode {
+  mode: string;
+  url: string;
+}
+
+export interface ActivityEvent {
+  event_id: string;
+  artifact_id: string;
+  artifact_type: string;
+  url: string;
+  title: string | null;
+  occurred_at: string;
+  incognito: boolean;
+  opens: number;
+  focused_seconds: number;
+  background_seconds: number;
+  modes: ActivityMode[];
+  trails: ActivityTrail[];
+  refs: ActivityRef[];
+}
+
+export interface WhyEvent {
+  event_id: string;
+  artifact_id: string;
+  url: string;
+  occurred_at: string;
+  incognito: boolean;
+  text: string;
+}
+
 export type VisitOutcome = "persisted" | "suppressed" | "rejected" | "retryable";
 
 export type NoteSaveOutcome = "created" | "replaced" | "created_with_warning" | "replaced_with_warning";
@@ -295,6 +370,6 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | LoadNoteRequest | SaveNoteRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | NoteLoaded | NoteSaved | NoteConflict | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;

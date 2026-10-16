@@ -33,6 +33,12 @@
           "$ref": "#/$defs/RecordVisitRequest"
         },
         {
+          "$ref": "#/$defs/RecordActivityRequest"
+        },
+        {
+          "$ref": "#/$defs/RecordWhyRequest"
+        },
+        {
           "$ref": "#/$defs/LoadNoteRequest"
         },
         {
@@ -68,6 +74,12 @@
         },
         {
           "$ref": "#/$defs/VisitRecorded"
+        },
+        {
+          "$ref": "#/$defs/ActivityRecorded"
+        },
+        {
+          "$ref": "#/$defs/WhyRecorded"
         },
         {
           "$ref": "#/$defs/NoteLoaded"
@@ -774,6 +786,28 @@
         }
       }
     },
+    "RecordActivityRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "event"],
+      "properties": {
+        "type": { "const": "record_activity" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "event": { "$ref": "#/$defs/ActivityEvent" }
+      }
+    },
+    "RecordWhyRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "event"],
+      "properties": {
+        "type": { "const": "record_why" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "event": { "$ref": "#/$defs/WhyEvent" }
+      }
+    },
     "LoadNoteRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -1006,6 +1040,34 @@
         }
       }
     },
+    "ActivityRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "event_id", "outcome", "reason", "relative_path"],
+      "properties": {
+        "type": { "const": "activity_recorded" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "outcome": { "$ref": "#/$defs/VisitOutcome" },
+        "reason": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "relative_path": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+      }
+    },
+    "WhyRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "event_id", "outcome", "reason", "relative_path"],
+      "properties": {
+        "type": { "const": "why_recorded" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "outcome": { "$ref": "#/$defs/VisitOutcome" },
+        "reason": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "relative_path": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+      }
+    },
     "NoteLoaded": {
       "type": "object",
       "additionalProperties": false,
@@ -1235,6 +1297,67 @@
         "incognito": {
           "type": "boolean"
         }
+      }
+    },
+    "ActivityTrail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_artifact_id", "from_url", "transition"],
+      "properties": {
+        "from_artifact_id": { "oneOf": [{ "type": "string", "maxLength": 512 }, { "type": "null" }] },
+        "from_url": { "oneOf": [{ "type": "string", "maxLength": 8192 }, { "type": "null" }] },
+        "transition": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "ActivityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_type", "value"],
+      "properties": {
+        "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "value": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "ActivityMode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "url"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["view", "edit", "review"] },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 }
+      }
+    },
+    "ActivityEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "artifact_id", "artifact_type", "url", "title", "occurred_at", "incognito", "opens", "focused_seconds", "background_seconds", "modes", "trails", "refs"],
+      "properties": {
+        "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] },
+        "occurred_at": { "type": "string", "minLength": 20, "maxLength": 25 },
+        "incognito": { "type": "boolean" },
+        "opens": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "focused_seconds": { "type": "integer", "minimum": 0, "maximum": 7200 },
+        "background_seconds": { "type": "integer", "minimum": 0, "maximum": 7200 },
+        "modes": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/ActivityMode" } },
+        "trails": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/ActivityTrail" } },
+        "refs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/ActivityRef" } }
+      }
+    },
+    "WhyEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "artifact_id", "url", "occurred_at", "incognito", "text"],
+      "properties": {
+        "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "occurred_at": { "type": "string", "minLength": 20, "maxLength": 25 },
+        "incognito": { "type": "boolean" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 500 }
       }
     },
     "VisitOutcome": {

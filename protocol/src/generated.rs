@@ -210,6 +210,22 @@ pub struct RecordVisitRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RecordActivityRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub event: ActivityEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordWhyRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub event: WhyEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoadNoteRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -257,6 +273,32 @@ pub struct ConfigConfirmed {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VisitRecorded {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub event_id: String,
+    pub outcome: VisitOutcome,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityRecorded {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub event_id: String,
+    pub outcome: VisitOutcome,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhyRecorded {
     pub protocol_version: u32,
     pub request_id: String,
     pub event_id: String,
@@ -326,6 +368,60 @@ pub struct VisitEvent {
     pub title: Option<String>,
     pub occurred_at: String,
     pub incognito: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityTrail {
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub from_artifact_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub from_url: Option<String>,
+    pub transition: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityRef {
+    pub artifact_type: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityMode {
+    pub mode: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityEvent {
+    pub event_id: String,
+    pub artifact_id: String,
+    pub artifact_type: String,
+    pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub title: Option<String>,
+    pub occurred_at: String,
+    pub incognito: bool,
+    pub opens: u32,
+    pub focused_seconds: u32,
+    pub background_seconds: u32,
+    pub modes: Vec<ActivityMode>,
+    pub trails: Vec<ActivityTrail>,
+    pub refs: Vec<ActivityRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhyEvent {
+    pub event_id: String,
+    pub artifact_id: String,
+    pub url: String,
+    pub occurred_at: String,
+    pub incognito: bool,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,6 +516,8 @@ pub enum Request {
     ChooseFolder(ChooseFolderRequest),
     ConfirmConfig(ConfirmConfigRequest),
     RecordVisit(RecordVisitRequest),
+    RecordActivity(RecordActivityRequest),
+    RecordWhy(RecordWhyRequest),
     LoadNote(LoadNoteRequest),
     SaveNote(SaveNoteRequest),
     CheckAgent(CheckAgentRequest),
@@ -436,6 +534,8 @@ impl Request {
             Self::ChooseFolder(value) => value.protocol_version,
             Self::ConfirmConfig(value) => value.protocol_version,
             Self::RecordVisit(value) => value.protocol_version,
+            Self::RecordActivity(value) => value.protocol_version,
+            Self::RecordWhy(value) => value.protocol_version,
             Self::LoadNote(value) => value.protocol_version,
             Self::SaveNote(value) => value.protocol_version,
             Self::CheckAgent(value) => value.protocol_version,
@@ -452,6 +552,8 @@ impl Request {
             Self::ChooseFolder(value) => &value.request_id,
             Self::ConfirmConfig(value) => &value.request_id,
             Self::RecordVisit(value) => &value.request_id,
+            Self::RecordActivity(value) => &value.request_id,
+            Self::RecordWhy(value) => &value.request_id,
             Self::LoadNote(value) => &value.request_id,
             Self::SaveNote(value) => &value.request_id,
             Self::CheckAgent(value) => &value.request_id,
@@ -470,6 +572,8 @@ pub enum Response {
     FolderChosen(FolderChosen),
     ConfigConfirmed(ConfigConfirmed),
     VisitRecorded(VisitRecorded),
+    ActivityRecorded(ActivityRecorded),
+    WhyRecorded(WhyRecorded),
     NoteLoaded(NoteLoaded),
     NoteSaved(NoteSaved),
     NoteConflict(NoteConflict),
@@ -488,6 +592,8 @@ impl Response {
             Self::FolderChosen(value) => value.protocol_version,
             Self::ConfigConfirmed(value) => value.protocol_version,
             Self::VisitRecorded(value) => value.protocol_version,
+            Self::ActivityRecorded(value) => value.protocol_version,
+            Self::WhyRecorded(value) => value.protocol_version,
             Self::NoteLoaded(value) => value.protocol_version,
             Self::NoteSaved(value) => value.protocol_version,
             Self::NoteConflict(value) => value.protocol_version,
@@ -506,6 +612,8 @@ impl Response {
             Self::FolderChosen(value) => &value.request_id,
             Self::ConfigConfirmed(value) => &value.request_id,
             Self::VisitRecorded(value) => &value.request_id,
+            Self::ActivityRecorded(value) => &value.request_id,
+            Self::WhyRecorded(value) => &value.request_id,
             Self::NoteLoaded(value) => &value.request_id,
             Self::NoteSaved(value) => &value.request_id,
             Self::NoteConflict(value) => &value.request_id,
