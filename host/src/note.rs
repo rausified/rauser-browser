@@ -507,6 +507,12 @@ pub fn use_as_artifact_note(
         )));
     }
     let parsed = parse_owned_note(&source_key, source_url, &source).ok_or_else(not_owned)?;
+    // Migration returns the new artifact note in the same response. Refuse
+    // before publishing if the source has been enlarged outside the panel;
+    // otherwise the move would succeed and only the response would fail.
+    if !body_fits_panel(&parsed.body) || !fits_in_response(&parsed.title, &parsed.body) {
+        return Err(too_large_on_disk());
+    }
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| NoteRequestError::Internal(error.into()))?;
@@ -786,6 +792,43 @@ mod tests {
             serde_json::to_string(current_url).unwrap()
         )));
         assert!(!load_note(&vault, source_url).unwrap().exists);
+    }
+
+    #[test]
+    fn oversized_url_note_is_not_moved_before_the_response_is_refused() {
+        let (root, vault) = vault();
+        let source_url = "https://example.com/board?selected=7";
+        let current_url = "https://example.com/items/7";
+        save_note(&vault, source_url, "Old", "small", "missing").unwrap();
+        let source_path = root
+            .path()
+            .join(vault.page_relative_path(source_url).unwrap());
+        let grown = std::fs::read_to_string(&source_path)
+            .unwrap()
+            .replace("small", &"x".repeat(MAX_BODY_UTF16_UNITS + 1));
+        std::fs::write(&source_path, &grown).unwrap();
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:example.com/7".into(),
+        };
+
+        assert!(matches!(
+            use_as_artifact_note(
+                &vault,
+                current_url,
+                &artifact_key,
+                source_url,
+                &revision_for(&grown),
+            ),
+            Err(NoteRequestError::TooLarge(_))
+        ));
+        assert_eq!(std::fs::read_to_string(source_path).unwrap(), grown);
+        assert!(
+            vault
+                .read_note(&artifact_key, current_url)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

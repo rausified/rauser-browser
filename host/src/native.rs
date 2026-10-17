@@ -1243,6 +1243,7 @@ struct NoteContext {
 fn note_context(
     config: &mut ConfigStore,
     url: &str,
+    include_older_notes: bool,
 ) -> Result<NoteContext, (ErrorCode, &'static str)> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
@@ -1266,7 +1267,9 @@ fn note_context(
         },
     );
     let mut older_urls = vec![canonical.clone()];
-    if let Some(found) = matched {
+    if let Some(found) = matched
+        && include_older_notes
+    {
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
             && let Ok(urls) = index.artifact_urls(&found.artifact_id)
@@ -1314,7 +1317,7 @@ fn note_error(request_id: &str, error_value: note::NoteRequestError) -> Response
 }
 
 fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore) -> Response {
-    let context = match note_context(config, &value.url) {
+    let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
@@ -1351,7 +1354,10 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             );
         }
     };
-    let context = match note_context(config, &value.url) {
+    // An ordinary autosave needs only the current key. Discovering every
+    // legacy URL note scans the bounded pages directory and is reserved for
+    // loads and explicit migrations, not repeated after each keystroke.
+    let context = match note_context(config, &value.url, false) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
@@ -1428,7 +1434,7 @@ fn use_artifact_note(
             );
         }
     };
-    let context = match note_context(config, &value.url) {
+    let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
@@ -1439,18 +1445,21 @@ fn use_artifact_note(
             "this page is no longer a recognized artifact",
         );
     }
-    let source =
-        match crate::capture::canonical_url(&value.source_url, &config.snapshot().strip_params) {
-            Ok(url) => url,
-            Err(_) => {
-                return error(
-                    &value.request_id,
-                    ErrorCode::InvalidRequest,
-                    "older note URL is invalid",
-                );
-            }
-        };
-    if !context.older_urls.iter().any(|url| url == &source) {
+    // `source_url` is the exact identity returned by load_note. Do not apply
+    // today's strip-parameter policy: a note created before that policy
+    // changed is stored under the older canonical URL and must stay findable.
+    if crate::vault::url_record_key(&value.source_url).is_err() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "older note URL is invalid",
+        );
+    }
+    if !context
+        .older_urls
+        .iter()
+        .any(|url| url == &value.source_url)
+    {
         return error(
             &value.request_id,
             ErrorCode::Unauthorized,
@@ -1461,7 +1470,7 @@ fn use_artifact_note(
         &context.vault,
         &context.canonical,
         &context.key,
-        &source,
+        &value.source_url,
         &value.expected_revision,
     ) {
         Ok(loaded) => Response::NoteLoaded(NoteLoaded {
@@ -2280,6 +2289,60 @@ id = "gdoc:{host}/{id}"
         let loaded = note_load(&mut config, edit);
         assert_eq!(loaded.key, first.key);
         assert_eq!(loaded.body, "same document");
+    }
+
+    #[test]
+    fn older_note_migration_keeps_the_source_url_from_before_param_stripping() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let old_url = "https://work.example/items/7?utm_source=before-policy";
+        let current_url = "https://work.example/items/7";
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        let revision = match note::save_note(
+            &vault,
+            old_url,
+            "Before stripping",
+            "keep this text",
+            "missing",
+        )
+        .unwrap()
+        {
+            note::SaveOutcome::Saved { revision, .. } => revision,
+            note::SaveOutcome::Stale { .. } => panic!("new URL note was unexpectedly stale"),
+        };
+        let loaded = note_load(&mut config, current_url);
+        assert_eq!(loaded.older_notes.len(), 1);
+        assert_eq!(loaded.older_notes[0].canonical_url, old_url);
+
+        let response = use_artifact_note(
+            brauser_protocol::UseArtifactNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "migrate".into(),
+                url: current_url.into(),
+                source_url: old_url.into(),
+                expected_revision: revision,
+            },
+            &mut config,
+        );
+        match response {
+            Response::NoteLoaded(note) => assert_eq!(note.body, "keep this text"),
+            other => panic!("expected migrated note, got {other:?}"),
+        }
+        assert!(!note::load_note(&vault, old_url).unwrap().exists);
     }
 
     #[test]

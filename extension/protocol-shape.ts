@@ -186,7 +186,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         (value.artifact === null || isArtifact(value.artifact));
     case "artifact_list_result":
       return Array.isArray(value.items) && value.items.length <= 32 &&
-        value.items.every(isArtifactListItem) && isStringArray(value.artifact_types) &&
+        value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
+        value.artifact_types.length <= 64 && isStringArray(value.artifact_types) &&
         typeof value.truncated === "boolean";
     case "worklog_result":
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&

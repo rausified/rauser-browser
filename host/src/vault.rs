@@ -465,6 +465,9 @@ pub fn url_record_key(page_url: &str) -> Result<RecordKey> {
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         bail!("page URL must be HTTP or HTTPS with a host");
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        bail!("page URL must not contain credentials");
+    }
     parsed.set_fragment(None);
     Ok(RecordKey {
         kind: RecordKeyKind::Url,
