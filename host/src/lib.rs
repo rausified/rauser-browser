@@ -12,6 +12,7 @@ pub mod config;
 pub mod consent;
 pub mod dialog;
 pub mod harness;
+pub mod index;
 pub mod native;
 pub mod note;
 pub mod privacy;

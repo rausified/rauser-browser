@@ -892,6 +892,11 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
                 old_storage.map(|value| value.later_dir.as_str()),
                 Some(next_storage.later_dir.as_str()),
             ),
+            (
+                "artifact files folder",
+                old_storage.map(|value| value.artifacts_dir.as_str()),
+                Some(next_storage.artifacts_dir.as_str()),
+            ),
             // Clearing the summaries folder only turns summaries off.
             (
                 "summaries folder",
@@ -960,6 +965,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: None,
         };
         let snapshot = ConfigSnapshot {
@@ -1176,6 +1182,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: summaries.map(str::to_owned),
         };
         let with = |summaries| ConfigSnapshot {
@@ -1338,6 +1345,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: summaries.map(str::to_owned),
         }
     }
@@ -1902,6 +1910,7 @@ mod setup_tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             agent_denylist: vec!["bank.example".into()],
@@ -2230,6 +2239,7 @@ mod setup_tests {
                     log_dir: "log".into(),
                     pages_dir: "pages".into(),
                     later_dir: "later".into(),
+                    artifacts_dir: "artifacts".into(),
                     summaries_dir: None,
                 }),
                 agent_denylist: vec!["bank.example".into()],
@@ -2294,6 +2304,7 @@ mod setup_tests {
                     log_dir: "log".into(),
                     pages_dir: "pages".into(),
                     later_dir: "later".into(),
+                    artifacts_dir: "artifacts".into(),
                     summaries_dir: None,
                 }),
                 agent_denylist: vec!["bank.example".into()],

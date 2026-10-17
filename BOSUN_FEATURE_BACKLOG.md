@@ -148,12 +148,12 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   now groups same-day records into bounded, replay-stable batches backed by
   one compact intent and append. Pressure coalescing, the 80% badge, durable
   overflow evidence, and near-repeat retirement are built and verified.
-- [ ] `brwr-xeh` **M1.5a step 6.6 — Index tables and artifact files.** `artifacts`,
-  `visits`, and `edges` tables in `index.db`; lazy regeneration from the dirty
-  set with skip-if-unchanged and Timeline rollups (§6.7); `brauser reindex`
-  rebuilding both from the logs. Test a hostile title, a case-colliding ID, an
-  external edit being replaced, a heavy-use day producing no file write until
-  regeneration, and a year of daily opens staying within rollup bounds.
+- [x] **M1.5a step 6.6 — Index tables and artifact files.** Durable
+  activity now updates disposable `artifacts`, `visits`, `edges`, and dirty-set
+  SQLite tables without touching the notes folder. Connection-close passes
+  regenerate ownership-checked, skip-if-unchanged artifact Markdown with
+  case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
+  both cache and files from bounded owned log markers.
 - [ ] `brwr-m40` **M1.5a step 6.7 — Panel, Recent, worklog, and record keys.** The
   artifact card (§5.7), the one-liner, the Recent tab (one history across
   tools, grouped by day, type and title filters), and the worklog view with
@@ -236,10 +236,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## In Progress / This Iteration
 
-- None. The next plan item is `brwr-xeh` (M1.5a step 6.6).
+- None. The next plan item is `brwr-m40` (M1.5a step 6.7).
 
 ## Shipped
 
+- **Category:** New Capability. **Turn durable activity into a local index and bounded artifact records (2026-10-16).** Each accepted activity now updates a standard SQLite `index.db` with artifact, visit, edge, and dirty-set tables while leaving the append-only Markdown log authoritative. Brauser lazily regenerates only dirty, owned artifact files at native connection boundaries, preserves unchanged mtimes, gives case-colliding IDs distinct hash-suffixed paths, replaces external edits only after checking ownership, neutralizes hostile presentation text, and bounds long histories with daily, weekly, then monthly Timeline rollups. `brauser reindex` reconstructs the database and files from bounded owned markers, and older configs receive a non-overlapping `artifacts_dir` default without weakening native consent. **Metrics:** 284 Rust tests and 8 extension suites passing; 13 new index, ownership, delivery-integration, migration, replay-integrity, multi-page SQLite, chronology, rollup, and wire regressions, with full protocol generation, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** Reliability. `brwr-6at` **Ship bounded, crash-recoverable activity batches (2026-10-16).** The service worker now sends up to 64 same-local-day records under a replay-stable batch ID and exact overflow snapshot, while the native host validates every event before publishing the survivors through one compact intent, one append, and one log sync. Queue pressure coalesces only compatible undispatched hours that still fit the hard byte cap, lights the toolbar badge at 80%, and carries dropped-hour count and range into the append-only log; lost acknowledgements cannot erase newer overflow. The retired near-repeat window is gone from protocol, consent, new config writes, and log scanning, so deliberate `/log` actions are never collapsed, while old configs and queues still drain safely. **Metrics:** 271 Rust tests and 8 extension suites passing; 6 durability regressions, with full protocol generation, current-state consistency, build, test, format, both clippy gates, clean npm install, typecheck, lint, extension checks, and queue export green.
 - **Category:** Bug Fix. **Finish the remaining adapter review repairs (2026-10-16).** Starter cards now recognize an installed GitHub pull-request or issue adapter before any organization scope is typed, and a missing draft can no longer become clickable through JavaScript's `undefined !== null` edge. The native host treats unknown future keys inside `[adapters]` as an adapter-only policy issue instead of an unreadable whole config: capture stays suspended, notes and other settings remain usable, unrelated saves preserve the unknown values, and the explicit remove-all repair clears them. **Metrics:** 267 Rust tests and 8 extension suites passing; 3 new failing-first regressions, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
 - **Category:** Documentation & Process. **Align contributor status with shipped artifact capture (2026-10-16).** AGENTS.md now describes the active revisioned worker lease, TypeScript prefilter, independent native-host recognition, and measured hourly activity instead of telling contributors those paths are unbuilt. README and DESIGN.md name the same product boundary and separate it from the unfinished delivery, index, and panel slices; a whitespace-tolerant CI check prevents the obsolete claims from returning. **Metrics:** 266 Rust tests and 8 extension suites passing; 1 new documentation regression, with full protocol generation, build, test, format, clippy, clean npm install, typecheck, lint, extension checks, and queue consistency green.
@@ -261,9 +262,13 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
-- Every PR #34 deploy blocker and M1.5a step 6.5 are now closed. The next
-  highest-priority ready plan item is `brwr-xeh`, the index tables, lazy
-  artifact-file generation, and `brauser reindex` foundation.
+- Every PR #34 deploy blocker and M1.5a steps 6.5–6.6 are now closed. The next
+  highest-priority ready plan item is `brwr-m40`: the artifact card, Recent,
+  worklog, and record-key user experience over the new local index.
+- Step 6.7 should make artifact-file conflicts visible in settings or the
+  artifact card. The generator deliberately leaves an unowned file untouched
+  and keeps that artifact dirty, but stderr alone is not an adequate human
+  explanation when a sync client or prior tool occupies the generated path.
 - An overflow that appears while the final queued batch is in flight is now
   preserved rather than over-acknowledged, but it needs a later artifact event
   before it has a validated log anchor. `brwr-m64` records the follow-up for an

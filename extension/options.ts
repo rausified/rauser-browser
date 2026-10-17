@@ -824,6 +824,7 @@ function storageFor(root: string, current: StorageConfig | null): StorageConfig 
     log_dir: current?.log_dir ?? "log",
     pages_dir: current?.pages_dir ?? "pages",
     later_dir: current?.later_dir ?? "later",
+    artifacts_dir: current?.artifacts_dir ?? "artifacts",
     summaries_dir: current?.summaries_dir ?? null,
   };
 }

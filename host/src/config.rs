@@ -340,13 +340,26 @@ impl ConfigStore {
         self.path.parent().context("config path has no parent")
     }
 
+    /// Production uses the OS cache directory. Tests and embedders with an
+    /// injected config path keep their disposable index beside that config,
+    /// so parallel fixtures never share process-global cache state.
+    pub fn cache_dir(&self) -> Result<PathBuf> {
+        if self.path == Self::default_path()? {
+            let dirs = ProjectDirs::from("", "", APP_NAME)
+                .context("cannot locate this user's application cache directory")?;
+            Ok(dirs.cache_dir().to_path_buf())
+        } else {
+            Ok(self.dir()?.join("cache"))
+        }
+    }
+
     pub fn root_identity(&self) -> Option<&str> {
         self.root_identity.as_deref()
     }
 
     /// Hold this lock from the policy refresh through a privileged write.
     /// ConfigStore::update takes the same lock before replacing config.toml.
-    pub(crate) fn lock_current(&self) -> Result<File> {
+    pub fn lock_current(&self) -> Result<File> {
         let parent = self.path.parent().context("config path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         let path = parent.join(".config.lock");
@@ -846,8 +859,8 @@ impl Default for StoredAdapters {
     }
 }
 
-/// The on-disk storage table. Unlike the wire type, `summaries_dir` may be
-/// omitted, so every M1 config.toml still loads.
+/// The on-disk storage table. Unlike the wire type, fields introduced after
+/// M1 may be omitted, so every older config.toml still loads.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredStorage {
@@ -856,6 +869,8 @@ struct StoredStorage {
     log_dir: String,
     pages_dir: String,
     later_dir: String,
+    #[serde(default)]
+    artifacts_dir: Option<String>,
     #[serde(default)]
     summaries_dir: Option<String>,
 }
@@ -868,6 +883,7 @@ impl From<StorageConfig> for StoredStorage {
             log_dir: value.log_dir,
             pages_dir: value.pages_dir,
             later_dir: value.later_dir,
+            artifacts_dir: Some(value.artifacts_dir),
             summaries_dir: value.summaries_dir,
         }
     }
@@ -875,15 +891,49 @@ impl From<StorageConfig> for StoredStorage {
 
 impl From<StoredStorage> for StorageConfig {
     fn from(value: StoredStorage) -> Self {
+        let mut occupied = vec![
+            Path::new(&value.log_dir),
+            Path::new(&value.pages_dir),
+            Path::new(&value.later_dir),
+        ];
+        if let Some(summaries_dir) = &value.summaries_dir {
+            occupied.push(Path::new(summaries_dir));
+        }
+        let artifacts_dir = value
+            .artifacts_dir
+            .unwrap_or_else(|| unused_artifacts_dir(&occupied));
         Self {
             root: value.root,
             profile: value.profile,
             log_dir: value.log_dir,
             pages_dir: value.pages_dir,
             later_dir: value.later_dir,
+            artifacts_dir,
             summaries_dir: value.summaries_dir,
         }
     }
+}
+
+/// Older configs did not name an artifact directory. Preserve their existing
+/// layout even when one of its configurable locations already uses the usual
+/// `artifacts` name; adopting a colliding default would make the whole config
+/// unreadable before the user had any way to choose a different location.
+fn unused_artifacts_dir(occupied: &[&Path]) -> String {
+    for suffix in 0u32.. {
+        let candidate = match suffix {
+            0 => "artifacts".to_owned(),
+            1 => "brauser-artifacts".to_owned(),
+            value => format!("brauser-artifacts-{value}"),
+        };
+        let candidate_parts = lower_components(Path::new(&candidate));
+        if occupied.iter().all(|path| {
+            let parts = lower_components(path);
+            !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(&parts)
+        }) {
+            return candidate;
+        }
+    }
+    unreachable!("a finite set of content paths cannot occupy every generated name")
 }
 
 /// `[agent]` as §7.1 shows it: the chosen harness and its entry.
@@ -1729,6 +1779,7 @@ fn validate_storage(storage: &StorageConfig) -> Result<()> {
         Path::new(&storage.log_dir),
         Path::new(&storage.pages_dir),
         Path::new(&storage.later_dir),
+        Path::new(&storage.artifacts_dir),
     ];
     if let Some(summaries_dir) = &storage.summaries_dir {
         paths.push(Path::new(summaries_dir));
@@ -1752,7 +1803,7 @@ fn validate_storage(storage: &StorageConfig) -> Result<()> {
             let l = lower_components(paths[left]);
             let r = lower_components(paths[right]);
             if l.starts_with(&r) || r.starts_with(&l) {
-                bail!("log, pages, later, and summaries locations must not overlap");
+                bail!("log, pages, later, artifacts, and summaries locations must not overlap");
             }
         }
     }
@@ -2052,6 +2103,10 @@ mod tests {
         assert!(store.configured());
         let snapshot = store.snapshot();
         assert_eq!(snapshot.storage.as_ref().unwrap().summaries_dir, None);
+        assert_eq!(
+            snapshot.storage.as_ref().unwrap().artifacts_dir,
+            "artifacts"
+        );
         assert!(snapshot.agent_denylist.is_empty());
         assert!(!snapshot.agent_denylist_confirmed);
         assert!(!snapshot.log_incognito);
@@ -2064,6 +2119,23 @@ mod tests {
             (ErrorCode::NotConfigured, SET_UP_AGENT.into())
         );
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
+    }
+
+    #[test]
+    fn old_config_gets_a_non_overlapping_artifact_directory() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        let body = fs::read_to_string(&path)
+            .unwrap()
+            .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"");
+        fs::write(&path, body).unwrap();
+
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        let storage = store.snapshot().storage.as_ref().unwrap();
+        assert_eq!(storage.pages_dir, "artifacts");
+        assert_eq!(storage.artifacts_dir, "brauser-artifacts");
     }
 
     #[test]
@@ -2700,6 +2772,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: None,
         });
         let identity = selected_root_identity(&root).unwrap();
@@ -2737,6 +2810,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             ..empty_config()
@@ -2783,7 +2857,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_summaries_dir_overlapping_pages() {
+    fn rejects_generated_content_directories_overlapping_pages() {
         let folder = tempfile::tempdir().unwrap();
         let mut storage = StorageConfig {
             root: folder.path().to_string_lossy().into_owned(),
@@ -2791,6 +2865,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: Some("pages/summaries".into()),
         };
         assert!(validate_storage(&storage).is_err());
@@ -2800,6 +2875,8 @@ mod tests {
         assert!(validate_storage(&storage).is_err());
         storage.summaries_dir = Some("summaries".into());
         validate_storage(&storage).unwrap();
+        storage.artifacts_dir = "pages/artifacts".into();
+        assert!(validate_storage(&storage).is_err());
     }
 
     #[test]
@@ -2811,6 +2888,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "pages".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: Some("Pages".into()),
         };
         assert!(validate_storage(&storage).is_err());
@@ -2827,6 +2905,7 @@ mod tests {
             log_dir: "log".into(),
             pages_dir: "ας".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: Some("ασ".into()),
         };
         assert!(validate_storage(&storage).is_err());
@@ -3358,6 +3437,7 @@ mod tests {
                 log_dir: "notes".into(),
                 pages_dir: "notes/pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             capture_enabled: false,
@@ -3423,6 +3503,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             capture_enabled: false,
@@ -3450,6 +3531,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             ..empty_config()
@@ -3498,6 +3580,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             ..empty_config()
@@ -3547,6 +3630,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             capture_enabled: true,
@@ -3670,6 +3754,7 @@ mod tests {
                 log_dir: "log".into(),
                 pages_dir: "pages".into(),
                 later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
             capture_enabled: false,
@@ -3688,6 +3773,7 @@ mod tests {
             log_dir: "Notes/Pages".into(),
             pages_dir: "notes".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
@@ -3703,6 +3789,7 @@ mod tests {
             log_dir: "Notes\\Pages".into(),
             pages_dir: "notes".into(),
             later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
             summaries_dir: None,
         };
         assert!(validate_storage(&storage).is_err());

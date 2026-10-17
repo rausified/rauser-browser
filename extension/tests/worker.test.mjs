@@ -1098,7 +1098,7 @@ test("unaddressed host errors and version mismatches reach the caller", async ()
 test("host config shape requires every v5 privacy, agent, and adapter key", () => {
   const config = {
     storage: {
-      root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
+      root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: null,
     },
     capture_enabled: false, sites: [], strip_params: [],
@@ -1208,7 +1208,7 @@ function configResult(request, origin, overrides = {}) {
     revision: `host-revision:${origin}`,
     config: {
       storage: {
-        root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
+        root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
         summaries_dir: null,
       },
       capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [],

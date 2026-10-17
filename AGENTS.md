@@ -76,8 +76,11 @@ overflow snapshot; the host validates the complete batch, then uses one
 compact crash-recovery intent, one append, and one log sync. Queue pressure
 coalesces compatible undispatched activity without exceeding the byte cap,
 lights the toolbar badge at 80%, and leaves durable overflow evidence. The
-index and artifact-file generation, artifact panel card, Recent list, worklog
-view, and record keys remain unfinished.
+native host now updates a rebuildable SQLite `index.db` only after durable log
+delivery and lazily regenerates ownership-checked artifact Markdown at
+connection boundaries. `brauser reindex` recreates both from the owned log
+markers. The artifact panel card, Recent list, worklog view, record keys, and
+the settings-facing update-files action remain unfinished.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
@@ -118,7 +121,7 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 
 - Treat all extension messages and page-derived content as untrusted.
 - Keep vault paths rooted in a user-selected directory; never accept a raw file path from a page or extension request.
-- Preserve existing user files. Page notes are the one file kind the host replaces whole, and only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an unrelated or unowned file at that path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
+- Preserve existing user files. Page notes and generated artifact files are the two implemented file kinds the host replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`). An unrelated or unowned file at either path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
 - Keep capture off until a folder is chosen, Chrome grants the requested site origin, and the native host confirms the policy. Any stored config whose notes folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path).
 - Keep the AI privacy denylist fail-closed: a page whose URL cannot be parsed, uses a non-HTTP(S) scheme, or has no classifiable host is always denied to agents, never allowed by default (host/src/privacy.rs `denylisted`); accept only normalized, punycode hostnames or bracketed IP literals as entries (`validate_denylist`). Only native harness setup may set or change `agent_denylist_confirmed` or the harness entry — the extension may only echo them unchanged or remove the harness (host/src/consent.rs `check_agent_fields`); removing or replacing a denylist entry always needs a fresh native confirmation, adding one does not (`approval_lines`).
 - A harness setup token is single-use, expires after a few minutes, and is rejected if the revision, the exact before/after config, or the on-disk identity of the confirmed harness binary no longer matches; never combine it with a folder-picker or settings-consent token (host/src/consent.rs `confirm_harness_setup_with`, `mint_harness`, `check_harness`).
