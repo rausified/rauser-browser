@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{ActivityEvent, StorageConfig, WhyEvent};
+use brauser_protocol::{ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, WhyEvent};
 use cap_std::fs::{Dir, OpenOptions};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,7 @@ const STATE_VERSION: u8 = 1;
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_FILES: usize = 100_000;
+const MAX_WORKLOG_BYTES: usize = 96 * 1024;
 const SQLITE_PAGE_SIZE: usize = 65_536;
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
 const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
@@ -47,6 +48,7 @@ pub struct RegenerationReport {
     pub written: usize,
     pub unchanged: usize,
     pub conflicts: usize,
+    pub conflict_paths: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -235,7 +237,16 @@ impl ArtifactIndex {
                     report.unchanged += 1;
                     state.dirty.remove(&id);
                 }
-                ArtifactWrite::Conflict => report.conflicts += 1,
+                ArtifactWrite::Conflict => {
+                    report.conflicts += 1;
+                    if report.conflict_paths.len() < 64 {
+                        report.conflict_paths.push(
+                            artifact_path(&self.storage.artifacts_dir, artifact)
+                                .to_string_lossy()
+                                .into_owned(),
+                        );
+                    }
+                }
             }
         }
         self.publish_state_and_database(&state)?;
@@ -335,6 +346,162 @@ impl ArtifactIndex {
         atomic_write(&self.database_path(), &database)
     }
 
+    /// Return the current derived record for one recognized artifact. The
+    /// append-only log remains authoritative; this never trusts index.db.
+    pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>> {
+        let derived = derive(&self.load_or_rebuild()?.events);
+        Ok(derived
+            .artifacts
+            .get(artifact_id)
+            .map(|row| artifact_view(row, linked_count(&derived.edges, artifact_id))))
+    }
+
+    /// Canonical URLs previously recorded for an artifact. Note lookup uses
+    /// these to discover URL-keyed M1 notes without scanning arbitrary files.
+    pub fn artifact_urls(&self, artifact_id: &str) -> Result<Vec<String>> {
+        let derived = derive(&self.load_or_rebuild()?.events);
+        let mut urls = derived
+            .visits
+            .iter()
+            .filter(|visit| visit.artifact_id == artifact_id)
+            .map(|visit| visit.url.clone())
+            .collect::<BTreeSet<_>>();
+        if let Some(row) = derived.artifacts.get(artifact_id) {
+            urls.insert(row.url.clone());
+        }
+        Ok(urls.into_iter().collect())
+    }
+
+    /// One row per artifact and local day, newest day first and then by that
+    /// day's measured focus. This is deliberately bounded for one native
+    /// message and does not depend on FTS5.
+    pub fn recent(
+        &self,
+        artifact_type: Option<&str>,
+        title_query: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
+        let derived = derive(&self.load_or_rebuild()?.events);
+        let types = derived
+            .artifacts
+            .values()
+            .map(|row| row.artifact_type.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let query = title_query.map(str::trim).filter(|value| !value.is_empty());
+        let query = query.map(|value| value.to_lowercase());
+        let mut grouped = BTreeMap::<(String, String), ArtifactListItem>::new();
+        for visit in &derived.visits {
+            let Some(artifact) = derived.artifacts.get(&visit.artifact_id) else {
+                continue;
+            };
+            if artifact_type.is_some_and(|wanted| wanted != artifact.artifact_type) {
+                continue;
+            }
+            if query
+                .as_ref()
+                .is_some_and(|wanted| !artifact.title.to_lowercase().contains(wanted))
+            {
+                continue;
+            }
+            let row = grouped
+                .entry((visit.local_date.clone(), visit.artifact_id.clone()))
+                .or_insert_with(|| ArtifactListItem {
+                    local_date: visit.local_date.clone(),
+                    artifact_id: visit.artifact_id.clone(),
+                    artifact_type: artifact.artifact_type.clone(),
+                    title: artifact.title.clone(),
+                    url: artifact.url.clone(),
+                    focused_seconds: 0,
+                    background_seconds: 0,
+                    opens: 0,
+                    why: artifact.why.clone(),
+                });
+            row.focused_seconds =
+                saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
+            row.background_seconds = saturating_u32(
+                u64::from(row.background_seconds).saturating_add(visit.background_secs),
+            );
+            row.opens = saturating_u32(u64::from(row.opens).saturating_add(visit.opens));
+        }
+        let mut items = grouped.into_values().collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            right
+                .local_date
+                .cmp(&left.local_date)
+                .then(right.focused_seconds.cmp(&left.focused_seconds))
+                .then(left.title.cmp(&right.title))
+                .then(left.artifact_id.cmp(&right.artifact_id))
+        });
+        let truncated = items.len() > limit;
+        items.truncate(limit);
+        Ok((items, types, truncated))
+    }
+
+    /// Render a measured, agent-free summary for an inclusive range of local
+    /// dates. Callers validate and bound the range before reaching here.
+    pub fn worklog(&self, start: Date, end: Date) -> Result<(String, usize)> {
+        let derived = derive(&self.load_or_rebuild()?.events);
+        let mut rows = BTreeMap::<String, (u64, u64, u64)>::new();
+        for visit in &derived.visits {
+            let Ok(date) = parse_date(&visit.local_date) else {
+                continue;
+            };
+            if date < start || date > end {
+                continue;
+            }
+            let row = rows.entry(visit.artifact_id.clone()).or_default();
+            row.0 = row.0.saturating_add(visit.focused_secs);
+            row.1 = row.1.saturating_add(visit.background_secs);
+            row.2 = row.2.saturating_add(visit.opens);
+        }
+        let opened = rows.values().filter(|row| row.2 > 0).count();
+        let carried = rows.values().filter(|row| row.2 == 0 && row.0 > 0).count();
+        let mut text = format!(
+            "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
+            if opened == 1 { "" } else { "s" }
+        );
+        let mut ordered = rows.into_iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| {
+            right
+                .1
+                .0
+                .cmp(&left.1.0)
+                .then(right.1.2.cmp(&left.1.2))
+                .then(left.0.cmp(&right.0))
+        });
+        let mut shown = 0usize;
+        for (id, (focused, background, opens)) in &ordered {
+            let Some(artifact) = derived.artifacts.get(id) else {
+                continue;
+            };
+            let mut line = format!(
+                "{} {}: {}",
+                artifact.artifact_type,
+                id,
+                plain_text(&artifact.title)
+            );
+            line.push_str(&format!(" — {}", measures(*focused, *background, *opens)));
+            if let Some(why) = &artifact.why {
+                line.push_str(&format!(". Why: {}", plain_text(why)));
+            }
+            if text.len().saturating_add(line.len()).saturating_add(1) > MAX_WORKLOG_BYTES {
+                break;
+            }
+            text.push('\n');
+            text.push_str(&line);
+            shown += 1;
+        }
+        if shown < ordered.len() {
+            text.push_str(&format!(
+                "\n… {} more artifacts omitted.",
+                ordered.len() - shown
+            ));
+        }
+        Ok((text, ordered.len()))
+    }
+
     fn state_path(&self) -> PathBuf {
         self.cache_dir.join("index-state.json")
     }
@@ -342,6 +509,50 @@ impl ArtifactIndex {
     pub fn database_path(&self) -> PathBuf {
         self.cache_dir.join("index.db")
     }
+}
+
+fn saturating_u32(value: u64) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn artifact_view(row: &ArtifactRow, linked: usize) -> ArtifactView {
+    ArtifactView {
+        artifact_id: row.artifact_id.clone(),
+        artifact_type: row.artifact_type.clone(),
+        title: row.title.clone(),
+        url: row.url.clone(),
+        first_seen: row.first_seen.clone(),
+        last_seen: row.last_seen.clone(),
+        focused_seconds: saturating_u32(row.focused_secs),
+        background_seconds: saturating_u32(row.background_secs),
+        opens: saturating_u32(row.opens),
+        days_opened: saturating_u32(row.days.len() as u64),
+        last_mode: row.last_mode.clone(),
+        why: row.why.clone(),
+        linked_count: saturating_u32(linked as u64),
+    }
+}
+
+fn linked_count(edges: &[EdgeRow], artifact_id: &str) -> usize {
+    edges
+        .iter()
+        .filter(|edge| edge.source == artifact_id || edge.target == artifact_id)
+        .count()
+}
+
+fn parse_date(value: &str) -> Result<Date> {
+    let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")?;
+    Ok(Date::parse(value, &format)?)
+}
+
+fn plain_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(500)
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result<ActivityEvent> {
@@ -1537,6 +1748,58 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
+    fn recent_and_worklog_are_measured_bounded_views_of_the_index() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let first = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "ABC",
+            "Release blocker",
+            "2026-10-15T12:00:00-04:00",
+        );
+        let second = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "XYZ",
+            "Design notes",
+            "2026-10-16T09:00:00-04:00",
+        );
+        index.record_activities([&first, &second], &[]).unwrap();
+        index
+            .record_why(
+                &WhyEvent {
+                    event_id: "00000000-0000-4000-8000-000000000003".into(),
+                    artifact_id: first.artifact_id.clone(),
+                    url: first.url.clone(),
+                    occurred_at: "2026-10-16T10:00:00-04:00".into(),
+                    incognito: false,
+                    text: "blocking the release".into(),
+                },
+                &[],
+            )
+            .unwrap();
+
+        let (recent, types, truncated) = index.recent(None, Some("release"), 200).unwrap();
+        assert_eq!(types, ["work.item"]);
+        assert!(!truncated);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].local_date, "2026-10-15");
+        assert_eq!(recent[0].focused_seconds, 125);
+        assert_eq!(recent[0].why.as_deref(), Some("blocking the release"));
+
+        let (text, count) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-16").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        assert!(text.starts_with("Opened 2 artifacts"));
+        assert!(text.contains("Release blocker"));
+        assert!(text.contains("Why: blocking the release"));
+    }
+
+    #[test]
     fn case_collisions_external_edits_and_unchanged_files_are_handled() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
@@ -1634,7 +1897,16 @@ print(json.dumps([tables,row]))"#;
         fs::create_dir_all(occupied.parent().unwrap()).unwrap();
         fs::write(&occupied, "someone else's file\n").unwrap();
 
-        assert_eq!(index.regenerate_dirty().unwrap().conflicts, 1);
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!(report.conflicts, 1);
+        assert_eq!(
+            report.conflict_paths,
+            vec![
+                artifact_path("artifacts", artifact)
+                    .to_string_lossy()
+                    .into_owned()
+            ]
+        );
         assert_eq!(
             fs::read_to_string(occupied).unwrap(),
             "someone else's file\n"

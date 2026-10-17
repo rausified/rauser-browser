@@ -7,6 +7,8 @@
 // switch whose token is no longer current does nothing further, so only the
 // latest active tab's note is loaded into the editor.
 
+import type { OlderNote, RecordKey } from "../protocol/ts/generated.js";
+
 /** Matches MAX_TITLE_BYTES in host/src/note.rs, which clamps longer titles. */
 export const MAX_NOTE_TITLE_BYTES = 2_048;
 
@@ -41,12 +43,14 @@ export interface NoteView {
   setEditable(editable: boolean): void;
   setStatus(message: string, warning?: boolean): void;
   showUnsaved(entries: readonly UnsavedText[]): void;
+  showOlderNotes?(entries: readonly OlderNote[]): void;
 }
 
 export interface NoteHost {
-  load(url: string): Promise<{ exists: boolean; revision: string; body: string }>;
-  save(request: { url: string; title: string; body: string; expected_revision: string }): Promise<
-    { type: "note_saved"; revision: string } | { type: "note_conflict"; revision: string; body: string }
+  load(url: string): Promise<{ exists: boolean; revision: string; body: string; key: RecordKey; older_notes: OlderNote[] }>;
+  save(request: { url: string; title: string; body: string; expected_revision: string; expected_key: RecordKey }): Promise<
+    { type: "note_saved"; revision: string; key: RecordKey } |
+    { type: "note_conflict"; revision: string; body: string; key: RecordKey; reason: string }
   >;
 }
 
@@ -61,6 +65,7 @@ export class NoteEditor {
   private url: string | null = null;
   private title = "";
   private revision: string | null = null;
+  private key: RecordKey | null = null;
   private loaded = false;
   private loadFailed = false;
   private dirty = false;
@@ -121,6 +126,13 @@ export class NoteEditor {
     return this.showPage(this.target);
   }
 
+  /** Force a fresh host load after an explicit note migration. */
+  reload(): Promise<void> {
+    const page = this.target;
+    this.target = null;
+    return this.showPage(page);
+  }
+
   private enqueue(work: () => Promise<void>): Promise<void> {
     // Start at once when nothing is running, so a flush from `pagehide` sends
     // its request before the panel disconnects from the host.
@@ -157,17 +169,21 @@ export class NoteEditor {
     // The tab's title may have changed while this switch waited its turn.
     this.title = page !== null && this.target?.url === page.url ? this.target.title : page?.title ?? "";
     this.revision = null;
+    this.key = null;
     this.loaded = false;
     this.loadFailed = false;
     this.dirty = false;
     this.view.setEditable(false);
     this.view.writeBody("");
     this.view.setStatus("");
+    this.view.showOlderNotes?.([]);
     if (page === null || token !== this.token) return;
     try {
       const response = await this.host.load(page.url);
       if (token !== this.token) return;
       this.revision = response.revision;
+      this.key = response.key;
+      this.view.showOlderNotes?.(response.older_notes);
       this.view.writeBody(response.body);
       this.loaded = true;
       this.view.setEditable(true);
@@ -181,7 +197,7 @@ export class NoteEditor {
 
   private async saveNow(): Promise<void> {
     this.clearTimer();
-    if (!this.dirty || !this.loaded || this.url === null || this.revision === null) return;
+    if (!this.dirty || !this.loaded || this.url === null || this.revision === null || this.key === null) return;
     const url = this.url;
     const body = this.view.readBody();
     this.dirty = false;
@@ -189,7 +205,7 @@ export class NoteEditor {
     let response: Awaited<ReturnType<NoteHost["save"]>>;
     try {
       response = await this.host.save({
-        url, title: this.title, body, expected_revision: this.revision,
+        url, title: this.title, body, expected_revision: this.revision, expected_key: this.key,
       });
     } catch (error) {
       this.dirty = true; // Retry on the next edit, tab change, or close.
@@ -198,6 +214,7 @@ export class NoteEditor {
       return;
     }
     this.revision = response.revision;
+    this.key = response.key ?? this.key;
     if (response.type === "note_saved") {
       // Edits typed during the save are still pending; their timer saves them.
       if (!this.dirty) this.view.setStatus("Saved");
@@ -208,8 +225,13 @@ export class NoteEditor {
     // made while this save was in flight (§4.4, §5.3).
     this.clearTimer();
     this.dirty = false;
-    this.keepUnsaved(url, this.view.readBody(), "This note changed elsewhere, so your edit was not saved.");
+    const reason = response.reason === "key_changed"
+      ? "This page's artifact identity changed, so your edit was not saved."
+      : "This note changed elsewhere, so your edit was not saved.";
+    this.keepUnsaved(url, this.view.readBody(), reason);
     this.view.writeBody(response.body);
-    this.view.setStatus("Could not save; this note changed elsewhere.", true);
+    this.view.setStatus(response.reason === "key_changed"
+      ? "Could not save; this page's artifact identity changed."
+      : "Could not save; this note changed elsewhere.", true);
   }
 }

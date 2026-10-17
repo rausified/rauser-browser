@@ -4,7 +4,7 @@
 //! refused and the note's current content is returned so nothing the user
 //! typed is silently lost.
 
-use brauser_protocol::NoteSaveOutcome;
+use brauser_protocol::{NoteSaveOutcome, OlderNote, RecordKey, RecordKeyKind};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -35,11 +35,14 @@ const MAX_BODY_UTF16_UNITS: usize = 98_304;
 const RESPONSE_ENVELOPE_BYTES: usize = 4 * 1024;
 const MISSING_REVISION: &str = "missing";
 
+#[derive(Debug)]
 pub struct LoadedNote {
     pub exists: bool,
     pub revision: String,
     pub title: String,
     pub body: String,
+    pub key: RecordKey,
+    pub older_notes: Vec<OlderNote>,
 }
 
 pub enum SaveOutcome {
@@ -88,23 +91,42 @@ struct ParsedNote {
 }
 
 pub fn load_note(vault: &Vault, canonical_url: &str) -> Result<LoadedNote, NoteRequestError> {
-    match vault.read_page(canonical_url)? {
-        None => Ok(LoadedNote {
-            exists: false,
-            revision: MISSING_REVISION.to_owned(),
-            title: String::new(),
-            body: String::new(),
-        }),
+    let key = crate::vault::url_record_key(canonical_url)?;
+    load_keyed_note(vault, canonical_url, &key, &[])
+}
+
+pub fn load_keyed_note(
+    vault: &Vault,
+    canonical_url: &str,
+    key: &RecordKey,
+    older_urls: &[String],
+) -> Result<LoadedNote, NoteRequestError> {
+    let mut older_notes = older_notes(vault, key, older_urls)?;
+    match vault.read_note(key, canonical_url)? {
+        None => {
+            trim_older_notes("", "", &mut older_notes);
+            Ok(LoadedNote {
+                exists: false,
+                revision: MISSING_REVISION.to_owned(),
+                title: String::new(),
+                body: String::new(),
+                key: key.clone(),
+                older_notes,
+            })
+        }
         Some(contents) => {
-            let parsed = parse_owned_note(canonical_url, &contents).ok_or_else(not_owned)?;
+            let parsed = parse_owned_note(key, canonical_url, &contents).ok_or_else(not_owned)?;
             if !body_fits_panel(&parsed.body) || !fits_in_response(&parsed.title, &parsed.body) {
                 return Err(too_large_on_disk());
             }
+            trim_older_notes(&parsed.title, &parsed.body, &mut older_notes);
             Ok(LoadedNote {
                 exists: true,
                 revision: revision_for(&contents),
                 title: parsed.title,
                 body: parsed.body,
+                key: key.clone(),
+                older_notes,
             })
         }
     }
@@ -117,16 +139,28 @@ pub fn save_note(
     body: &str,
     expected_revision: &str,
 ) -> Result<SaveOutcome, NoteRequestError> {
+    let key = crate::vault::url_record_key(canonical_url)?;
+    save_keyed_note(vault, canonical_url, &key, title, body, expected_revision)
+}
+
+pub fn save_keyed_note(
+    vault: &Vault,
+    canonical_url: &str,
+    key: &RecordKey,
+    title: &str,
+    body: &str,
+    expected_revision: &str,
+) -> Result<SaveOutcome, NoteRequestError> {
     if body.len() > MAX_BODY_BYTES || !body_fits_panel(body) {
         return Err(NoteRequestError::TooLarge(
             "note is too long to save".into(),
         ));
     }
-    let existing = vault.read_page(canonical_url)?;
+    let existing = vault.read_note(key, canonical_url)?;
     let (current_revision, parsed) = match &existing {
         None => (MISSING_REVISION.to_owned(), None),
         Some(contents) => {
-            let parsed = parse_owned_note(canonical_url, contents).ok_or_else(not_owned)?;
+            let parsed = parse_owned_note(key, canonical_url, contents).ok_or_else(not_owned)?;
             (revision_for(contents), Some(parsed))
         }
     };
@@ -169,9 +203,9 @@ pub fn save_note(
             "note has too many special characters to save".into(),
         ));
     }
-    let markdown = render_note(canonical_url, &effective_title, body, &created, &now)?;
+    let markdown = render_note(key, canonical_url, &effective_title, body, &created, &now)?;
     let replacing = existing.is_some();
-    let published = vault.replace_page(canonical_url, &markdown)?;
+    let published = vault.replace_note(key, canonical_url, &markdown)?;
     let outcome = match (replacing, published.warnings.is_empty()) {
         (false, true) => NoteSaveOutcome::Created,
         (false, false) => NoteSaveOutcome::CreatedWithWarning,
@@ -257,6 +291,7 @@ fn revision_for(contents: &str) -> String {
 }
 
 fn render_note(
+    key: &RecordKey,
     canonical_url: &str,
     title: &str,
     body: &str,
@@ -267,20 +302,29 @@ fn render_note(
         serde_json::to_string(title).map_err(|error| NoteRequestError::Internal(error.into()))?;
     let url_json = serde_json::to_string(canonical_url)
         .map_err(|error| NoteRequestError::Internal(error.into()))?;
-    let digest = hex::encode(Sha256::digest(canonical_url.as_bytes()));
-    let digest_json =
-        serde_json::to_string(&digest).map_err(|error| NoteRequestError::Internal(error.into()))?;
+    let key_line = match key.kind {
+        RecordKeyKind::Url => {
+            let digest_json = serde_json::to_string(&key.value)
+                .map_err(|error| NoteRequestError::Internal(error.into()))?;
+            format!("  url_id: {digest_json}\n")
+        }
+        RecordKeyKind::Artifact => {
+            let id_json = serde_json::to_string(&key.value)
+                .map_err(|error| NoteRequestError::Internal(error.into()))?;
+            format!("  artifact_id: {id_json}\n")
+        }
+    };
     // The body is stored verbatim; parse_owned_note removes only the one
     // newline written after it.
     Ok(format!(
-        "---\ntitle: {title_json}\nurl: {url_json}\n{FRONTMATTER_KEY}\n  canonical_url: {url_json}\n  url_id: {digest_json}\n  created: {created}\n  updated: {updated}\n---\n\n{body}\n"
+        "---\ntitle: {title_json}\nurl: {url_json}\n{FRONTMATTER_KEY}\n  canonical_url: {url_json}\n{key_line}  created: {created}\n  updated: {updated}\n---\n\n{body}\n"
     ))
 }
 
 /// Parse a note this host previously wrote, or refuse anything it does not
 /// recognize as its own. The side panel is the only editor, so this need not
 /// tolerate arbitrary hand edits; it must never adopt an unrelated file.
-fn parse_owned_note(canonical_url: &str, contents: &str) -> Option<ParsedNote> {
+fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Option<ParsedNote> {
     let (frontmatter, rest) = contents.strip_prefix("---\n")?.split_once("\n---\n")?;
     let body = rest.strip_prefix('\n').unwrap_or(rest);
     // render_note always appends exactly one trailing newline after the body.
@@ -289,6 +333,7 @@ fn parse_owned_note(canonical_url: &str, contents: &str) -> Option<ParsedNote> {
     let mut title = None;
     let mut fm_canonical: Option<String> = None;
     let mut fm_url_id: Option<String> = None;
+    let mut fm_artifact_id: Option<String> = None;
     let mut created: Option<String> = None;
     let mut kind: Option<String> = None;
     let mut in_block = false;
@@ -304,6 +349,8 @@ fn parse_owned_note(canonical_url: &str, contents: &str) -> Option<ParsedNote> {
                 fm_canonical = unquote(value);
             } else if let Some(value) = line.strip_prefix("  url_id: ") {
                 fm_url_id = unquote(value);
+            } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
+                fm_artifact_id = unquote(value);
             } else if let Some(value) = line.strip_prefix("  created: ") {
                 // Timestamps are written as plain RFC 3339 scalars (§6.5), not
                 // JSON-quoted like the string fields above.
@@ -319,22 +366,167 @@ fn parse_owned_note(canonical_url: &str, contents: &str) -> Option<ParsedNote> {
 
     let title = title?;
     let fm_canonical = fm_canonical?;
-    let fm_url_id = fm_url_id?;
     let created = created?;
     // §6.4: a page note has no kind key, or an explicit "page" kind. Anything
     // else (such as "summary") must never be treated as an owned page note.
     if kind.is_some_and(|value| value != "page") {
         return None;
     }
-    let expected_digest = hex::encode(Sha256::digest(canonical_url.as_bytes()));
-    if fm_canonical != canonical_url || fm_url_id != expected_digest {
-        return None;
+    match key.kind {
+        RecordKeyKind::Url => {
+            if fm_canonical != canonical_url
+                || fm_url_id.as_deref() != Some(key.value.as_str())
+                || fm_artifact_id.is_some()
+            {
+                return None;
+            }
+        }
+        RecordKeyKind::Artifact => {
+            if fm_artifact_id.as_deref() != Some(key.value.as_str()) || fm_url_id.is_some() {
+                return None;
+            }
+        }
     }
     Some(ParsedNote {
         title,
         created,
         body: body.to_owned(),
     })
+}
+
+/// Return a verified URL-keyed identity from a legacy page note. This is used
+/// only on bounded files from `Vault::note_candidates`; malformed, artifact-
+/// keyed, summary, and unrelated Markdown are ignored.
+pub fn url_keyed_note_url(contents: &str) -> Option<String> {
+    let (frontmatter, _) = contents.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let mut canonical = None;
+    let mut url_id = None;
+    let mut artifact_id = None;
+    let mut kind = None;
+    let mut in_block = false;
+    for line in frontmatter.lines() {
+        if line == FRONTMATTER_KEY {
+            in_block = true;
+            continue;
+        }
+        if in_block && !line.starts_with("  ") {
+            in_block = false;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("  canonical_url: ") {
+            canonical = unquote(value);
+        } else if let Some(value) = line.strip_prefix("  url_id: ") {
+            url_id = unquote(value);
+        } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
+            artifact_id = unquote(value);
+        } else if let Some(value) = line.strip_prefix("  kind: ") {
+            kind = Some(value.to_owned());
+        }
+    }
+    if artifact_id.is_some() || kind.is_some_and(|value| value != "page") {
+        return None;
+    }
+    let canonical = canonical?;
+    let expected = crate::vault::url_record_key(&canonical).ok()?;
+    (url_id.as_deref() == Some(expected.value.as_str())).then_some(canonical)
+}
+
+fn older_notes(
+    vault: &Vault,
+    primary_key: &RecordKey,
+    urls: &[String],
+) -> Result<Vec<OlderNote>, NoteRequestError> {
+    if primary_key.kind != RecordKeyKind::Artifact {
+        return Ok(Vec::new());
+    }
+    let mut result = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for canonical_url in urls.iter().take(24) {
+        if !seen.insert(canonical_url) {
+            continue;
+        }
+        let key = crate::vault::url_record_key(canonical_url)?;
+        let Some(contents) = vault.read_note(&key, canonical_url)? else {
+            continue;
+        };
+        let Some(parsed) = parse_owned_note(&key, canonical_url, &contents) else {
+            continue;
+        };
+        result.push(OlderNote {
+            key,
+            canonical_url: canonical_url.clone(),
+            title: parsed.title,
+            revision: revision_for(&contents),
+        });
+    }
+    Ok(result)
+}
+
+fn trim_older_notes(title: &str, body: &str, notes: &mut Vec<OlderNote>) {
+    while !notes.is_empty()
+        && escaped_len(title)
+            .saturating_add(escaped_len(body))
+            .saturating_add(
+                serde_json::to_vec(notes)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(MAX_OUTBOUND_BYTES),
+            )
+            .saturating_add(RESPONSE_ENVELOPE_BYTES)
+            > MAX_OUTBOUND_BYTES
+    {
+        notes.pop();
+    }
+}
+
+pub fn use_as_artifact_note(
+    vault: &Vault,
+    destination_url: &str,
+    artifact_key: &RecordKey,
+    source_url: &str,
+    expected_revision: &str,
+) -> Result<LoadedNote, NoteRequestError> {
+    if artifact_key.kind != RecordKeyKind::Artifact {
+        return Err(NoteRequestError::Conflict(OwnershipConflict(
+            "this page is not a recognized artifact".into(),
+        )));
+    }
+    if vault.read_note(artifact_key, destination_url)?.is_some() {
+        return Err(NoteRequestError::Conflict(OwnershipConflict(
+            "an artifact note already exists; the older note was left unchanged".into(),
+        )));
+    }
+    let source_key = crate::vault::url_record_key(source_url)?;
+    let source = vault.read_note(&source_key, source_url)?.ok_or_else(|| {
+        NoteRequestError::Conflict(OwnershipConflict("the older note no longer exists".into()))
+    })?;
+    if revision_for(&source) != expected_revision {
+        return Err(NoteRequestError::Conflict(OwnershipConflict(
+            "the older note changed; load it again before re-keying".into(),
+        )));
+    }
+    let parsed = parse_owned_note(&source_key, source_url, &source).ok_or_else(not_owned)?;
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| NoteRequestError::Internal(error.into()))?;
+    let markdown = render_note(
+        artifact_key,
+        destination_url,
+        &parsed.title,
+        &parsed.body,
+        &parsed.created,
+        &now,
+    )?;
+    vault.move_note_no_clobber(
+        &source_key,
+        source_url,
+        artifact_key,
+        destination_url,
+        &source,
+        &markdown,
+    )?;
+    load_keyed_note(vault, destination_url, artifact_key, &[])
 }
 
 fn unquote(value: &str) -> Option<String> {
@@ -522,6 +714,94 @@ mod tests {
     }
 
     #[test]
+    fn use_as_artifact_note_refuses_when_the_artifact_note_exists() {
+        let (_root, vault) = vault();
+        let source_url = "https://example.com/items/7?view=old";
+        let current_url = "https://example.com/items/7";
+        let source = match save_note(&vault, source_url, "Old", "older text", "missing").unwrap() {
+            SaveOutcome::Saved { revision, .. } => revision,
+            SaveOutcome::Stale { .. } => panic!("new URL note was unexpectedly stale"),
+        };
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:example.com/7".into(),
+        };
+        save_keyed_note(
+            &vault,
+            current_url,
+            &artifact_key,
+            "Current",
+            "artifact text",
+            "missing",
+        )
+        .unwrap();
+        let error = use_as_artifact_note(&vault, current_url, &artifact_key, source_url, &source)
+            .unwrap_err();
+        assert!(matches!(error, NoteRequestError::Conflict(_)));
+        assert_eq!(load_note(&vault, source_url).unwrap().body, "older text");
+        assert_eq!(
+            load_keyed_note(&vault, current_url, &artifact_key, &[])
+                .unwrap()
+                .body,
+            "artifact text"
+        );
+    }
+
+    #[test]
+    fn url_keyed_note_is_listed_and_can_become_the_artifact_note() {
+        let (_root, vault) = vault();
+        let source_url = "https://example.com/board?selected=7";
+        let current_url = "https://example.com/items/7";
+        let revision = match save_note(
+            &vault,
+            source_url,
+            "Before adapter",
+            "keep this text",
+            "missing",
+        )
+        .unwrap()
+        {
+            SaveOutcome::Saved { revision, .. } => revision,
+            SaveOutcome::Stale { .. } => panic!("new URL note was unexpectedly stale"),
+        };
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:example.com/7".into(),
+        };
+        let loaded =
+            load_keyed_note(&vault, current_url, &artifact_key, &[source_url.into()]).unwrap();
+        assert!(!loaded.exists);
+        assert_eq!(loaded.older_notes.len(), 1);
+        assert_eq!(loaded.older_notes[0].canonical_url, source_url);
+        let migrated =
+            use_as_artifact_note(&vault, current_url, &artifact_key, source_url, &revision)
+                .unwrap();
+        assert_eq!(migrated.body, "keep this text");
+        let artifact_markdown = vault
+            .read_note(&artifact_key, current_url)
+            .unwrap()
+            .unwrap();
+        assert!(artifact_markdown.contains(&format!(
+            "  canonical_url: {}",
+            serde_json::to_string(current_url).unwrap()
+        )));
+        assert!(!load_note(&vault, source_url).unwrap().exists);
+    }
+
+    #[test]
+    fn an_m1_url_keyed_note_loads_without_being_rewritten() {
+        let (root, vault) = vault();
+        let url = "https://example.com/original";
+        save_note(&vault, url, "Original", "M1 body", "missing").unwrap();
+        let path = root.path().join(vault.page_relative_path(url).unwrap());
+        let before = std::fs::read(&path).unwrap();
+        let loaded = load_note(&vault, url).unwrap();
+        assert_eq!(loaded.key.kind, RecordKeyKind::Url);
+        assert_eq!(loaded.body, "M1 body");
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
     fn a_long_title_is_clamped_on_creation_and_ignored_afterwards() {
         let (_root, vault) = vault();
         // 3-byte characters, so a byte cut could land inside one.
@@ -567,8 +847,36 @@ mod tests {
             revision: loaded.revision,
             title: loaded.title,
             body: loaded.body,
+            key: loaded.key,
+            reason: "stale".into(),
         });
         assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_OUTBOUND_BYTES);
+    }
+
+    #[test]
+    fn older_note_metadata_is_trimmed_before_a_large_note_exceeds_the_message_cap() {
+        let mut notes = (0..24)
+            .map(|index| OlderNote {
+                key: RecordKey {
+                    kind: RecordKeyKind::Url,
+                    value: format!("url:{index}:{}", "\u{0001}".repeat(500)),
+                },
+                canonical_url: format!("https://example.com/{index}/{}", "\u{0001}".repeat(8_000)),
+                title: "\u{0001}".repeat(MAX_TITLE_BYTES),
+                revision: "f".repeat(64),
+            })
+            .collect::<Vec<_>>();
+        let title = "\\\"".repeat(MAX_TITLE_BYTES);
+        let body = "\\\"".repeat(MAX_BODY_UTF16_UNITS);
+
+        trim_older_notes(&title, &body, &mut notes);
+
+        let estimated = escaped_len(&title)
+            + escaped_len(&body)
+            + serde_json::to_vec(&notes).unwrap().len()
+            + RESPONSE_ENVELOPE_BYTES;
+        assert!(estimated <= MAX_OUTBOUND_BYTES);
+        assert!(notes.len() < 24);
     }
 
     #[test]

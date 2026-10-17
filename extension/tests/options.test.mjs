@@ -112,7 +112,7 @@ function install({
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
     ["site-path", "input"], ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
-    ["reset-adapters", "button"],
+    ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
@@ -150,6 +150,8 @@ function install({
         state.configIssue = null;
         state.revision += 1;
         return { type: "config_updated", revision: String(state.revision), config: state.config };
+      case "refresh_artifacts":
+        return { type: "artifacts_refreshed", written: 2, unchanged: 3, conflicts: 1, conflict_paths: ["artifacts/work/item.md"] };
       default:
         throw new Error(`Unexpected host request ${request.type}`);
     }
@@ -830,4 +832,15 @@ test("a host restart drops harness offers only the old host knew", async () => {
 
   env.elements.get("detect-harnesses").click();
   await until(() => !env.elements.get("setup-harness").disabled, "Set up after detecting again");
+});
+
+test("manual artifact refresh reports unowned path conflicts", async () => {
+  const state = install();
+  await openSettings();
+  env.elements.get("refresh-artifacts").click();
+  await until(() => statusText().startsWith("Artifact files updated"), "artifact refresh");
+  assert.match(statusText(), /2 written, 3 already current/);
+  assert.match(statusText(), /1 unowned path conflict remains/);
+  assert.match(statusText(), /artifacts\/work\/item\.md/);
+  assert.equal(state.requests.at(-1).type, "refresh_artifacts");
 });

@@ -248,3 +248,29 @@ fn capture_batch_requires_typed_items_and_correlated_results() {
             .is_err()
     );
 }
+
+#[test]
+fn artifact_queries_and_note_keys_have_complete_shapes() {
+    for request in [
+        r#"{"type":"get_artifact","protocol_version":5,"request_id":"r1","url":"https://work.example/items/7","title":"Item 7"}"#,
+        r#"{"type":"list_artifacts","protocol_version":5,"request_id":"r2","artifact_type":null,"title_query":null,"limit":200}"#,
+        r#"{"type":"worklog","protocol_version":5,"request_id":"r3","start_date":"2026-10-12","end_date":"2026-10-17"}"#,
+        r#"{"type":"refresh_artifacts","protocol_version":5,"request_id":"r4"}"#,
+        r#"{"type":"use_artifact_note","protocol_version":5,"request_id":"r5","url":"https://work.example/items/7","source_url":"https://work.example/board?selected=7","expected_revision":"sha256:abc"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Request>(request).is_ok(),
+            "{request}"
+        );
+    }
+
+    let save = r#"{"type":"save_note","protocol_version":5,"request_id":"r6","url":"https://work.example/items/7","title":"Item","body":"text","expected_revision":"missing","expected_key":{"kind":"artifact","value":"work:work.example/7"}}"#;
+    assert!(serde_json::from_str::<Request>(save).is_ok());
+    assert!(
+        serde_json::from_str::<Request>(&save.replace(
+            ",\"expected_key\":{\"kind\":\"artifact\",\"value\":\"work:work.example/7\"}",
+            ""
+        ))
+        .is_err()
+    );
+}
