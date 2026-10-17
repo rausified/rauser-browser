@@ -5,10 +5,12 @@ use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ActivityRecorded, AgentChecked, BatchEventResult, BatchRecorded, CaptureEventKind,
-    ConfigConfirmed, ConfigResult, ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen,
-    HarnessSetupConfirmed, HarnessesDiscovered, HelloResult, NoteConflict, NoteLoaded, NoteSaved,
-    PROTOCOL_VERSION, Request, Response, VisitOutcome, VisitRecorded, WhyRecorded,
+    ActivityRecorded, AgentChecked, ArtifactListResult, ArtifactResult, ArtifactView,
+    ArtifactsRefreshed, BatchEventResult, BatchRecorded, CaptureEventKind, ConfigConfirmed,
+    ConfigResult, ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen, HarnessSetupConfirmed,
+    HarnessesDiscovered, HelloResult, NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION,
+    RecordKey, RecordKeyKind, Request, Response, VisitOutcome, VisitRecorded, WhyRecorded,
+    WorklogResult,
 };
 
 use crate::brand::NAMESPACE;
@@ -379,6 +381,11 @@ fn dispatch(
         Request::RecordWhy(value) => record_why(value, config),
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
+        Request::UseArtifactNote(value) => use_artifact_note(value, config),
+        Request::GetArtifact(value) => get_artifact(value, config),
+        Request::ListArtifacts(value) => list_artifacts(value, config),
+        Request::Worklog(value) => worklog(value, config),
+        Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         Request::CheckAgent(value) => check_agent(value, config),
         Request::DiscoverHarnesses(value) => {
             if config.refresh().is_err() {
@@ -1226,10 +1233,17 @@ fn regenerate_artifacts(config: &mut ConfigStore) {
 /// Notes work on any HTTP(S) page (§5.3): unlike visit logging, this never
 /// checks the site allowlist. The error is a small `(code, message)` pair,
 /// not a `Response`, so callers pay for the large `Response` enum only once.
-fn note_vault(
+struct NoteContext {
+    canonical: String,
+    vault: Vault,
+    key: RecordKey,
+    older_urls: Vec<String>,
+}
+
+fn note_context(
     config: &mut ConfigStore,
     url: &str,
-) -> Result<(String, Vault), (ErrorCode, &'static str)> {
+) -> Result<NoteContext, (ErrorCode, &'static str)> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
             ErrorCode::InvalidConfig,
@@ -1243,7 +1257,44 @@ fn note_vault(
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
     let vault = Vault::open_checked(storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
-    Ok((canonical, vault))
+    let matched = config.adapter_match(&canonical, None).ok();
+    let key = matched.as_ref().map_or_else(
+        || crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key"),
+        |found| RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: found.artifact_id.clone(),
+        },
+    );
+    let mut older_urls = vec![canonical.clone()];
+    if let Some(found) = matched {
+        if let Ok(cache_dir) = config.cache_dir()
+            && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+            && let Ok(urls) = index.artifact_urls(&found.artifact_id)
+        {
+            older_urls.extend(urls);
+        }
+        if let Ok(candidates) = vault.note_candidates() {
+            for contents in candidates {
+                let Some(candidate) = note::url_keyed_note_url(&contents) else {
+                    continue;
+                };
+                if config
+                    .adapter_match(&candidate, None)
+                    .is_ok_and(|candidate_match| candidate_match.artifact_id == found.artifact_id)
+                {
+                    older_urls.push(candidate);
+                }
+            }
+        }
+        older_urls.sort();
+        older_urls.dedup();
+    }
+    Ok(NoteContext {
+        canonical,
+        vault,
+        key,
+        older_urls,
+    })
 }
 
 fn note_error(request_id: &str, error_value: note::NoteRequestError) -> Response {
@@ -1263,11 +1314,16 @@ fn note_error(request_id: &str, error_value: note::NoteRequestError) -> Response
 }
 
 fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore) -> Response {
-    let (canonical, vault) = match note_vault(config, &value.url) {
+    let context = match note_context(config, &value.url) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    match note::load_note(&vault, &canonical) {
+    match note::load_keyed_note(
+        &context.vault,
+        &context.canonical,
+        &context.key,
+        &context.older_urls,
+    ) {
         Ok(loaded) => Response::NoteLoaded(NoteLoaded {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
@@ -1275,6 +1331,8 @@ fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore)
             revision: loaded.revision,
             title: loaded.title,
             body: loaded.body,
+            key: loaded.key,
+            older_notes: loaded.older_notes,
         }),
         Err(note_error_value) => note_error(&value.request_id, note_error_value),
     }
@@ -1293,13 +1351,34 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             );
         }
     };
-    let (canonical, vault) = match note_vault(config, &value.url) {
+    let context = match note_context(config, &value.url) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    match note::save_note(
-        &vault,
-        &canonical,
+    if value.expected_key != context.key {
+        return match note::load_keyed_note(
+            &context.vault,
+            &context.canonical,
+            &context.key,
+            &context.older_urls,
+        ) {
+            Ok(current) => Response::NoteConflict(NoteConflict {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                exists: current.exists,
+                revision: current.revision,
+                title: current.title,
+                body: current.body,
+                key: current.key,
+                reason: "key_changed".into(),
+            }),
+            Err(note_error_value) => note_error(&value.request_id, note_error_value),
+        };
+    }
+    match note::save_keyed_note(
+        &context.vault,
+        &context.canonical,
+        &context.key,
         &value.title,
         &value.body,
         &value.expected_revision,
@@ -1314,6 +1393,7 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             outcome,
             revision,
             relative_path,
+            key: context.key,
         }),
         Ok(note::SaveOutcome::Stale {
             revision,
@@ -1327,9 +1407,336 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             revision,
             title,
             body,
+            key: context.key,
+            reason: "stale".into(),
         }),
         Err(note_error_value) => note_error(&value.request_id, note_error_value),
     }
+}
+
+fn use_artifact_note(
+    value: brauser_protocol::UseArtifactNoteRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let context = match note_context(config, &value.url) {
+        Ok(resolved) => resolved,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    if context.key.kind != RecordKeyKind::Artifact {
+        return error(
+            &value.request_id,
+            ErrorCode::Conflict,
+            "this page is no longer a recognized artifact",
+        );
+    }
+    let source =
+        match crate::capture::canonical_url(&value.source_url, &config.snapshot().strip_params) {
+            Ok(url) => url,
+            Err(_) => {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidRequest,
+                    "older note URL is invalid",
+                );
+            }
+        };
+    if !context.older_urls.iter().any(|url| url == &source) {
+        return error(
+            &value.request_id,
+            ErrorCode::Unauthorized,
+            "that older note is not part of this artifact's recorded history",
+        );
+    }
+    match note::use_as_artifact_note(
+        &context.vault,
+        &context.canonical,
+        &context.key,
+        &source,
+        &value.expected_revision,
+    ) {
+        Ok(loaded) => Response::NoteLoaded(NoteLoaded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            exists: loaded.exists,
+            revision: loaded.revision,
+            title: loaded.title,
+            body: loaded.body,
+            key: loaded.key,
+            older_notes: loaded.older_notes,
+        }),
+        Err(note_error_value) => note_error(&value.request_id, note_error_value),
+    }
+}
+
+fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut ConfigStore) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidConfig,
+            "configuration is unavailable or needs repair",
+        );
+    }
+    let canonical = match crate::capture::canonical_url(&value.url, &config.snapshot().strip_params)
+    {
+        Ok(url) => url,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidRequest,
+                "page URL is invalid",
+            );
+        }
+    };
+    let matched = config
+        .adapter_match(&canonical, value.title.as_deref())
+        .ok();
+    let Some(matched) = matched else {
+        return Response::ArtifactResult(ArtifactResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            recognized: false,
+            artifact: None,
+        });
+    };
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return error(
+            &value.request_id,
+            ErrorCode::NotConfigured,
+            "choose a notes folder first",
+        );
+    };
+    let cache_dir = match config.cache_dir() {
+        Ok(path) => path,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "artifact index is unavailable",
+            );
+        }
+    };
+    let index = match ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir) {
+        Ok(index) => index,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "artifact index is unavailable",
+            );
+        }
+    };
+    let artifact = match index.artifact(&matched.artifact_id) {
+        Ok(Some(artifact)) => artifact,
+        Ok(None) => ArtifactView {
+            artifact_id: matched.artifact_id,
+            artifact_type: matched.artifact_type,
+            title: matched
+                .title
+                .map(|title| title.title)
+                .or(value.title)
+                .unwrap_or_else(|| "Untitled".into()),
+            url: canonical,
+            first_seen: String::new(),
+            last_seen: String::new(),
+            focused_seconds: 0,
+            background_seconds: 0,
+            opens: 0,
+            days_opened: 0,
+            last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
+            why: None,
+            linked_count: 0,
+        },
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "artifact index could not be read",
+            );
+        }
+    };
+    Response::ArtifactResult(ArtifactResult {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: value.request_id,
+        recognized: true,
+        artifact: Some(artifact),
+    })
+}
+
+fn list_artifacts(
+    value: brauser_protocol::ListArtifactsRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let index = match read_index(config) {
+        Ok(index) => index,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    // Thirty-two maximal rows still fit comfortably below Chrome's native
+    // messaging cap after JSON escaping.
+    let limit = usize::try_from(value.limit.clamp(1, 32)).unwrap_or(32);
+    match index.recent(
+        value.artifact_type.as_deref(),
+        value.title_query.as_deref(),
+        limit,
+    ) {
+        Ok((items, artifact_types, truncated)) => {
+            Response::ArtifactListResult(ArtifactListResult {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                items,
+                artifact_types,
+                truncated,
+            })
+        }
+        Err(_) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "artifact index could not be read",
+        ),
+    }
+}
+
+fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let start = match local_date(&value.start_date) {
+        Some(date) => date,
+        None => {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidRequest,
+                "worklog start_date is invalid",
+            );
+        }
+    };
+    let end = match local_date(&value.end_date) {
+        Some(date) => date,
+        None => {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidRequest,
+                "worklog end_date is invalid",
+            );
+        }
+    };
+    if end < start || (end - start).whole_days() > 6 {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "worklog range must be one to seven inclusive local dates",
+        );
+    }
+    let index = match read_index(config) {
+        Ok(index) => index,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    match index.worklog(start, end) {
+        Ok((text, count)) => Response::WorklogResult(WorklogResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            start_date: value.start_date,
+            end_date: value.end_date,
+            text,
+            artifact_count: u32::try_from(count).unwrap_or(u32::MAX),
+        }),
+        Err(_) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "worklog could not be generated",
+        ),
+    }
+}
+
+fn refresh_artifacts(
+    value: brauser_protocol::RefreshArtifactsRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let index = match read_index(config) {
+        Ok(index) => index,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    match index.regenerate_dirty() {
+        Ok(report) => Response::ArtifactsRefreshed(ArtifactsRefreshed {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            written: u32::try_from(report.written).unwrap_or(u32::MAX),
+            unchanged: u32::try_from(report.unchanged).unwrap_or(u32::MAX),
+            conflicts: u32::try_from(report.conflicts).unwrap_or(u32::MAX),
+            conflict_paths: report.conflict_paths,
+        }),
+        Err(_) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "artifact files could not be updated",
+        ),
+    }
+}
+
+fn read_index(config: &mut ConfigStore) -> Result<ArtifactIndex, (ErrorCode, &'static str)> {
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return Err((
+            ErrorCode::InvalidConfig,
+            "configuration is unavailable or needs repair",
+        ));
+    }
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+    };
+    let unavailable = || (ErrorCode::Internal, "artifact index is unavailable");
+    let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
+    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir).map_err(|_| unavailable())
+}
+
+fn local_date(value: &str) -> Option<time::Date> {
+    let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").ok()?;
+    time::Date::parse(value, &format).ok()
 }
 
 fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
@@ -1773,6 +2180,180 @@ mod tests {
         store
     }
 
+    fn write_adapter_config(
+        path: &std::path::Path,
+        root: &std::path::Path,
+        origin: &str,
+        adapter: &str,
+    ) {
+        config::fixtures::write(
+            path,
+            root,
+            "artifacts_dir = \"artifacts\"",
+            &format!(
+                "capture_enabled = true\nsites = [{{ origin = {origin:?}, path_prefix = \"/\" }}]"
+            ),
+            &format!("[adapters]\nformat = 1\n\n{adapter}"),
+        );
+    }
+
+    fn note_load(config: &mut ConfigStore, url: &str) -> brauser_protocol::NoteLoaded {
+        match load_note(
+            brauser_protocol::LoadNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "load".into(),
+                url: url.into(),
+            },
+            config,
+        ) {
+            Response::NoteLoaded(note) => note,
+            other => panic!("expected note_loaded, got {other:?}"),
+        }
+    }
+
+    fn note_save(
+        config: &mut ConfigStore,
+        url: &str,
+        body: &str,
+        revision: &str,
+        key: RecordKey,
+    ) -> Response {
+        save_note(
+            brauser_protocol::SaveNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "save".into(),
+                url: url.into(),
+                title: "Shared note".into(),
+                body: body.into(),
+                expected_revision: revision.into(),
+                expected_key: key,
+            },
+            config,
+        )
+    }
+
+    #[test]
+    fn google_doc_edit_and_view_routes_share_one_note() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://docs.google.com",
+            r#"[[artifacts]]
+type = "gdoc"
+origin = "https://docs.google.com"
+unscoped = "acknowledged"
+match = [{ path = "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}" }]
+modes = { edit = "edit", view = "view", preview = "view" }
+id = "gdoc:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let edit = "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit";
+        let view = "https://docs.google.com/document/d/abcdefghijklmnopqrst/view";
+        let legacy_vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        note::save_note(
+            &legacy_vault,
+            edit,
+            "Before adapter",
+            "older URL note",
+            "missing",
+        )
+        .unwrap();
+        let first = note_load(&mut config, view);
+        assert_eq!(first.key.kind, RecordKeyKind::Artifact);
+        assert_eq!(first.older_notes.len(), 1);
+        assert_eq!(first.older_notes[0].canonical_url, edit);
+        assert!(matches!(
+            note_save(
+                &mut config,
+                view,
+                "same document",
+                &first.revision,
+                first.key.clone()
+            ),
+            Response::NoteSaved(_)
+        ));
+        let loaded = note_load(&mut config, edit);
+        assert_eq!(loaded.key, first.key);
+        assert_eq!(loaded.body, "same document");
+    }
+
+    #[test]
+    fn jira_board_modal_and_browse_routes_share_one_note() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://acme.atlassian.net",
+            r#"[[artifacts]]
+type = "jira.issue"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/browse/{key:jira_key}" }, { path = "/jira/{*}", query = { selectedIssue = "{key:jira_key}" } }]
+id = "jira:{host}/{key}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let modal =
+            "https://acme.atlassian.net/jira/software/projects/ABC/boards/1?selectedIssue=ABC-123";
+        let browse = "https://acme.atlassian.net/browse/ABC-123";
+        let first = note_load(&mut config, modal);
+        assert!(matches!(
+            note_save(
+                &mut config,
+                modal,
+                "same issue",
+                &first.revision,
+                first.key.clone()
+            ),
+            Response::NoteSaved(_)
+        ));
+        let loaded = note_load(&mut config, browse);
+        assert_eq!(loaded.key, first.key);
+        assert_eq!(loaded.body, "same issue");
+    }
+
+    #[test]
+    fn adapter_change_mid_edit_is_a_key_changed_conflict() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        let adapter = |prefix: &str| {
+            format!(
+                r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{{ path = "/items/{{id:int}}" }}]
+id = "{prefix}:{{host}}/{{id}}"
+"#
+            )
+        };
+        write_adapter_config(&path, &root, "https://work.example", &adapter("work"));
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let loaded = note_load(&mut config, url);
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            &adapter("replacement"),
+        );
+        match note_save(&mut config, url, "unsaved", &loaded.revision, loaded.key) {
+            Response::NoteConflict(conflict) => {
+                assert_eq!(conflict.reason, "key_changed");
+                assert_eq!(conflict.key.value, "replacement:work.example/7");
+            }
+            other => panic!("expected key_changed conflict, got {other:?}"),
+        }
+    }
+
     #[test]
     fn loading_a_note_works_on_any_http_page_without_site_authorization() {
         let folder = tempfile::tempdir().unwrap();
@@ -1819,6 +2400,7 @@ mod tests {
             title: "A Title".into(),
             body: body.into(),
             expected_revision: revision.into(),
+            expected_key: crate::vault::url_record_key("https://example.com/a").unwrap(),
         })
     }
 
@@ -1929,6 +2511,8 @@ mod tests {
             revision: "missing".into(),
             title: String::new(),
             body: "x".repeat(MAX_OUTBOUND_BYTES + 1),
+            key: crate::vault::url_record_key("https://example.com/a").unwrap(),
+            older_notes: Vec::new(),
         });
         let mut output = Vec::new();
         write_frame(&mut output, &response).unwrap();
@@ -1965,6 +2549,7 @@ mod tests {
                     title: "A Title".into(),
                     body: body.into(),
                     expected_revision: revision.into(),
+                    expected_key: crate::vault::url_record_key("https://example.com/a").unwrap(),
                 }),
                 config,
                 consent,

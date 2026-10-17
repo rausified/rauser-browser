@@ -73,7 +73,13 @@ function harness(debounceMs = 60_000) {
 }
 
 const page = (url, title = url) => ({ url, title });
-const loaded = (body, revision = `rev-${body}`) => ({ exists: body !== "", revision, body });
+const loaded = (body, revision = `rev-${body}`) => ({
+  exists: body !== "",
+  revision,
+  body,
+  key: { kind: "url", value: "test-key" },
+  older_notes: [],
+});
 
 async function open(h, url, body) {
   const done = h.editor.showPage(page(url));
@@ -215,6 +221,27 @@ test("a conflict keeps edits typed during the save and does not save the server 
   assert.equal(h.view.body, "theirs");
   assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["mine and more"]);
   assert.equal(h.calls.filter((call) => call.kind === "save").length, 1);
+});
+
+test("a key change refuses the save and keeps the text for copy-out", async () => {
+  const h = harness();
+  await open(h, "https://p.test/", "old key note");
+  h.type("mine under the old key");
+  const pending = h.editor.flush();
+  const save = await h.next("save");
+  assert.deepEqual(save.expected_key, { kind: "url", value: "test-key" });
+  save.resolve({
+    type: "note_conflict",
+    revision: "missing",
+    body: "",
+    key: { kind: "artifact", value: "work:p.test/7" },
+    reason: "key_changed",
+  });
+  await pending;
+  assert.equal(h.view.body, "");
+  assert.equal(h.view.warning, true);
+  assert.match(h.view.status, /artifact identity changed/);
+  assert.equal(h.view.unsaved[0].text, "mine under the old key");
 });
 
 test("a flush with nothing running sends its save before returning", async () => {

@@ -176,6 +176,47 @@ export interface SaveNoteRequest {
   title: string;
   body: string;
   expected_revision: string;
+  expected_key: RecordKey;
+}
+
+export interface UseArtifactNoteRequest {
+  type: "use_artifact_note";
+  protocol_version: 5;
+  request_id: string;
+  url: string;
+  source_url: string;
+  expected_revision: string;
+}
+
+export interface GetArtifactRequest {
+  type: "get_artifact";
+  protocol_version: 5;
+  request_id: string;
+  url: string;
+  title: string | null;
+}
+
+export interface ListArtifactsRequest {
+  type: "list_artifacts";
+  protocol_version: 5;
+  request_id: string;
+  artifact_type: string | null;
+  title_query: string | null;
+  limit: number;
+}
+
+export interface WorklogRequest {
+  type: "worklog";
+  protocol_version: 5;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+}
+
+export interface RefreshArtifactsRequest {
+  type: "refresh_artifacts";
+  protocol_version: 5;
+  request_id: string;
 }
 
 export interface CheckAgentRequest {
@@ -240,6 +281,20 @@ export interface WhyRecorded {
   relative_path: string | null;
 }
 
+export type RecordKeyKind = "url" | "artifact";
+
+export interface RecordKey {
+  kind: RecordKeyKind;
+  value: string;
+}
+
+export interface OlderNote {
+  key: RecordKey;
+  canonical_url: string;
+  title: string;
+  revision: string;
+}
+
 export interface NoteLoaded {
   type: "note_loaded";
   protocol_version: 5;
@@ -248,6 +303,8 @@ export interface NoteLoaded {
   revision: string;
   title: string;
   body: string;
+  key: RecordKey;
+  older_notes: OlderNote[];
 }
 
 export interface NoteSaved {
@@ -257,6 +314,7 @@ export interface NoteSaved {
   outcome: NoteSaveOutcome;
   revision: string;
   relative_path: string;
+  key: RecordKey;
 }
 
 export interface NoteConflict {
@@ -267,6 +325,73 @@ export interface NoteConflict {
   revision: string;
   title: string;
   body: string;
+  key: RecordKey;
+  reason: string;
+}
+
+export interface ArtifactView {
+  artifact_id: string;
+  artifact_type: string;
+  title: string;
+  url: string;
+  first_seen: string;
+  last_seen: string;
+  focused_seconds: number;
+  background_seconds: number;
+  opens: number;
+  days_opened: number;
+  last_mode: string | null;
+  why: string | null;
+  linked_count: number;
+}
+
+export interface ArtifactListItem {
+  local_date: string;
+  artifact_id: string;
+  artifact_type: string;
+  title: string;
+  url: string;
+  focused_seconds: number;
+  background_seconds: number;
+  opens: number;
+  why: string | null;
+}
+
+export interface ArtifactResult {
+  type: "artifact_result";
+  protocol_version: 5;
+  request_id: string;
+  recognized: boolean;
+  artifact: ArtifactView | null;
+}
+
+export interface ArtifactListResult {
+  type: "artifact_list_result";
+  protocol_version: 5;
+  request_id: string;
+  items: ArtifactListItem[];
+  artifact_types: string[];
+  truncated: boolean;
+}
+
+export interface WorklogResult {
+  type: "worklog_result";
+  protocol_version: 5;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  text: string;
+  artifact_count: number;
+}
+
+export interface ArtifactsRefreshed {
+  type: "artifacts_refreshed";
+  protocol_version: 5;
+  request_id: string;
+  written: number;
+  unchanged: number;
+  conflicts: number;
+  conflict_paths: string[];
 }
 
 export interface AgentChecked {
@@ -409,6 +534,6 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;

@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::brand::NAMESPACE;
 use anyhow::{Context, Result, bail};
-use brauser_protocol::StorageConfig;
+use brauser_protocol::{RecordKey, RecordKeyKind, StorageConfig};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
@@ -17,6 +17,8 @@ use url::Url;
 use uuid::Uuid;
 
 const MAX_NOTE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_NOTE_SCAN_BYTES: usize = 16 * 1024 * 1024;
+const MAX_NOTE_SCAN_FILES: usize = 4_096;
 /// A live save renames its temporary within one request, so one this old was
 /// left by a host that was killed mid-save. The margin keeps a startup sweep
 /// from racing another host process's save in progress.
@@ -67,11 +69,29 @@ impl Vault {
     /// existing file (§4.4); this call trusts the markdown it is given and
     /// replaces whatever currently occupies the generated name.
     pub fn replace_page(&self, page_url: &str, markdown: &str) -> Result<CreatedPage> {
-        self.replace_page_with_post_publish_ops(page_url, markdown, sync_directory)
+        self.replace_note_with_post_publish_ops(
+            &url_record_key(page_url)?,
+            page_url,
+            markdown,
+            sync_directory,
+        )
+    }
+
+    pub fn replace_note(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+        markdown: &str,
+    ) -> Result<CreatedPage> {
+        self.replace_note_with_post_publish_ops(key, canonical_url, markdown, sync_directory)
     }
 
     pub fn page_relative_path(&self, page_url: &str) -> Result<PathBuf> {
         Ok(self.pages_dir.join(page_filename(page_url)?))
+    }
+
+    pub fn note_relative_path(&self, key: &RecordKey, canonical_url: &str) -> Result<PathBuf> {
+        Ok(self.pages_dir.join(note_filename(key, canonical_url)?))
     }
 
     /// Read a page generated from the same canonical URL. Callers must check
@@ -80,6 +100,111 @@ impl Vault {
     pub fn read_page(&self, page_url: &str) -> Result<Option<String>> {
         let filename = page_filename(page_url)?;
         self.read_named(&filename)
+    }
+
+    pub fn read_note(&self, key: &RecordKey, canonical_url: &str) -> Result<Option<String>> {
+        let filename = note_filename(key, canonical_url)?;
+        self.read_named(&filename)
+    }
+
+    /// Bounded candidates for reconciling M1 URL-keyed notes with current
+    /// adapter keys. Notes are flat in `pages_dir`; symlinks and large files
+    /// are never followed or read.
+    pub fn note_candidates(&self) -> Result<Vec<String>> {
+        let pages = match self.root.open_dir(&self.pages_dir) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("opening page notes directory"),
+        };
+        let mut names = pages
+            .entries()
+            .context("listing page notes directory")?
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.ends_with(".md"))
+            .collect::<Vec<_>>();
+        names.sort();
+        names.truncate(MAX_NOTE_SCAN_FILES);
+        let mut total = 0usize;
+        let mut contents = Vec::new();
+        for name in names {
+            let Ok(metadata) = pages.symlink_metadata(&name) else {
+                continue;
+            };
+            let Ok(length) = usize::try_from(metadata.len()) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || length > MAX_NOTE_BYTES
+                || total.saturating_add(length) > MAX_NOTE_SCAN_BYTES
+            {
+                continue;
+            }
+            let Some(text) = self.read_named(&name)? else {
+                continue;
+            };
+            total += text.len();
+            contents.push(text);
+        }
+        Ok(contents)
+    }
+
+    /// Publish a re-keyed note without replacing either side. The caller has
+    /// already validated the source contents and destination ownership. A
+    /// concurrent source edit aborts and removes the newly published copy.
+    pub fn move_note_no_clobber(
+        &self,
+        source_key: &RecordKey,
+        source_url: &str,
+        destination_key: &RecordKey,
+        destination_url: &str,
+        source_contents: &str,
+        destination_contents: &str,
+    ) -> Result<CreatedPage> {
+        if destination_contents.len() > MAX_NOTE_BYTES {
+            bail!("page note exceeds the 4 MiB write limit");
+        }
+        let source = note_filename(source_key, source_url)?;
+        let destination = note_filename(destination_key, destination_url)?;
+        self.root.create_dir_all(&self.pages_dir)?;
+        sync_directory_chain(&self.root, &self.pages_dir)?;
+        let pages = self.root.open_dir(&self.pages_dir)?;
+        if pages.symlink_metadata(&destination).is_ok() {
+            bail!("artifact note already exists");
+        }
+        let temporary = format!(".{NAMESPACE}-{}.tmp", Uuid::new_v4());
+        let mut file =
+            pages.open_with(&temporary, OpenOptions::new().write(true).create_new(true))?;
+        let cleanup = TempFileCleanup::new(&pages, &temporary);
+        file.write_all(destination_contents.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        pages
+            .hard_link(&temporary, &pages, &destination)
+            .context("publishing artifact-keyed note")?;
+        // The hard link is the publication point. Temporary cleanup is
+        // best-effort after that; a cleanup error must not turn a published
+        // destination into a reported failure that cannot be retried.
+        drop(cleanup);
+        let current = self.read_named(&source)?;
+        if current.as_deref() != Some(source_contents) {
+            if self.read_named(&destination)?.as_deref() == Some(destination_contents) {
+                let _ = pages.remove_file(&destination);
+            }
+            bail!("older note changed while it was being re-keyed");
+        }
+        if let Err(error) = pages.remove_file(&source) {
+            if self.read_named(&destination)?.as_deref() == Some(destination_contents) {
+                let _ = pages.remove_file(&destination);
+            }
+            return Err(error).context("removing URL-keyed note after re-keying");
+        }
+        sync_directory(&pages)?;
+        Ok(CreatedPage {
+            relative_path: self.pages_dir.join(destination),
+            warnings: Vec::new(),
+        })
     }
 
     fn read_named(&self, filename: &str) -> Result<Option<String>> {
@@ -161,6 +286,7 @@ impl Vault {
     /// generated name, replacing whatever is currently there (§4.4). Unlike
     /// the old no-clobber hard-link publish, a rename is itself the atomic
     /// cleanup step: on success no temporary name is left to remove.
+    #[cfg(test)]
     fn replace_page_with_post_publish_ops<G>(
         &self,
         page_url: &str,
@@ -170,10 +296,28 @@ impl Vault {
     where
         G: FnOnce(&Dir) -> io::Result<()>,
     {
+        self.replace_note_with_post_publish_ops(
+            &url_record_key(page_url)?,
+            page_url,
+            markdown,
+            sync_parent,
+        )
+    }
+
+    fn replace_note_with_post_publish_ops<G>(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+        markdown: &str,
+        sync_parent: G,
+    ) -> Result<CreatedPage>
+    where
+        G: FnOnce(&Dir) -> io::Result<()>,
+    {
         if markdown.len() > MAX_NOTE_BYTES {
             bail!("page note exceeds the 4 MiB write limit");
         }
-        let filename = page_filename(page_url)?;
+        let filename = note_filename(key, canonical_url)?;
         self.root
             .create_dir_all(&self.pages_dir)
             .context("creating page notes directory")?;
@@ -314,6 +458,37 @@ pub fn page_filename(page_url: &str) -> Result<String> {
     let stem = format!("{}{}", parsed.host_str().unwrap_or_default(), parsed.path());
     let slug = slug(&stem);
     Ok(format!("{slug}-{}.md", hex::encode(digest)))
+}
+
+pub fn url_record_key(page_url: &str) -> Result<RecordKey> {
+    let mut parsed = Url::parse(page_url).context("page URL is invalid")?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        bail!("page URL must be HTTP or HTTPS with a host");
+    }
+    parsed.set_fragment(None);
+    Ok(RecordKey {
+        kind: RecordKeyKind::Url,
+        value: hex::encode(Sha256::digest(parsed.as_str().as_bytes())),
+    })
+}
+
+pub fn note_filename(key: &RecordKey, canonical_url: &str) -> Result<String> {
+    match key.kind {
+        RecordKeyKind::Url => {
+            let expected = url_record_key(canonical_url)?;
+            if &expected != key {
+                bail!("URL record key does not match its canonical URL");
+            }
+            page_filename(canonical_url)
+        }
+        RecordKeyKind::Artifact => {
+            if key.value.is_empty() || key.value.len() > 512 {
+                bail!("artifact record key is invalid");
+            }
+            let digest = hex::encode(Sha256::digest(key.value.as_bytes()));
+            Ok(format!("artifact-{}-{}.md", slug(&key.value), digest))
+        }
+    }
 }
 
 fn slug(value: &str) -> String {

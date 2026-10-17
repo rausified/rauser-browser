@@ -252,6 +252,55 @@ pub struct SaveNoteRequest {
     pub title: String,
     pub body: String,
     pub expected_revision: String,
+    pub expected_key: RecordKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UseArtifactNoteRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub source_url: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetArtifactRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListArtifactsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub artifact_type: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub title_query: Option<String>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub start_date: String,
+    pub end_date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RefreshArtifactsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,6 +379,29 @@ pub struct WhyRecorded {
     pub relative_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordKeyKind {
+    Url,
+    Artifact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordKey {
+    pub kind: RecordKeyKind,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OlderNote {
+    pub key: RecordKey,
+    pub canonical_url: String,
+    pub title: String,
+    pub revision: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoteLoaded {
@@ -339,6 +411,8 @@ pub struct NoteLoaded {
     pub revision: String,
     pub title: String,
     pub body: String,
+    pub key: RecordKey,
+    pub older_notes: Vec<OlderNote>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +423,7 @@ pub struct NoteSaved {
     pub outcome: NoteSaveOutcome,
     pub revision: String,
     pub relative_path: String,
+    pub key: RecordKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,6 +435,85 @@ pub struct NoteConflict {
     pub revision: String,
     pub title: String,
     pub body: String,
+    pub key: RecordKey,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactView {
+    pub artifact_id: String,
+    pub artifact_type: String,
+    pub title: String,
+    pub url: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub focused_seconds: u32,
+    pub background_seconds: u32,
+    pub opens: u32,
+    pub days_opened: u32,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub last_mode: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub why: Option<String>,
+    pub linked_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactListItem {
+    pub local_date: String,
+    pub artifact_id: String,
+    pub artifact_type: String,
+    pub title: String,
+    pub url: String,
+    pub focused_seconds: u32,
+    pub background_seconds: u32,
+    pub opens: u32,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub why: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub recognized: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub artifact: Option<ArtifactView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactListResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub items: Vec<ArtifactListItem>,
+    pub artifact_types: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub text: String,
+    pub artifact_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactsRefreshed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub written: u32,
+    pub unchanged: u32,
+    pub conflicts: u32,
+    pub conflict_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -578,6 +732,11 @@ pub enum Request {
     RecordWhy(RecordWhyRequest),
     LoadNote(LoadNoteRequest),
     SaveNote(SaveNoteRequest),
+    UseArtifactNote(UseArtifactNoteRequest),
+    GetArtifact(GetArtifactRequest),
+    ListArtifacts(ListArtifactsRequest),
+    Worklog(WorklogRequest),
+    RefreshArtifacts(RefreshArtifactsRequest),
     CheckAgent(CheckAgentRequest),
     DiscoverHarnesses(DiscoverHarnessesRequest),
     ConfirmHarnessSetup(ConfirmHarnessSetupRequest),
@@ -597,6 +756,11 @@ impl Request {
             Self::RecordWhy(value) => value.protocol_version,
             Self::LoadNote(value) => value.protocol_version,
             Self::SaveNote(value) => value.protocol_version,
+            Self::UseArtifactNote(value) => value.protocol_version,
+            Self::GetArtifact(value) => value.protocol_version,
+            Self::ListArtifacts(value) => value.protocol_version,
+            Self::Worklog(value) => value.protocol_version,
+            Self::RefreshArtifacts(value) => value.protocol_version,
             Self::CheckAgent(value) => value.protocol_version,
             Self::DiscoverHarnesses(value) => value.protocol_version,
             Self::ConfirmHarnessSetup(value) => value.protocol_version,
@@ -616,6 +780,11 @@ impl Request {
             Self::RecordWhy(value) => &value.request_id,
             Self::LoadNote(value) => &value.request_id,
             Self::SaveNote(value) => &value.request_id,
+            Self::UseArtifactNote(value) => &value.request_id,
+            Self::GetArtifact(value) => &value.request_id,
+            Self::ListArtifacts(value) => &value.request_id,
+            Self::Worklog(value) => &value.request_id,
+            Self::RefreshArtifacts(value) => &value.request_id,
             Self::CheckAgent(value) => &value.request_id,
             Self::DiscoverHarnesses(value) => &value.request_id,
             Self::ConfirmHarnessSetup(value) => &value.request_id,
@@ -638,6 +807,10 @@ pub enum Response {
     NoteLoaded(NoteLoaded),
     NoteSaved(NoteSaved),
     NoteConflict(NoteConflict),
+    ArtifactResult(ArtifactResult),
+    ArtifactListResult(ArtifactListResult),
+    WorklogResult(WorklogResult),
+    ArtifactsRefreshed(ArtifactsRefreshed),
     AgentChecked(AgentChecked),
     HarnessesDiscovered(HarnessesDiscovered),
     HarnessSetupConfirmed(HarnessSetupConfirmed),
@@ -659,6 +832,10 @@ impl Response {
             Self::NoteLoaded(value) => value.protocol_version,
             Self::NoteSaved(value) => value.protocol_version,
             Self::NoteConflict(value) => value.protocol_version,
+            Self::ArtifactResult(value) => value.protocol_version,
+            Self::ArtifactListResult(value) => value.protocol_version,
+            Self::WorklogResult(value) => value.protocol_version,
+            Self::ArtifactsRefreshed(value) => value.protocol_version,
             Self::AgentChecked(value) => value.protocol_version,
             Self::HarnessesDiscovered(value) => value.protocol_version,
             Self::HarnessSetupConfirmed(value) => value.protocol_version,
@@ -680,6 +857,10 @@ impl Response {
             Self::NoteLoaded(value) => &value.request_id,
             Self::NoteSaved(value) => &value.request_id,
             Self::NoteConflict(value) => &value.request_id,
+            Self::ArtifactResult(value) => &value.request_id,
+            Self::ArtifactListResult(value) => &value.request_id,
+            Self::WorklogResult(value) => &value.request_id,
+            Self::ArtifactsRefreshed(value) => &value.request_id,
             Self::AgentChecked(value) => &value.request_id,
             Self::HarnessesDiscovered(value) => &value.request_id,
             Self::HarnessSetupConfirmed(value) => &value.request_id,

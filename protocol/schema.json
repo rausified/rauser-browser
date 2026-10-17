@@ -48,6 +48,21 @@
           "$ref": "#/$defs/SaveNoteRequest"
         },
         {
+          "$ref": "#/$defs/UseArtifactNoteRequest"
+        },
+        {
+          "$ref": "#/$defs/GetArtifactRequest"
+        },
+        {
+          "$ref": "#/$defs/ListArtifactsRequest"
+        },
+        {
+          "$ref": "#/$defs/WorklogRequest"
+        },
+        {
+          "$ref": "#/$defs/RefreshArtifactsRequest"
+        },
+        {
           "$ref": "#/$defs/CheckAgentRequest"
         },
         {
@@ -95,6 +110,18 @@
         },
         {
           "$ref": "#/$defs/NoteConflict"
+        },
+        {
+          "$ref": "#/$defs/ArtifactResult"
+        },
+        {
+          "$ref": "#/$defs/ArtifactListResult"
+        },
+        {
+          "$ref": "#/$defs/WorklogResult"
+        },
+        {
+          "$ref": "#/$defs/ArtifactsRefreshed"
         },
         {
           "$ref": "#/$defs/AgentChecked"
@@ -873,7 +900,8 @@
         "url",
         "title",
         "body",
-        "expected_revision"
+        "expected_revision",
+        "expected_key"
       ],
       "properties": {
         "type": {
@@ -904,7 +932,70 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "expected_key": {
+          "$ref": "#/$defs/RecordKey"
         }
+      }
+    },
+    "UseArtifactNoteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "url", "source_url", "expected_revision"],
+      "properties": {
+        "type": { "const": "use_artifact_note" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "GetArtifactRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "url", "title"],
+      "properties": {
+        "type": { "const": "get_artifact" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] }
+      }
+    },
+    "ListArtifactsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "artifact_type", "title_query", "limit"],
+      "properties": {
+        "type": { "const": "list_artifacts" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "artifact_type": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
+        "title_query": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+      }
+    },
+    "WorklogRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "start_date", "end_date"],
+      "properties": {
+        "type": { "const": "worklog" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "start_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "end_date": { "type": "string", "minLength": 10, "maxLength": 10 }
+      }
+    },
+    "RefreshArtifactsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "refresh_artifacts" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
     "CheckAgentRequest": {
@@ -1107,6 +1198,30 @@
         "relative_path": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
       }
     },
+    "RecordKeyKind": {
+      "type": "string",
+      "enum": ["url", "artifact"]
+    },
+    "RecordKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/RecordKeyKind" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "OlderNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "canonical_url", "title", "revision"],
+      "properties": {
+        "key": { "$ref": "#/$defs/RecordKey" },
+        "canonical_url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
     "NoteLoaded": {
       "type": "object",
       "additionalProperties": false,
@@ -1117,7 +1232,9 @@
         "exists",
         "revision",
         "title",
-        "body"
+        "body",
+        "key",
+        "older_notes"
       ],
       "properties": {
         "type": {
@@ -1147,6 +1264,14 @@
         "body": {
           "type": "string",
           "maxLength": 98304
+        },
+        "key": {
+          "$ref": "#/$defs/RecordKey"
+        },
+        "older_notes": {
+          "type": "array",
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/OlderNote" }
         }
       }
     },
@@ -1159,7 +1284,8 @@
         "request_id",
         "outcome",
         "revision",
-        "relative_path"
+        "relative_path",
+        "key"
       ],
       "properties": {
         "type": {
@@ -1185,6 +1311,9 @@
         "relative_path": {
           "type": "string",
           "minLength": 1
+        },
+        "key": {
+          "$ref": "#/$defs/RecordKey"
         }
       }
     },
@@ -1198,7 +1327,9 @@
         "exists",
         "revision",
         "title",
-        "body"
+        "body",
+        "key",
+        "reason"
       ],
       "properties": {
         "type": {
@@ -1228,7 +1359,103 @@
         "body": {
           "type": "string",
           "maxLength": 98304
+        },
+        "key": {
+          "$ref": "#/$defs/RecordKey"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["stale", "key_changed"]
         }
+      }
+    },
+    "ArtifactView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_type", "title", "url", "first_seen", "last_seen", "focused_seconds", "background_seconds", "opens", "days_opened", "last_mode", "why", "linked_count"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "first_seen": { "type": "string", "maxLength": 10 },
+        "last_seen": { "type": "string", "maxLength": 10 },
+        "focused_seconds": { "type": "integer", "minimum": 0 },
+        "background_seconds": { "type": "integer", "minimum": 0 },
+        "opens": { "type": "integer", "minimum": 0 },
+        "days_opened": { "type": "integer", "minimum": 0 },
+        "last_mode": { "oneOf": [{ "type": "string", "enum": ["view", "edit", "review"] }, { "type": "null" }] },
+        "why": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "linked_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ArtifactListItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local_date", "artifact_id", "artifact_type", "title", "url", "focused_seconds", "background_seconds", "opens", "why"],
+      "properties": {
+        "local_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "focused_seconds": { "type": "integer", "minimum": 0 },
+        "background_seconds": { "type": "integer", "minimum": 0 },
+        "opens": { "type": "integer", "minimum": 0 },
+        "why": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] }
+      }
+    },
+    "ArtifactResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "recognized", "artifact"],
+      "properties": {
+        "type": { "const": "artifact_result" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recognized": { "type": "boolean" },
+        "artifact": { "oneOf": [{ "$ref": "#/$defs/ArtifactView" }, { "type": "null" }] }
+      }
+    },
+    "ArtifactListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "items", "artifact_types", "truncated"],
+      "properties": {
+        "type": { "const": "artifact_list_result" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "items": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/ArtifactListItem" } },
+        "artifact_types": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "WorklogResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "start_date", "end_date", "text", "artifact_count"],
+      "properties": {
+        "type": { "const": "worklog_result" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "start_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "end_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "text": { "type": "string", "maxLength": 131072 },
+        "artifact_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ArtifactsRefreshed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "written", "unchanged", "conflicts", "conflict_paths"],
+      "properties": {
+        "type": { "const": "artifacts_refreshed" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "written": { "type": "integer", "minimum": 0 },
+        "unchanged": { "type": "integer", "minimum": 0 },
+        "conflicts": { "type": "integer", "minimum": 0 },
+        "conflict_paths": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } }
       }
     },
     "AgentChecked": {

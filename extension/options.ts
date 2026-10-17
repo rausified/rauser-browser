@@ -55,6 +55,7 @@ const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
 const adapterList = element<HTMLDivElement>("adapter-list");
 const newAdapterButton = element<HTMLButtonElement>("new-adapter");
 const resetAdaptersButton = element<HTMLButtonElement>("reset-adapters");
+const refreshArtifactsButton = element<HTMLButtonElement>("refresh-artifacts");
 const starterGallery = element<HTMLDivElement>("starter-gallery");
 const adapterEditor = element<HTMLDivElement>("adapter-editor");
 const adapterEditorHeading = element<HTMLHeadingElement>("adapter-editor-heading");
@@ -175,6 +176,7 @@ function updateControls(): void {
   }
   newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters || !session.config?.sites.length;
   resetAdaptersButton.disabled = !connected || busy || repairing || !repairingAdapters;
+  refreshArtifactsButton.disabled = !connected || busy || repairing || !session.config?.storage;
   for (const button of adapterList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters || button.dataset.boundary === "true";
   }
@@ -1020,6 +1022,28 @@ async function pauseCapture(): Promise<void> {
   }
 }
 
+async function refreshArtifactFiles(): Promise<void> {
+  if (busy || !session.config?.storage) return;
+  busy = true;
+  updateControls();
+  try {
+    const response = await session.host.call({
+      type: "refresh_artifacts",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+    }, "artifacts_refreshed");
+    const conflict = response.conflicts
+      ? ` ${response.conflicts} unowned path conflict${response.conflicts === 1 ? " remains" : "s remain"}; those files were not overwritten: ${response.conflict_paths.join(", ")}.`
+      : "";
+    show(`Artifact files updated: ${response.written} written, ${response.unchanged} already current.${conflict}`, response.conflicts > 0);
+  } catch (error) {
+    show(`Could not update artifact files: ${describe(error)}`, true);
+  } finally {
+    busy = false;
+    updateControls();
+  }
+}
+
 async function removeSite(site: SiteConfig): Promise<void> {
   const baseConfig = session.config;
   if (busy || !baseConfig || !session.revision || session.configIssue || session.adapterIssue ||
@@ -1288,6 +1312,7 @@ resetAdaptersButton.addEventListener("click", () => void saveAdapterDocument(
   { format: 1, artifacts: [] },
   "Invalid adapter rules removed; automatic capture remains off until new rules are added.",
 ));
+refreshArtifactsButton.addEventListener("click", () => void refreshArtifactFiles());
 saveAdapterButton.addEventListener("click", () => void saveAdapter());
 cancelAdapterButton.addEventListener("click", closeAdapterEditor);
 adapterJson.addEventListener("input", refreshAdapterEditor);

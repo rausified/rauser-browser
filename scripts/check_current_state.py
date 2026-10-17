@@ -58,6 +58,9 @@ def main() -> int:
         "AGENTS.md index": "index and artifact-file generation",
         "README.md index": "the index and artifact files",
         "DESIGN.md index": "indexing, record keys",
+        "AGENTS.md panel": "artifact panel card, Recent list, worklog view, record keys",
+        "README.md panel": "artifact card, Recent view, worklog, record keys",
+        "DESIGN.md panel": "record keys, artifact-facing views, and live-tool certification are next",
     }
     bodies = {
         "AGENTS.md": agents,
@@ -69,6 +72,9 @@ def main() -> int:
         "AGENTS.md index": agents,
         "README.md index": readme,
         "DESIGN.md index": design,
+        "AGENTS.md panel": agents,
+        "README.md panel": readme,
+        "DESIGN.md panel": design,
     }
     for filename, claim in stale_claims.items():
         body = bodies[filename]
@@ -100,6 +106,12 @@ def main() -> int:
         errors.append("README.md Status no longer records shipped artifact indexing")
     if "rebuildable indexing" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped artifact indexing")
+    if "cross-tool recent list" not in normalized(agents):
+        errors.append("AGENTS.md Current state no longer records shipped Recent view")
+    if "filtered cross-tool recent view" not in normalized(readme):
+        errors.append("README.md Status no longer records shipped artifact-facing views")
+    if "record keys, and artifact-facing views merged" not in normalized(design):
+        errors.append("DESIGN.md status no longer records shipped record keys and views")
 
     for error in errors:
         print(error, file=sys.stderr)
