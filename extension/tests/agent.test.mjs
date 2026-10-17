@@ -151,3 +151,17 @@ test("isResponseShape_accepts_new_responses_and_rejects_unknown", () => {
   assert.equal(isResponseShape({ type: "harness_ready", offers: [offer] }), false);
   assert.equal(isResponseShape({ type: "agent_checked", harness_id: "claude-code" }), false);
 });
+
+test("artifact list responses enforce the protocol type bound", () => {
+  const response = {
+    type: "artifact_list_result",
+    items: [],
+    artifact_types: Array.from({ length: 64 }, (_, index) => `type-${index}`),
+    truncated: false,
+  };
+  assert.equal(isResponseShape(response), true);
+  assert.equal(isResponseShape({
+    ...response,
+    artifact_types: [...response.artifact_types, "type-64"],
+  }), false);
+});

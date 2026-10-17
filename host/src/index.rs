@@ -350,10 +350,12 @@ impl ArtifactIndex {
     /// append-only log remains authoritative; this never trusts index.db.
     pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>> {
         let derived = derive(&self.load_or_rebuild()?.events);
-        Ok(derived
-            .artifacts
-            .get(artifact_id)
-            .map(|row| artifact_view(row, linked_count(&derived.edges, artifact_id))))
+        Ok(derived.artifacts.get(artifact_id).map(|row| {
+            artifact_view(
+                row,
+                linked_count(&derived.edges, &derived.artifacts, artifact_id),
+            )
+        }))
     }
 
     /// Canonical URLs previously recorded for an artifact. Note lookup uses
@@ -388,6 +390,7 @@ impl ArtifactIndex {
             .map(|row| row.artifact_type.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
+            .take(64)
             .collect::<Vec<_>>();
         let query = title_query.map(str::trim).filter(|value| !value.is_empty());
         let query = query.map(|value| value.to_lowercase());
@@ -533,11 +536,28 @@ fn artifact_view(row: &ArtifactRow, linked: usize) -> ArtifactView {
     }
 }
 
-fn linked_count(edges: &[EdgeRow], artifact_id: &str) -> usize {
-    edges
-        .iter()
-        .filter(|edge| edge.source == artifact_id || edge.target == artifact_id)
-        .count()
+fn linked_count(
+    edges: &[EdgeRow],
+    artifacts: &BTreeMap<String, ArtifactRow>,
+    artifact_id: &str,
+) -> usize {
+    let mut linked = BTreeSet::new();
+    for edge in edges {
+        let other = if edge.source == artifact_id {
+            Some(edge.target.as_str())
+        } else if edge.target == artifact_id {
+            Some(edge.source.as_str())
+        } else {
+            None
+        };
+        if let Some(other) = other
+            && other != artifact_id
+            && artifacts.contains_key(other)
+        {
+            linked.insert(other);
+        }
+    }
+    linked.len()
 }
 
 fn parse_date(value: &str) -> Result<Date> {
@@ -1797,6 +1817,55 @@ print(json.dumps([tables,row]))"#;
         assert!(text.starts_with("Opened 2 artifacts"));
         assert!(text.contains("Release blocker"));
         assert!(text.contains("Why: blocking the release"));
+    }
+
+    #[test]
+    fn linked_artifacts_are_distinct_and_unresolved_mentions_do_not_count() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let first = activity(
+            "00000000-0000-4000-8000-000000000011",
+            "ABC",
+            "Source",
+            "2026-10-15T12:00:00Z",
+        );
+        let mut second = activity(
+            "00000000-0000-4000-8000-000000000012",
+            "XYZ",
+            "Target",
+            "2026-10-15T13:00:00Z",
+        );
+        second.trails = ["link", "form_submit"]
+            .into_iter()
+            .map(|transition| ActivityTrail {
+                from_artifact_id: Some(first.artifact_id.clone()),
+                from_url: Some(first.url.clone()),
+                transition: transition.into(),
+            })
+            .collect();
+        second.refs.push(ActivityRef {
+            artifact_type: "work.item".into(),
+            value: "NOT-RECORDED".into(),
+        });
+        index.record_activities([&first, &second], &[]).unwrap();
+
+        assert_eq!(
+            index
+                .artifact(&first.artifact_id)
+                .unwrap()
+                .unwrap()
+                .linked_count,
+            1
+        );
+        assert_eq!(
+            index
+                .artifact(&second.artifact_id)
+                .unwrap()
+                .unwrap()
+                .linked_count,
+            1
+        );
     }
 
     #[test]
