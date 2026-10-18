@@ -378,16 +378,25 @@ impl ArtifactIndex {
     /// falls back to this when no adapter currently recognizes the URL (for
     /// example, the adapter that matched it was removed), so an existing
     /// shared artifact note stays discoverable instead of silently switching
-    /// to a fresh URL-keyed note.
+    /// to a fresh URL-keyed note. M1's legacy `web:<host>/<url_id>` identity
+    /// (`web.page`, a reserved synthetic scheme no real adapter may use) is
+    /// skipped: a URL visited under M1 before a real adapter later
+    /// recognized it must still recover the real artifact, not the earlier
+    /// synthetic one, even though `visits` is oldest-first.
     pub fn artifact_id_for_url(&self, url: &str) -> Result<Option<String>> {
         let derived = derive(&self.load_or_rebuild()?.events);
-        if let Some(visit) = derived.visits.iter().find(|visit| visit.url == url) {
+        let is_legacy = |id: &str| id.starts_with("web:");
+        if let Some(visit) = derived
+            .visits
+            .iter()
+            .find(|visit| visit.url == url && !is_legacy(&visit.artifact_id))
+        {
             return Ok(Some(visit.artifact_id.clone()));
         }
         Ok(derived
             .artifacts
             .values()
-            .find(|row| row.url == url)
+            .find(|row| row.url == url && !is_legacy(&row.artifact_id))
             .map(|row| row.artifact_id.clone()))
     }
 
@@ -1802,6 +1811,52 @@ print(json.dumps([tables,row]))"#;
         );
         assert_eq!(decoded[1][0], hostile);
         assert_eq!(decoded[1][1], "https://example.com/items/ABC");
+    }
+
+    #[test]
+    fn artifact_id_for_url_prefers_a_real_artifact_over_an_earlier_legacy_identity() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://example.com/items/7";
+        let legacy_event = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000001".into(),
+            artifact_id: "web:example.com/abc123".into(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: Some("Before an adapter recognized it".into()),
+            occurred_at: "2026-10-15T12:00:00+00:00".into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 10,
+            background_seconds: 0,
+            modes: Vec::new(),
+            trails: Vec::new(),
+            refs: Vec::new(),
+        };
+        let real_event = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000002".into(),
+            artifact_id: "work:example.com/7".into(),
+            artifact_type: "work.item".into(),
+            url: url.into(),
+            title: Some("Issue 7".into()),
+            occurred_at: "2026-10-16T12:00:00+00:00".into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 20,
+            background_seconds: 0,
+            modes: Vec::new(),
+            trails: Vec::new(),
+            refs: Vec::new(),
+        };
+        // Oldest first: the legacy M1 visit predates the real adapter match.
+        index.record_activity(&legacy_event, &[]).unwrap();
+        index.record_activity(&real_event, &[]).unwrap();
+
+        assert_eq!(
+            index.artifact_id_for_url(url).unwrap(),
+            Some("work:example.com/7".into())
+        );
     }
 
     #[test]

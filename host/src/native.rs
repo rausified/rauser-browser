@@ -1259,7 +1259,12 @@ fn note_context(
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
     let vault = Vault::open_checked(storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
-    let matched = config.adapter_match(&canonical, None).ok();
+    // Match on the original URL, not the stripped canonical form: capture
+    // (record_activity, record_why) evaluates adapter identity before any
+    // strip-parameter normalization, so a parameter an adapter's match rule
+    // requires must still be visible here, or this path and capture would
+    // disagree on whether the page is recognized.
+    let matched = config.adapter_match(url, None).ok();
     let key = match matched.as_ref() {
         Some(found) => RecordKey {
             kind: RecordKeyKind::Artifact,
@@ -1269,13 +1274,24 @@ fn note_context(
         // adapter or last enabled site was removed). Before falling back to
         // a fresh URL key, check whether it was previously recorded under an
         // artifact, so that artifact's existing shared note stays reachable
-        // instead of appearing empty.
+        // instead of appearing empty. The note's own stored identity is
+        // checked first because it survives independently of activity (a
+        // note saved while capture was paused, or before any activity was
+        // ever delivered, has no index row to recover from); the index is
+        // only a fallback for a note saved under a different alternate URL.
         None => {
-            let historical = config.cache_dir().ok().and_then(|cache_dir| {
-                ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                    .ok()?
-                    .artifact_id_for_url(&canonical)
-                    .ok()?
+            let from_note = vault.note_candidates().ok().and_then(|candidates| {
+                candidates
+                    .iter()
+                    .find_map(|contents| note::artifact_keyed_note_identity(contents, &canonical))
+            });
+            let historical = from_note.or_else(|| {
+                config.cache_dir().ok().and_then(|cache_dir| {
+                    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+                        .ok()?
+                        .artifact_id_for_url(&canonical)
+                        .ok()?
+                })
             });
             match historical {
                 Some(artifact_id) => RecordKey {
@@ -2651,6 +2667,101 @@ id = "work:{host}/{id}"
             "the shared artifact note must stay discoverable after the adapter is removed"
         );
         assert_eq!(loaded_after.body, "keep this text");
+    }
+
+    #[test]
+    fn a_note_saved_without_any_activity_stays_reachable_after_the_adapter_is_removed() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+
+        // Save the shared note while the adapter still recognizes the URL,
+        // but with no activity ever recorded for it (capture paused, or
+        // simply not delivered yet) -- there is no index row to recover
+        // from, only the note's own stored identity.
+        let loaded_before = note_load(&mut config, url);
+        assert_eq!(loaded_before.key.kind, RecordKeyKind::Artifact);
+        match note_save(
+            &mut config,
+            url,
+            "keep this text",
+            &loaded_before.revision,
+            loaded_before.key,
+        ) {
+            Response::NoteSaved(_) => {}
+            other => panic!("expected note_saved, got {other:?}"),
+        }
+
+        write_adapter_config(&path, &root, "https://work.example", "");
+
+        let loaded_after = note_load(&mut config, url);
+        assert!(
+            loaded_after.exists,
+            "a note saved with no activity history must still be found by its own stored identity"
+        );
+        assert_eq!(loaded_after.body, "keep this text");
+    }
+
+    #[test]
+    fn jira_board_modal_matches_before_strip_params_removes_its_query_identity() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://acme.atlassian.net\", path_prefix = \"/\" }]\nstrip_params = [\"selectedIssue\"]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "jira.issue"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/browse/{key:jira_key}" }, { path = "/jira/{*}", query = { selectedIssue = "{key:jira_key}" } }]
+id = "jira:{host}/{key}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let modal =
+            "https://acme.atlassian.net/jira/software/projects/ABC/boards/1?selectedIssue=ABC-123";
+        let browse = "https://acme.atlassian.net/browse/ABC-123";
+
+        // strip_params removes `selectedIssue` from the stored canonical
+        // URL, but adapter matching must still see it on the original URL,
+        // the same way capture does, or this route would stop being
+        // recognized as an artifact at all.
+        let modal_loaded = note_load(&mut config, modal);
+        assert_eq!(modal_loaded.key.kind, RecordKeyKind::Artifact);
+
+        assert!(matches!(
+            note_save(
+                &mut config,
+                modal,
+                "same issue",
+                &modal_loaded.revision,
+                modal_loaded.key.clone()
+            ),
+            Response::NoteSaved(_)
+        ));
+        let browse_loaded = note_load(&mut config, browse);
+        assert_eq!(browse_loaded.key, modal_loaded.key);
+        assert_eq!(browse_loaded.body, "same issue");
     }
 
     #[test]

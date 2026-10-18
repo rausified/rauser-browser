@@ -403,6 +403,39 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
     })
 }
 
+/// Returns the artifact_id of an artifact-keyed page note whose own recorded
+/// `canonical_url` is exactly this URL. Used, independent of any activity
+/// history, to recover a note's identity when no adapter currently
+/// recognizes the URL (its adapter was removed) but the note itself was
+/// saved while one did. This is used only on bounded files from
+/// `Vault::note_candidates`; malformed, URL-keyed, summary, and unrelated
+/// Markdown are ignored.
+pub fn artifact_keyed_note_identity(contents: &str, url: &str) -> Option<String> {
+    let (frontmatter, _) = contents.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let mut canonical = None;
+    let mut artifact_id = None;
+    let mut in_block = false;
+    for line in frontmatter.lines() {
+        if line == FRONTMATTER_KEY {
+            in_block = true;
+            continue;
+        }
+        if in_block && !line.starts_with("  ") {
+            in_block = false;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("  canonical_url: ") {
+            canonical = unquote(value);
+        } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
+            artifact_id = unquote(value);
+        }
+    }
+    let artifact_id = artifact_id?;
+    (canonical.as_deref() == Some(url)).then_some(artifact_id)
+}
+
 /// Return a verified URL-keyed identity from a legacy page note. This is used
 /// only on bounded files from `Vault::note_candidates`; malformed, artifact-
 /// keyed, summary, and unrelated Markdown are ignored.

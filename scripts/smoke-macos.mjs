@@ -393,10 +393,10 @@ async function hostConfig(wrapper) {
 
 // Simulates a second Brauser window saving this page's note first, so the
 // panel's own next save is refused as stale (§4.4, §5.3).
-async function hostSaveNote(wrapper, url, title, body, expectedRevision) {
+async function hostSaveNote(wrapper, url, title, body, expectedRevision, expectedKey) {
   const reply = await hostRequest(wrapper, {
     type: "save_note", protocol_version: PROTOCOL_VERSION, request_id: randomUUID(),
-    url, title, body, expected_revision: expectedRevision,
+    url, title, body, expected_revision: expectedRevision, expected_key: expectedKey,
   });
   if (reply.type !== "note_saved") {
     throw new Error(`Native host returned ${reply.type ?? "an unknown response"} instead of note_saved`);
@@ -1465,7 +1465,7 @@ async function run() {
       // Simulate a second Brauser window saving this page's note first, so
       // the open panel's own revision becomes stale (§4.4).
       externalBody = `External edit ${caseId}`;
-      await hostSaveNote(wrapper, allowed, title, externalBody, loaded.revision);
+      await hostSaveNote(wrapper, allowed, title, externalBody, loaded.revision, loaded.key);
 
       const unsavedLocalEdit = `${firstBody} plus an edit that cannot be saved ${caseId}`;
       await typeNote(unsavedLocalEdit);

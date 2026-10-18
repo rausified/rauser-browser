@@ -130,7 +130,11 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean): voi
   artifactIdentity.textContent = `${artifact.artifact_type} · ${artifact.artifact_id}`;
   artifactMode.textContent = artifact.last_mode ?? "";
   artifactMode.hidden = artifact.last_mode === null;
-  artifactMeasures.textContent = artifact.days_opened
+  // A restored tab can deliver focused/background time with no cold open,
+  // so days_opened alone cannot distinguish real delivered activity from
+  // the no-record-yet placeholder; first_seen is empty only for that
+  // placeholder (native.rs's get_artifact fallback).
+  artifactMeasures.textContent = artifact.first_seen
     ? `Focused ${duration(artifact.focused_seconds)} over ${artifact.days_opened} day${artifact.days_opened === 1 ? "" : "s"} · ${duration(artifact.background_seconds)} background · last ${artifact.last_seen}`
     : "Recognized; no delivered activity yet.";
   artifactLinks.textContent = artifact.linked_count
@@ -198,7 +202,12 @@ async function saveWhy(): Promise<void> {
       },
     }, "why_recorded");
     if (response.outcome !== "persisted") throw new Error(response.reason ?? response.outcome);
-    whyEdited = false;
+    // Only clear the dirty flag if nothing changed while this save was in
+    // flight; a newer, still-unsaved draft (or a switch to a different
+    // artifact) must not be overwritten by the refresh below.
+    if (currentArtifact === artifact && artifactWhy.value.trim() === text) {
+      whyEdited = false;
+    }
     await refreshArtifact();
     show("Artifact context saved.");
   } catch (error) {
