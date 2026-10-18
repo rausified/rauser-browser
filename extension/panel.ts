@@ -169,7 +169,9 @@ async function refreshArtifact(): Promise<void> {
     renderArtifact(response.artifact, response.recognized);
   } catch (error) {
     if (page !== currentPage) return;
-    renderArtifact(null, false);
+    // A transient fetch failure must not discard an in-progress "Why I'm
+    // here" draft or the card's last-known state (renderArtifact(null, ...)
+    // would reset both); only report the error.
     artifactStatus.textContent = `Artifact status unavailable: ${describe(error)}`;
   }
 }

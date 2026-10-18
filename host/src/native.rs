@@ -1280,32 +1280,36 @@ fn note_context(
         // ever delivered, has no index row to recover from); the index is
         // only a fallback for a note saved under a different alternate URL.
         None => {
-            // Collect every distinct match rather than taking the first:
-            // stripped query identity can make two different artifacts
-            // share the same canonical URL, and guessing between them
-            // would silently redirect a save into an unrelated artifact's
-            // note. Trust the recovery only when it is unambiguous.
-            let from_note = vault.note_candidates().ok().and_then(|candidates| {
-                let mut ids = candidates
-                    .iter()
-                    .filter_map(|contents| note::artifact_keyed_note_identity(contents, &canonical))
-                    .collect::<std::collections::BTreeSet<_>>();
-                (ids.len() == 1).then(|| ids.pop_first().expect("checked len == 1 above"))
-            });
-            let historical = from_note.or_else(|| {
-                config.cache_dir().ok().and_then(|cache_dir| {
+            // Collect every distinct match from BOTH sources into one set
+            // before deciding uniqueness: stripped query identity can make
+            // two different artifacts share the same canonical URL, and
+            // trusting either source alone -- even one that is itself
+            // unambiguous -- could still miss a conflicting match the
+            // other source holds. Guessing between them would silently
+            // redirect a save into an unrelated artifact's note, so the
+            // recovery is trusted only when the union is unambiguous.
+            let mut candidates = std::collections::BTreeSet::new();
+            if let Ok(note_candidates) = vault.note_candidates() {
+                candidates.extend(note_candidates.iter().filter_map(|contents| {
+                    note::artifact_keyed_note_identity(contents, &canonical)
+                }));
+            }
+            if let Ok(cache_dir) = config.cache_dir()
+                && let Ok(index) =
                     ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                        .ok()?
-                        .artifact_id_for_url(&canonical)
-                        .ok()?
-                })
-            });
-            match historical {
-                Some(artifact_id) => RecordKey {
+                && let Ok(ids) = index.artifact_candidates_for_url(&canonical)
+            {
+                candidates.extend(ids);
+            }
+            match candidates.len() {
+                1 => RecordKey {
                     kind: RecordKeyKind::Artifact,
-                    value: artifact_id,
+                    value: candidates
+                        .into_iter()
+                        .next()
+                        .expect("checked len == 1 above"),
                 },
-                None => {
+                _ => {
                     crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
                 }
             }

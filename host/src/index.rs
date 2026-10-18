@@ -374,22 +374,23 @@ impl ArtifactIndex {
         Ok(urls.into_iter().collect())
     }
 
-    /// Artifact previously recorded for a canonical URL, if any, checking
-    /// both an activity's own URL and any mode-evidence URL hourly
+    /// Every distinct artifact previously recorded for a canonical URL,
+    /// checking both an activity's own URL and any mode-evidence URL hourly
     /// coalescing may have folded into a later event's primary URL (so an
     /// alternate route such as `/edit` is not lost once a visit's primary
     /// URL settles on `/view`). Note lookup falls back to this when no
     /// adapter currently recognizes the URL (for example, the adapter that
     /// matched it was removed), so an existing shared artifact note stays
     /// discoverable instead of silently switching to a fresh URL-keyed one.
-    /// Returns `None`, rather than guessing, when more than one distinct
-    /// real artifact has recorded this exact URL: stripped query identity
-    /// can make two different artifacts share one canonical form, and a
-    /// wrong guess here would silently redirect a save into an unrelated
+    /// Returns the raw candidate set rather than collapsing it: the caller
+    /// must combine it with any other recovery source before deciding
+    /// uniqueness, since stripped query identity can make two different
+    /// artifacts share one canonical form, and a wrong guess from either
+    /// source alone would silently redirect a save into an unrelated
     /// artifact's note. M1's legacy `web:<host>/<url_id>` identity
     /// (`web.page`, a reserved synthetic scheme no real adapter may use) is
     /// always excluded from the candidates.
-    pub fn artifact_id_for_url(&self, url: &str) -> Result<Option<String>> {
+    pub fn artifact_candidates_for_url(&self, url: &str) -> Result<BTreeSet<String>> {
         let events = &self.load_or_rebuild()?.events;
         let is_legacy = |id: &str| id.starts_with("web:");
         let mut candidates = BTreeSet::new();
@@ -408,12 +409,7 @@ impl ArtifactIndex {
                 _ => {}
             }
         }
-        Ok((candidates.len() == 1).then(|| {
-            candidates
-                .into_iter()
-                .next()
-                .expect("checked len == 1 above")
-        }))
+        Ok(candidates)
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of
@@ -1830,7 +1826,7 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
-    fn artifact_id_for_url_includes_mode_evidence_urls() {
+    fn artifact_candidates_for_url_includes_mode_evidence_urls() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -1857,17 +1853,17 @@ print(json.dumps([tables,row]))"#;
         index.record_activity(&event, &[]).unwrap();
 
         assert_eq!(
-            index.artifact_id_for_url(edit_url).unwrap(),
-            Some("gdoc:docs.example/abc".into())
+            index.artifact_candidates_for_url(edit_url).unwrap(),
+            BTreeSet::from(["gdoc:docs.example/abc".to_string()])
         );
         assert_eq!(
-            index.artifact_id_for_url(view_url).unwrap(),
-            Some("gdoc:docs.example/abc".into())
+            index.artifact_candidates_for_url(view_url).unwrap(),
+            BTreeSet::from(["gdoc:docs.example/abc".to_string()])
         );
     }
 
     #[test]
-    fn artifact_id_for_url_rejects_an_ambiguous_url_shared_by_two_artifacts() {
+    fn artifact_candidates_for_url_includes_every_artifact_sharing_an_ambiguous_url() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -1895,11 +1891,14 @@ print(json.dumps([tables,row]))"#;
         index.record_activity(&event_a, &[]).unwrap();
         index.record_activity(&event_b, &[]).unwrap();
 
-        assert_eq!(index.artifact_id_for_url(url).unwrap(), None);
+        assert_eq!(
+            index.artifact_candidates_for_url(url).unwrap(),
+            BTreeSet::from(["work:a/1".to_string(), "work:b/2".to_string()])
+        );
     }
 
     #[test]
-    fn artifact_id_for_url_prefers_a_real_artifact_over_an_earlier_legacy_identity() {
+    fn artifact_candidates_for_url_prefers_a_real_artifact_over_an_earlier_legacy_identity() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -1939,8 +1938,8 @@ print(json.dumps([tables,row]))"#;
         index.record_activity(&real_event, &[]).unwrap();
 
         assert_eq!(
-            index.artifact_id_for_url(url).unwrap(),
-            Some("work:example.com/7".into())
+            index.artifact_candidates_for_url(url).unwrap(),
+            BTreeSet::from(["work:example.com/7".to_string()])
         );
     }
 
