@@ -88,6 +88,7 @@ struct ParsedNote {
     title: String,
     created: String,
     body: String,
+    canonical_url: String,
 }
 
 pub fn load_note(vault: &Vault, canonical_url: &str) -> Result<LoadedNote, NoteRequestError> {
@@ -212,7 +213,27 @@ pub fn save_keyed_note(
             "note has too many special characters to save".into(),
         ));
     }
-    let markdown = render_note(key, canonical_url, &effective_title, body, &created, &now)?;
+    // An artifact-keyed note's canonical_url is informational, not part of
+    // its ownership check (only artifact_id is, above), and is this
+    // lookup's only durable, activity-independent trail back to a URL after
+    // the adapter that produced the key is removed. Keep recording the
+    // note's original URL rather than whichever alternate route last saved
+    // it, so that original URL stays able to recover it.
+    let effective_canonical_url = match key.kind {
+        RecordKeyKind::Artifact => parsed
+            .as_ref()
+            .map(|note| note.canonical_url.clone())
+            .unwrap_or_else(|| canonical_url.to_owned()),
+        RecordKeyKind::Url => canonical_url.to_owned(),
+    };
+    let markdown = render_note(
+        key,
+        &effective_canonical_url,
+        &effective_title,
+        body,
+        &created,
+        &now,
+    )?;
     let replacing = existing.is_some();
     let published = vault.replace_note(key, canonical_url, &markdown)?;
     let outcome = match (replacing, published.warnings.is_empty()) {
@@ -400,6 +421,7 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
         title,
         created,
         body: body.to_owned(),
+        canonical_url: fm_canonical,
     })
 }
 
@@ -412,8 +434,11 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
 /// Markdown are ignored.
 pub fn artifact_keyed_note_identity(contents: &str, url: &str) -> Option<String> {
     let (frontmatter, _) = contents.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let mut title = None;
     let mut canonical = None;
     let mut artifact_id = None;
+    let mut created = None;
+    let mut kind = None;
     let mut in_block = false;
     for line in frontmatter.lines() {
         if line == FRONTMATTER_KEY {
@@ -423,14 +448,29 @@ pub fn artifact_keyed_note_identity(contents: &str, url: &str) -> Option<String>
         if in_block && !line.starts_with("  ") {
             in_block = false;
         }
-        if !in_block {
-            continue;
+        if in_block {
+            if let Some(value) = line.strip_prefix("  canonical_url: ") {
+                canonical = unquote(value);
+            } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
+                artifact_id = unquote(value);
+            } else if let Some(value) = line.strip_prefix("  created: ") {
+                created = Some(value.to_owned());
+            } else if let Some(value) = line.strip_prefix("  kind: ") {
+                kind = Some(value.to_owned());
+            }
         }
-        if let Some(value) = line.strip_prefix("  canonical_url: ") {
-            canonical = unquote(value);
-        } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
-            artifact_id = unquote(value);
+        if let Some(value) = line.strip_prefix("title: ") {
+            title = unquote(value);
         }
+    }
+    // Require the same shape a fully validated owned page note has
+    // (parse_owned_note), not just the two fields this lookup reads, so an
+    // unrelated or malformed file can never be adopted as an artifact's
+    // identity.
+    title?;
+    created?;
+    if kind.is_some_and(|value| value != "page") {
+        return None;
     }
     let artifact_id = artifact_id?;
     (canonical.as_deref() == Some(url)).then_some(artifact_id)
@@ -825,6 +865,68 @@ mod tests {
         let loaded = load_keyed_note(&vault, current_url, &artifact_key, &older_urls).unwrap();
         assert_eq!(loaded.older_notes.len(), 1);
         assert_eq!(loaded.older_notes[0].canonical_url, source_url);
+    }
+
+    #[test]
+    fn an_artifact_notes_creation_url_survives_a_save_from_an_alternate_route() {
+        let (_root, vault) = vault();
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:example.com/7".into(),
+        };
+        let created_url = "https://example.com/items/7?mode=edit";
+        let alternate_url = "https://example.com/items/7?mode=view";
+
+        let revision = match save_keyed_note(
+            &vault,
+            created_url,
+            &artifact_key,
+            "Issue 7",
+            "first",
+            "missing",
+        )
+        .unwrap()
+        {
+            SaveOutcome::Saved { revision, .. } => revision,
+            SaveOutcome::Stale { .. } => panic!("new artifact note was unexpectedly stale"),
+        };
+        // Saved again from a different alternate route for the same artifact.
+        save_keyed_note(
+            &vault,
+            alternate_url,
+            &artifact_key,
+            "Issue 7",
+            "second",
+            &revision,
+        )
+        .unwrap();
+
+        let raw = vault
+            .read_note(&artifact_key, alternate_url)
+            .unwrap()
+            .unwrap();
+        assert!(
+            artifact_keyed_note_identity(&raw, created_url).is_some(),
+            "the note must still be recoverable by the URL it was created on"
+        );
+        assert!(
+            artifact_keyed_note_identity(&raw, alternate_url).is_none(),
+            "canonical_url must record the creation URL, not the latest alternate route"
+        );
+    }
+
+    #[test]
+    fn artifact_keyed_note_identity_rejects_a_candidate_missing_required_fields() {
+        let url = "https://example.com/x";
+        let missing_created = format!(
+            "---\ntitle: \"Stolen\"\nurl: \"{url}\"\n{FRONTMATTER_KEY}\n  canonical_url: \"{url}\"\n  artifact_id: \"work:example.com/7\"\n---\n\nbody\n"
+        );
+        assert!(artifact_keyed_note_identity(&missing_created, url).is_none());
+
+        let summary_kind = format!(
+            "---\ntitle: \"Summary\"\nurl: \"{url}\"\n{FRONTMATTER_KEY}\n  canonical_url: \"{url}\"\n  artifact_id: \"work:example.com/7\"\n  created: 2026-01-01T00:00:00Z\n  kind: summary\n---\n\nbody\n"
+        );
+        assert!(artifact_keyed_note_identity(&summary_kind, url).is_none());
     }
 
     #[test]

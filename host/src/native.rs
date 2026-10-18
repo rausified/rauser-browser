@@ -1599,8 +1599,13 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             );
         }
     };
+    // Match on the original URL, not the stripped canonical form (§ see
+    // note_context): a query identity strip_params removes, such as Jira's
+    // `selectedIssue`, must still be visible here or the artifact card and
+    // context controls would disagree with capture and note lookup about
+    // whether this page is recognized.
     let matched = config
-        .adapter_match(&canonical, value.title.as_deref())
+        .adapter_match(&value.url, value.title.as_deref())
         .ok();
     let Some(matched) = matched else {
         return Response::ArtifactResult(ArtifactResult {

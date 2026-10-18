@@ -141,8 +141,13 @@ impl Vault {
             {
                 continue;
             }
-            let Some(text) = self.read_named(&name)? else {
-                continue;
+            // A single unreadable or non-UTF-8 file must not abort the whole
+            // scan: skip it, the same as any other candidate this loop
+            // already excludes, rather than silently hiding every candidate
+            // behind one bad file.
+            let text = match self.read_named(&name) {
+                Ok(Some(text)) => text,
+                Ok(None) | Err(_) => continue,
             };
             total += text.len();
             contents.push(text);
