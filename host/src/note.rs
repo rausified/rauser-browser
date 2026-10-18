@@ -532,8 +532,13 @@ fn older_notes(
         if !seen.insert(canonical_url) {
             continue;
         }
-        let key = crate::vault::url_record_key(canonical_url)?;
-        let Some(contents) = vault.read_note(&key, canonical_url)? else {
+        // An unreadable, oversized, or otherwise broken optional older
+        // candidate must never take down the primary note load below it;
+        // skip just this one candidate.
+        let Ok(key) = crate::vault::url_record_key(canonical_url) else {
+            continue;
+        };
+        let Ok(Some(contents)) = vault.read_note(&key, canonical_url) else {
             continue;
         };
         let Some(parsed) = parse_owned_note(&key, canonical_url, &contents) else {
@@ -835,6 +840,42 @@ mod tests {
                 .unwrap()
                 .body,
             "artifact text"
+        );
+    }
+
+    #[test]
+    fn a_broken_older_candidate_cannot_take_down_the_primary_note_load() {
+        let (root, vault) = vault();
+        let primary_url = "https://example.com/items/7";
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:example.com/7".into(),
+        };
+        save_keyed_note(
+            &vault,
+            primary_url,
+            &artifact_key,
+            "Issue 7",
+            "primary text",
+            "missing",
+        )
+        .unwrap();
+
+        // A broken older candidate: a directory sitting where its note
+        // file would be, so reading it fails outright rather than
+        // returning "not found".
+        let broken_url = "https://example.com/board?selected=7";
+        let pages = root.path().join("pages");
+        let broken_filename = crate::vault::page_filename(broken_url).unwrap();
+        std::fs::create_dir(pages.join(&broken_filename)).unwrap();
+
+        let loaded =
+            load_keyed_note(&vault, primary_url, &artifact_key, &[broken_url.into()]).unwrap();
+        assert!(loaded.exists, "the primary note must still load");
+        assert_eq!(loaded.body, "primary text");
+        assert!(
+            loaded.older_notes.is_empty(),
+            "the broken candidate must be skipped, not surfaced"
         );
     }
 

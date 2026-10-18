@@ -1280,10 +1280,17 @@ fn note_context(
         // ever delivered, has no index row to recover from); the index is
         // only a fallback for a note saved under a different alternate URL.
         None => {
+            // Collect every distinct match rather than taking the first:
+            // stripped query identity can make two different artifacts
+            // share the same canonical URL, and guessing between them
+            // would silently redirect a save into an unrelated artifact's
+            // note. Trust the recovery only when it is unambiguous.
             let from_note = vault.note_candidates().ok().and_then(|candidates| {
-                candidates
+                let mut ids = candidates
                     .iter()
-                    .find_map(|contents| note::artifact_keyed_note_identity(contents, &canonical))
+                    .filter_map(|contents| note::artifact_keyed_note_identity(contents, &canonical))
+                    .collect::<std::collections::BTreeSet<_>>();
+                (ids.len() == 1).then(|| ids.pop_first().expect("checked len == 1 above"))
             });
             let historical = from_note.or_else(|| {
                 config.cache_dir().ok().and_then(|cache_dir| {
@@ -2593,6 +2600,38 @@ id = "{prefix}:{{host}}/{{id}}"
             }
             other => panic!("expected key_changed conflict, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_ambiguous_historical_identity_is_rejected_rather_than_guessed() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(&path, &root, "https://work.example", "");
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+
+        // Two different artifacts, each with their own note, that happen
+        // to share one stripped canonical URL.
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        let artifact_a = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:a/7".into(),
+        };
+        let artifact_b = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:b/7".into(),
+        };
+        note::save_keyed_note(&vault, url, &artifact_a, "A", "note a", "missing").unwrap();
+        note::save_keyed_note(&vault, url, &artifact_b, "B", "note b", "missing").unwrap();
+
+        let loaded_note = note_load(&mut config, url);
+        assert_eq!(
+            loaded_note.key.kind,
+            RecordKeyKind::Url,
+            "an ambiguous historical match must fall back to a fresh URL key, not guess"
+        );
     }
 
     #[test]

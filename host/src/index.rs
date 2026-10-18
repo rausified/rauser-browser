@@ -374,30 +374,46 @@ impl ArtifactIndex {
         Ok(urls.into_iter().collect())
     }
 
-    /// Artifact previously recorded for a canonical URL, if any. Note lookup
-    /// falls back to this when no adapter currently recognizes the URL (for
-    /// example, the adapter that matched it was removed), so an existing
-    /// shared artifact note stays discoverable instead of silently switching
-    /// to a fresh URL-keyed note. M1's legacy `web:<host>/<url_id>` identity
+    /// Artifact previously recorded for a canonical URL, if any, checking
+    /// both an activity's own URL and any mode-evidence URL hourly
+    /// coalescing may have folded into a later event's primary URL (so an
+    /// alternate route such as `/edit` is not lost once a visit's primary
+    /// URL settles on `/view`). Note lookup falls back to this when no
+    /// adapter currently recognizes the URL (for example, the adapter that
+    /// matched it was removed), so an existing shared artifact note stays
+    /// discoverable instead of silently switching to a fresh URL-keyed one.
+    /// Returns `None`, rather than guessing, when more than one distinct
+    /// real artifact has recorded this exact URL: stripped query identity
+    /// can make two different artifacts share one canonical form, and a
+    /// wrong guess here would silently redirect a save into an unrelated
+    /// artifact's note. M1's legacy `web:<host>/<url_id>` identity
     /// (`web.page`, a reserved synthetic scheme no real adapter may use) is
-    /// skipped: a URL visited under M1 before a real adapter later
-    /// recognized it must still recover the real artifact, not the earlier
-    /// synthetic one, even though `visits` is oldest-first.
+    /// always excluded from the candidates.
     pub fn artifact_id_for_url(&self, url: &str) -> Result<Option<String>> {
-        let derived = derive(&self.load_or_rebuild()?.events);
+        let events = &self.load_or_rebuild()?.events;
         let is_legacy = |id: &str| id.starts_with("web:");
-        if let Some(visit) = derived
-            .visits
-            .iter()
-            .find(|visit| visit.url == url && !is_legacy(&visit.artifact_id))
-        {
-            return Ok(Some(visit.artifact_id.clone()));
+        let mut candidates = BTreeSet::new();
+        for event in events.values() {
+            match event {
+                CachedEvent::Activity(activity) if !is_legacy(&activity.artifact_id) => {
+                    if activity.url == url || activity.modes.iter().any(|mode| mode.url == url) {
+                        candidates.insert(activity.artifact_id.clone());
+                    }
+                }
+                CachedEvent::Legacy(legacy)
+                    if !is_legacy(&legacy.artifact_id) && legacy.url == url =>
+                {
+                    candidates.insert(legacy.artifact_id.clone());
+                }
+                _ => {}
+            }
         }
-        Ok(derived
-            .artifacts
-            .values()
-            .find(|row| row.url == url && !is_legacy(&row.artifact_id))
-            .map(|row| row.artifact_id.clone()))
+        Ok((candidates.len() == 1).then(|| {
+            candidates
+                .into_iter()
+                .next()
+                .expect("checked len == 1 above")
+        }))
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of
@@ -1811,6 +1827,75 @@ print(json.dumps([tables,row]))"#;
         );
         assert_eq!(decoded[1][0], hostile);
         assert_eq!(decoded[1][1], "https://example.com/items/ABC");
+    }
+
+    #[test]
+    fn artifact_id_for_url_includes_mode_evidence_urls() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let edit_url = "https://docs.example/d/abc/edit";
+        let view_url = "https://docs.example/d/abc/view";
+        let event = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000003".into(),
+            artifact_id: "gdoc:docs.example/abc".into(),
+            artifact_type: "gdoc".into(),
+            url: view_url.into(),
+            title: Some("Doc".into()),
+            occurred_at: "2026-10-16T12:00:00+00:00".into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 30,
+            background_seconds: 0,
+            modes: vec![ActivityMode {
+                mode: "edit".into(),
+                url: edit_url.into(),
+            }],
+            trails: Vec::new(),
+            refs: Vec::new(),
+        };
+        index.record_activity(&event, &[]).unwrap();
+
+        assert_eq!(
+            index.artifact_id_for_url(edit_url).unwrap(),
+            Some("gdoc:docs.example/abc".into())
+        );
+        assert_eq!(
+            index.artifact_id_for_url(view_url).unwrap(),
+            Some("gdoc:docs.example/abc".into())
+        );
+    }
+
+    #[test]
+    fn artifact_id_for_url_rejects_an_ambiguous_url_shared_by_two_artifacts() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://work.example/board?selectedIssue=stripped";
+        let event_a = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000004".into(),
+            artifact_id: "work:a/1".into(),
+            artifact_type: "work.item".into(),
+            url: url.into(),
+            title: Some("A".into()),
+            occurred_at: "2026-10-16T12:00:00+00:00".into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 5,
+            background_seconds: 0,
+            modes: Vec::new(),
+            trails: Vec::new(),
+            refs: Vec::new(),
+        };
+        let event_b = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000005".into(),
+            artifact_id: "work:b/2".into(),
+            ..event_a.clone()
+        };
+        index.record_activity(&event_a, &[]).unwrap();
+        index.record_activity(&event_b, &[]).unwrap();
+
+        assert_eq!(index.artifact_id_for_url(url).unwrap(), None);
     }
 
     #[test]
