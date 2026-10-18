@@ -51,6 +51,9 @@
           "$ref": "#/$defs/UseArtifactNoteRequest"
         },
         {
+          "$ref": "#/$defs/ViewOlderNoteRequest"
+        },
+        {
           "$ref": "#/$defs/GetArtifactRequest"
         },
         {
@@ -949,6 +952,18 @@
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "ViewOlderNoteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "url", "source_url"],
+      "properties": {
+        "type": { "const": "view_older_note" },
+        "protocol_version": { "type": "integer", "const": 5 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 }
       }
     },
     "GetArtifactRequest": {

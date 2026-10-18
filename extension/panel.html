@@ -82,8 +82,14 @@
         </div>
         <div id="older-notes" hidden>
           <h3>Older notes on this artifact</h3>
-          <p class="page-url">These URL-keyed notes predate the artifact adapter. You can keep them, or move one into the shared artifact note.</p>
+          <p class="page-url">These URL-keyed notes predate the artifact adapter. You can keep them, view one without changing anything, or move one into the shared artifact note.</p>
           <ul id="older-note-list" class="plain-list"></ul>
+          <div id="older-note-view" hidden>
+            <p id="older-note-view-title"></p>
+            <textarea id="older-note-view-body" rows="6" readonly></textarea>
+            <button id="copy-older-note-view" type="button" class="secondary compact">Copy</button>
+            <button id="close-older-note-view" type="button" class="secondary compact">Close</button>
+          </div>
         </div>
       </section>
       </div>

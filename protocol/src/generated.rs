@@ -267,6 +267,15 @@ pub struct UseArtifactNoteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ViewOlderNoteRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub source_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetArtifactRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -733,6 +742,7 @@ pub enum Request {
     LoadNote(LoadNoteRequest),
     SaveNote(SaveNoteRequest),
     UseArtifactNote(UseArtifactNoteRequest),
+    ViewOlderNote(ViewOlderNoteRequest),
     GetArtifact(GetArtifactRequest),
     ListArtifacts(ListArtifactsRequest),
     Worklog(WorklogRequest),
@@ -757,6 +767,7 @@ impl Request {
             Self::LoadNote(value) => value.protocol_version,
             Self::SaveNote(value) => value.protocol_version,
             Self::UseArtifactNote(value) => value.protocol_version,
+            Self::ViewOlderNote(value) => value.protocol_version,
             Self::GetArtifact(value) => value.protocol_version,
             Self::ListArtifacts(value) => value.protocol_version,
             Self::Worklog(value) => value.protocol_version,
@@ -781,6 +792,7 @@ impl Request {
             Self::LoadNote(value) => &value.request_id,
             Self::SaveNote(value) => &value.request_id,
             Self::UseArtifactNote(value) => &value.request_id,
+            Self::ViewOlderNote(value) => &value.request_id,
             Self::GetArtifact(value) => &value.request_id,
             Self::ListArtifacts(value) => &value.request_id,
             Self::Worklog(value) => &value.request_id,

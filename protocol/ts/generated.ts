@@ -188,6 +188,14 @@ export interface UseArtifactNoteRequest {
   expected_revision: string;
 }
 
+export interface ViewOlderNoteRequest {
+  type: "view_older_note";
+  protocol_version: 5;
+  request_id: string;
+  url: string;
+  source_url: string;
+}
+
 export interface GetArtifactRequest {
   type: "get_artifact";
   protocol_version: 5;
@@ -534,6 +542,6 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
 
 export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;

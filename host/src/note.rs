@@ -95,6 +95,15 @@ pub fn load_note(vault: &Vault, canonical_url: &str) -> Result<LoadedNote, NoteR
     load_keyed_note(vault, canonical_url, &key, &[])
 }
 
+/// Loads an older URL-keyed note by its own key, without the current page's
+/// adapter match upgrading it to the shared artifact note. Lets an older
+/// note stay reachable (view-only; it is not re-keyed) after a sibling note
+/// has already been migrated into the shared artifact note.
+pub fn load_older_note(vault: &Vault, source_url: &str) -> Result<LoadedNote, NoteRequestError> {
+    let key = crate::vault::url_record_key(source_url)?;
+    load_keyed_note(vault, source_url, &key, &[])
+}
+
 pub fn load_keyed_note(
     vault: &Vault,
     canonical_url: &str,
@@ -443,7 +452,10 @@ fn older_notes(
     }
     let mut result = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for canonical_url in urls.iter().take(24) {
+    for canonical_url in urls {
+        if result.len() >= 24 {
+            break;
+        }
         if !seen.insert(canonical_url) {
             continue;
         }
@@ -751,6 +763,55 @@ mod tests {
                 .body,
             "artifact text"
         );
+    }
+
+    #[test]
+    fn an_older_note_past_two_dozen_candidate_urls_is_still_found() {
+        let (_root, vault) = vault();
+        let current_url = "https://example.com/items/7";
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:example.com/7".into(),
+        };
+        let source_url = "https://example.com/board?selected=7";
+        save_note(
+            &vault,
+            source_url,
+            "Before adapter",
+            "keep this text",
+            "missing",
+        )
+        .unwrap();
+        // 24 candidates with no saved note, then the one that actually has
+        // one. The candidate limit must not cut off examination before this
+        // older note is even looked at.
+        let mut older_urls: Vec<String> = (0..24)
+            .map(|index| format!("https://example.com/noise/{index}"))
+            .collect();
+        older_urls.push(source_url.into());
+        let loaded = load_keyed_note(&vault, current_url, &artifact_key, &older_urls).unwrap();
+        assert_eq!(loaded.older_notes.len(), 1);
+        assert_eq!(loaded.older_notes[0].canonical_url, source_url);
+    }
+
+    #[test]
+    fn an_older_note_can_be_viewed_without_migrating_it() {
+        let (_root, vault) = vault();
+        let source_url = "https://example.com/board?selected=7";
+        save_note(
+            &vault,
+            source_url,
+            "Before adapter",
+            "keep this text",
+            "missing",
+        )
+        .unwrap();
+        let viewed = load_older_note(&vault, source_url).unwrap();
+        assert!(viewed.exists);
+        assert_eq!(viewed.body, "keep this text");
+        assert_eq!(viewed.key.kind, RecordKeyKind::Url);
+        // Viewing never migrates or changes the note.
+        assert!(load_note(&vault, source_url).unwrap().exists);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import {
   exactOriginPattern,
   isHttpUrl,
+  localTimestamp,
   type WorkerStatus,
 } from "./model.js";
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
@@ -51,6 +52,11 @@ const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
 const olderNotes = element<HTMLDivElement>("older-notes");
 const olderNoteList = element<HTMLUListElement>("older-note-list");
+const olderNoteView = element<HTMLDivElement>("older-note-view");
+const olderNoteViewTitle = element<HTMLParagraphElement>("older-note-view-title");
+const olderNoteViewBody = element<HTMLTextAreaElement>("older-note-view-body");
+const copyOlderNoteViewButton = element<HTMLButtonElement>("copy-older-note-view");
+const closeOlderNoteViewButton = element<HTMLButtonElement>("close-older-note-view");
 const pageTab = element<HTMLButtonElement>("tab-page");
 const recentTab = element<HTMLButtonElement>("tab-recent");
 const pageView = element<HTMLDivElement>("page-view");
@@ -83,6 +89,11 @@ let grantOrigin: string | null = null;
 let currentPage: { url: string; title: string } | null = null;
 let currentArtifact: ArtifactView | null = null;
 let olderNoteEntries: OlderNote[] = [];
+// Tracks the artifact the "Why I'm here" field was last rendered for, so an
+// unrelated tab/title refresh for the SAME artifact never overwrites text the
+// user has not saved yet; switching to a different artifact always resets it.
+let whyArtifactId: string | null = null;
+let whyEdited = false;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 let recentLoadSeq = 0;
 let worklogLoadSeq = 0;
@@ -110,7 +121,11 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean): voi
   currentArtifact = artifact;
   artifactCard.hidden = artifact === null;
   artifactStatus.textContent = recognized ? "● Artifact recognized" : "○ Not an artifact";
-  if (!artifact) return;
+  if (!artifact) {
+    whyArtifactId = null;
+    whyEdited = false;
+    return;
+  }
   artifactHeading.textContent = artifact.title;
   artifactIdentity.textContent = `${artifact.artifact_type} · ${artifact.artifact_id}`;
   artifactMode.textContent = artifact.last_mode ?? "";
@@ -121,7 +136,15 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean): voi
   artifactLinks.textContent = artifact.linked_count
     ? `${artifact.linked_count} linked artifact${artifact.linked_count === 1 ? "" : "s"}`
     : "No linked artifacts yet.";
-  artifactWhy.value = artifact.why ?? "";
+  if (artifact.artifact_id !== whyArtifactId) {
+    whyArtifactId = artifact.artifact_id;
+    whyEdited = false;
+  }
+  // A refresh triggered by an unrelated tab/title event for this same
+  // artifact must never clobber context the user is still typing.
+  if (!whyEdited) {
+    artifactWhy.value = artifact.why ?? "";
+  }
 }
 
 async function refreshArtifact(): Promise<void> {
@@ -147,8 +170,11 @@ async function refreshArtifact(): Promise<void> {
   }
 }
 
+// Local wall-clock time with its numeric UTC offset, matching the worker's
+// offset-qualified activity timestamps, so explicit context lands in the
+// same local day's log as the activity around it rather than always UTC's.
 function timestampSeconds(): string {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  return localTimestamp(new Date());
 }
 
 async function saveWhy(): Promise<void> {
@@ -172,6 +198,7 @@ async function saveWhy(): Promise<void> {
       },
     }, "why_recorded");
     if (response.outcome !== "persisted") throw new Error(response.reason ?? response.outcome);
+    whyEdited = false;
     await refreshArtifact();
     show("Artifact context saved.");
   } catch (error) {
@@ -185,16 +212,24 @@ function renderOlderNotes(entries: readonly OlderNote[]): void {
   olderNoteEntries = entries.map((entry) => ({ ...entry, key: { ...entry.key } }));
   olderNoteList.replaceChildren();
   olderNotes.hidden = entries.length === 0;
+  closeOlderNoteView();
   for (const [index, entry] of entries.entries()) {
     const item = document.createElement("li");
     const label = document.createElement("span");
     label.textContent = `${entry.title || entry.canonical_url} — ${entry.canonical_url} `;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary compact";
-    button.dataset.olderIndex = String(index);
-    button.textContent = "Use as artifact note";
-    item.append(label, button);
+    const viewButton = document.createElement("button");
+    viewButton.type = "button";
+    viewButton.className = "secondary compact";
+    viewButton.dataset.olderIndex = String(index);
+    viewButton.dataset.olderAction = "view";
+    viewButton.textContent = "View";
+    const useButton = document.createElement("button");
+    useButton.type = "button";
+    useButton.className = "secondary compact";
+    useButton.dataset.olderIndex = String(index);
+    useButton.dataset.olderAction = "use";
+    useButton.textContent = "Use as artifact note";
+    item.append(label, viewButton, useButton);
     olderNoteList.append(item);
   }
 }
@@ -218,6 +253,41 @@ async function useOlderNote(index: number): Promise<void> {
   } catch (error) {
     showNoteStatus(`Could not use that note: ${describe(error)}`, true);
   }
+}
+
+// Opens an older URL-keyed note read-only, without migrating it, so it stays
+// reachable even after a sibling note has already become the shared artifact
+// note (at which point its own URL would otherwise resolve to that note).
+async function viewOlderNote(index: number): Promise<void> {
+  const page = currentPage;
+  const entry = olderNoteEntries[index];
+  if (!page || !entry) return;
+  try {
+    const response = await session.host.call({
+      type: "view_older_note",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      url: page.url,
+      source_url: entry.canonical_url,
+    }, "note_loaded");
+    olderNoteViewTitle.textContent = response.title || entry.canonical_url;
+    olderNoteViewBody.value = response.body;
+    olderNoteView.hidden = false;
+  } catch (error) {
+    showNoteStatus(`Could not open that note: ${describe(error)}`, true);
+  }
+}
+
+function closeOlderNoteView(): void {
+  olderNoteView.hidden = true;
+  olderNoteViewTitle.textContent = "";
+  olderNoteViewBody.value = "";
+}
+
+function copyOlderNoteView(): void {
+  void navigator.clipboard.writeText(olderNoteViewBody.value).catch((error: unknown) => {
+    showNoteStatus(`Could not copy: ${describe(error)}`, true);
+  });
 }
 
 function changing(): boolean {
@@ -707,11 +777,21 @@ noteBody.addEventListener("input", () => notes.edited());
 noteGrantOrigin.addEventListener("click", requestNoteOrigin);
 copyUnsavedButton.addEventListener("click", copyUnsavedText);
 saveWhyButton.addEventListener("click", () => void saveWhy());
+artifactWhy.addEventListener("input", () => {
+  whyEdited = true;
+});
 olderNoteList.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
   const index = target.dataset.olderIndex;
-  if (index !== undefined) void useOlderNote(Number(index));
+  if (index === undefined) return;
+  if (target.dataset.olderAction === "view") {
+    void viewOlderNote(Number(index));
+  } else {
+    void useOlderNote(Number(index));
+  }
 });
+copyOlderNoteViewButton.addEventListener("click", copyOlderNoteView);
+closeOlderNoteViewButton.addEventListener("click", closeOlderNoteView);
 pageTab.addEventListener("click", () => selectView("page"));
 recentTab.addEventListener("click", () => selectView("recent"));
 recentType.addEventListener("change", () => void loadRecent());

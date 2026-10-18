@@ -374,6 +374,43 @@ impl ArtifactIndex {
         Ok(urls.into_iter().collect())
     }
 
+    /// Artifact previously recorded for a canonical URL, if any. Note lookup
+    /// falls back to this when no adapter currently recognizes the URL (for
+    /// example, the adapter that matched it was removed), so an existing
+    /// shared artifact note stays discoverable instead of silently switching
+    /// to a fresh URL-keyed note.
+    pub fn artifact_id_for_url(&self, url: &str) -> Result<Option<String>> {
+        let derived = derive(&self.load_or_rebuild()?.events);
+        if let Some(visit) = derived.visits.iter().find(|visit| visit.url == url) {
+            return Ok(Some(visit.artifact_id.clone()));
+        }
+        Ok(derived
+            .artifacts
+            .values()
+            .find(|row| row.url == url)
+            .map(|row| row.artifact_id.clone()))
+    }
+
+    /// Latest "why I'm here" context recorded for an artifact, independent of
+    /// whether any activity has created its artifact row yet. A newly
+    /// recognized artifact can have saved context before its first hourly
+    /// activity is delivered.
+    pub fn latest_why(&self, artifact_id: &str) -> Result<Option<String>> {
+        let events = &self.load_or_rebuild()?.events;
+        let mut latest: Option<(OffsetDateTime, String)> = None;
+        for event in events.values() {
+            if let CachedEvent::Why(why) = event
+                && why.artifact_id == artifact_id
+            {
+                let at = parsed_timestamp(&why.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                if latest.as_ref().is_none_or(|current| at >= current.0) {
+                    latest = Some((at, why.text.clone()));
+                }
+            }
+        }
+        Ok(latest.map(|(_, text)| text))
+    }
+
     /// One row per artifact and local day, newest day first and then by that
     /// day's measured focus. This is deliberately bounded for one native
     /// message and does not depend on FTS5.

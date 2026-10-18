@@ -382,6 +382,7 @@ fn dispatch(
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
+        Request::ViewOlderNote(value) => view_older_note(value, config),
         Request::GetArtifact(value) => get_artifact(value, config),
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
@@ -1259,13 +1260,34 @@ fn note_context(
     let vault = Vault::open_checked(storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
     let matched = config.adapter_match(&canonical, None).ok();
-    let key = matched.as_ref().map_or_else(
-        || crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key"),
-        |found| RecordKey {
+    let key = match matched.as_ref() {
+        Some(found) => RecordKey {
             kind: RecordKeyKind::Artifact,
             value: found.artifact_id.clone(),
         },
-    );
+        // No adapter currently recognizes this URL (for example, its
+        // adapter or last enabled site was removed). Before falling back to
+        // a fresh URL key, check whether it was previously recorded under an
+        // artifact, so that artifact's existing shared note stays reachable
+        // instead of appearing empty.
+        None => {
+            let historical = config.cache_dir().ok().and_then(|cache_dir| {
+                ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+                    .ok()?
+                    .artifact_id_for_url(&canonical)
+                    .ok()?
+            });
+            match historical {
+                Some(artifact_id) => RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: artifact_id,
+                },
+                None => {
+                    crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
+                }
+            }
+        }
+    };
     let mut older_urls = vec![canonical.clone()];
     if let Some(found) = matched
         && include_older_notes
@@ -1487,6 +1509,51 @@ fn use_artifact_note(
     }
 }
 
+/// Opens an older URL-keyed note read-only, without migrating it, so it
+/// stays reachable even after a sibling older note has already become the
+/// shared artifact note (at which point visiting its own URL would
+/// otherwise resolve to that shared note instead).
+fn view_older_note(
+    value: brauser_protocol::ViewOlderNoteRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let context = match note_context(config, &value.url, true) {
+        Ok(resolved) => resolved,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    if context.key.kind != RecordKeyKind::Artifact {
+        return error(
+            &value.request_id,
+            ErrorCode::Conflict,
+            "this page is no longer a recognized artifact",
+        );
+    }
+    if !context
+        .older_urls
+        .iter()
+        .any(|url| url == &value.source_url)
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::Unauthorized,
+            "that older note is not part of this artifact's recorded history",
+        );
+    }
+    match note::load_older_note(&context.vault, &value.source_url) {
+        Ok(loaded) => Response::NoteLoaded(NoteLoaded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            exists: loaded.exists,
+            revision: loaded.revision,
+            title: loaded.title,
+            body: loaded.body,
+            key: loaded.key,
+            older_notes: Vec::new(),
+        }),
+        Err(note_error_value) => note_error(&value.request_id, note_error_value),
+    }
+}
+
 fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut ConfigStore) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
@@ -1557,6 +1624,11 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
     let artifact = match index.artifact(&matched.artifact_id) {
         Ok(Some(artifact)) => artifact,
         Ok(None) => ArtifactView {
+            // Context can be saved before the artifact's first activity is
+            // delivered, since activity derives rows but context does not
+            // wait on it; look it up directly instead of hardcoding `None`
+            // and blanking context the user just saved.
+            why: index.latest_why(&matched.artifact_id).ok().flatten(),
             artifact_id: matched.artifact_id,
             artifact_type: matched.artifact_type,
             title: matched
@@ -1572,7 +1644,6 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             opens: 0,
             days_opened: 0,
             last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
-            why: None,
             linked_count: 0,
         },
         Err(_) => {
@@ -2346,6 +2417,92 @@ id = "work:{host}/{id}"
     }
 
     #[test]
+    fn an_older_note_can_be_viewed_through_the_native_host_without_migrating() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let old_url = "https://work.example/items/7?utm_source=before-policy";
+        let current_url = "https://work.example/items/7";
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        note::save_note(
+            &vault,
+            old_url,
+            "Before stripping",
+            "keep this text",
+            "missing",
+        )
+        .unwrap();
+        // Populate `older_urls`, the same precondition `use_artifact_note` relies on.
+        assert_eq!(note_load(&mut config, current_url).older_notes.len(), 1);
+
+        let response = view_older_note(
+            brauser_protocol::ViewOlderNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "view-1".into(),
+                url: current_url.into(),
+                source_url: old_url.into(),
+            },
+            &mut config,
+        );
+        match response {
+            Response::NoteLoaded(note) => {
+                assert_eq!(note.body, "keep this text");
+                assert_eq!(note.key.kind, RecordKeyKind::Url);
+            }
+            other => panic!("expected the older note's body, got {other:?}"),
+        }
+        // Viewing must not migrate anything: the older note stays a
+        // separate URL-keyed note, not merged into the shared artifact note.
+        assert!(note::load_note(&vault, old_url).unwrap().exists);
+    }
+
+    #[test]
+    fn viewing_an_unrelated_url_as_an_older_note_is_refused() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let response = view_older_note(
+            brauser_protocol::ViewOlderNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "view-2".into(),
+                url: "https://work.example/items/7".into(),
+                source_url: "https://unrelated.example/other".into(),
+            },
+            &mut config,
+        );
+        match response {
+            Response::Error(error) => assert_eq!(error.code, ErrorCode::Unauthorized),
+            other => panic!("expected an unauthorized error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn jira_board_modal_and_browse_routes_share_one_note() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
@@ -2414,6 +2571,147 @@ id = "{prefix}:{{host}}/{{id}}"
                 assert_eq!(conflict.key.value, "replacement:work.example/7");
             }
             other => panic!("expected key_changed conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_removed_adapters_shared_note_stays_reachable_by_its_recorded_history() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+
+        // Record a real activity so the index remembers this URL belonged
+        // to the artifact while the adapter was still enabled.
+        let activity_response = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "activity-1".into(),
+                event: ActivityEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: "work:work.example/7".into(),
+                    artifact_type: "work.item".into(),
+                    url: url.into(),
+                    title: Some("Issue 7".into()),
+                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    incognito: false,
+                    opens: 1,
+                    focused_seconds: 3,
+                    background_seconds: 0,
+                    modes: Vec::new(),
+                    trails: Vec::new(),
+                    refs: Vec::new(),
+                },
+            },
+            &mut config,
+        );
+        assert!(matches!(
+            activity_response,
+            Response::ActivityRecorded(ActivityRecorded {
+                outcome: VisitOutcome::Persisted,
+                ..
+            })
+        ));
+
+        // Save the shared note while the adapter still recognizes the URL,
+        // so it is keyed by the artifact, not the URL.
+        let loaded_before = note_load(&mut config, url);
+        assert_eq!(loaded_before.key.kind, RecordKeyKind::Artifact);
+        match note_save(
+            &mut config,
+            url,
+            "keep this text",
+            &loaded_before.revision,
+            loaded_before.key,
+        ) {
+            Response::NoteSaved(_) => {}
+            other => panic!("expected note_saved, got {other:?}"),
+        }
+
+        // Remove the adapter. The URL no longer resolves through any
+        // adapter, as if its site had been removed.
+        write_adapter_config(&path, &root, "https://work.example", "");
+
+        let loaded_after = note_load(&mut config, url);
+        assert!(
+            loaded_after.exists,
+            "the shared artifact note must stay discoverable after the adapter is removed"
+        );
+        assert_eq!(loaded_after.body, "keep this text");
+    }
+
+    #[test]
+    fn saved_context_appears_before_the_first_activity_is_delivered() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let artifact_id = "work:work.example/7";
+
+        let why_response = record_why(
+            brauser_protocol::RecordWhyRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "why-1".into(),
+                event: brauser_protocol::WhyEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: artifact_id.into(),
+                    url: url.into(),
+                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    incognito: false,
+                    text: "blocking the release".into(),
+                },
+            },
+            &mut config,
+        );
+        assert!(matches!(
+            why_response,
+            Response::WhyRecorded(WhyRecorded {
+                outcome: VisitOutcome::Persisted,
+                ..
+            })
+        ));
+
+        let artifact_response = get_artifact(
+            brauser_protocol::GetArtifactRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "artifact-1".into(),
+                url: url.into(),
+                title: Some("Issue 7".into()),
+            },
+            &mut config,
+        );
+        match artifact_response {
+            Response::ArtifactResult(result) => {
+                let artifact = result.artifact.expect("recognized artifact");
+                assert_eq!(artifact.why.as_deref(), Some("blocking the release"));
+            }
+            other => panic!("expected artifact_result, got {other:?}"),
         }
     }
 
