@@ -72,6 +72,43 @@ function isAdapterWarning(value: unknown): boolean {
       (warning[key] as number) >= 0);
 }
 
+function isRecordKey(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const key = value as Record<string, unknown>;
+  return (key.kind === "url" || key.kind === "artifact") && typeof key.value === "string";
+}
+
+function isOlderNote(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const note = value as Record<string, unknown>;
+  return isRecordKey(note.key) && typeof note.canonical_url === "string" &&
+    typeof note.title === "string" && typeof note.revision === "string";
+}
+
+function isUnsignedInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isArtifact(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const artifact = value as Record<string, unknown>;
+  return ["artifact_id", "artifact_type", "title", "url", "first_seen", "last_seen"]
+    .every((key) => typeof artifact[key] === "string") &&
+    ["focused_seconds", "background_seconds", "opens", "days_opened", "linked_count"]
+      .every((key) => isUnsignedInteger(artifact[key])) &&
+    (artifact.last_mode === null || ["view", "edit", "review"].includes(String(artifact.last_mode))) &&
+    stringOrNull(artifact.why);
+}
+
+function isArtifactListItem(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const item = value as Record<string, unknown>;
+  return ["local_date", "artifact_id", "artifact_type", "title", "url"]
+    .every((key) => typeof item[key] === "string") &&
+    ["focused_seconds", "background_seconds", "opens"]
+      .every((key) => isUnsignedInteger(item[key])) && stringOrNull(item.why);
+}
+
 export function isConfig(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const config = value as Record<string, unknown>;
@@ -132,14 +169,33 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
           stringOrNull((result as Record<string, unknown>).relative_path));
     case "note_loaded":
       return typeof value.exists === "boolean" && typeof value.revision === "string" &&
-        typeof value.title === "string" && typeof value.body === "string";
+        typeof value.title === "string" && typeof value.body === "string" &&
+        isRecordKey(value.key) && Array.isArray(value.older_notes) &&
+        value.older_notes.length <= 24 && value.older_notes.every(isOlderNote);
     case "note_saved":
       return ["created", "replaced", "created_with_warning", "replaced_with_warning"]
         .includes(String(value.outcome)) &&
-        typeof value.revision === "string" && typeof value.relative_path === "string";
+        typeof value.revision === "string" && typeof value.relative_path === "string" &&
+        isRecordKey(value.key);
     case "note_conflict":
       return typeof value.exists === "boolean" && typeof value.revision === "string" &&
-        typeof value.title === "string" && typeof value.body === "string";
+        typeof value.title === "string" && typeof value.body === "string" &&
+        isRecordKey(value.key) && ["stale", "key_changed"].includes(String(value.reason));
+    case "artifact_result":
+      return typeof value.recognized === "boolean" &&
+        (value.artifact === null || isArtifact(value.artifact));
+    case "artifact_list_result":
+      return Array.isArray(value.items) && value.items.length <= 32 &&
+        value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
+        value.artifact_types.length <= 64 && isStringArray(value.artifact_types) &&
+        typeof value.truncated === "boolean";
+    case "worklog_result":
+      return typeof value.start_date === "string" && typeof value.end_date === "string" &&
+        typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
+    case "artifacts_refreshed":
+      return isUnsignedInteger(value.written) && isUnsignedInteger(value.unchanged) &&
+        isUnsignedInteger(value.conflicts) && Array.isArray(value.conflict_paths) &&
+        value.conflict_paths.length <= 64 && isStringArray(value.conflict_paths);
     case "agent_checked":
       return typeof value.harness_id === "string" && typeof value.harness_version === "string" &&
         (value.url_allowed === null || typeof value.url_allowed === "boolean");

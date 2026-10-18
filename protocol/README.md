@@ -19,9 +19,10 @@ the typed request. A mismatch returns an `error` response with code
 `unsupported_protocol_version` and the host's protocol version. If malformed
 input has no recoverable request ID, an `error` response may use an empty ID.
 
-Protocol version 5 covers host discovery, configuration, consent, visit
-capture, versioned whole-file page notes, the AI-harness readiness gate, and
-format-versioned artifact-adapter configuration. `get_config` returns a
+Protocol version 5 covers host discovery, configuration, consent, visit and
+artifact-activity capture, record-keyed whole-file page notes, artifact index
+queries, the AI-harness readiness gate, and format-versioned artifact-adapter
+configuration. `get_config` returns a
 `revision` that the extension must send as `expected_revision` with its full
 `update_config` snapshot. A successful update returns a new `revision`; a stale
 revision returns a `conflict` error. The revision is `missing` when no config
@@ -70,6 +71,16 @@ an `[adapters]` table loads as format 1 with no artifacts. Until alias
 migrations arrive, an existing adapter's `id` template is immutable. Adapter
 additions or changes require native confirmation, and an unscoped adapter on a
 shared origin adds an explicit every-account-in-this-Chrome-profile warning.
+
+`load_note` returns the host-derived `RecordKey` and any bounded older
+URL-keyed notes that now resolve to the same artifact. `save_note` must echo
+both that key and the note revision; if adapter policy changes the key before
+save, the host returns `note_conflict` with reason `key_changed` and current
+content. `use_artifact_note` moves one verified older note only when no
+artifact-keyed note exists, publishing without clobber before removing the
+source. `get_artifact`, `list_artifacts`, and `worklog` expose bounded derived
+index views; `refresh_artifacts` runs the owned-file regeneration pass and
+returns bounded conflict paths for unrelated occupants it did not replace.
 
 Native harness setup is two messages. `discover_harnesses` takes
 `expected_revision` and returns `harnesses_discovered` with at most eight

@@ -32,6 +32,33 @@
         <p id="page-title" class="page-title">No page yet</p>
         <p id="page-url" class="page-url"></p>
         <p id="page-unusable" class="warning" hidden>{{APP_NAME}} can't use this tab. Switch to an http(s) page to see its note.</p>
+        <p id="artifact-status" class="artifact-status"></p>
+      </section>
+
+      <nav class="panel-tabs" aria-label="Panel views">
+        <button id="tab-page" type="button" class="tab-button active" aria-selected="true">This page</button>
+        <button id="tab-recent" type="button" class="tab-button" aria-selected="false">Recent</button>
+      </nav>
+
+      <div id="page-view">
+      <section id="artifact-card" aria-labelledby="artifact-heading" hidden>
+        <div class="artifact-card-heading">
+          <div>
+            <p class="artifact-label">Artifact</p>
+            <h2 id="artifact-heading">Recognized artifact</h2>
+          </div>
+          <span id="artifact-mode" class="status-chip"></span>
+        </div>
+        <p id="artifact-identity" class="page-url"></p>
+        <p id="artifact-measures"></p>
+        <p id="artifact-links"></p>
+        <div class="field">
+          <label for="artifact-why">Why I'm here</label>
+          <div class="inline-field">
+            <input id="artifact-why" type="text" maxlength="500" placeholder="Optional one-line context" />
+            <button id="save-why" type="button" class="secondary">Save</button>
+          </div>
+        </div>
       </section>
 
       <section aria-labelledby="note-heading">
@@ -53,7 +80,52 @@
           <textarea id="note-unsaved" rows="4" readonly></textarea>
           <button id="copy-unsaved" type="button" class="secondary">Copy</button>
         </div>
+        <div id="older-notes" hidden>
+          <h3>Older notes on this artifact</h3>
+          <p class="page-url">These URL-keyed notes predate the artifact adapter. You can keep them, view one without changing anything, or move one into the shared artifact note.</p>
+          <ul id="older-note-list" class="plain-list"></ul>
+          <div id="older-note-view" hidden>
+            <p id="older-note-view-title"></p>
+            <textarea id="older-note-view-body" rows="6" readonly></textarea>
+            <button id="copy-older-note-view" type="button" class="secondary compact">Copy</button>
+            <button id="close-older-note-view" type="button" class="secondary compact">Close</button>
+          </div>
+        </div>
       </section>
+      </div>
+
+      <div id="recent-view" hidden>
+        <section aria-labelledby="recent-heading">
+          <h2 id="recent-heading">Recent artifacts</h2>
+          <div class="preview-grid">
+            <div class="field">
+              <label for="recent-type">Type</label>
+              <select id="recent-type"><option value="">All types</option></select>
+            </div>
+            <div class="field">
+              <label for="recent-title">Title contains</label>
+              <input id="recent-title" type="search" maxlength="256" />
+            </div>
+          </div>
+          <p id="recent-status" class="page-url"></p>
+          <div id="recent-list" class="recent-list"></div>
+        </section>
+        <section aria-labelledby="worklog-heading">
+          <div class="note-header">
+            <h2 id="worklog-heading">Worklog</h2>
+            <button id="copy-worklog" type="button" class="secondary" disabled>Copy</button>
+          </div>
+          <div class="field">
+            <label for="worklog-period" class="visually-hidden">Worklog period</label>
+            <select id="worklog-period">
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="week">This week</option>
+            </select>
+          </div>
+          <pre id="worklog-text" class="worklog-text">Open Recent to generate a worklog.</pre>
+        </section>
+      </div>
 
       <details id="capture-strip" class="capture-strip">
         <summary id="capture-strip-summary">● Capture off · 0 pending</summary>
