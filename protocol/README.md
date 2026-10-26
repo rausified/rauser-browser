@@ -36,7 +36,9 @@ backs up those exact bytes before replacing the file.
 the selected notes folder. `sites` and `strip_params` are
 also required. The generated Rust deserializer rejects omitted nullable fields,
 matching the JSON Schema requirement. Existing M0 TOML defaults to an empty
-site list, `utm_*`/`fbclid`/`gclid` stripping, and a 300-second repeat window.
+site list and `utm_*`/`fbclid`/`gclid` stripping. The old `near_repeat_secs`
+setting is accepted and ignored by version 5; current activity is bounded by
+hourly totals and delivery is idempotent by event ID.
 An M0 file with a notes root but no native-picker provenance is returned as an
 inert repair state. The user must reselect the folder; the host backs up the
 old file before saving the M1 config. M1 accepts the neutral profile only.
@@ -88,7 +90,8 @@ offers. Each offer has the binary the host found, its resolved `real_path`,
 `version`, argument template, the environment names it requires, and optional
 names with a `present` flag; values are never sent. A usable offer carries a
 five-minute, single-use `offer_id` bound to the revision. A refused offer
-(Codex, for now, or an unsafe path) has a `null` `offer_id` and a `refusal`.
+(for example, an unreviewed Codex version or an unsafe path) has a `null`
+`offer_id` and a `refusal`. Explicitly reviewed Codex versions can be offered.
 `confirm_harness_setup` names an `offer_id`, the optional environment names
 to pass through, the denylist, and `summaries_dir` (`null` keeps the current
 folder or uses `summaries`). The host spends the offer, re-checks the
@@ -153,9 +156,10 @@ such as a directory sync, warned; not a failure and not retried). A stale
 `expected_revision` refuses the write and returns `note_conflict` with the
 note's current `exists`, `revision`, `title`, and `body` instead, so the
 panel can reload the newer note and show the text it could not save. Before
-replacing, the host checks the existing file's recorded canonical URL and
-`brauser:` ownership (absent or `page` `kind`, never `summary`); a mismatch
-is a `conflict` error, and the file is never adopted or overwritten.
+replacing, the host checks the file's record identity (canonical URL for a
+URL-keyed note, artifact ID for an artifact-keyed note) and `brauser:`
+ownership (absent or `page` `kind`, never `summary`); a mismatch is a
+`conflict` error, and the file is never adopted or overwritten.
 
 The host remains responsible for runtime validation of string lengths,
 absolute paths, site origins and path prefixes, storage confinement, token

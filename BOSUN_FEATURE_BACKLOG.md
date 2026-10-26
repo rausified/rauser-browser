@@ -18,11 +18,20 @@ for one cycle, split it into ordered sub-items here rather than reordering the
 plan. You may still add proposals and notes at cycle end — just don't build
 them ahead of the plan.
 
+**Reconciled with main and confirmed by John, 2026-10-18.** Capture Site and
+safe Re-learn/re-keying come before AI summaries; normal setup must not expose
+adapter JSON. macOS and Windows are both in scope. Preserve main's queued
+SQLite, concurrency, host-hardening, auth, and Windows work. Step 6.7 is
+already implemented in this development branch, so do not rebuild it from
+main's stale unchecked item. The branches are two commits ahead/six behind,
+not a single linear sequence; DESIGN.md §12.3 records the integration boundary.
+
 **Beads is the machine queue (2026-10-16).** `.beads/issues.jsonl` holds one
 bead per open item below, structured like Privateer's queue. Known Issues
 are P1 and plan work is P2. Cookie's proposals are P3, so none of them outranks
-plan work. Dependencies are only the real ones (8.2 waits for 6.5-6.7, then
-8.3, 8.4, 8.5 in turn), so `bd ready` shows every Known Issue at once. **Take
+plan work. Dependencies are only the real ones (8.2 waits for record keys,
+Capture Site/re-keying, browser stabilization, and the auth decision; streaming,
+extraction, and summaries follow), so `bd ready` shows every Known Issue at once. **Take
 them in the order listed here, per the rule above.** **[human]** items carry
 the `human` label (`bd human list`) and depend on the deferred `brwr-hpo`
 HUMAN GATE bead. Do not close the gate to make them ready. Every open item
@@ -32,13 +41,44 @@ launch when the two disagree.
 **Known issues come before plan work (set by John, 2026-10-16).** While any
 item under "Known Issues (Blocking Deploy)" is unchecked, take the first one
 before any plan item. Fix it with a regression test, check it off with a
-one-line note, and keep each fix to one cycle. These came from a code review
-of PR #34 (merged to GitHub main as 68f180b). The review was not separately
-verified, so confirm each failure scenario with a failing test first. If the
-test shows the finding is wrong, check it off as "not reproduced" and say why.
+one-line note, and keep each fix to one cycle. The original PR #34 findings
+(merged to GitHub main as 68f180b) are retained below as completed history.
+The 2026-10-18 review added two native-host reproductions (DESIGN.md §12.3).
+Turn each reproduction into a failing committed regression before its fix.
+If a test disproves a finding, check it off as "not reproduced" and say why.
 
 ## Known Issues (Blocking Deploy)
 
+- [ ] `brwr-ezb` **Artifact notes become hidden after adapter or site removal.**
+  Reproduced on 2026-10-18: save an artifact note, remove its adapter through
+  `update_config`, then load the same URL. `note_context` falls back to a URL
+  key and `older_notes` returns no entries for that key; the artifact note file
+  is preserved but the panel shows no note. Keep existing notes reachable
+  after removal or recognition narrowing without re-enabling capture, merging
+  competing notes, or weakening the host-derived key and ownership checks.
+  Cover alternate known routes, an occupied URL note, ambiguous history, and
+  cache deletion/reindex.
+- [ ] `brwr-ee5` **A valid stale index cache silently omits durable activity.**
+  Reproduced on 2026-10-18: retain the cache after A, deliver B, restore the
+  earlier valid cache to simulate failed publication after append, then
+  deliver C. Recent omits B until `brauser reindex`. `load_or_rebuild` checks
+  cache structure and folder identity but has no log ingestion checkpoint;
+  index-update failures are only written to stderr before a persisted ack.
+  Add automatic bounded catch-up on a later delivery/query and after restart.
+  Keep the log ack independent of index success; expose unavailable/stale
+  derived history when repair fails instead of silently showing it as complete.
+- [ ] `brwr-rto` **Restrict trail transitions to Chrome's known values.**
+  Restored from main's 2026-10-16 host review: `activity_shape_is_valid`
+  currently accepts any nonempty transition of at most 64 bytes. Validate the
+  declared transition vocabulary before durable capture and indexing.
+- [ ] `brwr-1fo` **Strip Unicode format characters from page-derived text.**
+  Restored from the same review: the log and artifact Markdown sanitizers strip
+  controls but preserve bidi/zero-width format characters that can disguise
+  rows. Cover both renderers with one reviewed sanitizer and regressions.
+- [ ] `brwr-992` **Use the shared activity policy check in single delivery.**
+  Single activity and batch delivery duplicate privileged evidence checks.
+  Restore main's hardening task, first demonstrate parity/tampering cases, then
+  make both paths use the same authoritative validation.
 - [x] `brwr-7yp` **Adapter removal refused when two adapters share origin and type.**
   `validate_adapter_transition` (host/src/config.rs ~1254) checks each old
   adapter against a surviving sibling's id. Two `work.issue` adapters on one
@@ -154,28 +194,93 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   regenerate ownership-checked, skip-if-unchanged artifact Markdown with
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
+- [x] **M1.5a step 6.7 — Panel, Recent, worklog, and record keys.** Implemented
+  in the development checkout on 2026-10-17: artifact card/context, cross-tool
+  Recent filters, copyable worklogs, host-derived note keys, guarded older-note
+  migration, and visible artifact-file conflicts. Main integration and live
+  acceptance remain distinct from this implementation checkbox (§12.3).
+- [ ] `brwr-mff` **[human] Add bundled `rusqlite` and make it available to builds.**
+  Preserve main's dependency gate: update the manifest/lockfile, pass
+  `cargo deny check --all-features --locked`, and make the dependency available
+  to the isolated build environment. Do not bypass a failed dependency fetch
+  by retaining a hand-written database engine.
+- [ ] `brwr-b2e` **Replace the custom snapshot with incremental SQLite.**
+  After the dependency gate, replace whole-history JSON derivation and the
+  custom file encoder with transactional upserts and indexed card/Recent/
+  worklog queries. Keep logs authoritative, preserve IDs, retain the current
+  write lock, add ingestion checkpoints/catch-up, and check month/year history
+  fixtures. This is main's existing task, not a second index rewrite.
+- [ ] `brwr-7vf` **Validate concurrent hosts against the SQLite index.**
+  After adoption, use WAL, a busy timeout, and serialized updates/regeneration;
+  prove no lost/duplicated rows or dirty markers, double regeneration, or
+  surfaced `SQLITE_BUSY` across panel/settings/worker hosts.
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8 — Certify the three starter adapters.** Check
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-npy` **§12.2 step 2 — Headless page-load check in CI (optional,
-  recommended).** Load the built `extension/dist/` in headless Chrome and open
-  the panel and settings page, so a stale-manifest class of failure is caught
-  before a manual run.
+- [x] **§12.2 step 2 — Built-page loading in CI.** The existing macOS headless
+  smoke run already loads the built extension and drives its panel/settings
+  pages. Source confirmed on 2026-10-18; this does not claim a new macOS pass.
+- [ ] `brwr-9xg` **§12.3 stabilization — Exercise artifact panel interactions.**
+  Extend the existing headless smoke path for the artifact card/context,
+  Recent filters, worklog selection/Copy, and older-note migration. Exercise
+  refresh after background delivery and close/reopen during debounce or an
+  in-flight save; repair lost-edit recovery before accepting close-time saves.
+  Use disposable local/scripted fixtures and browser state, without real
+  accounts, models, or the user's clipboard. This coverage precedes more M2
+  feature work.
+- [ ] `brwr-1hj` **Capture Site — structural drafting before AI.**
+  Bring step 7.6 forward: a side-panel button and context-menu/toolbar paths
+  for ungranted tabs, URL/link shapes, structural drafting without an agent,
+  and a plain-language example/exclusion/scope preview before native consent.
+  JSON remains advanced-only. Tier 1 is not required; add `scripting` for the
+  fixed link-shape function if absent. Preserve every step 7.6 safety rule and
+  split implementation into ordered, reviewable sub-items before building.
+- [ ] `brwr-6x2` **Ship safe Re-learn/re-keying with Capture Site.**
+  Bring forward the required part of alias migrations so a corrected draft
+  cannot orphan history, notes, or index rows. Use explicit append-only re-key
+  events, preserve competing notes, and keep the ID freeze until this exists.
+- [ ] `brwr-bzx` **Restore Windows CI.** Add Windows host build/test/clippy
+  and extension checks; retain Windows paths and fix Unix-only assumptions.
+  Establish the Windows baseline before acceptance. A build is not a proof
+  of real dialogs, registration, capture, or harness isolation.
+- [ ] `brwr-ooy` **Implement bounded harness execution on Windows.**
+  `run_bounded` currently refuses non-Unix platforms. Add equivalent cleared
+  environment, private working directory, output/deadline caps, cancellation,
+  and whole-process-tree containment with safe wrappers. Exercise descendants
+  and normal/failure cleanup using fake Windows harnesses before M2 acceptance.
+- [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.**
+  After CI/baseline setup, record a real isolated-profile run for registration,
+  picker/consent, first grants, panel-closed capture, notes/closure, Recent/
+  worklog, Pause/revocation, and Capture Site/re-learning as they land. Request
+  permission before using the desktop; keep untested pieces explicit.
+- [ ] `brwr-9yc` **[human] Decide Chrome-spawned harness authentication.**
+  Preserve main's gate for John's Bedrock environment and other auth sources.
+  Compare harness-stored login, explicitly managed host environment, and a
+  private host-owned env file; John decides before M2 invocation.
 - [ ] `brwr-6wz` **M2 step 8.2 — Host invocation.** Start only after 6.4–6.7 are shipped.
   Allowlisted environment, templated argv, page content on stdin inside the
   untrusted-data block, host-owned working directory, timeout, output cap,
   process-tree kill, and the confirmed-install-location check (§7.1), with the
   fake-harness tests and the §7.1 canary listed in step 8.2.
+- [ ] `brwr-jfe` **Make the native message loop responsive before streaming.**
+  Separate stdin reading, long-running work, and one serialized writer;
+  answer short requests during a run and tear work down on EOF. Preserve
+  config/write locking. This is main's existing pre-streaming task.
 - [ ] `brwr-0cj` **M2 step 8.3 — Streaming protocol.** A reader that stays responsive
   while a harness runs; chunk, `rejected`, error, `cancel`, and
   `summary_result` messages correlated by `request_id` under the 900 KiB cap;
   stdin EOF kills the harness. Takes the next protocol version after v5.
+- [ ] `brwr-f45` **Agent-refined Capture Site.** After structural capture,
+  host invocation, and responsive streaming, let the configured harness refine
+  a draft under the same isolation and per-rule checks. It uses the same
+  plain-language review and consent; capture keeps working without an agent.
 - [ ] `brwr-0ij` **M2 step 8.4 — Content extraction.** Bundled, pinned Readability-style
   extraction, the `summarize` command, context menu, and toolbar trigger, and
   the §8 permissions. **[human]** sub-step first (`brwr-rva`): the real-Chrome `activeTab`
-  checks (a)–(d) in step 8.4 need macOS; build the rest behind them only once
-  they are recorded.
+  checks (a)–(d) in step 8.4 need real Chrome on the target platform. Record
+  macOS and Windows results separately. Reuse `scripting` from Capture Site or add it if absent;
+  M2 does not depend on the M1.5b daily-use gate.
 - [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel.** Denylist checks, the §5.2
   and §4.4 summary write and result contract, the §3.1 extension-page CSP with
   a manifest test, and the external-editor race, shared summaries directory,
@@ -183,10 +288,12 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ### Gated plan work (do not start yet)
 
-- **M1.5b (§12.2 step 7.1–7.7)** — aliases, Tier 1 fields (`scripting`),
-  worklog files, the remaining starter adapters, Create adapter with the
-  structural drafter, then agent drafting. DESIGN.md gates this on M1.5a being
-  in daily use for a few weeks; John will lift the gate here when it's time.
+- **Remaining M1.5b (§12.2 steps 7.1–7.5)** — the rest of aliases, Tier 1
+  fields, worklog files, and additional starters retain the few-weeks daily-use
+  gate. Capture Site (7.6), its required re-key migration (part of 7.2), and
+  later agent refinement (7.7) are exceptions moved into Plan work above.
+  John confirmed on 2026-10-18 that he has not tried the new workspace yet,
+  so that interval has not started.
 - **M3 — Related** (FTS5 in `brauser reindex`, related pages, read later),
   **M4 — Omnibar** (built-in commands, free text, custom commands), and
   **M5 — Release** (installer, store listing, signing and provenance, docs)
@@ -194,12 +301,11 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ### Focused quality follow-up
 
-- [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
-  Extend the built-page check or its scripted host so it opens the artifact
-  card, filters Recent, changes and copies a worklog, and migrates an older
-  note. The boundary and state-machine tests shipped with step 6.7, but this
-  composed browser path should catch DOM wiring regressions without a live
-  account, credential, or network call.
+- [ ] `brwr-x0d` **Extract a rendering helper when a consumer needs it.**
+  Step 6.7 already shipped without this helper, so its old prerequisite is
+  obsolete. Consider a small framework-free list/stream helper when Capture
+  Site or streaming demonstrates shared behavior; avoid a prerequisite rewrite
+  of the existing views.
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
   child can exit after printing its reply before the parent writes the framed
   request, intermittently producing `EPIPE` even though production dialog
@@ -211,6 +317,17 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
   marker currently waits for another authorized event to provide a safe log
   anchor. Make that evidence independently deliverable without accepting an
   unvalidated URL or vault path.
+- [ ] `brwr-o1l` **Share capture authorization/store setup.** Preserve main's
+  follow-up to reduce duplication across legacy visits, single activity, and
+  batches after the concrete policy fixes, with a legacy-removal release plan.
+- [ ] `brwr-ahb` **Use one adapter identity for consent and transitions.**
+  Keep the displayed approval and the enforced policy delta aligned.
+- [ ] `brwr-2iz` **Bound `adapter_id_history` within the config cap.**
+  Give a specific capacity error and a safe migration/prune path, or fold
+  retirement into the explicit Re-learn migration without reopening ID swaps.
+- [ ] `brwr-m68` **Separate the spec from dated implementation history.**
+  Preserve main's documentation cleanup task; move historical probes/as-built
+  records out of DESIGN.md once this reconciliation is integrated.
 
 ### Cookie's own proposals (only after the plan work above)
 
@@ -235,10 +352,15 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## In Progress / This Iteration
 
-- None. The next ready plan item is `brwr-npy` (the optional headless page-load check); `brwr-5yn` remains a human-only live-tool gate.
+- None. Start with the unchecked Known Issues, then the index/browser
+  stabilization and Capture Site/Re-learn plan above. Windows is in scope;
+  its CI and runtime work may proceed alongside independent capture work.
+  Keep human/dependency gates intact. See DESIGN.md §12.3 for branch divergence
+  and the difference between implementation and acceptance.
 
 ## Shipped
 
+- **Category:** Documentation & Process. `brwr-npy` **Recognize existing built-page CI coverage (2026-10-18).** The macOS CI job already builds and loads the unpacked extension through the headless smoke runner, which opens and drives both panel and settings. Closed the duplicate task after source inspection; no new macOS execution is claimed. The 2026-10-18 review promotes the distinct artifact interaction task, records two reproduced correctness issues, and keeps live-tool certification and daily-use evidence open.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** New Capability. **Turn durable activity into a local index and bounded artifact records (2026-10-16).** Each accepted activity now updates a standard SQLite `index.db` with artifact, visit, edge, and dirty-set tables while leaving the append-only Markdown log authoritative. Brauser lazily regenerates only dirty, owned artifact files at native connection boundaries, preserves unchanged mtimes, gives case-colliding IDs distinct hash-suffixed paths, replaces external edits only after checking ownership, neutralizes hostile presentation text, and bounds long histories with daily, weekly, then monthly Timeline rollups. `brauser reindex` reconstructs the database and files from bounded owned markers, and older configs receive a non-overlapping `artifacts_dir` default without weakening native consent. **Metrics:** 284 Rust tests and 8 extension suites passing; 13 new index, ownership, delivery-integration, migration, replay-integrity, multi-page SQLite, chronology, rollup, and wire regressions, with full protocol generation, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** Reliability. `brwr-6at` **Ship bounded, crash-recoverable activity batches (2026-10-16).** The service worker now sends up to 64 same-local-day records under a replay-stable batch ID and exact overflow snapshot, while the native host validates every event before publishing the survivors through one compact intent, one append, and one log sync. Queue pressure coalesces only compatible undispatched hours that still fit the hard byte cap, lights the toolbar badge at 80%, and carries dropped-hour count and range into the append-only log; lost acknowledgements cannot erase newer overflow. The retired near-repeat window is gone from protocol, consent, new config writes, and log scanning, so deliberate `/log` actions are never collapsed, while old configs and queues still drain safely. **Metrics:** 271 Rust tests and 8 extension suites passing; 6 durability regressions, with full protocol generation, current-state consistency, build, test, format, both clippy gates, clean npm install, typecheck, lint, extension checks, and queue export green.
@@ -262,9 +384,9 @@ test shows the finding is wrong, check it off as "not reproduced" and say why.
 
 ## Notes / Ideas for Later
 
-- Every PR #34 deploy blocker and M1.5a steps 6.5–6.7 are now closed. The next
-  ready plan item is `brwr-npy`, while the final M1.5a starter certification is
-  correctly held behind the human/live-tool gate.
+- The original PR #34 blockers and implementation steps 6.5–6.7 are closed.
+  The 2026-10-18 review's new correctness gaps now precede further plan work;
+  final M1.5a starter certification remains behind the human/live-tool gate.
 - Artifact-file conflicts are now visible from the settings regeneration
   action, including bounded relative paths, while the generator continues to
   leave those unowned occupants and their dirty records untouched.

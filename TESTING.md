@@ -104,6 +104,68 @@ Checks of this kind in this repo:
 - `npm run smoke:macos -- --auto`: the full flow with the real picker, alert, and Chrome prompt, answered through UI scripting. It takes keyboard focus.
 - `npm run check:macos-alert -- --on-desktop` (`scripts/check-macos-alert.mjs`): shows the real macOS confirmation twice and checks, by counting `UserNotificationCenter`'s on-screen windows, that the alert closes with no click when the dialog child's stdin ends and when it times out.
 
+## Artifact workspace acceptance (reviewed 2026-10-18)
+
+The existing macOS CI smoke run already loads the built extension and drives
+the panel and settings. That satisfies basic page-load coverage; adding a
+second runner is unnecessary. It does not yet exercise the composed artifact
+card/context, Recent filters, worklog selection/Copy, and older-note migration.
+Extend that path under `brwr-9xg`, including background-delivery refresh and
+close/reopen before the note debounce expires or while a save is in flight.
+The current close-time flush is best effort and has no durable draft handoff;
+if those checks expose lost edits, add recovery before accepting that behavior.
+Keep any clipboard checks inside the disposable browser or an injected seam.
+
+Two ad hoc checks against the built native host reproduced correctness gaps
+on Linux. They used synthetic policy and an isolated temporary notes/config/cache
+tree, with no real browser, harness, credentials, or live work account. Convert
+these recipes into failing regressions before fixing them:
+
+- **Note discovery after policy removal (`brwr-ezb`).** Save a note under an
+  adapter-derived artifact key, remove the adapter using revisioned
+  `update_config`, and `load_note` at the same URL. The current result is
+  `exists: false` with no older notes, while the artifact note file still
+  contains the user's text. Cover site removal and recognition narrowing too;
+  preserve capture revocation and handle competing notes explicitly.
+- **Catch up a valid stale index (`brwr-ee5`).** Deliver A and retain its
+  `index-state.json`; deliver B, then restore the earlier valid cache to model
+  an append followed by failed/interrupted cache publication. Deliver C and
+  query Recent: B remains missing despite being in the owned log.
+  `brauser reindex` restores B. Recovery must happen automatically on a later
+  delivery/query and after restart, without requiring a replay of B. An
+  unrepaired cache must be reported as stale/unavailable.
+
+Before treating the artifact workspace as accepted for daily work, request a
+macOS session and record the Chrome/macOS versions, source revision, date,
+tools, observed results, and remaining limits. The live checks should cover:
+
+1. For each available starter, follow its routes and scope rules in
+   [docs/adapters/](docs/adapters/), open alternate routes to one artifact,
+   and verify that non-artifact and out-of-scope pages stay unrecorded.
+   Record certification per adapter; unavailable tools remain uncertified.
+2. With the panel closed, spend known intervals on an artifact and in another
+   application, then compare delivered focus/background/open totals in the
+   log, panel, and worklog. Separately check real idle/lock and a restored tab;
+   synthetic idle events and reload fixtures do not establish those results.
+3. Open Recent, filter across tools, copy a daily/weekly worklog, edit a note
+   through alternate routes, and exercise an older-note migration. Check
+   pending-save closure and reopen, a refused stale save, Pause, and grant
+   removal. Reindex and regenerate artifacts without replacing an unowned
+   file.
+
+Windows is in scope (reconfirmed 2026-10-18), but the current CI/smoke recipe
+is macOS-specific. Restore Windows build/test/lint coverage and a documented
+Windows baseline, then record native registration, real picker/consent, first
+grants, capture, note closure, and process-tree containment on Windows. The
+current `run_bounded` implementation is Unix-only and refuses other platforms.
+A Windows build alone will not establish AI support; real-harness canaries and
+an isolated Windows browser run are separate acceptance.
+
+John reported no use of the new workspace as of 2026-10-18. Record the first
+daily-use date and concrete friction before lifting the remaining M1.5b few-weeks gate. Capture Site and its
+required Re-learn/re-keying have moved ahead of that gate and of AI.
+Passing portable tests does not start that interval or certify live adapters.
+
 ## Changing this document
 
 This standard is meant to improve with use. When you change it:
@@ -115,6 +177,7 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-18: Source review found that the existing CI smoke run already covers built panel/settings loading, while artifact interaction coverage remains open. The Linux workspace checks passed (296 Rust tests and eight extension test files); separate isolated native-host checks reproduced hidden notes after adapter removal and durable history missing from a valid stale index. Recorded the regression recipes and macOS/live-tool acceptance boundary above; no new macOS or real-harness acceptance is claimed.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.
 - 2026-09-28: Branch `m2-harness-setup`. Chrome passes the runner's environment to the native host, so AI harness setup would have seen the real `PATH` and credentials. The headless wrapper now clears the environment with `env -i` and pins `PATH` to fake harnesses; added the external-programs section. The headless run with fake harnesses passed with nine scripted dialogs.
