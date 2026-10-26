@@ -1190,7 +1190,6 @@ async function run() {
         "The folder was saved even though its confirmation was declined");
       await onSettings(async (page) => {
         await page.fill("#site-url", siteInput);
-        await page.fill("#site-path", "/allowed");
       });
       await waitFor(() => onSettings(async (page) =>
         requireCondition(await page.enabled("#enable-site"), "Enable this site is disabled")));
@@ -1204,7 +1203,7 @@ async function run() {
         await onSettings(async (page) => requireCondition(await page.enabled("#enable-site"), "Setup is still running"));
       }, async () => {
         await chromePrompt();
-        await answerConfirmation("No", `${origin}/allowed`);
+        await answerConfirmation("No", `${origin}/`);
       });
       const reply = await hostConfig(wrapper);
       requireCondition(reply.config.storage === null && !reply.config.capture_enabled && reply.config.sites.length === 0,
@@ -1254,11 +1253,11 @@ async function run() {
           `Expected ${notesRoot}; host has ${selectedRoot ?? "none"}`);
         requireCondition(reply.config.capture_enabled === true, "Capture is not enabled in the host");
         requireCondition(reply.config.sites.length === 1 &&
-          reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/allowed",
-        "Host site rule does not match the fixture origin and /allowed prefix");
+          reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/",
+        "Host site rule does not match the fixture origin");
       }, async () => {
         await chromePrompt();
-        await answerConfirmation("Yes", `${origin}/allowed`);
+        await answerConfirmation("Yes", `${origin}/`);
       });
       // A first navigation grant makes the settings page restart the extension,
       // which closes every extension page.
@@ -1744,7 +1743,7 @@ async function run() {
     }
 
     await step("Site removal", async () => {
-      await inSettings((page) => page.click(`button[aria-label="Remove ${origin}/allowed"]`));
+      await inSettings((page) => page.click(`button[aria-label="Remove ${origin}/"]`));
       await waitFor(async () => {
         const reply = await hostConfig(wrapper);
         requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,

@@ -25,18 +25,10 @@
           <button id="choose-folder" type="button" disabled>Choose folder…</button>
         </div>
 
-        <p>Notes use neutral Markdown in M1. An Obsidian-specific profile is planned for a later milestone.</p>
-
         <div class="field">
           <label for="site-url">Site URL</label>
           <input id="site-url" type="url" placeholder="https://example.com/" autocomplete="off" spellcheck="false" />
-          <small>Enter a scheme and host, with a port if needed, such as https://example.com. Wildcards are not accepted.</small>
-        </div>
-
-        <div class="field">
-          <label for="site-path">Allowed path prefix</label>
-          <input id="site-path" type="text" value="/" spellcheck="false" />
-          <small>The host checks this path; Chrome's permission covers the chosen scheme, host, and port across all paths.</small>
+          <small>Enter a scheme and host, with a port if needed, such as https://example.com. Wildcards are not accepted. Adapters below decide which pages on the site are recorded.</small>
         </div>
 
         <button id="enable-site" type="button" disabled>Enable this site</button>

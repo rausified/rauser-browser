@@ -47,7 +47,6 @@ const status = element<HTMLDivElement>("status");
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
 const siteUrl = element<HTMLInputElement>("site-url");
-const sitePath = element<HTMLInputElement>("site-path");
 const enableButton = element<HTMLButtonElement>("enable-site");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
 const sitesList = element<HTMLUListElement>("sites-list");
@@ -779,14 +778,9 @@ function parseSite(): { site: SiteConfig; pattern: string } {
     throw new Error("Enter an HTTP(S) site URL without credentials");
   }
   if (url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Enter only the site origin here; use Allowed path prefix to narrow capture");
+    throw new Error("Enter only the site origin here; adapters decide which pages are recorded");
   }
-  const path = sitePath.value.trim();
-  if (!path.startsWith("/") || path.includes("?") || path.includes("#") ||
-      path.includes("\\") || path.split("/").some((part) => part === "." || part === "..")) {
-    throw new Error("Path prefix must start with / and contain no query, fragment, or traversal");
-  }
-  const site = { origin: url.origin, path_prefix: path };
+  const site = { origin: url.origin, path_prefix: "/" };
   return { site, pattern: exactOriginPattern(site.origin) };
 }
 
@@ -1330,7 +1324,6 @@ chooseFolderButton.addEventListener("click", () => void chooseFolder());
 enableButton.addEventListener("click", enableSite);
 pauseButton.addEventListener("click", () => void pauseCapture());
 siteUrl.addEventListener("input", () => void refreshPreflight());
-sitePath.addEventListener("input", () => void refreshPreflight());
 // Enable's rollback compares against this page's last permission read, so
 // every grant change, from this page or elsewhere, refreshes it.
 chrome.permissions.onAdded.addListener(() => void refreshPreflight());
