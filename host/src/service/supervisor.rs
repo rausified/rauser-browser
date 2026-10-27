@@ -392,6 +392,22 @@ impl Supervisor {
         supervisor
     }
 
+    /// As [`Supervisor::new`], with `status.json` access failing wherever
+    /// `fault` says so, from the first resumed run on.
+    #[cfg(test)]
+    fn with_status_fault(
+        store: RunStore,
+        registry: HarnessRegistry,
+        finisher: Box<dyn RunFinisher>,
+        options: ServiceOptions,
+        fault: StatusFault,
+    ) -> Self {
+        let (supervisor, queued) = Self::recovered(store, registry, finisher, options);
+        let _ = supervisor.inner.status_fault.set(fault);
+        supervisor.resume(queued);
+        supervisor
+    }
+
     /// Make `status.json` reads and writes fail wherever `fault` says so.
     #[cfg(test)]
     fn set_status_fault(&self, fault: StatusFault) {
@@ -463,11 +479,15 @@ impl Supervisor {
                     let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
-                Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
-                    status.state = RunState::Failed;
-                    status.error_kind = Some(RunErrorKind::ServiceRestarted);
-                    status.error = Some(maintenance::SERVICE_RESTARTED.to_string());
-                }),
+                Some((Submit::Existing(_), _)) | None => {
+                    // Its key stays taken until this end state is recorded.
+                    lock(&inner.scheduler).hold(&status.start_key, id);
+                    inner.finish(id, |status| {
+                        status.state = RunState::Failed;
+                        status.error_kind = Some(RunErrorKind::ServiceRestarted);
+                        status.error = Some(maintenance::SERVICE_RESTARTED.to_string());
+                    });
+                }
             }
         }
         Inner::pump(inner);
@@ -2982,6 +3002,95 @@ mod tests {
         assert_eq!(view.error_kind, Some(RunErrorKind::ServiceRestarted));
         assert_eq!(fixture.on_disk(id), RunState::Failed);
         assert!(restarted.is_idle());
+    }
+
+    /// A queued record that recovery cannot resume (no working directory, or
+    /// a second queued run for one key) fails with "service restarted"; when
+    /// that end state cannot be recorded, its key must stay taken too.
+    #[test]
+    fn recovery_only_end_states_that_cannot_be_recorded_keep_their_keys() {
+        let fixture = Fixture::new(ANSWER);
+        let store = &fixture.supervisor.inner.store;
+        let seed = |key: &str, cwd: Option<&Path>, created_at: &str| {
+            let id = seed_record(store, fixture.dir.path(), RunState::Queued, created_at);
+            let mut status = store.status(id).unwrap();
+            status.cwd = cwd.map(|cwd| cwd.display().to_string());
+            status.start_key.value = format!("https://example.com/{key}");
+            status.url = status.start_key.value.clone();
+            store.write_status(&status).unwrap();
+            id
+        };
+        let homeless = seed("stuck-homeless", None, "2026-10-26T09:00:00.000000000Z");
+        // Oldest first: this one resumes, the later one is the duplicate.
+        let _first = seed(
+            "stuck-twice",
+            Some(fixture.dir.path()),
+            "2026-10-26T09:00:00.000000000Z",
+        );
+        let second = seed(
+            "stuck-twice",
+            Some(fixture.dir.path()),
+            "2026-10-26T09:05:00.000000000Z",
+        );
+
+        let options = ServiceOptions {
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
+            idle_exit: Duration::from_secs(600),
+            service_pid: std::process::id().wrapping_add(1),
+            run_env: Arc::new(|| Ok(Vec::new())),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
+            opener: crate::open::default_opener(),
+        };
+        let finisher = TestFinisher {
+            fail_saves: Arc::new(AtomicUsize::new(0)),
+            saves: Arc::new(AtomicUsize::new(0)),
+        };
+        // Every end-state write of a recovery-only run fails.
+        let fault: StatusFault = Arc::new(move |io: StatusIo<'_>| match io {
+            StatusIo::Read(_) => false,
+            StatusIo::Write(status) => {
+                status.finished_at.is_some()
+                    && (status.run_id == homeless.to_string()
+                        || status.run_id == second.to_string())
+            }
+        });
+        let program = fixture.path("fake-harness");
+        let registry = HarnessRegistry::from_lookup(move |name| {
+            (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
+        });
+        let restarted = Supervisor::with_status_fault(
+            RunStore::open(fixture.path("runs")).unwrap(),
+            registry,
+            Box::new(finisher),
+            options,
+            fault,
+        );
+        assert_eq!(lock(&restarted.inner.unsettled).len(), 2);
+        assert_eq!(
+            store.status(homeless).unwrap().state,
+            RunState::Queued,
+            "the failed write left the record queued on disk"
+        );
+
+        // No new run starts for the homeless record's key.
+        let (view, existing) = restarted
+            .start_run(fixture.request("stuck-homeless"))
+            .unwrap();
+        assert!(existing, "a second run started: {view:?}");
+        assert_eq!(view.run_id, homeless.to_string());
+        assert_eq!(view.state, RunState::Failed);
+
+        // Once the resumed run for the shared key ends, the unrecorded
+        // duplicate still holds the key.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !restarted.is_idle() {
+            assert!(Instant::now() < deadline, "the resumed run never ended");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let (view, existing) = restarted.start_run(fixture.request("stuck-twice")).unwrap();
+        assert!(existing, "a second run started: {view:?}");
+        assert_eq!(view.run_id, second.to_string());
     }
 
     #[test]

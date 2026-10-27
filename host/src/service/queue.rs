@@ -38,6 +38,10 @@ pub struct Scheduler {
     running: Vec<Uuid>,
     waiting: VecDeque<Uuid>,
     by_key: HashMap<KeyId, Uuid>,
+    /// Keys held by runs recovery could not resume (no working directory,
+    /// or a second queued run for one key): they were never scheduled, but
+    /// until their end state is recorded their key must stay taken.
+    held: HashMap<Uuid, KeyId>,
 }
 
 impl Scheduler {
@@ -48,9 +52,18 @@ impl Scheduler {
         if let Some(existing) = self.by_key.get(&key) {
             return Submit::Existing(*existing);
         }
+        if let Some((holder, _)) = self.held.iter().find(|(_, held)| **held == key) {
+            return Submit::Existing(*holder);
+        }
         self.by_key.insert(key, id);
         self.waiting.push_back(id);
         Submit::New
+    }
+
+    /// Takes `key` for `id`, a run recovery could not resume, until
+    /// [`Scheduler::finished`] frees it. It takes no slot.
+    pub fn hold(&mut self, key: &RecordKey, id: Uuid) {
+        self.held.insert(id, key_id(key));
     }
 
     /// Moves the oldest waiting run to running, if a slot is free.
@@ -100,6 +113,7 @@ impl Scheduler {
 
     fn free_key(&mut self, id: Uuid) {
         self.by_key.retain(|_, owner| *owner != id);
+        self.held.remove(&id);
     }
 }
 
