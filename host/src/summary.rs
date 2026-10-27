@@ -69,12 +69,16 @@ pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'stati
         || !summary.summary_path.ends_with(".summary.md")
         // The rendered link wraps this in `<...>` (CommonMark's bracketed
         // destination form), which forbids line breaks and unescaped `<`/
-        // `>`. Reject rather than escape: a vault-relative path has no
-        // legitimate reason to need any of these.
+        // `>`; `#`/`?` are not special to CommonMark there, but some
+        // Markdown viewers (DESIGN.md's Obsidian/VS Code preview bar) treat
+        // a link destination as a URI reference and would resolve a
+        // trailing fragment or query instead of opening the file. Reject
+        // rather than escape: a vault-relative path has no legitimate
+        // reason to need any of these.
         || summary
             .summary_path
             .chars()
-            .any(|ch| ch.is_control() || matches!(ch, '<' | '>'))
+            .any(|ch| ch.is_control() || matches!(ch, '<' | '>' | '#' | '?'))
     {
         return Err("invalid_summary_path");
     }
@@ -165,6 +169,8 @@ mod tests {
             "pages/>evil.summary.md",
             "pages/<script>.summary.md",
             "pages/evil\n.summary.md",
+            "pages/evil#frag.summary.md",
+            "pages/evil?query.summary.md",
         ] {
             let mut bad = summary();
             bad.summary_path = path.into();
