@@ -153,6 +153,31 @@ test("reports the address of the document it read", () => {
   assert.equal(run(scope).href, "https://read.example/elsewhere");
 });
 
+// JSON.stringify writes a lone surrogate as a \\udXXXX escape, which a strict
+// parser such as serde_json rejects, failing the whole start_run.
+const LONE_ESCAPE = /\\ud[89a-f][0-9a-f]{2}/i;
+
+test("lone surrogates in page text, selection and title become U+FFFD", () => {
+  const { scope } = page({
+    article: el("div", el("p", "high \uD800 low \uDC00 pair 😀 end\uD83D")),
+    articleTitle: "\uDE00Title\uD800",
+    selection: "pick \uDBFF ed 😀",
+  });
+  const result = run(scope);
+  assert.equal(result.content, "high \uFFFD low \uFFFD pair 😀 end\uFFFD");
+  assert.equal(result.title, "\uFFFDTitle\uFFFD");
+  assert.equal(result.selection, "pick \uFFFD ed 😀");
+  assert.doesNotMatch(JSON.stringify(result), LONE_ESCAPE);
+
+  // The body-text fallback, and a cut next to a replaced half, too.
+  const body = page({ title: "Doc\uDC00", bodyText: "Body \uD800\uD800😀" });
+  const fallback = run(body.scope, { ...EXTRACT_LIMITS, maxContentChars: 8 });
+  assert.equal(fallback.title, "Doc\uFFFD");
+  assert.equal(fallback.content, "Body \uFFFD\uFFFD");
+  assert.equal(fallback.truncated, true);
+  assert.doesNotMatch(JSON.stringify(fallback), LONE_ESCAPE);
+});
+
 test("an empty page is unreadable, not an empty run", () => {
   const { scope } = page({ title: "", article: el("div", el("p", "  "), el("img")), bodyText: " \n\t " });
   assert.deepEqual({ ...run(scope) }, {

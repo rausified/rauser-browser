@@ -1106,6 +1106,28 @@ test("Summarize refuses when the tab holds another document by extraction time",
   await until(() => same.sent("start_run").length === 1, "start_run");
 });
 
+test("start_run never carries a lone surrogate, whichever field it came from", async () => {
+  // Chrome's tab title stands in when Readability finds none.
+  const page = await summarizePanel({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab \uD800 title" },
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
+      frameId: 0,
+      result: {
+        title: "", content: "Body \uDC00 text 😀", selection: "\uD83D", truncated: false, readable: true, href: ARTICLE_URL,
+      },
+    }],
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  const [request] = page.sent("start_run");
+  assert.equal(request.title, "Tab \uFFFD title");
+  assert.equal(request.content, "Body \uFFFD text 😀");
+  assert.equal(request.selection, "\uFFFD");
+  assert.doesNotMatch(JSON.stringify(request), /\\ud[89a-f][0-9a-f]{2}/i);
+});
+
 test("the setup warning shows once", async () => {
   const local = new Map();
   const first = await summarizePanel({ local });

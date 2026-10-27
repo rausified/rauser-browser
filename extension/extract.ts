@@ -34,7 +34,21 @@ export const EXTRACT_LIMITS: ExtractLimits = {
   maxTitleChars: 2048,
 };
 
+// A lone surrogate: half a pair with no other half. JSON.stringify writes one
+// as a \udXXXX escape, which strict parsers such as the host's serde_json
+// reject, so each is replaced with U+FFFD before anything is sent.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** `value` with every lone surrogate replaced by U+FFFD. */
+export function wellFormed(value: string): string {
+  return value.replace(LONE_SURROGATE, "\uFFFD");
+}
+
 export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
+  // The same replacement as wellFormed, repeated here because Chrome runs
+  // only this function's own source in the page.
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+  const whole = (value: string): string => value.replace(lone, "\uFFFD");
   const encoder = new TextEncoder();
   const encoded = (value: string | null): number => encoder.encode(JSON.stringify(value)).length;
   // A cut never ends on half a surrogate pair.
@@ -131,10 +145,12 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   if (!readable) {
     content = (document.body?.innerText ?? "").trim();
   }
-  const fullTitle = title || document.title || "";
+  // Replaced before measuring, so a cut never meets a lone half either.
+  content = whole(content);
+  const fullTitle = whole(title || document.title || "");
   title = cut(fullTitle, Math.min(fullTitle.length, limits.maxTitleChars));
 
-  const picked = window.getSelection()?.toString() ?? "";
+  const picked = whole(window.getSelection()?.toString() ?? "");
   let selection: string | null = picked.trim() === "" ? null : picked;
   let truncated = false;
   if (selection !== null) {

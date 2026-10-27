@@ -3,7 +3,7 @@
 // summarizeTab; the host and the service check every field again.
 import type { RunView } from "../protocol/ts/generated.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
-import { EXTRACT_LIMITS, extractReadablePage, type ExtractedPage } from "./extract.js";
+import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
 import { localTimestamp } from "./model.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
 
@@ -19,6 +19,13 @@ export interface SummarizeDeps {
   scripting: typeof chrome.scripting;
   host: Pick<HostClient, "call">;
   now(): Date;
+}
+
+/** At most MAX_TITLE_CHARS UTF-16 units, never ending on half a pair. */
+function cutTitle(title: string): string {
+  if (title.length <= MAX_TITLE_CHARS) return title;
+  const code = title.charCodeAt(MAX_TITLE_CHARS - 1);
+  return title.slice(0, code >= 0xd800 && code <= 0xdbff ? MAX_TITLE_CHARS - 1 : MAX_TITLE_CHARS);
 }
 
 /** Whether two addresses name the same page once parsed as the URL standard
@@ -63,10 +70,12 @@ export async function summarizeTab(
     type: "start_run",
     protocol_version: PROTOCOL_VERSION,
     request_id: newRequestId(),
-    url: tab.url,
-    title: (page.title || tab.title).slice(0, MAX_TITLE_CHARS),
-    content: page.content,
-    selection: page.selection,
+    // Every string is made well-formed again, since the tab title comes from
+    // Chrome and a stale or older extractor may not have done it.
+    url: wellFormed(tab.url),
+    title: wellFormed(cutTitle(page.title || tab.title)),
+    content: wellFormed(page.content),
+    selection: page.selection === null ? null : wellFormed(page.selection),
     harness: null,
     record_key: null,
     requested_at: localTimestamp(deps.now()),
