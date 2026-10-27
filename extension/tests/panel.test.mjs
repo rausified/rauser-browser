@@ -815,19 +815,11 @@ test("a failed artifact lookup for the same page keeps its card and draft", asyn
   assert.equal(page.el("save-why").disabled, false);
 });
 
-test("an unsaved Why draft survives a host outage", async () => {
-  const page = await install({
-    tab: { id: 1, url: "https://docs.example/a", title: "A" },
-    config: CAPTURING,
-    intercept: (request) => request.type === "get_artifact"
-      ? recognized(artifact("doc:a", "Doc A", "old reason"))
-      : undefined,
-  });
+async function outageWithDraft(page) {
   await until(() => page.el("artifact-why").value === "old reason", "the stored why");
   await noteLoaded(page);
   await settle();
   typeWhy(page, "my unsaved draft");
-
   // The host process exits, and the next start fails.
   page.hostExits();
   page.state.hostDead = true;
@@ -835,11 +827,19 @@ test("an unsaved Why draft survives a host outage", async () => {
   await settle();
   page.titleChanged("A (2)"); // the panel now knows the host is unreachable
   await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
+}
+
+const withStoredWhy = (request) => request.type === "get_artifact"
+  ? recognized(artifact("doc:a", "Doc A", "old reason"))
+  : undefined;
+
+test("an unsaved Why draft survives a host outage", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING, intercept: withStoredWhy,
+  });
+  await outageWithDraft(page);
   assert.equal(page.el("artifact-card").hidden, false);
   assert.equal(page.el("artifact-why").value, "my unsaved draft");
-  // Saving waits for the host; the draft stays editable.
-  assert.equal(page.el("save-why").disabled, true);
-  assert.equal(page.el("artifact-why").disabled, false);
 
   // The host is back; the user follows a link to another URL of the same artifact.
   page.state.hostDead = false;
@@ -849,7 +849,26 @@ test("an unsaved Why draft survives a host outage", async () => {
   assert.equal(page.el("artifact-card").hidden, false);
   assert.equal(page.el("artifact-why").value, "my unsaved draft",
     "the unsaved Why draft was replaced after the host outage");
+});
+
+test("Save why reports a host outage and records once the host is back", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING, intercept: withStoredWhy,
+  });
+  await outageWithDraft(page);
+  // The click itself restarts the host, so Save stays available.
   assert.equal(page.el("save-why").disabled, false);
+  page.el("save-why").click();
+  await until(() => /Could not save artifact context/.test(page.el("status").textContent), "the save failure");
+  assert.equal(page.el("artifact-why").value, "my unsaved draft");
+
+  page.state.hostDead = false;
+  await until(() => page.el("save-why").disabled === false, "Save to enable again");
+  page.el("save-why").click();
+  await until(() => page.el("status").textContent === "Artifact context saved.", "the saved status");
+  const recorded = page.sent("record_why");
+  assert.equal(recorded.at(-1).event.text, "my unsaved draft");
+  assert.equal(recorded.at(-1).event.url, "https://docs.example/a");
 });
 
 test("Save why is disabled while capture is paused, keeps the draft, and points to Resume capture", async () => {

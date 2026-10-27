@@ -282,12 +282,14 @@ function whyPausedReason(): string | null {
   return null;
 }
 
-/** Why "Why I'm here" cannot be saved right now, or null when it can. */
+/** Why "Why I'm here" cannot be saved right now, or null when it can. An
+ * unreachable host does not block Save: the call itself restarts the host,
+ * so a draft kept through an outage can be saved once it returns, and a
+ * failure shows its reason. */
 function whySaveBlocked(): string | null {
   if (!currentPage || !currentArtifact || artifactPageUrl !== currentPage.url) return WHY_WAIT_FOR_ARTIFACT;
   const paused = whyPausedReason();
   if (paused) return paused;
-  if (!session.connected) return "The native host is unavailable, so this can't be saved yet.";
   if (!artifactWhy.value.trim()) return "Type why you're here, then save.";
   if (changing()) return "Wait for the panel to finish its current task, then save.";
   return null;
