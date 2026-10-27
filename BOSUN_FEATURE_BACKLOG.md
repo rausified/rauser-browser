@@ -531,7 +531,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, health recheck on clean `4342a18`):
+  Latest verification (2026-10-27, health recheck on clean `7706276`):
   no quarantine failure file or incomplete changes were present.
   Protocol generation, workspace build, format, both Clippy configurations,
   npm ci, typecheck, lint, extension build, all 13 extension
@@ -542,7 +542,8 @@ were folded into `brwr-q7e` above rather than given their own item.
   return EPERM. The script gate fails; disabling Node test isolation exposes
   8 passes, 1 failure and 1 platform skip. No product or test changes, skipped
   coverage, feature work or history reset. Keep this bead open until a runner
-  permitting local IPC verifies the complete gate; logs are under ignored
+  permitting local IPC verifies the complete gate. The current run reproduced
+  both denials independently; earlier raw logs remain under ignored
   `target/overnight-health/cycle-6-*.log`. The commit message is prepared.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
@@ -902,8 +903,12 @@ were folded into `brwr-q7e` above rather than given their own item.
   `brwr-t40` blocker. The next useful product increment remains host drafting
   with selectable rules and example artifact grouping, using the existing
   private pattern inputs; additional pattern diagnostics do not complete it.
-- Rechecked clean `4342a18`: the same 32 service failures and independent
-  AF_UNIX/Node EPERM probes persist. All other required gates pass, including
-  all 13 extension test files. No feature or test changes were made. The driver
+- Rechecked clean `7706276`: the same 32 service failures and independent
+  AF_UNIX/Node EPERM probes persist. Build, lint, protocol and extension gates
+  pass, including all 13 extension test files. No feature or test changes were made. The driver
   should preserve its external full-gate result in the next handoff: the
   absence of a quarantine file alone does not establish a passing baseline.
+- No further product idea is needed while this gate blocks the assigned queue.
+  The useful next action is an unfiltered external gate with its baseline SHA
+  and results carried into the next prompt. Repeating the same denied tests
+  in an unchanged runner consumes cycles without advancing Capture Site.
