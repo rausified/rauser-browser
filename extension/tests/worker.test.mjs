@@ -673,6 +673,38 @@ test("malformed legacy site removal state is kept and keeps capture paused", asy
   values.clear();
 });
 
+test("migration keeps every origin when both full legacy lists are merged", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const pad = (index) => String(index).padStart(3, "0");
+  const revoked = Array.from({ length: 256 }, (_, index) => `https://rev-${pad(index)}.example`);
+  const removed = Array.from({ length: 256 }, (_, index) => `https://site-${pad(index)}.example`);
+  const lastRemoved = removed.at(-1);
+  values.set(storageKey("revocations_v1"), revoked);
+  values.set(storageKey("locally_removed_sites_v1"),
+    removed.map((origin) => ({ origin, path_prefix: "/" })));
+  values.set(storageKey("policy_v1"), {
+    ...lease(lastRemoved),
+    adapters: { format: 1, artifacts: [artifact(lastRemoved)] },
+  });
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [...revoked, ...removed]);
+  assert.equal(values.has(storageKey("revocations_v1")), false);
+  assert.equal(values.has(storageKey("locally_removed_sites_v1")), false);
+
+  tabs.set(62, { id: 62, url: `${lastRemoved}/items/x`, title: "X", incognito: false });
+  onCommitted({
+    tabId: 62, frameId: 0, documentId: "doc-full-union", documentLifecycle: "active",
+    url: `${lastRemoved}/items/x`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.queued, 0);
+  assert.equal(status.pending_removals.length, 512);
+});
+
 test("a failed pending-removal migration write keeps honoring the legacy removal state", async () => {
   values.clear();
   sessionValues.clear();

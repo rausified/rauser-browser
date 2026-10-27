@@ -42,9 +42,10 @@ const LEGACY_REVOCATIONS_KEY = storageKey("revocations_v1");
 const LEGACY_REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
 // Written by the per-origin note grants of earlier builds.
 const LEGACY_NOTE_ORIGINS_KEY = storageKey("note_origins_v1");
-const MAX_PENDING_REMOVALS = 256;
 // The per-list cap earlier builds enforced on each legacy key.
 const LEGACY_MAX_REMOVALS = 256;
+// Migration merges both legacy lists, so the pending list holds their full union.
+const MAX_PENDING_REMOVALS = 2 * LEGACY_MAX_REMOVALS;
 const HOST_ERROR_KEY = storageKey("host_error_v1");
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const ACTIVITY_SESSION_KEY = storageKey("activity_session_v1");
@@ -410,10 +411,13 @@ async function migratePendingRemovals(): Promise<void> {
   const stored = await chrome.storage.local.get([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
   if (!(LEGACY_REVOCATIONS_KEY in stored) && !(LEGACY_REMOVED_SITES_KEY in stored)) return;
   const origins = await readPendingRemovals();
+  // Never drop a removal gate. A union too large to store stays in the
+  // legacy keys, which keep gating capture until it can migrate.
+  if (origins.length > MAX_PENDING_REMOVALS) {
+    throw new Error("Pending site removals exceed the migration limit; legacy state kept");
+  }
   // Delete the legacy keys only after the merged list is durably written.
-  await chrome.storage.local.set({
-    [PENDING_REMOVALS_KEY]: origins.slice(0, MAX_PENDING_REMOVALS),
-  });
+  await chrome.storage.local.set({ [PENDING_REMOVALS_KEY]: origins });
   await chrome.storage.local.remove([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
   // Only a lease received after the list changed may clear it.
   receivedLease = null;
