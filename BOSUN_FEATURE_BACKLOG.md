@@ -194,23 +194,9 @@ and the protocol v6 removals) is done; see Shipped.
   card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
   with a validated structured answer, pinned Readability extraction, the
   Summarize & log button, and the polling run card (spec §6; plan Tasks 28-42).
-  Tracks one Cookie queue item per plan task, built in this order, each
-  depending on the one before; it closes when they all close:
-  - [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
-  - [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
-  - [ ] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
-  - [ ] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
-  - [ ] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
-  - [ ] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
-  - [ ] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
-  - [ ] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
-  - [ ] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
-  - [ ] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
-  - [ ] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
-  - [ ] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
-  - [ ] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
-  - [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
-  - [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
+  Tracks one queue item per plan task, built in order; it closes when they
+  all close. All of them are in progress in the Lane A session; see In
+  Progress.
 - [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
   integration.** The owned summary file, the `summary` daily-log event,
   summaries in the index, Recent, the worklog, and the panel, written under the
@@ -480,6 +466,23 @@ main, check the item off as "not reproduced" and say why. The last item,
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- In progress in the Lane A session (PR 3 on `feat/agent-runners-pr3`), not Cookie. Cookie must not claim these:
+- [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
+- [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
+- [ ] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
+- [ ] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
+- [ ] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
+- [ ] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
+- [ ] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
+- [ ] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
+- [ ] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
+- [ ] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
+- [ ] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
+- [ ] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
+- [ ] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
+- [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
+- [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   Extend the existing built-page smoke check so it opens the artifact card,

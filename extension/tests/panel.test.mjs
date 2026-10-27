@@ -82,7 +82,7 @@ function statusFor() {
 
 const CONFIG = {
   storage: {
-    root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later",
+    root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
     artifacts_dir: "artifacts", summaries_dir: null, knowledge_base_dir: null,
   },
   capture_enabled: false,

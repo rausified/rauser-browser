@@ -97,7 +97,8 @@ esac
         PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
     }
 
-    /// A config with a notes folder chosen and no harness. It still carries
+    /// A config with a home folder chosen in the fixed layout (so loading it
+    /// moves nothing) and no harness. It still carries
     /// a retired v5 privacy key, which loads and is dropped on the next save.
     fn write_config(&self) {
         let root = fs::canonicalize(self.path("notes")).unwrap();
@@ -107,7 +108,7 @@ esac
         fs::write(
             &self.config,
             format!(
-                "root_picker_confirmed = true\nroot_identity = {:?}\nagent_denylist = [\"bank.example\"]\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n",
+                "root_picker_confirmed = true\nroot_identity = {:?}\nagent_denylist = [\"bank.example\"]\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"logs\"\npages_dir = \"notes\"\nlater_dir = \"later\"\nartifacts_dir = \"artifacts\"\nsummaries_dir = \"summaries\"\n",
                 identity,
                 root.to_str().unwrap(),
             ),

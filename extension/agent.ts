@@ -13,12 +13,12 @@ export function harnessOfferNote(offer: HarnessOffer): string {
 }
 
 /** What Detect harnesses reports for a ready offer. Set up harness needs a
- * notes folder, so without one this says to choose it first. */
+ * home folder, so without one this says to choose it first. */
 export function harnessFoundText(name: string, version: string | null, hasNotesFolder: boolean): string {
   const found = `Found ${name}${version ? ` ${version}` : ""}.`;
   return hasNotesFolder
     ? `${found} Choose Set up harness to run a test prompt.`
-    : `${found} Choose a notes folder first, then set up the harness.`;
+    : `${found} Choose a home folder first, then set up the harness.`;
 }
 
 /** The settings page's one-line AI state. Capture setup is described

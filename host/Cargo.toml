@@ -34,7 +34,7 @@ uuid = { version = "1", features = ["v4"] }
 # Safe process-group kill and uid lookup for harness runs; the crates keep
 # #![forbid(unsafe_code)], so libc's unsafe killpg is not used directly.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", features = ["process"] }
+rustix = { version = "1.1", features = ["fs", "process"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"
