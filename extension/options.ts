@@ -4,6 +4,7 @@ import type {
 import { exactOriginPattern, isHttpUrl, type WorkerStatus } from "./model.js";
 import {
   adaptersForSites,
+  capturePaused,
   ConfigSession,
   describe,
   element,
@@ -49,6 +50,7 @@ const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
 const siteUrl = element<HTMLInputElement>("site-url");
 const enableButton = element<HTMLButtonElement>("enable-site");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
+const resumeButton = element<HTMLButtonElement>("resume-capture");
 const sitesList = element<HTMLUListElement>("sites-list");
 const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
 const adapterList = element<HTMLDivElement>("adapter-list");
@@ -88,6 +90,10 @@ let preflight: {
   apiGranted: boolean;
   originGranted: boolean;
 } | null = null;
+// The grants Resume capture would request, as last read. Resume must request
+// them in the click, so its rollback compares against this read.
+let resumeGrantsVersion = 0;
+let resumeGrants: { entries: string[]; held: Set<string> } | null = null;
 // Harness offers are single-use and bound to the revision they were found at.
 let offers: HarnessOffer[] = [];
 let selectedOfferId: string | null = null;
@@ -137,6 +143,7 @@ function showConfigState(): void {
   const policyIssue = session.configIssue ?? session.adapterIssue;
   const problem = setupProblem(session.config, policyIssue);
   if (policyIssue) show(problem!, true);
+  else if (capturePaused(session.config, null)) show("Capture is paused. Click Resume capture to turn it back on.");
   else if (problem) {
     show(`${problem} ${session.config?.storage ? "Enable" : "Choose a folder and enable"} a site to begin.`);
   }
@@ -170,6 +177,9 @@ function updateControls(): void {
   enableButton.disabled = !connected || busy || preflight === null ||
     (!picker && needsFolderPick());
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
+  const paused = capturePaused(session.config, session.configIssue ?? session.adapterIssue);
+  resumeButton.hidden = !paused;
+  resumeButton.disabled = !connected || busy || !paused || resumeGrants === null;
   for (const button of sitesList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters;
   }
@@ -738,6 +748,10 @@ function renderConfig(): void {
   renderStarterGallery();
   renderAdapters();
   renderAgent();
+  // A save can change the listed sites without a reload.
+  if (config?.sites.length && resumeGrants?.entries.join("\n") !== resumeGrantEntries(config).join("\n")) {
+    void refreshResumeGrants();
+  }
   if (adapterEdit === null) updateControls();
   else refreshAdapterEditor();
 }
@@ -745,6 +759,7 @@ function renderConfig(): void {
 async function reloadConfig(): Promise<void> {
   await session.reload();
   void refreshPreflight();
+  void refreshResumeGrants();
   showConfigState();
   if (session.status?.pause_pending && session.config?.capture_enabled && !session.configIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
@@ -782,6 +797,27 @@ function parseSite(): { site: SiteConfig; pattern: string } {
   }
   const site = { origin: url.origin, path_prefix: "/" };
   return { site, pattern: exactOriginPattern(site.origin) };
+}
+
+function resumeGrantEntries(config: ConfigSnapshot): string[] {
+  return ["webNavigation", ...config.sites.map((site) => exactOriginPattern(site.origin))];
+}
+
+async function refreshResumeGrants(): Promise<void> {
+  const version = ++resumeGrantsVersion;
+  resumeGrants = null;
+  updateControls();
+  if (!session.config?.sites.length) return;
+  const entries = resumeGrantEntries(session.config);
+  try {
+    const held = await Promise.all(entries.map((entry) => chrome.permissions.contains(
+      entry === "webNavigation" ? { permissions: [entry] } : { origins: [entry] })));
+    if (version !== resumeGrantsVersion) return;
+    resumeGrants = { entries, held: new Set(entries.filter((_, index) => held[index])) };
+    updateControls();
+  } catch (error) {
+    if (version === resumeGrantsVersion) show(`Cannot inspect Chrome permissions: ${describe(error)}`, true);
+  }
 }
 
 async function refreshPreflight(): Promise<void> {
@@ -882,6 +918,39 @@ async function rollbackNewPermissions(grant: {
   await Promise.all(removals);
 }
 
+/**
+ * After a commit that turned capture on, finish any pause another page started
+ * meanwhile, restart the extension if Chrome needs that for a new navigation
+ * grant, and otherwise report success.
+ */
+async function reportCaptureOn(success: string): Promise<void> {
+  const workerState = await session.refreshStatus();
+  if (workerState.pause_pending) {
+    try {
+      await withConfigMutationLock(async () => {
+        // Another page may already have finished pausing while we
+        // waited. Only finish a pause that is still pending.
+        const latestState = await worker<WorkerStatus>({ kind: "get_status" });
+        if (latestState.pause_pending) await session.completePausedHostConfig();
+        await session.applyHostConfig(await session.readHostConfig());
+      });
+      show(session.config?.capture_enabled
+        ? "Capture settings changed on another page. Review the current sites."
+        : "Capture was paused on another page. Pending capture records were cleared.",
+      session.config?.capture_enabled === true);
+    } catch (error) {
+      show(`Capture is paused locally; the host pause needs attention: ${describe(error)}`, true);
+    }
+    return;
+  }
+  if (!workerState.navigation_ready) {
+    show(`Chrome is restarting the extension to activate the new navigation permission. Reopen ${APP_NAME} settings and the side panel.`, true);
+    setTimeout(() => chrome.runtime.reload(), 1_000);
+    return;
+  }
+  show(success);
+}
+
 function enableSite(): void {
   const currentConfig = session.config;
   if (busy || !currentConfig || !session.revision || !preflight) return;
@@ -953,31 +1022,7 @@ function enableSite(): void {
           });
         }
       });
-      const workerState = await session.refreshStatus();
-      if (workerState.pause_pending) {
-        try {
-          await withConfigMutationLock(async () => {
-            // Another page may already have finished pausing while we
-            // waited. Only finish a pause that is still pending.
-            const latestState = await worker<WorkerStatus>({ kind: "get_status" });
-            if (latestState.pause_pending) await session.completePausedHostConfig();
-            await session.applyHostConfig(await session.readHostConfig());
-          });
-          show(session.config?.capture_enabled
-            ? "Capture settings changed on another page. Review the current sites."
-            : "Capture was paused on another page. Pending capture records were cleared.",
-          session.config?.capture_enabled === true);
-        } catch (error) {
-          show(`Capture is paused locally; the host pause needs attention: ${describe(error)}`, true);
-        }
-        return;
-      }
-      if (!workerState.navigation_ready) {
-        show(`Chrome is restarting the extension to activate the new navigation permission. Reopen ${APP_NAME} settings and the side panel.`, true);
-        setTimeout(() => chrome.runtime.reload(), 1_000);
-        return;
-      }
-      show(`Capture enabled for ${parsed.site.origin}${parsed.site.path_prefix}. The side panel sends buffered activity.`);
+      await reportCaptureOn(`Capture enabled for ${parsed.site.origin}${parsed.site.path_prefix}. The side panel sends buffered activity.`);
     } catch (error) {
       show(`Setup failed: ${describe(error)}`, true);
       if (error instanceof HostError && error.code === "conflict") {
@@ -998,6 +1043,106 @@ function enableSite(): void {
       void refreshPreflight();
     }
   })();
+}
+
+/**
+ * Turn capture back on for the sites already listed. Like Enable, it asks
+ * Chrome for the sites' grants in the click and needs the host's native
+ * confirmation; a grant it added is removed again unless the host commits.
+ */
+function resumeCapture(): void {
+  const config = session.config;
+  if (busy || !config || !session.revision ||
+      !capturePaused(config, session.configIssue ?? session.adapterIssue)) return;
+  const before = resumeGrants;
+  const entries = resumeGrantEntries(config);
+  if (!before || before.entries.join("\n") !== entries.join("\n")) return;
+  const removing = config.sites.find((site) =>
+    session.status?.locally_removed_sites.some((removed) => sameSite(removed, site)));
+  if (removing) {
+    show(`Finish removing ${removing.origin} from the host before resuming capture.`, true);
+    return;
+  }
+  if (!navigator.locks?.request) {
+    show("This Chrome build cannot coordinate configuration changes. Capture remains off.", true);
+    return;
+  }
+  const initialPauseToken = session.status?.pause_token ?? null;
+  // This call must run in the click stack, as in enableSite.
+  const granted = chrome.permissions.request({
+    permissions: ["webNavigation"], origins: entries.slice(1),
+  });
+  busy = true;
+  updateControls();
+  void (async () => {
+    let committed = false;
+    let permissionGranted = false;
+    try {
+      permissionGranted = await granted;
+      if (!permissionGranted) {
+        show("Chrome access was declined. Capture remains off.", true);
+        return;
+      }
+      // As in enableSite: Chrome held no grant for these origins before the
+      // click, so any notes entry for them is stale. The new grant belongs to logging.
+      for (const site of config.sites) {
+        if (!before.held.has(exactOriginPattern(site.origin))) await forgetNoteOrigin(site.origin);
+      }
+      await withConfigMutationLock(async () => {
+        const latest = session.config!;
+        const stillGranted = await chrome.permissions.contains({
+          permissions: ["webNavigation"],
+          origins: latest.sites.map((site) => exactOriginPattern(site.origin)),
+        });
+        if (!stillGranted) throw new Error("Chrome access changed; click Resume capture again");
+        await session.saveConfig({ ...latest, capture_enabled: true }, null, () => { committed = true; },
+          true, initialPauseToken);
+        const revision = session.revision;
+        if (revision) {
+          for (const site of latest.sites) {
+            await worker<WorkerStatus>({ kind: "ack_reenabled_origin", origin: site.origin, revision });
+          }
+        }
+      });
+      await reportCaptureOn("Capture resumed for the listed sites. The side panel sends buffered activity.");
+    } catch (error) {
+      show(`Could not resume capture: ${describe(error)}`, true);
+      if (error instanceof HostError && error.code === "conflict") {
+        await reloadConfig().catch(() => undefined);
+      }
+    } finally {
+      if (!committed && permissionGranted) {
+        try {
+          await withConfigMutationLock(() => rollbackResumeGrants(config.sites, before));
+        } catch (error) {
+          show(`Could not remove new Chrome access: ${describe(error)}`, true);
+        }
+      }
+      busy = false;
+      await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
+      updateControls();
+      void refreshResumeGrants();
+    }
+  })();
+}
+
+/**
+ * Remove the grants a failed resume added. Another page may have turned
+ * capture on meanwhile, so grants the current host policy needs stay, as do
+ * any the side panel uses for notes.
+ */
+async function rollbackResumeGrants(
+  sites: SiteConfig[], before: { held: Set<string> },
+): Promise<void> {
+  const latest = (await session.readHostConfig()).config;
+  const needed = latest.capture_enabled ? latest.sites : [];
+  const notes = await noteOrigins();
+  const origins = sites
+    .filter((site) => !needed.some((other) => other.origin === site.origin) && !notes.has(site.origin))
+    .map((site) => exactOriginPattern(site.origin))
+    .filter((pattern) => !before.held.has(pattern));
+  const permissions = before.held.has("webNavigation") || needed.length ? [] : ["webNavigation"];
+  if (origins.length || permissions.length) await chrome.permissions.remove({ permissions, origins });
 }
 
 async function pauseCapture(): Promise<void> {
@@ -1322,13 +1467,18 @@ denylistInput.addEventListener("keydown", (event) => {
 summariesInput.addEventListener("input", () => { summariesEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
 enableButton.addEventListener("click", enableSite);
+resumeButton.addEventListener("click", resumeCapture);
 pauseButton.addEventListener("click", () => void pauseCapture());
 siteUrl.addEventListener("input", () => void refreshPreflight());
 // Enable's rollback compares against this page's last permission read, so
 // every grant change, from this page or elsewhere, refreshes it.
-chrome.permissions.onAdded.addListener(() => void refreshPreflight());
+chrome.permissions.onAdded.addListener(() => {
+  void refreshPreflight();
+  void refreshResumeGrants();
+});
 chrome.permissions.onRemoved.addListener(() => {
   void refreshPreflight();
+  void refreshResumeGrants();
   void pruneNoteOrigins().catch(() => undefined);
 });
 session.watchPolicy(scheduleReload);
