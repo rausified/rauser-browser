@@ -186,3 +186,14 @@ test("isRunView requires answer and rejects an unknown importance", () => {
   assert.equal(updated({ ...view, answer: { ...view.answer, document_type: 7 } }), false);
   assert.equal(updated({ ...view, answer: "high" }), false);
 });
+
+test("path_opened and agent_env_listed responses are checked", () => {
+  assert.equal(isResponseShape({ type: "path_opened" }), true);
+  assert.equal(isResponseShape({ type: "agent_env_listed", names: ["FOO"], problem: null }), true);
+  assert.equal(isResponseShape({ type: "agent_env_listed", names: [], problem: "agent.env must have mode 0600, not 0644" }), true);
+  assert.equal(isResponseShape({ type: "agent_env_listed", names: [7], problem: null }), false);
+  assert.equal(isResponseShape({ type: "agent_env_listed", names: ["FOO"] }), false);
+  assert.equal(isResponseShape({
+    type: "agent_env_listed", names: Array.from({ length: 65 }, (_, n) => `K${n}`), problem: null,
+  }), false);
+});

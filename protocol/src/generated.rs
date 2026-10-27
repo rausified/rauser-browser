@@ -824,6 +824,47 @@ pub struct RunUpdated {
     pub run: RunView,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenTarget {
+    CodexThread,
+    AgentEnv,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenPathRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub target: OpenTarget,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathOpened {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetAgentEnvRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentEnvListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub names: Vec<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub problem: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceHelloRequest {
@@ -866,6 +907,8 @@ pub enum Request {
     ListRuns(ListRunsRequest),
     CancelRun(CancelRunRequest),
     RetrySave(RetrySaveRequest),
+    OpenPath(OpenPathRequest),
+    GetAgentEnv(GetAgentEnvRequest),
     ServiceHello(ServiceHelloRequest),
 }
 
@@ -895,6 +938,8 @@ impl Request {
             Self::ListRuns(value) => value.protocol_version,
             Self::CancelRun(value) => value.protocol_version,
             Self::RetrySave(value) => value.protocol_version,
+            Self::OpenPath(value) => value.protocol_version,
+            Self::GetAgentEnv(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
     }
@@ -924,6 +969,8 @@ impl Request {
             Self::ListRuns(value) => &value.request_id,
             Self::CancelRun(value) => &value.request_id,
             Self::RetrySave(value) => &value.request_id,
+            Self::OpenPath(value) => &value.request_id,
+            Self::GetAgentEnv(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
     }
@@ -953,6 +1000,8 @@ pub enum Response {
     RunFetched(RunFetched),
     RunsListed(RunsListed),
     RunUpdated(RunUpdated),
+    PathOpened(PathOpened),
+    AgentEnvListed(AgentEnvListed),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
 }
@@ -980,6 +1029,8 @@ impl Response {
             Self::RunFetched(value) => value.protocol_version,
             Self::RunsListed(value) => value.protocol_version,
             Self::RunUpdated(value) => value.protocol_version,
+            Self::PathOpened(value) => value.protocol_version,
+            Self::AgentEnvListed(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
@@ -1007,6 +1058,8 @@ impl Response {
             Self::RunFetched(value) => &value.request_id,
             Self::RunsListed(value) => &value.request_id,
             Self::RunUpdated(value) => &value.request_id,
+            Self::PathOpened(value) => &value.request_id,
+            Self::AgentEnvListed(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }

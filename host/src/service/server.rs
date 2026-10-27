@@ -1,9 +1,9 @@
 //! The service's private Unix socket: one listener in the 0700 support
 //! directory, one thread per connection, and the same length-prefixed JSON
 //! framing as native messaging. The service answers `service_hello`, the
-//! five run messages, and harness setup (`discover_harnesses`,
-//! `set_up_harness`); it exits after `idle_exit` with nothing queued or
-//! running and no request.
+//! five run messages, harness setup (`discover_harnesses`,
+//! `set_up_harness`), `open_path` and `get_agent_env`; it exits after
+//! `idle_exit` with nothing queued or running and no request.
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -17,13 +17,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ConfigUpdated, ErrorCode, HarnessId, HarnessesDiscovered, PROTOCOL_VERSION, Request, Response,
-    RunFetched, RunStarted, RunUpdated, RunsListed, ServiceReady, SetUpHarnessRequest,
-    SummaryVocabulary,
+    AgentEnvListed, ConfigUpdated, ErrorCode, HarnessId, HarnessesDiscovered, PROTOCOL_VERSION,
+    PathOpened, Request, Response, RunFetched, RunStarted, RunUpdated, RunsListed, ServiceReady,
+    SetUpHarnessRequest, SummaryVocabulary,
 };
 use uuid::Uuid;
 
 use super::agent_env::{AgentEnv, AgentEnvError};
+use super::open::{list_agent_env, open_target};
 use super::paths::{self, ServicePaths};
 use super::record::check_start_run;
 use super::setup;
@@ -33,6 +34,7 @@ use crate::config::ConfigStore;
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::native::{error, parse_envelope};
+use crate::open::Opener;
 use crate::vault::selected_root_identity;
 
 /// How often the accept loop checks for a connection and for idle exit.
@@ -122,6 +124,7 @@ pub fn serve(
         // binary on disk must not make an old service look current.
         build_id: paths::build_id(),
         last_arrival: Mutex::new(Instant::now()),
+        opener: options.opener,
     });
     loop {
         match listener.accept() {
@@ -193,6 +196,7 @@ struct Server {
     supervisor: Supervisor,
     build_id: String,
     last_arrival: Mutex<Instant>,
+    opener: Opener,
 }
 
 impl Server {
@@ -347,6 +351,30 @@ impl Server {
                 Err(env_error) => error(&id, ErrorCode::InvalidConfig, &env_error.to_string()),
             },
             Request::SetUpHarness(value) => self.set_up_harness(value),
+            Request::OpenPath(value) => {
+                let run_id = match value.run_id.as_deref().map(parse_run_id) {
+                    None => None,
+                    Some(Some(run_id)) => Some(run_id),
+                    Some(None) => return bad_run_id(&id),
+                };
+                let store = self.supervisor.store();
+                match open_target(&self.paths, store, value.target, run_id, self.opener) {
+                    Ok(()) => Response::PathOpened(PathOpened {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id,
+                    }),
+                    Err((code, message)) => error(&id, code, &message),
+                }
+            }
+            Request::GetAgentEnv(value) => {
+                let (names, problem) = list_agent_env(&self.paths);
+                Response::AgentEnvListed(AgentEnvListed {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    names,
+                    problem,
+                })
+            }
             _ => error(&id, ErrorCode::InvalidRequest, "not a service request"),
         }
     }
@@ -583,6 +611,7 @@ mod tests {
                 idle_exit,
                 service_pid: std::process::id(),
                 run_env: env_source(paths),
+                opener: crate::open::default_opener(),
             }
         }
 
@@ -1085,6 +1114,46 @@ mod tests {
         let socket = std::fs::symlink_metadata(world.socket()).unwrap();
         assert!(socket.file_type().is_socket());
         assert_eq!(socket.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn open_path_and_get_agent_env_over_the_socket() {
+        use brauser_protocol::{GetAgentEnvRequest, OpenPathRequest, OpenTarget};
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        world.write_agent_env("FOO=secret-value\n", 0o600);
+        match world.call(&Request::GetAgentEnv(GetAgentEnvRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "env".into(),
+        })) {
+            Response::AgentEnvListed(listed) => {
+                assert_eq!(listed.request_id, "env");
+                assert_eq!(listed.names, vec!["FOO"]);
+                assert_eq!(listed.problem, None);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+        let open = |target, run_id: Option<&str>| {
+            world.call(&Request::OpenPath(OpenPathRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "open".into(),
+                target,
+                run_id: run_id.map(str::to_owned),
+            }))
+        };
+        let (code, _) = error_of(open(OpenTarget::CodexThread, Some("not-a-run-id")));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        // The fake Claude Code run has no Codex thread.
+        let run_id = world.started_run_id();
+        world.wait_finished(&run_id);
+        let (code, _) = error_of(open(OpenTarget::CodexThread, Some(&run_id)));
+        assert_eq!(code, ErrorCode::NotConfigured);
+        // The test build never runs /usr/bin/open; agent.env is left as it is.
+        open(OpenTarget::AgentEnv, None);
+        assert_eq!(
+            std::fs::read_to_string(world.paths.agent_env()).unwrap(),
+            "FOO=secret-value\n"
+        );
     }
 
     #[test]

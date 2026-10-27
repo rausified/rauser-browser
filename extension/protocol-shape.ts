@@ -267,6 +267,11 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return Array.isArray(value.runs) && value.runs.length <= 20 && value.runs.every(isRunView);
     case "run_updated":
       return isRunView(value.run);
+    case "path_opened":
+      return true;
+    case "agent_env_listed":
+      return Array.isArray(value.names) && value.names.length <= 64 &&
+        isStringArray(value.names) && stringOrNull(value.problem);
     default:
       return false;
   }

@@ -46,6 +46,7 @@ use super::record::{
 };
 use crate::answer::parse_answer;
 use crate::config::{ConfigStore, default_summary_vocabulary};
+use crate::open::Opener;
 use crate::vault::Vault;
 
 /// How long a run may take before its process group is killed.
@@ -151,6 +152,8 @@ pub struct ServiceOptions {
     /// restart; a run whose environment cannot be built fails before its
     /// harness starts.
     pub run_env: EnvSource,
+    /// Opens a run's Codex thread and reveals `agent.env`.
+    pub opener: Opener,
 }
 
 impl ServiceOptions {
@@ -394,6 +397,11 @@ impl Supervisor {
     /// through them too.
     pub fn registry(&self) -> &HarnessRegistry {
         &self.inner.registry
+    }
+
+    /// The run records, for reading a run's thread without touching it.
+    pub fn store(&self) -> &RunStore {
+        &self.inner.store
     }
 
     /// Queue a run, or return the queued-or-running run for the same record
@@ -1271,6 +1279,7 @@ mod tests {
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
+                opener: crate::open::default_opener(),
             };
             let finisher = Box::new(finisher);
             let supervisor = match spawn_fault {
@@ -1643,6 +1652,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id(),
             run_env: Arc::new(|| Ok(Vec::new())),
+            opener: crate::open::default_opener(),
         };
         let own = Duration::from_secs(5);
         assert_eq!(options.timeout_for(None), DEFAULT_RUN_TIMEOUT);
@@ -2233,6 +2243,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
             run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),
+            opener: crate::open::default_opener(),
         };
         let debug = format!("{options:?}");
         assert!(!debug.contains("secret-value"), "{debug}");

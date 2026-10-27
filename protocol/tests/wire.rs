@@ -594,3 +594,32 @@ fn run_view_answer_round_trips_and_rejects_an_unknown_importance() {
         );
     }
 }
+
+#[test]
+fn open_path_and_agent_env_messages_round_trip() {
+    for (target, run_id) in [
+        ("codex_thread", r#""00000000-0000-4000-8000-000000000001""#),
+        ("agent_env", "null"),
+    ] {
+        let request = format!(
+            r#"{{"type":"open_path","protocol_version":6,"request_id":"r","target":"{target}","run_id":{run_id}}}"#
+        );
+        let parsed: Request = serde_json::from_str(&request).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), request);
+    }
+    // There is no summary target, and run_id is required.
+    let summary = r#"{"type":"open_path","protocol_version":6,"request_id":"r","target":"summary","run_id":null}"#;
+    assert!(serde_json::from_str::<Request>(summary).is_err());
+    let no_run =
+        r#"{"type":"open_path","protocol_version":6,"request_id":"r","target":"agent_env"}"#;
+    assert!(serde_json::from_str::<Request>(no_run).is_err());
+    let opened = r#"{"type":"path_opened","protocol_version":6,"request_id":"r"}"#;
+    assert!(serde_json::from_str::<Response>(opened).is_ok());
+
+    let get = r#"{"type":"get_agent_env","protocol_version":6,"request_id":"r"}"#;
+    assert!(serde_json::from_str::<Request>(get).is_ok());
+    let listed = r#"{"type":"agent_env_listed","protocol_version":6,"request_id":"r","names":["FOO"],"problem":null}"#;
+    let parsed: Response = serde_json::from_str(listed).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), listed);
+    assert!(serde_json::from_str::<Response>(&listed.replace(r#","problem":null"#, "")).is_err());
+}

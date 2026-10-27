@@ -10,6 +10,7 @@ pub mod codex;
 pub mod command_runner;
 pub mod harness_api;
 pub mod maintenance;
+pub mod open;
 pub mod paths;
 pub mod prompt;
 pub mod queue;
@@ -67,6 +68,7 @@ fn options(paths: &ServicePaths) -> ServiceOptions {
         idle_exit: DEFAULT_IDLE_EXIT,
         service_pid: std::process::id(),
         run_env: server::env_source(paths),
+        opener: crate::open::default_opener(),
     };
     #[cfg(feature = "scripted-dialogs")]
     {

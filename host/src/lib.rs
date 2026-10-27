@@ -19,6 +19,9 @@ pub mod harness;
 pub mod index;
 pub mod native;
 pub mod note;
+// Only the service opens anything until PR 4's `open_summary`.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) mod open;
 mod presentation;
 // The service is plain POSIX; only its launchd glue is macOS-only.
 #[cfg(unix)]

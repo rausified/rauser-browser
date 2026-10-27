@@ -416,15 +416,18 @@ fn dispatch(
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
-        // Run ids and offsets are the service's to check, and harness setup
-        // detects and probes on the service's PATH and environment.
+        // Run ids and offsets are the service's to check, harness setup
+        // detects and probes on the service's PATH and environment, and
+        // agent.env and run threads live in the service's directory.
         #[cfg(unix)]
         request @ (Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
         | Request::RetrySave(_)
         | Request::DiscoverHarnesses(_)
-        | Request::SetUpHarness(_)) => forward(&request, context.service),
+        | Request::SetUpHarness(_)
+        | Request::OpenPath(_)
+        | Request::GetAgentEnv(_)) => forward(&request, context.service),
         #[cfg(not(unix))]
         Request::StartRun(_)
         | Request::GetRun(_)
@@ -432,7 +435,9 @@ fn dispatch(
         | Request::CancelRun(_)
         | Request::RetrySave(_)
         | Request::DiscoverHarnesses(_)
-        | Request::SetUpHarness(_) => error(
+        | Request::SetUpHarness(_)
+        | Request::OpenPath(_)
+        | Request::GetAgentEnv(_) => error(
             id,
             ErrorCode::ServiceUnavailable,
             "The Brauser service is not supported on Windows.",
@@ -6213,6 +6218,61 @@ id = "work:{host}/{id}"
                 &SetupContext::new(),
             );
             assert_eq!(refused(&response).0, ErrorCode::ServiceUnavailable);
+        }
+
+        /// open_path and get_agent_env act on the service's own directory,
+        /// so the host forwards them unchanged.
+        #[test]
+        fn open_path_and_get_agent_env_are_forwarded_to_the_service() {
+            use brauser_protocol::{
+                AgentEnvListed, GetAgentEnvRequest, OpenPathRequest, OpenTarget, PathOpened,
+            };
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = FakeService::listen(
+                &socket,
+                Arc::new(move |request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::OpenPath(value) => Response::PathOpened(PathOpened {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                    }),
+                    Request::GetAgentEnv(value) => Response::AgentEnvListed(AgentEnvListed {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        names: vec!["FOO".into()],
+                        problem: None,
+                    }),
+                    _ => fake::runs_listed(request),
+                }),
+            );
+            let link = link(socket, never);
+            let open = OpenPathRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "open-1".into(),
+                target: OpenTarget::AgentEnv,
+                run_id: None,
+            };
+            assert!(matches!(
+                call(&mut config, &link, Request::OpenPath(open.clone())),
+                Response::PathOpened(ref opened) if opened.request_id == "open-1"
+            ));
+            match call(
+                &mut config,
+                &link,
+                Request::GetAgentEnv(GetAgentEnvRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "env-1".into(),
+                }),
+            ) {
+                Response::AgentEnvListed(listed) => assert_eq!(listed.names, vec!["FOO"]),
+                other => panic!("expected agent_env_listed, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(&requests[1], Request::OpenPath(value) if *value == open));
+            assert!(matches!(&requests[3], Request::GetAgentEnv(_)));
         }
 
         #[test]

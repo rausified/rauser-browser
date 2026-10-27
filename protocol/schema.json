@@ -73,6 +73,8 @@
         { "$ref": "#/$defs/ListRunsRequest" },
         { "$ref": "#/$defs/CancelRunRequest" },
         { "$ref": "#/$defs/RetrySaveRequest" },
+        { "$ref": "#/$defs/OpenPathRequest" },
+        { "$ref": "#/$defs/GetAgentEnvRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
     },
@@ -130,6 +132,8 @@
         { "$ref": "#/$defs/RunFetched" },
         { "$ref": "#/$defs/RunsListed" },
         { "$ref": "#/$defs/RunUpdated" },
+        { "$ref": "#/$defs/PathOpened" },
+        { "$ref": "#/$defs/AgentEnvListed" },
         { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
@@ -1852,6 +1856,66 @@
         "protocol_version": { "type": "integer", "const": 6 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run": { "$ref": "#/$defs/RunView" }
+      }
+    },
+    "OpenTarget": {
+      "type": "string",
+      "description": "What open_path opens: a run's Codex thread, or agent.env revealed in Finder.",
+      "enum": ["codex_thread", "agent_env"]
+    },
+    "OpenPathRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask the Brauser service to open a run's Codex thread (run_id required) or reveal agent.env, creating it with mode 0600 when missing (run_id null).",
+      "required": ["type", "protocol_version", "request_id", "target", "run_id"],
+      "properties": {
+        "type": { "const": "open_path" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "target": { "$ref": "#/$defs/OpenTarget" },
+        "run_id": {
+          "oneOf": [{ "type": "string", "minLength": 36, "maxLength": 36 }, { "type": "null" }]
+        }
+      }
+    },
+    "PathOpened": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "path_opened" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "GetAgentEnvRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask the Brauser service which variable names agent.env sets. Values never leave the service.",
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "get_agent_env" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "AgentEnvListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The names agent.env sets, sorted, never values. problem is non-null when agent.env cannot be used or not every name is listed.",
+      "required": ["type", "protocol_version", "request_id", "names", "problem"],
+      "properties": {
+        "type": { "const": "agent_env_listed" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "names": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "problem": {
+          "oneOf": [{ "type": "string", "maxLength": 512 }, { "type": "null" }]
+        }
       }
     },
     "ServiceHelloRequest": {

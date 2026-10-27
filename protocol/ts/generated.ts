@@ -594,6 +594,36 @@ export interface RunUpdated {
   run: RunView;
 }
 
+export type OpenTarget = "codex_thread" | "agent_env";
+
+export interface OpenPathRequest {
+  type: "open_path";
+  protocol_version: 6;
+  request_id: string;
+  target: OpenTarget;
+  run_id: string | null;
+}
+
+export interface PathOpened {
+  type: "path_opened";
+  protocol_version: 6;
+  request_id: string;
+}
+
+export interface GetAgentEnvRequest {
+  type: "get_agent_env";
+  protocol_version: 6;
+  request_id: string;
+}
+
+export interface AgentEnvListed {
+  type: "agent_env_listed";
+  protocol_version: 6;
+  request_id: string;
+  names: string[];
+  problem: string | null;
+}
+
 export interface ServiceHelloRequest {
   type: "service_hello";
   protocol_version: 6;
@@ -607,6 +637,6 @@ export interface ServiceReady {
   build_id: string;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | GetAgentEnvRequest | ServiceHelloRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | ServiceReady | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | AgentEnvListed | ServiceReady | ErrorResponse;
