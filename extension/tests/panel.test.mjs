@@ -50,7 +50,11 @@ class FakeElement {
   setAttribute() {}
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
+  add(child) { this.children.push(child); }
   replaceChildren(...children) { this.children = children; }
+  // Agent text reaches the panel; markup must never be parsed from it.
+  set innerHTML(_value) { throw new Error("The panel must set text through textContent, not innerHTML"); }
+  insertAdjacentHTML() { throw new Error("The panel must set text through textContent, not insertAdjacentHTML"); }
   querySelector(selector) {
     return this.children.find((child) => child.tagName === selector.toUpperCase()) ?? new FakeElement(selector);
   }
@@ -197,6 +201,13 @@ async function install({
   globalThis.document = {
     getElementById: (id) => elements.get(id) ?? null,
     createElement: (tag) => new FakeElement(tag),
+  };
+  globalThis.Option = class extends FakeElement {
+    constructor(text = "", value = text) {
+      super("option");
+      this.ownText = text;
+      this.value = value;
+    }
   };
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
     locks: { request: async (_name, _options, action) => action() },
@@ -1432,4 +1443,133 @@ test("the panel restores run cards on load and shows a run the shortcut started"
   page.notify({ kind: "run_started", run_id: started.run_id, tab_id: 1, at: Date.now() });
   await until(() => page.el("run-area").textContent.includes("Shortcut run"), "the shortcut's card");
   assert.equal(page.el("run-area").textContent.split("Restored run").length, 2, "each run shows once");
+});
+
+// --- The page's existing summary (Task 51) ---------------------------------
+
+const SUMMARY = {
+  summarized_at: "2026-10-27T10:00:00-07:00", document_type: "specification",
+  category: "technical specification", importance: "high",
+  summary_path: "summaries/2026-10-27 Spec.md", harness: "codex",
+};
+
+const opensSummary = (request) => request.type === "open_summary"
+  ? { type: "summary_opened", relative_path: SUMMARY.summary_path }
+  : null;
+
+test("an unrecognized page with a summary shows its line and opens it", async () => {
+  let fail = false;
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+    intercept: (request) => {
+      if (request.type === "get_artifact") {
+        return { type: "artifact_result", recognized: false, artifact: null, summary: SUMMARY };
+      }
+      if (request.type === "open_summary" && fail) return { type: "error", code: "conflict", message: "not a summary" };
+      return opensSummary(request);
+    },
+  });
+  await until(() => page.el("page-summary").hidden === false, "the page's summary line");
+  assert.equal(page.el("page-summary-text").textContent, "specification · technical specification · high importance");
+  assert.equal(page.el("artifact-card").hidden, true, "an unrecognized page has no artifact card");
+  assert.equal(page.el("artifact-status").textContent, "○ Not an artifact");
+
+  page.el("page-summary-open").click();
+  await until(() => page.sent("open_summary").length === 1, "open_summary");
+  assert.equal(page.sent("open_summary")[0].url, ARTICLE_URL);
+
+  fail = true;
+  page.el("page-summary-open").click();
+  await until(() => /Could not open the summary: not a summary/.test(page.el("status").textContent), "the open failure");
+});
+
+test("a recognized page shows its adapter artifact's summary", async () => {
+  // An adapter artifact with a summary and no measured activity yet.
+  const summaryOnly = {
+    ...artifact("doc:a", "Doc A"), first_seen: "2026-10-27", last_seen: "2026-10-27",
+    focused_seconds: 0, background_seconds: 0, opens: 0, days_opened: 0,
+  };
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact"
+      ? { ...recognized(summaryOnly), summary: { ...SUMMARY, document_type: "report", importance: "low" } }
+      : opensSummary(request),
+  });
+  await until(() => page.el("artifact-heading").textContent === "Doc A", "the artifact card");
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-measures").textContent, "No activity measured yet");
+  assert.equal(page.el("page-summary").hidden, false);
+  assert.equal(page.el("page-summary-text").textContent, "report · technical specification · low importance");
+  page.el("page-summary-open").click();
+  await until(() => page.sent("open_summary").length === 1, "open_summary");
+  assert.equal(page.sent("open_summary")[0].url, "https://docs.example/a");
+});
+
+test("a page without a summary hides the line", async () => {
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+    intercept: (request) => {
+      if (request.type !== "get_artifact") return null;
+      if (request.url.endsWith("/broken")) return { type: "error", code: "internal", message: "index busy" };
+      return {
+        type: "artifact_result", recognized: false, artifact: null,
+        summary: request.url === ARTICLE_URL ? SUMMARY : null,
+      };
+    },
+  });
+  assert.equal(page.el("page-summary").hidden, true, "hidden before any lookup");
+  await until(() => page.el("page-summary").hidden === false, "the summarized page's line");
+
+  page.followLink("https://read.example/plain", "Plain");
+  await until(() => page.sent("get_artifact").some((request) => request.url.endsWith("/plain")), "the next lookup");
+  await until(() => page.el("page-summary").hidden === true, "the line to hide");
+  assert.equal(page.el("page-summary-text").textContent, "");
+
+  // A failed lookup for another page never shows the previous page's line.
+  page.followLink(ARTICLE_URL, "Article");
+  await until(() => page.el("page-summary").hidden === false, "the line again");
+  page.followLink("https://read.example/broken", "Broken");
+  await until(() => /unavailable: index busy/.test(page.el("artifact-status").textContent), "the lookup error");
+  assert.equal(page.el("page-summary").hidden, true);
+  page.el("page-summary-open").click();
+  await settle();
+  assert.equal(page.sent("open_summary").length, 0);
+});
+
+function descendants(root) {
+  return root.children.flatMap((child) => [child, ...descendants(child)]);
+}
+
+test("a summarized Recent row says so and renders agent text as text", async () => {
+  const hostile = "<img src=https://evil.example/x.png>";
+  const row = (title, url, summary) => ({
+    local_date: "2026-10-27", artifact_id: `web:${title}`, artifact_type: "web.page", title, url,
+    focused_seconds: 0, background_seconds: 0, opens: 0, why: null, summary,
+  });
+  const items = [
+    row("<b>Spec</b>", "https://read.example/spec", { ...SUMMARY, document_type: hostile, importance: "medium" }),
+    row("Plain page", "https://read.example/plain", null),
+  ];
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+    intercept: (request) => request.type === "list_artifacts"
+      ? { type: "artifact_list_result", items, artifact_types: ["web.page"], truncated: false }
+      : opensSummary(request),
+  });
+  await noteLoaded(page);
+  page.el("tab-recent").click();
+  await until(() => page.el("recent-list").textContent.includes("Plain page"), "the Recent rows");
+
+  const [summarized, plain] = page.el("recent-list").children.filter((child) => child.tagName !== "H3");
+  assert.ok(summarized.textContent.includes("<b>Spec</b>"));
+  assert.ok(summarized.textContent.includes(`Summarized · ${hostile}, medium importance`));
+  assert.ok(!plain.textContent.includes("Summarized"));
+  assert.equal(buttonIn(plain, "Open summary"), null);
+  // Every piece of agent text is a text node, never markup.
+  assert.ok(descendants(summarized).every((node) => !/^(IMG|B)$/.test(node.tagName)));
+
+  buttonIn(summarized, "Open summary").click();
+  await until(() => page.sent("open_summary").length === 1, "open_summary");
+  assert.equal(page.sent("open_summary")[0].url, "https://read.example/spec");
 });
