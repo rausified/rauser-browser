@@ -10,9 +10,11 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{HarnessId, RecordKey, RunErrorKind, RunState, RunView};
+use brauser_protocol::{HarnessId, RecordKey, RunAnswer, RunErrorKind, RunState, RunView};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::answer::SummaryAnswer;
 
 /// The largest `stream.txt`; text past it is dropped.
 pub const STREAM_CAP: usize = 4 * 1024 * 1024;
@@ -130,9 +132,19 @@ pub struct RunStatusFile {
 }
 
 impl RunStatusFile {
-    /// The protocol view of this run. Retry save is offered only for a save
-    /// failure whose validated answer is still on disk.
-    pub fn view(&self, stream_bytes: u32, has_result: bool) -> RunView {
+    /// The protocol view of this run, with `result` its kept `result.json`.
+    /// Retry save is offered only for a save failure whose validated answer
+    /// is still on disk. A result that is not a [`SummaryAnswer`] (a PR 2
+    /// record) shows no answer.
+    pub fn view(&self, stream_bytes: u32, result: Option<&serde_json::Value>) -> RunView {
+        let answer = result
+            .and_then(|value| SummaryAnswer::deserialize(value).ok())
+            .map(|answer| RunAnswer {
+                document_type: answer.document_type,
+                category: answer.category,
+                importance: answer.importance.level,
+                importance_reason: answer.importance.reason,
+            });
         RunView {
             run_id: self.run_id.clone(),
             state: self.state,
@@ -153,7 +165,8 @@ impl RunStatusFile {
             stream_bytes,
             can_retry_save: self.state == RunState::Failed
                 && self.error_kind == Some(RunErrorKind::SaveFailed)
-                && has_result,
+                && result.is_some(),
+            answer,
         }
     }
 
@@ -590,7 +603,28 @@ mod tests {
         status.state = RunState::Failed;
         status.cwd = Some("/".repeat(1024));
         status.summary_path = Some("s".repeat(1024));
-        let view = status.view(u32::MAX, true);
+        // The widest answer the validation lets through: four-byte chars.
+        let wide = |chars: usize| "\u{1F600}".repeat(chars);
+        let answer = serde_json::to_value(crate::answer::SummaryAnswer {
+            document_type: wide(crate::answer::MAX_LABEL_CHARS),
+            category: wide(crate::answer::MAX_LABEL_CHARS),
+            entities: crate::answer::Entities {
+                technologies: Vec::new(),
+                products: Vec::new(),
+                people: Vec::new(),
+                companies: Vec::new(),
+            },
+            description: String::new(),
+            importance: crate::answer::Importance {
+                level: brauser_protocol::ImportanceLevel::Medium,
+                reason: wide(crate::answer::MAX_REASON_CHARS),
+            },
+            assessment: String::new(),
+            related_notes: Vec::new(),
+        })
+        .unwrap();
+        let view = status.view(u32::MAX, Some(&answer));
+        assert!(view.answer.is_some());
         let listed = brauser_protocol::Response::RunsListed(brauser_protocol::RunsListed {
             protocol_version: brauser_protocol::PROTOCOL_VERSION,
             request_id: "r".repeat(128),
@@ -754,19 +788,48 @@ mod tests {
         status.state = RunState::Failed;
         status.error_kind = Some(RunErrorKind::SaveFailed);
         status.error = Some("The notes folder is gone.".into());
-        let view = status.view(12, true);
+        let kept = serde_json::json!({});
+        let view = status.view(12, Some(&kept));
         assert!(view.can_retry_save);
         assert_eq!(view.stream_bytes, 12);
         assert_eq!(view.run_id, id.to_string());
         assert_eq!(view.record_key, status.start_key);
         assert_eq!(view.error.as_deref(), Some("The notes folder is gone."));
 
-        assert!(!status.view(12, false).can_retry_save);
+        assert!(!status.view(12, None).can_retry_save);
         status.error_kind = Some(RunErrorKind::HarnessFailed);
-        assert!(!status.view(12, true).can_retry_save);
+        assert!(!status.view(12, Some(&kept)).can_retry_save);
         status.error_kind = Some(RunErrorKind::SaveFailed);
         status.state = RunState::Succeeded;
-        assert!(!status.view(12, true).can_retry_save);
+        assert!(!status.view(12, Some(&kept)).can_retry_save);
+    }
+
+    #[test]
+    fn run_view_answer_comes_from_a_summary_answer_result() {
+        let mut status = sample(Uuid::new_v4());
+        status.state = RunState::Succeeded;
+        assert_eq!(status.view(0, None).answer, None);
+        // A PR 2 result is not a summary answer, so it shows none.
+        let old = serde_json::json!({"summary": "ok"});
+        assert_eq!(status.view(0, Some(&old)).answer, None);
+        let answer = serde_json::json!({
+            "document_type": "report",
+            "category": "news",
+            "entities": {"technologies": [], "products": [], "people": [], "companies": []},
+            "description": "d",
+            "importance": {"level": "low", "reason": "r"},
+            "assessment": "a",
+            "related_notes": []
+        });
+        assert_eq!(
+            status.view(0, Some(&answer)).answer,
+            Some(brauser_protocol::RunAnswer {
+                document_type: "report".into(),
+                category: "news".into(),
+                importance: brauser_protocol::ImportanceLevel::Low,
+                importance_reason: "r".into(),
+            })
+        );
     }
 
     #[test]

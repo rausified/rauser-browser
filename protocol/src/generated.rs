@@ -722,6 +722,23 @@ pub enum RunErrorKind {
     SaveFailed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportanceLevel {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunAnswer {
+    pub document_type: String,
+    pub category: String,
+    pub importance: ImportanceLevel,
+    pub importance_reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunView {
@@ -752,6 +769,8 @@ pub struct RunView {
     pub summary_path: Option<String>,
     pub stream_bytes: u32,
     pub can_retry_save: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub answer: Option<RunAnswer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

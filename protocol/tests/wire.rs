@@ -404,7 +404,7 @@ fn artifact_queries_and_note_keys_have_complete_shapes() {
     );
 }
 
-const RUN_VIEW: &str = r#"{"run_id":"00000000-0000-4000-8000-000000000001","state":"running","harness":"codex","record_key":{"kind":"url","value":"https://a.example/x"},"written_record_key":null,"url":"https://a.example/x","title":"T","cwd":null,"created_at":"2026-10-26T14:00:00-07:00","started_at":null,"finished_at":null,"error":null,"error_kind":null,"thread_id":null,"session_id":null,"summary_path":null,"stream_bytes":0,"can_retry_save":false}"#;
+const RUN_VIEW: &str = r#"{"run_id":"00000000-0000-4000-8000-000000000001","state":"running","harness":"codex","record_key":{"kind":"url","value":"https://a.example/x"},"written_record_key":null,"url":"https://a.example/x","title":"T","cwd":null,"created_at":"2026-10-26T14:00:00-07:00","started_at":null,"finished_at":null,"error":null,"error_kind":null,"thread_id":null,"session_id":null,"summary_path":null,"stream_bytes":0,"can_retry_save":false,"answer":null}"#;
 
 fn run_fetched(view: &str) -> String {
     format!(
@@ -485,6 +485,7 @@ fn run_view_round_trips_every_state_and_error_kind() {
         r#","summary_path":null"#,
         r#","stream_bytes":0"#,
         r#","can_retry_save":false"#,
+        r#","answer":null"#,
     ] {
         assert!(
             serde_json::from_str::<Response>(&run_fetched(&RUN_VIEW.replace(key, ""))).is_err(),
@@ -538,4 +539,27 @@ fn service_ready_requires_build_id() {
     let ready = r#"{"type":"service_ready","protocol_version":6,"request_id":"r","build_id":"b1"}"#;
     assert!(serde_json::from_str::<Response>(ready).is_ok());
     assert!(serde_json::from_str::<Response>(&ready.replace(r#","build_id":"b1""#, "")).is_err());
+}
+
+#[test]
+fn run_view_answer_round_trips_and_rejects_an_unknown_importance() {
+    let answer = r#""answer":{"document_type":"report","category":"news","importance":"high","importance_reason":"New."}"#;
+    let view = RUN_VIEW.replace(r#""answer":null"#, answer);
+    let parsed: Response = serde_json::from_str(&run_fetched(&view)).unwrap();
+    let encoded = serde_json::to_string(&parsed).unwrap();
+    assert!(encoded.contains(answer), "{encoded}");
+    for bad in [
+        view.replace(r#""importance":"high""#, r#""importance":"critical""#),
+        view.replace(r#""importance":"high""#, r#""importance":"High""#),
+        view.replace(r#","importance_reason":"New.""#, ""),
+        view.replace(
+            r#""importance_reason":"New.""#,
+            r#""importance_reason":"New.","x":1"#,
+        ),
+    ] {
+        assert!(
+            serde_json::from_str::<Response>(&run_fetched(&bad)).is_err(),
+            "{bad}"
+        );
+    }
 }

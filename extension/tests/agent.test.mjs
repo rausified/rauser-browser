@@ -120,7 +120,7 @@ test("run responses are checked against the RunView shape", () => {
     url: "https://a.example/x", title: "T", cwd: null,
     created_at: "2026-10-26T14:00:00-07:00", started_at: null, finished_at: null,
     error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
-    stream_bytes: 0, can_retry_save: false,
+    stream_bytes: 0, can_retry_save: false, answer: null,
   };
   const fetched = { type: "run_fetched", run: view, stream_text: "x", next_offset: 1, more: false };
   assert.equal(isResponseShape(fetched), true);
@@ -140,4 +140,28 @@ test("run responses are checked against the RunView shape", () => {
   assert.equal(isResponseShape({ type: "runs_listed", runs: Array.from({ length: 21 }, () => view) }), false);
   assert.equal(isResponseShape({ type: "service_ready", build_id: "b" }), false);
   assert.equal(isResponseShape({ type: "error", code: "service_unavailable", message: "m" }), true);
+});
+
+test("isRunView requires answer and rejects an unknown importance", () => {
+  const view = {
+    run_id: "00000000-0000-4000-8000-000000000001", state: "succeeded", harness: "claude",
+    record_key: { kind: "url", value: "https://a.example/x" }, written_record_key: null,
+    url: "https://a.example/x", title: "T", cwd: "/kb",
+    created_at: "2026-10-26T14:00:00-07:00", started_at: null, finished_at: null,
+    error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+    stream_bytes: 0, can_retry_save: false,
+    answer: { document_type: "report", category: "news", importance: "high", importance_reason: "New." },
+  };
+  const updated = (run) => isResponseShape({ type: "run_updated", run });
+  assert.equal(updated(view), true);
+  assert.equal(updated({ ...view, answer: null }), true);
+  const { answer: _omitted, ...missing } = view;
+  assert.equal(updated(missing), false);
+  assert.equal(updated({ ...view, answer: { ...view.answer, importance: "critical" } }), false);
+  assert.equal(updated({ ...view, answer: { ...view.answer, importance: "High" } }), false);
+  const { importance_reason: _reason, ...partial } = view.answer;
+  assert.equal(updated({ ...view, answer: partial }), false);
+  assert.equal(updated({ ...view, answer: { ...view.answer, extra: 1 } }), false);
+  assert.equal(updated({ ...view, answer: { ...view.answer, document_type: 7 } }), false);
+  assert.equal(updated({ ...view, answer: "high" }), false);
 });

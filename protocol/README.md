@@ -151,8 +151,11 @@ the `written_record_key` (the key at save time, which may differ after an
 adapter edit), `url`, `title`, `cwd`, RFC 3339 `created_at`, `started_at`,
 and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
 `canceled`, `service_restarted`, `invalid_output`, or `save_failed`),
-`thread_id`, `session_id`, `summary_path`, `stream_bytes`, and
-`can_retry_save`.
+`thread_id`, `session_id`, `summary_path`, `stream_bytes`,
+`can_retry_save`, and `answer`. Once the agent's answer has passed
+validation, `answer` is a `RunAnswer` (`document_type`, `category`,
+`importance` as an `ImportanceLevel` of `high`, `medium`, or `low`, and
+`importance_reason`); before that, or when validation failed, it is null.
 
 `service_hello` and `service_ready` pass only between the host and the
 service: before forwarding, the host sends `service_hello` and the service

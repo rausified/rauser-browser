@@ -9,7 +9,9 @@
 //!    session, and streams its events into the record. A watchdog thread
 //!    refreshes `heartbeat_at` every [`HEARTBEAT`] and kills the process group
 //!    at the deadline.
-//! 3. The outcome is mapped to a terminal state; a validated answer is kept in
+//! 3. The answer is validated (spec §6.4); an invalid one gets one repair
+//!    turn in the same session.
+//! 4. The outcome is mapped to a terminal state; a validated answer is kept in
 //!    `result.json` before `save`, so a save failure can be retried without
 //!    running the harness again.
 //!
@@ -20,7 +22,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -36,12 +38,13 @@ use super::harness_api::{
     HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
-use super::prompt::summary_prompt;
+use super::prompt::{repair_prompt, summary_prompt};
 use super::queue::{Scheduler, Submit};
 use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, fit_session_id,
     page_markdown,
 };
+use crate::answer::parse_answer;
 use crate::config::{ConfigStore, default_summary_vocabulary};
 use crate::vault::Vault;
 
@@ -49,8 +52,6 @@ use crate::vault::Vault;
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
 /// How often a running record's `heartbeat_at` is refreshed.
 pub const HEARTBEAT: Duration = Duration::from_secs(5);
-/// The largest final answer `accept` takes (PR 2).
-pub const MAX_ANSWER_BYTES: usize = 256 * 1024;
 /// The most runs `list_runs` returns.
 pub const LIST_LIMIT: usize = 20;
 /// How long `cancel_run` waits for a running run to reach its end state.
@@ -66,30 +67,30 @@ pub struct SavedRun {
 /// Validates a harness's final answer and saves it. Errors are user-facing
 /// reasons stored in the run's `error`.
 pub trait RunFinisher: Send + Sync {
-    /// PR 2: `final_text` must be a JSON object of at most 256 KiB. PR 3
-    /// (Task 33) replaces this with §6.4 validation.
-    fn accept(&self, final_text: &str) -> Result<serde_json::Value, String>;
+    /// The normalized answer to keep in `result.json`, or what is wrong with
+    /// `final_text`; the error goes back to the agent in the repair turn.
+    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String>;
     /// PR 2: re-reads config under `lock_current` + `refresh` and requires a
     /// configured, openable vault. PR 4 writes the summary here.
     fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String>;
 }
 
-/// PR 2's [`accept`](RunFinisher::accept): one JSON object, at most
-/// [`MAX_ANSWER_BYTES`].
-pub fn accept_json_object(final_text: &str) -> Result<serde_json::Value, String> {
-    if final_text.len() > MAX_ANSWER_BYTES {
-        return Err("The agent's answer is too large.".to_string());
-    }
-    match serde_json::from_str::<serde_json::Value>(final_text.trim()) {
-        Ok(value @ serde_json::Value::Object(_)) => Ok(value),
-        Ok(_) => Err("The agent's answer is not a JSON object.".to_string()),
-        Err(_) => Err("The agent's answer is not valid JSON.".to_string()),
-    }
+/// Validate `final_text` as a §6.4 answer against the run's knowledge base
+/// folder (its working directory) and re-serialize it normalized.
+pub fn accept_summary_answer(
+    run: &RunStatusFile,
+    final_text: &str,
+) -> Result<serde_json::Value, String> {
+    let Some(cwd) = run.cwd.as_deref() else {
+        return Err("run has no working directory".into());
+    };
+    let answer = parse_answer(final_text, Path::new(cwd))?;
+    serde_json::to_value(answer).map_err(|_| "the answer could not be encoded".to_string())
 }
 
-/// PR 2's finisher: accepts any JSON object and checks, under the config
-/// lock, that a configured notes folder can still be opened. It writes
-/// nothing; PR 4 adds the summary file and log event.
+/// The service's finisher: accepts a §6.4 answer and checks, under the
+/// config lock, that a configured notes folder can still be opened. It
+/// writes nothing; PR 4 adds the summary file and log event.
 pub struct VaultCheckFinisher {
     config: Mutex<ConfigStore>,
 }
@@ -103,8 +104,8 @@ impl VaultCheckFinisher {
 }
 
 impl RunFinisher for VaultCheckFinisher {
-    fn accept(&self, final_text: &str) -> Result<serde_json::Value, String> {
-        accept_json_object(final_text)
+    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
+        accept_summary_answer(run, final_text)
     }
 
     fn save(&self, run: &RunStatusFile, _result: &serde_json::Value) -> Result<SavedRun, String> {
@@ -563,8 +564,8 @@ impl Supervisor {
         let _guard = lock(&record_lock);
         let mut status = inner.status(id)?;
         let result = inner.store.read_result(id).ok().flatten();
-        let has_result = result.is_some();
-        let Some(result) = result.filter(|_| status.view(0, has_result).can_retry_save) else {
+        let retryable = status.view(0, result.as_ref()).can_retry_save;
+        let Some(result) = result.filter(|_| retryable) else {
             return Err((
                 ErrorCode::Conflict,
                 "This run has no failed save to retry.".to_string(),
@@ -643,10 +644,11 @@ impl Inner {
 
     fn view_of(&self, id: Uuid, status: &RunStatusFile) -> RunView {
         let stream_bytes = self.store.stream_bytes(id).unwrap_or(0);
-        let has_result = status.state == RunState::Failed
-            && status.error_kind == Some(RunErrorKind::SaveFailed)
-            && self.store.read_result(id).ok().flatten().is_some();
-        status.view(stream_bytes, has_result)
+        // Only a run past validation has a result to read.
+        let result = matches!(status.state, RunState::Succeeded | RunState::Failed)
+            .then(|| self.store.read_result(id).ok().flatten())
+            .flatten();
+        status.view(stream_bytes, result.as_ref())
     }
 
     /// Read-modify-write `status.json` under the run's mutex.
@@ -770,15 +772,21 @@ impl Inner {
                 RunErrorKind::TimedOut,
                 Some(timeout_message(control.timeout)),
             ),
-            (None, Err(reason)) => Finish::fail(RunErrorKind::HarnessFailed, Some(reason)),
-            (None, Ok(final_text)) => this.conclude(id, &status, &final_text),
+            (None, Driven::Failed(reason)) => {
+                Finish::fail(RunErrorKind::HarnessFailed, Some(reason))
+            }
+            (None, Driven::Invalid(reason)) => {
+                Finish::fail(RunErrorKind::InvalidOutput, Some(reason))
+            }
+            (None, Driven::Accepted(result)) => this.conclude(id, &status, &result),
         };
         this.finish_with(&control, id, |status| finished.apply(status));
         let _ = watchdog.join();
     }
 
     /// Start the harness session and run its turn, streaming events into the
-    /// record. `Ok` is the final answer text; `Err` is the failure reason.
+    /// record, then validate the answer. An invalid answer gets one repair
+    /// turn in the same session; both turns stream into `stream.txt`.
     fn drive(
         self: &Arc<Self>,
         id: Uuid,
@@ -786,9 +794,9 @@ impl Inner {
         status: &RunStatusFile,
         launch: Launch,
         env: Vec<(OsString, OsString)>,
-    ) -> Result<String, String> {
+    ) -> Driven {
         let Some(runner) = self.registry.get(Some(status.harness)) else {
-            return Err("The AI harness is no longer set up.".to_string());
+            return Driven::Failed("The AI harness is no longer set up.".to_string());
         };
         let page_path = self.store.page_path(id);
         let spec = RunSpec {
@@ -808,11 +816,12 @@ impl Inner {
                 worker.note(id, |status| status.process_group = Some(group));
             }
         })));
-        let mut session = runner
-            .start(&spec, &control.slot)
-            .map_err(|error| format!("starting the harness: {error:#}"))?;
+        let mut session = match runner.start(&spec, &control.slot) {
+            Ok(session) => session,
+            Err(error) => return Driven::Failed(format!("starting the harness: {error:#}")),
+        };
         let mut truncated = false;
-        let outcome = session.turn(&spec.prompt, &mut |event| match event {
+        let mut sink = |event| match event {
             HarnessEvent::Text(text) => match self.store.append_stream(id, &text) {
                 Ok(true) => {}
                 Ok(false) if !truncated => {
@@ -845,28 +854,39 @@ impl Inner {
                     }
                 }
             }
-        });
+        };
+        let driven = match session.turn(&spec.prompt, &mut sink) {
+            TurnOutcome::Failed { reason } => Driven::Failed(reason),
+            TurnOutcome::Answered { final_text } => match self.finisher.accept(status, &final_text)
+            {
+                Ok(result) => Driven::Accepted(result),
+                Err(problem) => match session.turn(&repair_prompt(&problem), &mut sink) {
+                    TurnOutcome::Failed { reason } => Driven::Failed(reason),
+                    TurnOutcome::Answered { final_text } => {
+                        match self.finisher.accept(status, &final_text) {
+                            Ok(result) => Driven::Accepted(result),
+                            Err(problem) => Driven::Invalid(format!(
+                                "The agent's answer was not valid after one correction: {problem}"
+                            )),
+                        }
+                    }
+                },
+            },
+        };
         session.close();
-        match outcome {
-            TurnOutcome::Answered { final_text } => Ok(final_text),
-            TurnOutcome::Failed { reason } => Err(reason),
-        }
+        driven
     }
 
-    /// Validate, keep, and save an answer.
-    fn conclude(&self, id: Uuid, status: &RunStatusFile, final_text: &str) -> Finish {
-        let result = match self.finisher.accept(final_text) {
-            Ok(result) => result,
-            Err(reason) => return Finish::fail(RunErrorKind::InvalidOutput, Some(reason)),
-        };
-        if let Err(error) = self.store.write_result(id, &result) {
+    /// Keep and save a validated answer.
+    fn conclude(&self, id: Uuid, status: &RunStatusFile, result: &serde_json::Value) -> Finish {
+        if let Err(error) = self.store.write_result(id, result) {
             eprintln!("brauser service: keeping run {id} result: {error:#}");
             return Finish::fail(
                 RunErrorKind::SaveFailed,
                 Some("The answer could not be kept for saving.".to_string()),
             );
         }
-        match self.finisher.save(status, &result) {
+        match self.finisher.save(status, result) {
             Ok(saved) => Finish::Succeeded(saved),
             Err(reason) => Finish::fail(RunErrorKind::SaveFailed, Some(reason)),
         }
@@ -990,6 +1010,16 @@ fn kill_group(group: i32) {
     }
 }
 
+/// How a run's conversation with its harness ended.
+enum Driven {
+    /// A validated answer, normalized for `result.json`.
+    Accepted(serde_json::Value),
+    /// The answer was still invalid after the repair turn.
+    Invalid(String),
+    /// The harness could not start, or a turn failed.
+    Failed(String),
+}
+
 /// A run's end state.
 enum Finish {
     Succeeded(SavedRun),
@@ -1081,6 +1111,7 @@ mod tests {
 
     use crate::service::record::MAX_SESSION_ID_BYTES;
 
+    use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
     use crate::service::harness_api::HarnessRegistry;
     use crate::service::record::{RunStatusFile, RunStore};
@@ -1091,8 +1122,12 @@ mod tests {
     }
 
     impl RunFinisher for TestFinisher {
-        fn accept(&self, final_text: &str) -> Result<serde_json::Value, String> {
-            accept_json_object(final_text)
+        fn accept(
+            &self,
+            run: &RunStatusFile,
+            final_text: &str,
+        ) -> Result<serde_json::Value, String> {
+            accept_summary_answer(run, final_text)
         }
 
         fn save(
@@ -1134,6 +1169,7 @@ mod tests {
             ("PATH".into(), "/bin:/usr/bin".into()),
             ("RELEASE".into(), dir.join("release").into_os_string()),
             ("COUNT".into(), dir.join("count").into_os_string()),
+            ("VALID_ANSWER".into(), TEST_ANSWER.into()),
         ]
     }
 
@@ -1319,9 +1355,20 @@ mod tests {
         }
     }
 
-    const ANSWER: &str = "echo 'session: sess-1'\necho working >&2\necho '{\"summary\": \"ok\"}'\n";
+    // The fake harness prints `$VALID_ANSWER`, a valid §6.4 answer.
+    const ANSWER: &str = "echo 'session: sess-1'\necho working >&2\necho \"$VALID_ANSWER\"\n";
     const BLOCK_THEN_ANSWER: &str =
-        "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho '{\"summary\": \"ok\"}'\n";
+        "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho \"$VALID_ANSWER\"\n";
+    /// A fake harness that saves each turn's prompt as `prompt-<n>` and
+    /// answers turn 1 with `first` and turn 2 with `second` (shell code).
+    fn two_turns(first: &str, second: &str) -> String {
+        format!(
+            "n=$(( $(/bin/cat \"$COUNT\" 2>/dev/null || echo 0) + 1 ))\n\
+             echo $n > \"$COUNT\"\n\
+             /bin/cat > \"$COUNT.prompt-$n\"\n\
+             if [ $n = 1 ]; then\n{first}\nelse\n{second}\nfi\n"
+        )
+    }
 
     fn run_dir(fixture: &Fixture, id: Uuid) -> PathBuf {
         fixture.path("runs").join(id.to_string())
@@ -1344,8 +1391,14 @@ mod tests {
         assert_eq!(view.harness, HarnessId::Codex);
         assert!(view.started_at.is_some() && view.finished_at.is_some());
         assert!(!view.can_retry_save);
-        assert_eq!(fixture.stream(id), "{\"summary\": \"ok\"}\n");
-        assert_eq!(view.stream_bytes as usize, "{\"summary\": \"ok\"}\n".len());
+        assert_eq!(fixture.stream(id), format!("{TEST_ANSWER}\n"));
+        assert_eq!(view.stream_bytes as usize, TEST_ANSWER.len() + 1);
+        let answer = view
+            .answer
+            .as_ref()
+            .expect("a succeeded run shows its answer");
+        assert_eq!(answer.document_type, "report");
+        assert_eq!(answer.importance, brauser_protocol::ImportanceLevel::High);
 
         let dir = run_dir(&fixture, id);
         let page = read(&dir.join("page.md"));
@@ -1359,7 +1412,10 @@ mod tests {
         );
         let result: serde_json::Value =
             serde_json::from_str(&read(&dir.join("result.json"))).unwrap();
-        assert_eq!(result, serde_json::json!({"summary": "ok"}));
+        assert_eq!(
+            result,
+            serde_json::from_str::<serde_json::Value>(TEST_ANSWER).unwrap()
+        );
         assert_eq!(read(&dir.join("run.log")), "working\n");
         let status: serde_json::Value =
             serde_json::from_str(&read(&dir.join("status.json"))).unwrap();
@@ -1611,16 +1667,99 @@ mod tests {
     }
 
     #[test]
-    fn non_json_answer_is_invalid_output_and_keeps_stream() {
-        let fixture = Fixture::new("echo 'not json at all'\n");
+    fn invalid_answer_gets_one_repair_turn_and_succeeds() {
+        let fixture = Fixture::new(&two_turns("echo 'not json'", "echo \"$VALID_ANSWER\""));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(read(&fixture.path("count")), "2\n");
+        let repair = read(&fixture.path("count.prompt-2"));
+        assert!(
+            repair.starts_with("Your previous answer was not valid: the answer is not valid JSON"),
+            "{repair}"
+        );
+        assert!(repair.contains("Reply with only the corrected JSON object"));
+        assert!(read(&fixture.path("count.prompt-1")).contains("page.md"));
+        assert_eq!(fixture.stream(id), format!("not json\n{TEST_ANSWER}\n"));
+        assert!(run_dir(&fixture, id).join("result.json").is_file());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn second_invalid_answer_fails_invalid_output_and_keeps_stream() {
+        let fixture = Fixture::new(&two_turns(
+            "echo 'not json at all'",
+            "echo '{\"document_type\": \"report\"}'",
+        ));
         let id = fixture.start("a");
         let view = fixture.wait_finished(id);
         assert_eq!(view.state, RunState::Failed);
         assert_eq!(view.error_kind, Some(RunErrorKind::InvalidOutput));
+        let error = view.error.as_deref().unwrap();
+        assert!(
+            error.starts_with("The agent's answer was not valid after one correction: "),
+            "{error}"
+        );
+        assert!(error.contains("category"), "{error}");
         assert!(!view.can_retry_save);
-        assert_eq!(fixture.stream(id), "not json at all\n");
+        assert_eq!(view.answer, None);
+        assert_eq!(
+            read(&fixture.path("count")),
+            "2\n",
+            "exactly one repair turn"
+        );
+        assert_eq!(
+            fixture.stream(id),
+            "not json at all\n{\"document_type\": \"report\"}\n"
+        );
         assert!(!run_dir(&fixture, id).join("result.json").exists());
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn empty_final_text_gets_a_repair_turn() {
+        let fixture = Fixture::new(&two_turns("true", "echo \"$VALID_ANSWER\""));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let repair = read(&fixture.path("count.prompt-2"));
+        assert!(repair.contains("the answer is empty"), "{repair}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn repair_turn_after_harness_exit_fails_as_harness_failed() {
+        let fixture = Fixture::new(&two_turns(
+            "echo 'not json'",
+            "echo 'harness went away' >&2\nexit 4",
+        ));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed);
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(
+            view.error.as_deref(),
+            Some("harness exited with status 4: harness went away")
+        );
+        assert_eq!(fixture.stream(id), "not json\n");
+        assert!(!run_dir(&fixture, id).join("result.json").exists());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn accept_without_cwd_fails_invalid_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
+        let finisher = VaultCheckFinisher::new(config);
+        let mut run = sample_status(Uuid::new_v4());
+        assert_eq!(
+            finisher.accept(&run, TEST_ANSWER).unwrap_err(),
+            "run has no working directory"
+        );
+        run.cwd = Some(dir.path().display().to_string());
+        let accepted = finisher.accept(&run, TEST_ANSWER).unwrap();
+        assert_eq!(accepted["importance"]["level"], "high");
+        assert!(finisher.accept(&run, "{}").is_err());
     }
 
     #[test]
@@ -1638,7 +1777,7 @@ mod tests {
 
     #[test]
     fn save_failure_offers_retry_save_and_retry_succeeds() {
-        let fixture = Fixture::new("echo ran >> \"$COUNT\"\necho '{\"summary\": \"ok\"}'\n");
+        let fixture = Fixture::new("echo ran >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n");
         fixture.fail_saves.store(1, Ordering::SeqCst);
         let id = fixture.start("a");
         let view = fixture.wait_finished(id);
@@ -1769,7 +1908,8 @@ mod tests {
     #[test]
     fn run_env_is_read_when_the_run_starts() {
         let fixture = Fixture::new(
-            "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho \"{\\\"foo\\\": \\\"$FOO\\\"}\"\n",
+            "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\n\
+             echo \"$VALID_ANSWER\" | /usr/bin/sed \"s/A page./$FOO/\"\n",
         );
         let with_foo = |value: &str| {
             let mut env = default_env(fixture.dir.path());
@@ -1814,7 +1954,7 @@ mod tests {
     fn over_long_or_control_character_session_ids_are_dropped_whole() {
         // A later unfit id neither replaces nor truncates the good one.
         let fixture = Fixture::new(&format!(
-            "echo 'session: sess-1'\necho 'session: {}'\nprintf 'session: sess\\0012\\n'\necho '{{}}'\n",
+            "echo 'session: sess-1'\necho 'session: {}'\nprintf 'session: sess\\0012\\n'\necho \"$VALID_ANSWER\"\n",
             "s".repeat(MAX_SESSION_ID_BYTES + 1)
         ));
         let id = fixture.start("a");
@@ -1824,7 +1964,7 @@ mod tests {
 
         // With only an unfit id, none is recorded.
         let fixture = Fixture::new(&format!(
-            "echo 'session: {}'\necho '{{}}'\n",
+            "echo 'session: {}'\necho \"$VALID_ANSWER\"\n",
             "s".repeat(MAX_SESSION_ID_BYTES + 1)
         ));
         let id = fixture.start("a");
@@ -1838,8 +1978,9 @@ mod tests {
         let fixture = Fixture::new("printf 'h\\303\\251llo\\n'\necho '{}'\n");
         let id = fixture.start("a");
         fixture.wait_finished(id);
+        // The answer is invalid, so the repair turn repeats the output.
         let (_, page) = fixture.supervisor.get_run(id, 3).unwrap();
-        assert_eq!(page.text, "llo\n{}\n");
+        assert_eq!(page.text, "llo\n{}\nh\u{e9}llo\n{}\n");
         assert!(matches!(
             fixture.supervisor.get_run(id, 2),
             Err((ErrorCode::InvalidRequest, _))
@@ -1854,25 +1995,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn accept_requires_a_json_object_within_the_size_limit() {
-        assert_eq!(
-            accept_json_object("  {\"a\": 1}\n").unwrap(),
-            serde_json::json!({"a": 1})
-        );
-        assert!(accept_json_object("[1]").is_err());
-        assert!(accept_json_object("not json").is_err());
-        let big = format!("{{\"a\": \"{}\"}}", "x".repeat(MAX_ANSWER_BYTES));
-        assert!(accept_json_object(&big).is_err());
-    }
-
-    #[test]
-    fn vault_check_finisher_refuses_without_a_configured_vault() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
-        let finisher = VaultCheckFinisher::new(config);
-        let id = Uuid::new_v4();
-        let run = RunStatusFile {
+    /// A running record with no working directory.
+    fn sample_status(id: Uuid) -> RunStatusFile {
+        RunStatusFile {
             version: 1,
             run_id: id.to_string(),
             state: RunState::Running,
@@ -1898,7 +2023,15 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
-        };
+        }
+    }
+
+    #[test]
+    fn vault_check_finisher_refuses_without_a_configured_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
+        let finisher = VaultCheckFinisher::new(config);
+        let run = sample_status(Uuid::new_v4());
         let error = finisher.save(&run, &serde_json::json!({})).unwrap_err();
         assert!(error.contains("notes folder"), "{error}");
     }

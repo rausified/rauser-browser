@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::claude::ClaudeRunner;
 use super::codex::CodexRunner;
+use crate::answer::answer_schema;
 use crate::harness::search_path;
 
 /// Everything a runner needs to start one run.
@@ -210,7 +211,9 @@ impl HarnessRegistry {
         let search_path = search_path(get("PATH").as_deref(), home.as_deref());
         Self {
             runners: vec![
-                Box::new(CodexRunner::new(search_path.clone(), None)),
+                // The installed app-server takes `outputSchema` on
+                // `turn/start` (TESTING.md), so Codex is held to the shape.
+                Box::new(CodexRunner::new(search_path.clone(), Some(answer_schema()))),
                 Box::new(ClaudeRunner::new(search_path)),
             ],
         }

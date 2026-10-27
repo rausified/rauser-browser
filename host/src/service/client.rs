@@ -515,6 +515,7 @@ pub(crate) mod fake {
             summary_path: None,
             stream_bytes: 0,
             can_retry_save: false,
+            answer: None,
         }
     }
 

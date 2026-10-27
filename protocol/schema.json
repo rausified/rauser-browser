@@ -1829,11 +1829,28 @@
       "type": "string",
       "enum": ["harness_failed", "timed_out", "canceled", "service_restarted", "invalid_output", "save_failed"]
     },
+    "ImportanceLevel": {
+      "type": "string",
+      "description": "How much a summarized page matters given the user's knowledge base.",
+      "enum": ["high", "medium", "low"]
+    },
+    "RunAnswer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The validated summary answer's headline fields, kept in the run's result.",
+      "required": ["document_type", "category", "importance", "importance_reason"],
+      "properties": {
+        "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "importance": { "$ref": "#/$defs/ImportanceLevel" },
+        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
     "RunView": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339.",
-      "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save"],
+      "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339. answer is filled once the run has a validated answer.",
+      "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save", "answer"],
       "properties": {
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
         "state": { "$ref": "#/$defs/RunState" },
@@ -1852,7 +1869,8 @@
         "session_id": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 256 }, { "type": "null" }] },
         "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 4096 }, { "type": "null" }] },
         "stream_bytes": { "type": "integer", "minimum": 0 },
-        "can_retry_save": { "type": "boolean" }
+        "can_retry_save": { "type": "boolean" },
+        "answer": { "oneOf": [{ "$ref": "#/$defs/RunAnswer" }, { "type": "null" }] }
       }
     },
     "StartRunRequest": {

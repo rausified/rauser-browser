@@ -440,6 +440,7 @@ mod tests {
         StartRunRequest,
     };
 
+    use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
     use crate::config::fixtures;
     use crate::frame::{read_frame, write_request};
@@ -640,16 +641,29 @@ mod tests {
         }
     }
 
-    const ANSWER: &str = "echo '{\"ok\": true}'\n";
+    /// A fake harness body that prints a valid answer.
+    fn answer() -> String {
+        format!("echo '{TEST_ANSWER}'\n")
+    }
+
+    /// As [`answer`], with the description replaced by `description`, which
+    /// the shell expands.
+    fn answering(description: &str) -> String {
+        format!("echo '{TEST_ANSWER}' | /usr/bin/sed \"s|A page.|{description}|\"\n")
+    }
 
     #[test]
     fn framed_start_and_get_run_over_the_socket() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let run_id = world.started_run_id();
         let fetched = world.wait_finished(&run_id);
         assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
-        assert!(fetched.stream_text.contains("\"ok\""), "{fetched:?}");
+        assert!(
+            fetched.stream_text.contains("\"document_type\""),
+            "{fetched:?}"
+        );
+        assert!(fetched.run.answer.is_some(), "{fetched:?}");
         assert!(fetched.next_offset > 0);
         assert!(!fetched.more);
         // The same record key while queued or running returns that run; once
@@ -681,7 +695,7 @@ mod tests {
 
     #[test]
     fn service_hello_reports_this_build() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         match world.call(&Request::ServiceHello(ServiceHelloRequest {
             protocol_version: PROTOCOL_VERSION,
@@ -697,7 +711,7 @@ mod tests {
 
     #[test]
     fn version_5_request_gets_unsupported_protocol_version() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let mut stream = UnixStream::connect(world.socket()).unwrap();
         let body = br#"{"type":"service_hello","protocol_version":5,"request_id":"old"}"#;
@@ -712,7 +726,7 @@ mod tests {
 
     #[test]
     fn non_service_request_is_invalid_request() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::Hello(HelloRequest {
             protocol_version: PROTOCOL_VERSION,
@@ -724,7 +738,7 @@ mod tests {
 
     #[test]
     fn start_run_without_record_key_is_invalid_request() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, _) = error_of(world.start_run(None));
         assert_eq!(code, ErrorCode::InvalidRequest);
@@ -739,7 +753,7 @@ mod tests {
 
     #[test]
     fn start_run_over_the_schema_bounds_from_a_socket_peer_is_invalid_request() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
             protocol_version: PROTOCOL_VERSION,
@@ -765,7 +779,7 @@ mod tests {
 
     #[test]
     fn start_run_without_a_notes_folder_is_not_configured() {
-        let world = World::unconfigured(ANSWER);
+        let world = World::unconfigured(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.start_run(Some(url_key())));
         assert_eq!(code, ErrorCode::NotConfigured);
@@ -774,7 +788,7 @@ mod tests {
 
     #[test]
     fn start_run_uses_the_knowledge_base_folder_as_cwd() {
-        let world = World::unconfigured("printf '{\"cwd\": \"%s\"}\\n' \"$(pwd -P)\"\n");
+        let world = World::unconfigured(&answering("cwd=$(pwd -P)"));
         let knowledge_base = world._temp.path().join("kb");
         std::fs::create_dir(&knowledge_base).unwrap();
         world.configure(Some(""), Some(&knowledge_base));
@@ -788,14 +802,14 @@ mod tests {
         assert!(
             fetched
                 .stream_text
-                .contains(&format!("\"cwd\": \"{}\"", expected.display())),
+                .contains(&format!("cwd={}", expected.display())),
             "{fetched:?}"
         );
     }
 
     #[test]
     fn start_run_prompts_with_the_configured_vocabulary() {
-        let world = World::unconfigured("cat > \"$0.prompt\"\necho '{\"ok\": true}'\n");
+        let world = World::unconfigured(&format!("cat > \"$0.prompt\"\n{}", answer()));
         world.configure(
             Some("\n[summary_vocabulary]\ndocument_types = [\"memo\"]\ncategories = [\"legal review\"]\n"),
             None,
@@ -817,7 +831,7 @@ mod tests {
 
     #[test]
     fn start_run_without_agent_or_harness_is_not_configured() {
-        let world = World::unconfigured(ANSWER);
+        let world = World::unconfigured(&answer());
         world.configure(None, None);
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.start_run(Some(url_key())));
@@ -855,7 +869,7 @@ mod tests {
 
     #[test]
     fn replaced_knowledge_base_folder_is_refused() {
-        let world = World::unconfigured(ANSWER);
+        let world = World::unconfigured(&answer());
         let knowledge_base = world._temp.path().join("kb");
         std::fs::create_dir(&knowledge_base).unwrap();
         world.configure(Some(""), Some(&knowledge_base));
@@ -909,7 +923,7 @@ mod tests {
 
     #[test]
     fn agent_env_file_reaches_the_harness() {
-        let world = World::new("echo \"{\\\"foo\\\": \\\"$FOO\\\"}\"\n");
+        let world = World::new(&answering("$FOO"));
         world.write_agent_env("FOO=bar\n", 0o600);
         world.start(Duration::from_secs(600));
         let run_id = world.started_run_id();
@@ -920,7 +934,7 @@ mod tests {
 
     #[test]
     fn group_readable_agent_env_fails_start_without_values() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.write_agent_env("FOO=secret\n", 0o644);
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.start_run(Some(url_key())));
@@ -931,7 +945,7 @@ mod tests {
 
     #[test]
     fn second_instance_reports_already_running() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let built = Arc::new(AtomicBool::new(false));
         let flag = built.clone();
@@ -963,7 +977,7 @@ mod tests {
 
     #[test]
     fn idle_service_exits_and_removes_socket() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         let started = Instant::now();
         let handle = world.start(Duration::from_millis(300));
         assert!(world.paths.pid().exists());
@@ -980,7 +994,7 @@ mod tests {
 
     #[test]
     fn socket_is_0600_in_a_0700_dir() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let dir = std::fs::metadata(&world.support).unwrap();
         assert_eq!(dir.permissions().mode() & 0o777, 0o700);
@@ -991,7 +1005,7 @@ mod tests {
 
     #[test]
     fn a_regular_file_at_the_socket_path_is_not_removed() {
-        let world = World::new(ANSWER);
+        let world = World::new(&answer());
         std::fs::write(world.socket(), "keep").unwrap();
         let error = serve(
             &world.paths,

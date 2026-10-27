@@ -517,6 +517,15 @@ export type RunState = "queued" | "running" | "succeeded" | "failed" | "canceled
 
 export type RunErrorKind = "harness_failed" | "timed_out" | "canceled" | "service_restarted" | "invalid_output" | "save_failed";
 
+export type ImportanceLevel = "high" | "medium" | "low";
+
+export interface RunAnswer {
+  document_type: string;
+  category: string;
+  importance: ImportanceLevel;
+  importance_reason: string;
+}
+
 export interface RunView {
   run_id: string;
   state: RunState;
@@ -536,6 +545,7 @@ export interface RunView {
   summary_path: string | null;
   stream_bytes: number;
   can_retry_save: boolean;
+  answer: RunAnswer | null;
 }
 
 export interface StartRunRequest {

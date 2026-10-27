@@ -103,8 +103,20 @@ const HARNESS_IDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 const RUN_VIEW_KEYS: readonly string[] = [
   "run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd",
   "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id",
-  "summary_path", "stream_bytes", "can_retry_save",
+  "summary_path", "stream_bytes", "can_retry_save", "answer",
 ];
+
+const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
+
+/** Exactly the v6 `RunAnswer` keys; the host bounds the strings. */
+function isRunAnswer(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const answer = value as Record<string, unknown>;
+  return Object.keys(answer).length === 4 &&
+    typeof answer.document_type === "string" && typeof answer.category === "string" &&
+    typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
+    typeof answer.importance_reason === "string";
+}
 
 export function isRunView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -123,7 +135,8 @@ export function isRunView(value: unknown): boolean {
       (typeof run.error_kind === "string" && RUN_ERROR_KINDS.has(run.error_kind))) &&
     stringOrNull(run.thread_id) && stringOrNull(run.session_id) &&
     stringOrNull(run.summary_path) && isUnsignedInteger(run.stream_bytes) &&
-    typeof run.can_retry_save === "boolean";
+    typeof run.can_retry_save === "boolean" &&
+    (run.answer === null || isRunAnswer(run.answer));
 }
 
 function isArtifact(value: unknown): boolean {

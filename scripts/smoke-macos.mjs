@@ -311,8 +311,8 @@ exit 1`),
   // The service's summary harness (FAKE_HARNESS_ENV): one run per turn with
   // the page path as $1 and the prompt on stdin. $HOME/fake-agent.mode picks
   // ok, slow, or fail. It sits outside fake-bin, so discovery never sees it.
-  // PR 2 accepts only stdout that is one JSON object, so "working" streams
-  // inside the answer rather than on its own line.
+  // The service accepts only stdout that is one valid summary answer, so
+  // "working" streams inside the answer rather than on its own line.
   const fakeAgent = path.join(fakeInstall, "fake-agent");
   await writeFile(fakeAgent, `#!/bin/sh
 /bin/cat > /dev/null
@@ -323,7 +323,7 @@ case "$mode" in
   fail) echo 'fake failure' >&2; exit 3 ;;
 esac
 echo 'session: smoke-session'
-echo '{"progress":"working","ok":true}'
+echo '{"document_type":"report","category":"news","entities":{"technologies":[],"products":[],"people":[],"companies":[]},"description":"Fake agent working.","importance":{"level":"low","reason":"A smoke page."},"assessment":"Nothing new.","related_notes":[]}'
 `, { mode: 0o700 });
   await chmod(fakeAgent, 0o700);
   return { fakeBin, fakeInstall, argvLog, fakeAgent };
