@@ -91,7 +91,7 @@ Agent runs are owned by a new per-user OS service (a macOS launchd agent) instal
 
 ### 5.3 Messages (protocol v6)
 
-Extension → host → service: `start_run` (record key resolved by the host, URL, title, extracted content, optional selection) → `run_id` (new or existing); `get_run` (`run_id`, `since_offset`) → state + new stream text + result/summary path; `list_runs` (recent and in-flight, for restoring cards); `cancel_run`; `retry_save`. Streaming is by polling `get_run` about once a second while a card is visible, so no host-side streaming protocol or concurrent message loop is needed (this replaces DESIGN.md §12.2 step 8.3 and backlog `brwr-jfe` / `brwr-0cj`). Every response stays under the existing 900 KiB outbound cap; `get_run` pages long stream text by offset.
+Extension → host → service: `start_run` (record key resolved by the host, URL, title, extracted content, optional selection) → `run_id` (new or existing); `get_run` (`run_id`, `since_offset`) → state + new stream text + result/summary path; `list_runs` (recent and in-flight, for restoring cards); `cancel_run`; `retry_save`. Host only, not forwarded to the service (added within v6 in PR 4, protocol/README.md): `open_summary` (page URL) opens the page's owned summary file. Streaming is by polling `get_run` about once a second while a card is visible, so no host-side streaming protocol or concurrent message loop is needed (this replaces DESIGN.md §12.2 step 8.3 and backlog `brwr-jfe` / `brwr-0cj`). Every response stays under the existing 900 KiB outbound cap; `get_run` pages long stream text by offset.
 
 ## 6. Agent runs
 
