@@ -1062,3 +1062,63 @@ test("Save why stays disabled while a local pause waits for the host", async () 
   assert.equal(page.sent("record_why").length, 0);
   assert.match(page.el("status").textContent, /Use Pause capture to finish/);
 });
+
+// --- Artifact card: container and contents -----------------------------------
+
+const REPO = {
+  artifact_id: "github.repo:github.com/acme-corp/widgets",
+  artifact_type: "github.repo",
+  title: "acme-corp/widgets",
+  url: "https://github.com/acme-corp/widgets",
+};
+
+test("artifact card links a PR to its repository", async () => {
+  const pr = { ...artifact("github.pr:github.com/acme-corp/widgets/7", "Fix the thing"), within: REPO };
+  const page = await install({
+    tab: { id: 1, url: "https://github.com/acme-corp/widgets/pull/7", title: "Fix the thing" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(pr) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-within").hidden, false);
+  assert.equal(page.el("artifact-within").textContent, "In acme-corp/widgets");
+  const link = page.el("artifact-within").querySelector("a");
+  assert.equal(link.href, REPO.url);
+});
+
+test("repository card lists contained work", async () => {
+  const pr = { artifact_id: "github.pr:github.com/acme-corp/widgets/7", artifact_type: "github.pr",
+    title: "Fix the thing", url: "https://github.com/acme-corp/widgets/pull/7", focused_seconds: 125 };
+  const issue = { artifact_id: "github.issue:github.com/acme-corp/widgets/3", artifact_type: "github.issue",
+    title: "Flaky test", url: "https://github.com/acme-corp/widgets/issues/3", focused_seconds: 40 };
+  const repo = { ...artifact("github.repo:github.com/acme-corp/widgets", "acme-corp/widgets"), contained: [pr, issue] };
+  const page = await install({
+    tab: { id: 1, url: REPO.url, title: "acme-corp/widgets" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(repo) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-contained").hidden, false);
+  const rows = page.el("artifact-contained").children;
+  assert.equal(rows.length, 3, "a heading row plus one row per contained artifact");
+  assert.equal(rows[0].textContent, "Worked on inside");
+  const firstLink = rows[1].querySelector("a");
+  assert.equal(firstLink.textContent, "Fix the thing · 2 min");
+  assert.equal(firstLink.href, pr.url);
+  const secondLink = rows[2].querySelector("a");
+  assert.equal(secondLink.textContent, "Flaky test · 40 sec");
+  assert.equal(secondLink.href, issue.url);
+});
+
+test("card hides container rows when absent", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-within").hidden, true);
+  assert.equal(page.el("artifact-within").textContent, "");
+  assert.equal(page.el("artifact-contained").hidden, true);
+  assert.equal(page.el("artifact-contained").children.length, 0);
+});

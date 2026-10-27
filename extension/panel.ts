@@ -14,7 +14,9 @@ import {
 } from "./artifact-refresh.js";
 import type {
   ArtifactListItem,
+  ArtifactRefView,
   ArtifactView,
+  ContainedArtifactView,
   OlderNote,
   WorklogResult,
 } from "../protocol/ts/generated.js";
@@ -57,6 +59,8 @@ const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
 const artifactMeasures = element<HTMLParagraphElement>("artifact-measures");
 const artifactLinks = element<HTMLParagraphElement>("artifact-links");
+const artifactWithin = element<HTMLParagraphElement>("artifact-within");
+const artifactContained = element<HTMLUListElement>("artifact-contained");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
@@ -148,6 +152,44 @@ function duration(seconds: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+// A null/empty container field hides its element along with its contents, so
+// a later artifact that lacks one never shows a stale card from the artifact
+// before it.
+function renderWithin(within: ArtifactRefView | null): void {
+  artifactWithin.replaceChildren();
+  artifactWithin.hidden = within === null;
+  if (!within) return;
+  const label = document.createElement("span");
+  label.textContent = "In ";
+  const link = document.createElement("a");
+  link.href = within.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = within.title;
+  artifactWithin.append(label, link);
+}
+
+function containedRow(item: ContainedArtifactView): HTMLLIElement {
+  const row = document.createElement("li");
+  const link = document.createElement("a");
+  link.href = item.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = `${item.title} · ${duration(item.focused_seconds)}`;
+  row.append(link);
+  return row;
+}
+
+function renderContained(contained: readonly ContainedArtifactView[]): void {
+  artifactContained.replaceChildren();
+  artifactContained.hidden = contained.length === 0;
+  if (!contained.length) return;
+  const heading = document.createElement("li");
+  heading.className = "artifact-label";
+  heading.textContent = "Worked on inside";
+  artifactContained.append(heading, ...contained.map(containedRow));
+}
+
 function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null = null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
@@ -156,6 +198,8 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   if (!artifact) {
     whyArtifactId = null;
     whyEdited = false;
+    renderWithin(null);
+    renderContained([]);
     updateControls();
     return;
   }
@@ -173,6 +217,8 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   artifactLinks.textContent = artifact.linked_count
     ? `${artifact.linked_count} linked artifact${artifact.linked_count === 1 ? "" : "s"}`
     : "No linked artifacts yet.";
+  renderWithin(artifact.within);
+  renderContained(artifact.contained);
   if (artifact.artifact_id !== whyArtifactId) {
     whyArtifactId = artifact.artifact_id;
     whyEdited = false;
