@@ -49,6 +49,27 @@ Interactive Windows Chrome, picker, confirmation, and native registration
 acceptance remains the separate human-gated `brwr-i1g` task. A green CI run
 alone does not certify those interactions.
 
+## Concurrent native connections
+
+Run `cargo test --locked -p brauser --features scripted-dialogs --target-dir
+target/scripted-dialogs` for the complete host fixture coverage. The Unix-only
+`host/tests/harness_setup.rs` tests use the built executable, cleared
+environment, disposable HOME, scripted dialogs and fake shell harnesses. A
+file-gated probe proves correlated health/settings/readiness replies arrive
+before setup finishes, while repeated setup and its single-use grant remain
+ordered. Disconnect tests cover EOF, a truncated length, an oversized frame,
+and a broken stdout pipe with stdin still open; they verify host exit, dead
+probe/descendant processes, removed run directories and unchanged config.
+An unanswered confirmation closes on EOF or queue overload, leaves a later
+scripted answer unconsumed and never starts its probe. The ordinary Rust
+suite also checks that a failed writer can return while its reader is blocked.
+
+All waits in the executable fixtures have deadlines. These tests do not use a
+real model, account, UI, browser or clipboard. macOS Chrome smoke remains a
+separate check; its expected scripted-dialog count remains 14. Windows harness
+containment and host config-path isolation remain `brwr-ooy` and `brwr-3rt`;
+the Unix fixture does not certify Windows runtime behavior.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser

@@ -19,6 +19,17 @@ the typed request. A mismatch returns an `error` response with code
 `unsupported_protocol_version` and the host's protocol version. If malformed
 input has no recoverable request ID, an `error` response may use an empty ID.
 
+During a folder picker, policy confirmation, harness discovery or setup,
+`hello`, `get_config` and `check_agent` can reply before the long request.
+Match replies by `request_id`; those queries observe committed configuration,
+while other requests stay ordered on the connection's config/consent worker.
+This concurrency uses the existing v5 messages, without streaming or a cancel
+request. The pending queue allows 16 requests and 8 MiB (besides the active
+request and bounded reader/channel buffers); overflow returns an uncorrelated
+`invalid_request` and closes the connection. Closing stdin or a terminal
+transport failure cancels active harness/dialog waits; already accepted
+ordinary requests drain on clean EOF.
+
 Protocol version 5 covers host discovery, configuration, consent, visit and
 artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter

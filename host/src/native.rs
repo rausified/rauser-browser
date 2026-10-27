@@ -1,7 +1,10 @@
 //! Chrome native messaging uses a four-byte, native-endian length prefix
 //! followed by one UTF-8 JSON value. Stdout contains frames only.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
@@ -16,6 +19,7 @@ use brauser_protocol::{
 use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore};
+use crate::connection::{CancelOnDrop, Cancellation};
 use crate::consent::ConsentAuthority;
 use crate::dialog::{self, DialogText};
 use crate::harness::HarnessEnv;
@@ -34,7 +38,7 @@ const MAX_REQUEST_ID_CHARS: usize = 128;
 pub fn serve(config: ConfigStore) -> Result<()> {
     let input = io::stdin();
     let output = io::stdout();
-    serve_with_io(input.lock(), output.lock(), config)
+    serve_with_io(input, output.lock(), config)
 }
 
 /// What harness setup may use from the host process. Built once per
@@ -45,7 +49,11 @@ pub struct SetupContext<'a> {
 }
 
 /// Process requests until the browser closes the native messaging pipe.
-pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore) -> Result<()> {
+pub fn serve_with_io<R: Read + Send + 'static, W: Write>(
+    input: R,
+    output: W,
+    config: ConfigStore,
+) -> Result<()> {
     let env = HarnessEnv::from_process(config.dir()?);
     let context = SetupContext {
         env: &env,
@@ -54,47 +62,179 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
     serve_with_context(input, output, config, &context)
 }
 
-pub fn serve_with_context<R: Read, W: Write>(
+pub fn serve_with_context<R: Read + Send + 'static, W: Write>(
     mut input: R,
     mut output: W,
     mut config: ConfigStore,
     context: &SetupContext<'_>,
 ) -> Result<()> {
-    let mut consent = ConsentAuthority::new();
-    loop {
-        let body = match read_frame(&mut input) {
-            Ok(Some(body)) => body,
-            Ok(None) => {
-                regenerate_artifacts(&mut config);
-                return Ok(());
-            }
-            Err(FrameError::TooLarge) => {
-                write_frame(
-                    &mut output,
-                    &error(
-                        "",
-                        ErrorCode::MessageTooLarge,
-                        "native message exceeds the 4 MiB inbound limit",
-                    ),
-                )?;
-                bail!("oversized native message; connection closed");
-            }
-            Err(FrameError::InvalidLength) => {
-                write_frame(
-                    &mut output,
-                    &error(
-                        "",
-                        ErrorCode::InvalidRequest,
-                        "native message has an empty body",
-                    ),
-                )?;
-                continue;
-            }
-            Err(FrameError::Io(error)) => return Err(error).context("reading native message"),
-        };
-        let response = dispatch_json(&body, &mut config, &mut consent, context);
-        write_frame(&mut output, &response)?;
+    // Both producers have at most one event buffered. The coordinator owns
+    // stdout exclusively; neither request workers nor children can interleave
+    // frames. A bounded pending queue prevents input from growing with the
+    // duration of a person's confirmation or a harness run.
+    const MAX_PENDING: usize = 16;
+    const MAX_PENDING_BYTES: usize = 2 * MAX_INBOUND_BYTES;
+    enum Event {
+        Input(std::result::Result<Option<Vec<u8>>, FrameError>),
+        Response(Box<Response>),
     }
+    let cancel = Cancellation::default();
+    let mut query_config = config.query_view();
+    let (events, receiver) = mpsc::sync_channel(1);
+    let reader_events = events.clone();
+    let reader_cancel = cancel.clone();
+    // An owned reader may remain blocked if stdout fails while Chrome keeps
+    // stdin open. Do not join that thread on error: returning from serve lets
+    // the executable exit. It has no config, writer or child-process authority.
+    std::thread::spawn(move || {
+        loop {
+            let frame = read_frame(&mut input);
+            let terminal = !matches!(frame, Ok(Some(_)) | Err(FrameError::InvalidLength));
+            if terminal {
+                reader_cancel.cancel();
+            }
+            if reader_events.send(Event::Input(frame)).is_err() || terminal {
+                break;
+            }
+        }
+    });
+    std::thread::scope(|scope| {
+        // Own the receiver inside the scope body so an early return closes
+        // response sends before the scope waits for its worker to exit.
+        let receiver = receiver;
+        let (jobs, requests) = mpsc::sync_channel::<Vec<u8>>(1);
+        let worker_cancel = cancel.clone();
+        let worker = scope.spawn(move || {
+            worker_cancel.bind(|| {
+                let mut consent = ConsentAuthority::new();
+                while let Ok(body) = requests.recv() {
+                    let response = dispatch_json(&body, &mut config, &mut consent, context);
+                    if events.send(Event::Response(Box::new(response))).is_err() {
+                        return;
+                    }
+                }
+                regenerate_artifacts(&mut config);
+            });
+        });
+        // Drop order matters: cancel before scope joins the request worker,
+        // and drop the job sender so an idle worker can finish as well.
+        let _cancel_on_return = CancelOnDrop(cancel);
+        let mut pending = VecDeque::<Vec<u8>>::new();
+        let mut pending_bytes = 0;
+        let mut active = false;
+        let mut long_running = false;
+        let mut eof = false;
+        loop {
+            if !active {
+                if let Some(body) = pending.pop_front() {
+                    pending_bytes -= body.len();
+                    long_running = is_long_request(&body);
+                    jobs.send(body).context("native request worker stopped")?;
+                    active = true;
+                } else if eof {
+                    return Ok(());
+                }
+            }
+            // A pipelined query may already have arrived while the previous
+            // short request was finishing. It must also bypass a long request
+            // that has now started, regardless of reader/worker scheduling.
+            if long_running {
+                while let Some(index) = pending.iter().position(|body| is_live_query(body)) {
+                    let body = pending.remove(index).expect("pending query exists");
+                    pending_bytes -= body.len();
+                    let response = dispatch_json(
+                        &body,
+                        &mut query_config,
+                        &mut ConsentAuthority::new(),
+                        context,
+                    );
+                    write_frame(&mut output, &response)?;
+                }
+            }
+            let event = match receiver.recv_timeout(Duration::from_millis(20)) {
+                Ok(event) => event,
+                Err(mpsc::RecvTimeoutError::Timeout) if !worker.is_finished() => continue,
+                Err(_) => bail!("native request worker stopped"),
+            };
+            match event {
+                Event::Response(response) => {
+                    write_frame(&mut output, &response)?;
+                    active = false;
+                    long_running = false;
+                }
+                Event::Input(Ok(Some(body))) => {
+                    // These queries mint no grants and write no user data.
+                    // During a long request they observe the latest committed
+                    // disk state, independently of the worker's consent state.
+                    if long_running && is_live_query(&body) {
+                        let response = dispatch_json(
+                            &body,
+                            &mut query_config,
+                            &mut ConsentAuthority::new(),
+                            context,
+                        );
+                        write_frame(&mut output, &response)?;
+                    } else {
+                        pending_bytes += body.len();
+                        if pending.len() >= MAX_PENDING || pending_bytes > MAX_PENDING_BYTES {
+                            write_frame(
+                                &mut output,
+                                &error(
+                                    "",
+                                    ErrorCode::InvalidRequest,
+                                    "too many pending native requests; connection closed",
+                                ),
+                            )?;
+                            bail!("native request queue exceeded its limit");
+                        }
+                        pending.push_back(body);
+                    }
+                }
+                Event::Input(Ok(None)) => eof = true,
+                Event::Input(Err(FrameError::InvalidLength)) => {
+                    write_frame(
+                        &mut output,
+                        &error(
+                            "",
+                            ErrorCode::InvalidRequest,
+                            "native message has an empty body",
+                        ),
+                    )?;
+                }
+                Event::Input(Err(FrameError::TooLarge)) => {
+                    write_frame(
+                        &mut output,
+                        &error(
+                            "",
+                            ErrorCode::MessageTooLarge,
+                            "native message exceeds the 4 MiB inbound limit",
+                        ),
+                    )?;
+                    bail!("oversized native message; connection closed");
+                }
+                Event::Input(Err(FrameError::Io(error))) => {
+                    return Err(error).context("reading native message");
+                }
+            }
+        }
+    })
+}
+
+fn is_long_request(body: &[u8]) -> bool {
+    matches!(
+        serde_json::from_slice::<Request>(body),
+        Ok(Request::ChooseFolder(_)
+            | Request::ConfirmConfig(_)
+            | Request::DiscoverHarnesses(_)
+            | Request::ConfirmHarnessSetup(_))
+    )
+}
+
+fn is_live_query(body: &[u8]) -> bool {
+    matches!(
+        serde_json::from_slice::<Request>(body),
+        Ok(Request::Hello(_) | Request::GetConfig(_) | Request::CheckAgent(_))
+    )
 }
 
 /// Read the common envelope before the version-specific request. A newer
@@ -1887,6 +2027,55 @@ mod tests {
         let mut input = Cursor::new(wire);
         let json = read_frame(&mut input).unwrap().unwrap();
         serde_json::from_slice(&json).unwrap()
+    }
+
+    #[test]
+    fn a_broken_writer_does_not_wait_for_the_browser_to_close_stdin() {
+        struct OpenInput {
+            bytes: Cursor<Vec<u8>>,
+            closed: mpsc::Receiver<()>,
+        }
+        impl Read for OpenInput {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let size = self.bytes.read(buffer)?;
+                if size == 0 {
+                    let _ = self.closed.recv();
+                }
+                Ok(size)
+            }
+        }
+        struct BrokenOutput;
+        impl Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let bytes = encoded_request(Request::Hello(HelloRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "broken-writer".into(),
+        }));
+        let (close, closed) = mpsc::channel();
+        let (finished, result) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let outcome = serve_with_io(
+                OpenInput {
+                    bytes: Cursor::new(bytes),
+                    closed,
+                },
+                BrokenOutput,
+                config,
+            );
+            finished.send(outcome.is_err()).unwrap();
+        });
+        assert!(result.recv_timeout(Duration::from_secs(5)).unwrap());
+        // Release the detached read only after serve has returned.
+        drop(close);
+        thread.join().unwrap();
     }
 
     #[test]

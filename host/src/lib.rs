@@ -9,6 +9,7 @@ pub mod adapters;
 pub mod brand;
 pub mod capture;
 pub mod config;
+mod connection;
 pub mod consent;
 pub mod dialog;
 pub mod harness;

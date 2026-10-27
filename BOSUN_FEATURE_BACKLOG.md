@@ -255,11 +255,11 @@ Their line numbers predate step 6.6, so re-check them.
   acceptance, prove the same cleared environment, private work directory,
   bounded output, timeout/cancellation and process-tree containment with fake
   executables in Windows CI. A Windows build alone is not harness support.
-- [ ] `brwr-jfe` **Concurrent native message loop (before 8.3).** Refactor
-  `serve_with_context` into a stdin reader thread, a worker for long requests,
-  and one serialized writer, reusing `run_bounded`'s thread/mpsc pattern. No
-  protocol change. A short request must be answered while a long one runs,
-  and stdin EOF must tear both down.
+- [x] **Concurrent native message loop (before 8.3).** Built the
+  dedicated frame reader, ordered config/consent worker and serialized writer.
+  Health/settings/readiness queries respond during setup; EOF, transport
+  failure and queue overload cancel child waits. Existing v5 message shapes
+  and single-use consent state remain intact; streaming is still separate.
 - [ ] `brwr-0cj` **M2 step 8.3 — Streaming protocol.** A reader that stays responsive
   while a harness runs; chunk, `rejected`, error, `cancel`, and
   `summary_result` messages correlated by `request_id` under the 900 KiB cap;
@@ -382,6 +382,8 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Shipped
 
+- **Category:** New Capability. **Keep native messaging responsive during setup (2026-10-27).** `brwr-jfe` adds a dedicated reader, one ordered config/consent worker and a serialized writer, so health, settings and readiness queries respond while a dialog or harness probe is waiting. Child waits cancel on EOF, terminal framing failure, queue overload or broken output; Unix harness groups are killed and private run directories removed. The existing v5 messages, revision checks and single-use grants stay intact. **Metrics:** 336 workspace Rust tests (+1), 311 scripted-build tests (+4), 8 extension test files and both Clippy configurations green; 3 new executable regressions cover six disconnect/overload cases; macOS smoke unavailable on Linux, expected dialog count 14.
+
 - **Category:** Testing & Verification. **Make the dialog reply fixture follow the real request handshake (2026-10-27).** `brwr-4vb` is complete: the successful fake child now consumes the decimal byte length and complete body before replying, removing a test-only early-exit race that could break otherwise green builds with EPIPE. A 114,694-byte Unicode request reproduces the old failure and passed 100 consecutive runs with the repaired child; production dialogs are unchanged. **Metrics:** 335 Rust tests (+1 Unicode SQLite regression), 307 scripted-build tests, 8 extension test files and both Clippy configurations green; 5,000 generated adapter cases agree through direct engine runs, with the Node wrapper blocked by the sandbox; macOS smoke unavailable on Linux, 14 dialogs unchanged.
 
 - **Category:** Bug Fix. **Keep shared and older notes reachable after capture rules are removed (2026-10-27).** Historical note recovery now retains the older URL-note list and its read-only viewing action after adapter removal, recognition narrowing and site removal. Both URL lookup directions share durable activity, mode and explicit-context evidence, so alternate routes and context-only history recover the same note without inventing activity. Native request tests prove separate URL notes, migration refusals, stale-key copy-out, cache deletion/reindex and suppressed capture preserve existing content. **Metrics:** 332 Rust tests (+5) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
@@ -414,6 +416,17 @@ Their line numbers predate step 6.6, so re-check them.
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- `brwr-jfe` is complete; `brwr-9xg` is the next ready P2 stabilization
+  item. Continue its built-panel/close-and-reopen acceptance before further
+  M2 features. Streaming (`brwr-0cj`) must add its own correlated cancel
+  request and route it around long work; the current bypass covers only
+  health/settings/readiness, and connection cancellation is bound to the
+  ordered worker thread. Do not mistake this prerequisite for streaming.
+- Capture Site (`brwr-1hj`) remains the strongest visible next capability
+  once its queue blockers clear. Use concrete remembered-page examples and
+  the existing incoming-trail proposal (`brwr-1g2`) to explain cross-tool
+  work; avoid adding another internal status view or duplicate proposal.
 
 - The Windows CI configuration is ready for a runner, not a claim of Windows
   support. Continue `brwr-bzx` from an actual CI result; the Linux VM cannot

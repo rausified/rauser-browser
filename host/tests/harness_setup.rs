@@ -9,7 +9,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use brauser_protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
@@ -146,9 +148,31 @@ esac
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
+        let mut output = child.stdout.take().unwrap();
+        let (sender, replies) = mpsc::channel();
+        let (closed, output_closed) = mpsc::channel();
+        std::thread::spawn(move || {
+            loop {
+                let mut prefix = [0u8; 4];
+                if output.read_exact(&mut prefix).is_err() {
+                    break;
+                }
+                let length = u32::from_ne_bytes(prefix) as usize;
+                assert!(length <= 900 * 1024);
+                let mut reply = vec![0u8; length];
+                output.read_exact(&mut reply).unwrap();
+                let reply: Value = serde_json::from_slice(&reply).unwrap();
+                if sender.send(reply).is_err() {
+                    break;
+                }
+            }
+            drop(output);
+            let _ = closed.send(());
+        });
         Host {
             input: Some(child.stdin.take().unwrap()),
-            output: child.stdout.take().unwrap(),
+            replies,
+            output_closed,
             child,
             next_id: 0,
             fake_bin: self.path("bin"),
@@ -159,13 +183,14 @@ esac
 struct Host {
     child: Child,
     input: Option<ChildStdin>,
-    output: ChildStdout,
+    replies: mpsc::Receiver<Value>,
+    output_closed: mpsc::Receiver<()>,
     next_id: u32,
     fake_bin: PathBuf,
 }
 
 impl Host {
-    fn call(&mut self, mut request: Value) -> Value {
+    fn send(&mut self, mut request: Value) -> String {
         self.next_id += 1;
         let id = format!("r{}", self.next_id);
         request["protocol_version"] = json!(PROTOCOL_VERSION);
@@ -177,11 +202,18 @@ impl Host {
             .unwrap();
         input.write_all(&body).unwrap();
         input.flush().unwrap();
-        let mut prefix = [0u8; 4];
-        self.output.read_exact(&mut prefix).unwrap();
-        let mut reply = vec![0u8; u32::from_ne_bytes(prefix) as usize];
-        self.output.read_exact(&mut reply).unwrap();
-        let reply: Value = serde_json::from_slice(&reply).unwrap();
+        id
+    }
+
+    fn receive(&self) -> Value {
+        self.replies
+            .recv_timeout(Duration::from_secs(10))
+            .expect("host did not respond")
+    }
+
+    fn call(&mut self, request: Value) -> Value {
+        let id = self.send(request);
+        let reply = self.receive();
         assert_eq!(reply["request_id"], json!(id));
         reply
     }
@@ -229,7 +261,183 @@ impl Host {
 
     fn close(mut self) {
         drop(self.input.take());
-        assert!(self.child.wait().unwrap().success());
+        self.wait_for_exit(true);
+    }
+
+    fn wait_for_exit(&mut self, success: bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert_eq!(status.success(), success, "{status}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "host did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn wait_until(message: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready() {
+        assert!(Instant::now() < deadline, "{message}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn setup_request(revision: &str, offer: &str) -> Value {
+    json!({
+        "type": "confirm_harness_setup", "expected_revision": revision,
+        "offer_id": offer, "env_names": [], "agent_denylist": ["bank.example"],
+        "summaries_dir": null,
+    })
+}
+
+#[test]
+fn queries_respond_during_a_probe_and_setup_grants_remain_ordered() {
+    let world = World::new(&format!(
+        "echo started > \"$log/started\"\nwhile [ ! -e \"$log/release\" ]; do /bin/sleep 0.02; done\n{PASSING_BODY}"
+    ));
+    let mut host = world.serve();
+    let revision = host.revision();
+    let offer = host.claude_offer(&revision);
+    world.answer("confirmed");
+    let setup_id = host.send(setup_request(&revision, &offer));
+    wait_until("probe never started", || world.path("log/started").exists());
+
+    // All responses must arrive before releasing the probe. Also pipeline a
+    // stateful request: it must wait and retain the worker's single-use offer.
+    let repeated = host.send(setup_request(&revision, &offer));
+    for kind in ["hello", "get_config", "check_agent"] {
+        let mut query = json!({"type": kind});
+        if kind == "check_agent" {
+            query["url"] = Value::Null;
+        }
+        let reply = host.call(query);
+        assert_ne!(reply["request_id"], setup_id);
+        assert_ne!(reply["request_id"], repeated);
+        match kind {
+            "hello" => assert_eq!(reply["type"], "hello_result"),
+            "get_config" => {
+                assert_eq!(reply["type"], "config_result");
+                assert_eq!(reply["revision"], revision);
+                assert_eq!(reply["agent_status"]["state"], "not_set_up");
+            }
+            "check_agent" => assert_eq!(reply["code"], "not_configured"),
+            _ => unreachable!(),
+        }
+    }
+    fs::write(world.path("log/release"), "go").unwrap();
+    let confirmed = host.receive();
+    assert_eq!(confirmed["request_id"], setup_id);
+    assert_eq!(confirmed["type"], "harness_setup_confirmed");
+    let spent = host.receive();
+    assert_eq!(spent["request_id"], repeated);
+    assert_eq!(spent["code"], "unauthorized");
+    let updated = host.call(json!({
+        "type": "update_config", "expected_revision": revision,
+        "config": confirmed["config"], "picker_token": null,
+        "consent_token": null, "harness_token": confirmed["harness_token"],
+    }));
+    assert_eq!(updated["type"], "config_updated");
+    assert_eq!(
+        host.call(json!({"type": "get_config"}))["agent_status"]["state"],
+        "ready"
+    );
+    host.close();
+}
+
+#[test]
+fn connection_failures_cancel_the_probe_tree_without_committing_setup() {
+    for ending in ["eof", "truncated", "oversized", "writer"] {
+        let world = World::new(
+            r#"echo $$ > "$log/probe.pid"
+/bin/sleep 30 &
+echo $! > "$log/child.pid"
+pwd > "$log/workdir"
+wait"#,
+        );
+        let before = fs::read(&world.config).unwrap();
+        let mut host = world.serve();
+        let revision = host.revision();
+        let offer = host.claude_offer(&revision);
+        world.answer("confirmed");
+        host.send(setup_request(&revision, &offer));
+        wait_until("probe never started", || world.path("log/workdir").exists());
+        if ending == "writer" {
+            // The first query lets the response reader drop the pipe. The
+            // second must hit BrokenPipe while input stays open and the
+            // probe is running, rather than waiting forever for stdin EOF.
+            let (_, replacement) = mpsc::channel();
+            host.replies = replacement;
+            host.send(json!({"type": "hello"}));
+            host.output_closed
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            host.send(json!({"type": "hello"}));
+        } else if ending != "eof" {
+            let bytes = if ending == "truncated" {
+                vec![1, 0]
+            } else {
+                (4 * 1024 * 1024 + 1_u32).to_ne_bytes().to_vec()
+            };
+            host.input.as_mut().unwrap().write_all(&bytes).unwrap();
+        }
+        if ending != "writer" {
+            drop(host.input.take());
+        }
+        host.wait_for_exit(ending == "eof");
+        for name in ["probe.pid", "child.pid"] {
+            let pid = world.log(name).unwrap().trim().parse().unwrap();
+            let pid = rustix::process::Pid::from_raw(pid).unwrap();
+            wait_until("probe process survived disconnect", || {
+                rustix::process::test_kill_process(pid).is_err()
+            });
+        }
+        let dir = PathBuf::from(world.log("workdir").unwrap().trim());
+        assert!(!dir.exists(), "run directory survived {ending}");
+        assert_eq!(fs::read(&world.config).unwrap(), before);
+    }
+}
+
+#[test]
+fn eof_and_queue_overload_close_an_unanswered_confirmation() {
+    for overload in [false, true] {
+        let world = World::new(PASSING_BODY);
+        let before = fs::read(&world.config).unwrap();
+        let mut host = world.serve();
+        let revision = host.revision();
+        let offer = host.claude_offer(&revision);
+        host.send(setup_request(&revision, &offer));
+        wait_until("confirmation never opened", || !world.shown().is_empty());
+        assert_eq!(host.call(json!({"type": "hello"}))["type"], "hello_result");
+        if overload {
+            // These requests cannot bypass the ordered consent worker.
+            for _ in 0..17 {
+                host.send(setup_request(&revision, &offer));
+            }
+            let reply = host.receive();
+            assert_eq!(reply["code"], "invalid_request");
+            assert!(reply["message"].as_str().unwrap().contains("pending"));
+        } else {
+            drop(host.input.take());
+        }
+        host.wait_for_exit(!overload);
+        world.answer("confirmed");
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(
+            world.path("dialogs/answer").exists(),
+            "dialog survived connection"
+        );
+        assert!(world.log("stdin.log").is_none());
+        assert_eq!(fs::read(&world.config).unwrap(), before);
     }
 }
 

@@ -106,6 +106,19 @@ The extension runs in a hostile environment (arbitrary web pages), and the host 
 - Messages are length-prefixed JSON. M0 caps extension-to-host bodies at 4 MiB and host-to-extension bodies at 900 KiB, below Chrome's 1 MiB outbound limit. A response that would exceed the outbound cap is replaced by a correlated `message_too_large` error; the host keeps serving. Page-note bodies are capped at 98304 characters (counted as UTF-16 units, as the panel's textarea counts them) and 384 KiB, and a save that could not be returned whole by a later load is refused, so a saved note always loads; a note grown past either limit outside the panel loads as `message_too_large`, never into a textarea that could not accept further typing. A new note's title is clamped to 2048 bytes, not refused.
 - Deserialized into typed structs with `deny_unknown_fields`. Unknown message types are rejected.
 - Every message carries a protocol version and request ID. Version mismatch returns a structured error.
+- The native connection has a dedicated frame reader, one ordered config/consent
+  worker, and one serialized writer. During folder selection, configuration
+  confirmation, harness discovery or setup, `hello`, `get_config` and
+  `check_agent` may reply ahead of the long request; they refresh an independent
+  view of committed configuration and never share or mint consent grants.
+  Other requests retain arrival order. Pending input is limited to 16 requests
+  and 8 MiB, in addition to the active request and bounded channel/reader
+  buffers; exceeding either queue limit reports `invalid_request` and closes
+  the connection. EOF, terminal framing errors and writer failure cancel
+  child waits: Unix harness process groups are killed and their private work
+  directories removed, while dialog children get stdin EOF and a grace period
+  to close before a forced kill. Accepted ordinary requests drain on EOF and
+  artifact regeneration still runs at the connection boundary.
 - Single and batched activity delivery share `check_activity_policy` under the
   current configuration lock, before opening the notes folder. Both enforce
   collection bounds, recognition and scope, artifact identity, mode evidence,
@@ -1032,7 +1045,7 @@ The plan follows Chrome's current [optional-permission rules](https://developer.
    7. Agent drafting, after M2 host invocation (step 8.2), using the same harness isolation, for the hint and for **Improve with AI** in the review. Draft tests give the fake harness the step 7.6 planted inputs and check that its drafts are held to the same per-rule checks. They also cover a draft carrying Tier 1 fields, a title template, or a `scope`, and a draft that does not parse; the host must reject each before the preview, and the preview must list every non-artifact shape a borderline draft matches.
 8. **Build the rest of M2** after M1.5a, in this order, each step reviewed and merged separately. The sub-steps keep M2's step numbers, so step 8.2 is M2 step 2.
    2. Host invocation: an environment of only the allowlisted variables, argv from the template, page content on stdin inside the untrusted-data block, the host-owned working directory, a timeout, output cap, and process-tree kill, and the confirmed-install-location prefix check (§7.1). Test with fake harness binaries on both OSes, including one whose symlink target changes between runs (identity re-check), one moved outside the confirmed install location, one that emits a tool call or an unknown Codex event, and one that reports `is_error`. Run the §7.1 canary for each shipped harness template, including a prompt-injected page that asks Codex to read a planted file; it passes if the contents appear in no forwarded chunk or summary and any non-allowlisted event ends the run as `rejected`.
-   3. Streaming protocol: the host currently answers one request at a time, so it needs a reader that stays responsive while a harness runs. Add chunk, `rejected`, error, `cancel`, and `summary_result` messages correlated by `request_id`, each under the host's 900 KiB outbound cap (§4.3). Closing the panel (stdin EOF) kills the harness.
+   3. Streaming protocol: the concurrent native-loop prerequisite is built (2026-10-27, `brwr-jfe`): a dedicated reader, ordered worker and serialized writer keep health/settings queries responsive during setup, with connection cancellation and bounded pending input (§4.3), still on protocol v5. Streaming itself remains unbuilt. Add chunk, `rejected`, error, `cancel`, and `summary_result` messages correlated by `request_id`, each under the host's 900 KiB outbound cap (§4.3). Closing the panel (stdin EOF) kills the harness.
    4. Content extraction with a bundled, pinned Readability-style library, the `summarize` command, context menu, and toolbar trigger, and the permissions in §8 (`scripting` is already present from M1.5b). First confirm with the real-Chrome smoke runner that (a) the command, context-menu, and toolbar-action paths grant `activeTab` to `chrome.scripting.executeScript`, and whether opening the panel from the action (`openPanelOnActionClick`) grants it; (b) the grant ends when the tab navigates; (c) the panel sees no URL for an ungranted tab; (d) the grant does not carry over to another tab in the same window.
    5. `/summarize` in the panel, with denylist checks and the summary write and result contract in §5.2 and §4.4. Set the §3.1 extension-page CSP, with a test that the built manifest carries it. Test an external-editor race, a shared or overlapping summaries directory, and a config change during a fake-harness run, which must discard the output.
 9. **M3–M5** follow as in the table. The compact intent index moved into M1.5a (step 6.5).
