@@ -405,9 +405,10 @@ impl Server {
     }
 
     /// The harness, working directory, and time limit for a new run, read
-    /// from the service's own configuration under the config lock. The
-    /// request's harness wins over the configured entry. The harness runs in
-    /// the knowledge base folder, which must still be the folder the user
+    /// from the service's own configuration under the config lock. Runs use
+    /// the harness setup probed and committed, with its entry's time limit;
+    /// a request may name that harness but no other. The harness runs in the
+    /// knowledge base folder, which must still be the folder the user
     /// picked.
     fn run_setup(
         &self,
@@ -427,17 +428,28 @@ impl Server {
             ));
         }
         let knowledge_base = checked_knowledge_base(&config)?;
-        let agent = config.snapshot().agent.as_ref();
-        let harness = requested
-            .or(agent.map(|agent| agent.harness))
+        let agent = config
+            .snapshot()
+            .agent
+            .as_ref()
             .ok_or((ErrorCode::NotConfigured, SET_UP_HARNESS))?;
-        let timeout = agent.map(|agent| Duration::from_secs(agent.timeout_secs.into()));
+        if let Some(requested) = requested.filter(|requested| *requested != agent.harness) {
+            return Err((ErrorCode::NotConfigured, not_set_up(requested)));
+        }
         Ok(RunSetup {
-            harness,
+            harness: agent.harness,
             cwd: knowledge_base,
-            timeout,
+            timeout: Some(Duration::from_secs(agent.timeout_secs.into())),
             vocabulary: config.snapshot().summary_vocabulary.clone(),
         })
+    }
+}
+
+/// The refusal for a run naming `harness` when another one is set up.
+fn not_set_up(harness: HarnessId) -> &'static str {
+    match harness {
+        HarnessId::Codex => "Codex is not the summary harness set up in Brauser settings.",
+        HarnessId::Claude => "Claude Code is not the summary harness set up in Brauser settings.",
     }
 }
 
@@ -513,7 +525,7 @@ mod tests {
 
     use brauser_protocol::{
         ErrorCode, GetRunRequest, HarnessId, HelloRequest, ListRunsRequest, PROTOCOL_VERSION,
-        RecordKey, RecordKeyKind, Request, Response, RunErrorKind, RunState, ServiceHelloRequest,
+        RecordKey, RecordKeyKind, Request, Response, RunState, ServiceHelloRequest,
         StartRunRequest,
     };
 
@@ -931,31 +943,58 @@ mod tests {
             message,
             "Set up a summary harness in Brauser settings first."
         );
-        // A request that names its harness needs no configured entry.
-        let mut request = StartRunRequest {
+        // Naming a harness does not stand in for setting one up.
+        let request = named_start_run(HarnessId::Codex);
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(request))),
+            (
+                ErrorCode::NotConfigured,
+                "Set up a summary harness in Brauser settings first.".to_string()
+            )
+        );
+        assert!(!world.paths.runs().exists() || dir_is_empty(&world.paths.runs()));
+    }
+
+    fn named_start_run(harness: HarnessId) -> StartRunRequest {
+        StartRunRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "named".into(),
             url: "https://example.com/a".into(),
             title: "Page A".into(),
             content: "Body text".into(),
             selection: None,
-            harness: Some(HarnessId::Codex),
+            harness: Some(harness),
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
-        };
-        match world.call(&Request::StartRun(request.clone())) {
-            Response::RunStarted(started) => assert_eq!(started.run.harness, HarnessId::Codex),
+        }
+    }
+
+    fn dir_is_empty(path: &Path) -> bool {
+        std::fs::read_dir(path).unwrap().next().is_none()
+    }
+
+    /// Only the harness that passed setup's probe runs: a request naming
+    /// another is refused, and one naming the set-up harness gets its entry.
+    #[test]
+    fn start_run_refuses_a_harness_that_is_not_set_up() {
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(named_start_run(HarnessId::Codex)))),
+            (
+                ErrorCode::NotConfigured,
+                "Codex is not the summary harness set up in Brauser settings.".to_string()
+            )
+        );
+        assert!(!world.paths.runs().exists() || dir_is_empty(&world.paths.runs()));
+        match world.call(&Request::StartRun(named_start_run(HarnessId::Claude))) {
+            Response::RunStarted(started) => {
+                assert_eq!(started.run.harness, HarnessId::Claude);
+                let fetched = world.wait_finished(&started.run.run_id);
+                assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+            }
             other => panic!("unexpected response: {other:?}"),
         }
-        request.harness = None;
-        request.record_key = Some(RecordKey {
-            kind: RecordKeyKind::Url,
-            value: "https://example.com/b".into(),
-        });
-        assert_eq!(
-            error_of(world.call(&Request::StartRun(request))).0,
-            ErrorCode::NotConfigured
-        );
     }
 
     #[test]
@@ -1006,32 +1045,15 @@ mod tests {
         assert!(started.elapsed() >= Duration::from_secs(2));
         assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
 
-        // Without an entry, the service's limit applies.
-        let world = World::unconfigured("exec /bin/sleep 30\n");
-        world.configure(None, None);
+        // A request naming the set-up harness gets the same limit.
+        let world = World::new(&format!("/bin/sleep 2\n{}", answer()));
         world.start_with(Duration::from_secs(600), Duration::from_secs(1));
-        let request = StartRunRequest {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: "timed".into(),
-            url: "https://example.com/a".into(),
-            title: "Page A".into(),
-            content: "Body text".into(),
-            selection: None,
-            harness: Some(HarnessId::Claude),
-            record_key: Some(url_key()),
-            requested_at: "2026-10-26T10:00:00Z".into(),
-        };
-        let run_id = match world.call(&Request::StartRun(request)) {
+        let run_id = match world.call(&Request::StartRun(named_start_run(HarnessId::Claude))) {
             Response::RunStarted(started) => started.run.run_id,
             other => panic!("unexpected response: {other:?}"),
         };
         let fetched = world.wait_finished(&run_id);
-        assert_eq!(fetched.run.state, RunState::Failed, "{fetched:?}");
-        assert_eq!(fetched.run.error_kind, Some(RunErrorKind::TimedOut));
-        assert_eq!(
-            fetched.run.error.as_deref(),
-            Some("Timed out after 1 second")
-        );
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
     }
 
     #[test]

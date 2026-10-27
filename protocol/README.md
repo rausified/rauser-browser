@@ -137,7 +137,8 @@ the same length-prefixed framing and generated types:
 - `start_run` carries the page `url`, `title`, extracted `content` (at most
   1,048,576 characters; the host's 4 MiB inbound frame cap is the binding byte
   limit), an optional `selection`, an optional `harness` (`codex` or
-  `claude`), `record_key`, and `requested_at`. The extension always sends
+  `claude`; a run always uses the harness set up in settings, and a request
+  naming another is refused as `not_configured`), `record_key`, and `requested_at`. The extension always sends
   `record_key` as `null`: the host resolves it exactly as `load_note` does and
   refuses a request that names one. `requested_at` is the user's local click
   time as an RFC 3339 timestamp with its UTC offset, checked against the same
