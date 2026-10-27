@@ -517,8 +517,9 @@ were folded into `brwr-q7e` above rather than given their own item.
   child can exit after printing its reply before the parent writes the framed
   request, intermittently producing `EPIPE` even though production dialog
   children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly. The earlier cycle-6 fix never merged; the repair
-  is now committed as `00dbc75` and included in `728b200`.
+  and exercise it repeatedly. The repair is committed as `00dbc75` and
+  included in `728b200`;
+  the bead is blocked on full verification in a runner that permits local IPC.
 
   Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
   request, make the reply fixture consume exactly the framed byte count, and
@@ -531,20 +532,20 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, quarantine recovery on `90f88b4`):
-  recovered cycle 4's documentation from its quarantine branch; the driver
-  rejected it for a missing `.bosun_commit_msg`, which is now written.
-  Protocol generation, workspace build, format, both Clippy configurations,
-  cached offline npm install, typecheck, lint, extension build, all 13 extension
-  test files and current-state checks pass. The unfiltered Rust gate remains
-  red: 26 adapter-template tests pass, then 447 host tests pass and 32 fail in
-  service/IPC tests. The repaired dialog fixture passes its 60 exchanges.
-  Independent workspace Unix bind and JSON-only Node `spawnSync` probes both
-  return EPERM. The script gate fails; disabling Node test isolation exposes
-  8 passes, 1 failure and 1 platform skip. No product or test changes, skipped
-  coverage, feature work or history reset. Keep this bead open until a runner
-  permitting local IPC verifies the complete gate; logs are under ignored
-  `target/overnight-health/`.
+  Latest verification (2026-10-27, clean `8b7acd7`): no quarantine file
+  or incomplete changes. Protocol generation, workspace build, format, both
+  Clippy configurations, offline npm ci, typecheck, lint, extension build,
+  all 13 extension test files, current-state and queue checks pass. The
+  unfiltered Rust gate has 26 adapter-template passes, 447 host passes and
+  32 service/IPC failures; later binaries are not reached. Five dialog tests
+  pass, including the repaired 60-exchange fixture. Independent AF_UNIX bind
+  and connect probes both return EPERM. Node spawnSync reports status 0 but
+  error EPERM and empty output; script diagnostics show 8 passes, 1 failure
+  and 1 platform skip. No source changes, disabled tests, feature work or
+  history reset. Raw logs: `target/overnight-health/baseline-8b7acd7/`.
+  Driver action: run the unfiltered gate with local IPC permitted and include
+  the tested baseline SHA and result in the next cycle's handoff. The absence
+  of a quarantine file does not establish green health.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -882,24 +883,33 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — quarantine recovery)
+### Current health handoff (2026-10-27 — baseline `1305440`)
 
-- Recovered cycle 4 documentation; its missing commit message is now present.
-  This cycle still begins red, so no new feature was started.
-- The same IPC restriction persists on clean merged baselines `728b200` and
-  `90f88b4`. The last five commits contain no state verified green under this
-  restriction. A history reset cannot restore a denied OS capability; retain
-  `00dbc75` and leave all socket and script coverage enabled.
-- The root blocker is runner capability, not an incomplete code change. The
-  driver should run the unfiltered gate where Unix bind/connect and Node
-  synchronous child output are permitted, and preserve that result for the
-  next cycle. No approval or code rollback can resolve EPERM inside this run.
-  Current raw health logs are under ignored `target/overnight-health/`.
-- For useful script diagnostics here, run
-  `node --test --test-isolation=none scripts/tests/dev-service.test.mjs`.
-  The normal test-isolated runner reports only a failed file; the diagnostic
-  reports the actual win32 simulation failure. Neither invocation passes.
-- Once the health gate is genuinely green, resume `brwr-1hj` through its
-  `brwr-t40` blocker. The next useful product increment remains host drafting
-  with selectable rules and example artifact grouping, using the existing
-  private pattern inputs; additional pattern diagnostics do not complete it.
+- Clean workspace; no quarantine failure file. The unfiltered opening gate
+  again passes 26 adapter-template tests and 447 host tests, then fails 32
+  service tests. Later Rust test binaries are not reached. All 13 extension
+  test files pass, as do protocol generation, build, fmt, both Clippy
+  configurations, npm install, typecheck, lint, extension build, current-state
+  validation and queue consistency. The repaired dialog fixture completes its
+  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
+- Independent workspace AF_UNIX bind and connect both return errno 1 EPERM.
+  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
+  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
+  and 1 platform skip, with the win32 simulation unable to parse empty output.
+  TESTING.md documents that diagnostic and the restriction. Keep all tests
+  enabled and do not change production IPC to fit this runner.
+- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29` and
+  `8b7acd7`. No commit among the last five is verified green in this runner,
+  so no history reset was attempted. Earlier quarantine documentation was
+  recovered; this cycle introduces no product or test change and claims no
+  shipped feature.
+- The driver needs to carry the baseline SHA and an unfiltered external
+  gate result into its next handoff, and provide a runner permitting local
+  IPC and synchronous child output. Another unchanged restricted cycle will
+  reproduce these failures rather than advance the assigned product work.
+- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
+  selectable rules and example artifact grouping using the existing private
+  pattern inputs. Resolve the Notion leading-literal contradiction
+  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
+  preview which example pages share an artifact still belongs in this review;
+  no additional diagnostic view or self-directed feature is needed first.
