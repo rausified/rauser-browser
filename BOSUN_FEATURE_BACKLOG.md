@@ -342,15 +342,6 @@ and the protocol v6 removals) is done; see Shipped.
   it. The queue had imported this bead as closed from the cycle-8 export;
   it is reopened because that code never reached `main`.
 
-- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
-  child can exit after printing its reply before the parent writes the framed
-  request, intermittently producing `EPIPE` even though production dialog
-  children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly; this was discovered during the current cycle's
-  final Rust verification and does not affect the shipped worker change.
-  Reopened: its fix exists only in the never-merged cycle-6 PR, so it has not
-  reached `main`.
-
 - [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
   drop that races the last in-flight batch stays counted and visible, but its
   marker currently waits for another authorized event to provide a safe log
@@ -521,6 +512,35 @@ were folded into `brwr-q7e` above rather than given their own item.
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
+  child can exit after printing its reply before the parent writes the framed
+  request, intermittently producing `EPIPE` even though production dialog
+  children read the request first. Make the fixture obey the real handshake
+  and exercise it repeatedly. The earlier cycle-6 fix never merged; the repair
+  is now committed as `00dbc75` and included in `728b200`.
+
+  Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
+  request, make the reply fixture consume exactly the framed byte count, and
+  stress repeated replies. Review the complete diff and rerun the required
+  checks. Keep this bead open until the driver can verify the full suite: this
+  sandbox refuses Unix sockets (EPERM), including a standalone bind probe.
+  Repair committed: the large-input reproduction failed with Broken pipe before
+  the fix; the child now reads the byte count and complete body before replying.
+  Sixty exchanges cover empty, short and 64 KiB UTF-8 requests without waiting
+  for EOF. No production dialog behavior changed. Full verification remains
+  pending outside the sandbox; no shipped claim or bead closure this cycle.
+
+  Cycle 2 verification (2026-10-27): clean baseline, no failure-gate file;
+  the fixture passes in both normal and scripted-dialog builds. The required
+  full gate still fails at 32 socket-dependent host tests (447 pass), and an
+  independent Unix bind in this workspace returns EPERM. All 13 extension
+  files and both Clippy gates pass. Diagnostic filtering gives 493 Rust passes
+  with 39 host tests excluded; this is not full-suite acceptance. The script
+  suite has 8 passes, 1 platform skip and 1 failure: a standalone Node
+  `spawnSync` probe confirms EPERM and empty stdout. No new code, feature,
+  test suppression or reset was attempted. An unrestricted driver verification
+  is needed before closing this item or starting the next feature cycle.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -836,3 +856,39 @@ were folded into `brwr-q7e` above rather than given their own item.
   unchecked in the future rule review.
 - `brwr-vny` is a later product idea: help a person understand a skipped page
   using an actual policy reason, after the ordered Capture Site work.
+
+### Cycle observations (2026-10-27 — dialog fixture repair)
+
+- Health started red solely at Unix-socket service tests: 32 host failures, all
+  explained by denied socket operations; a minimal independent bind also
+  returned EPERM. The workspace started clean and no commit-gate failure file
+  existed. Keep real socket coverage intact and have the driver rerun it.
+- The successful-dialog fixture must read the framed request before answering,
+  as production does. Large requests reliably exposed the old fixture's
+  early-exit race; small requests alone passed by scheduling luck.
+- Node's synchronous child-process transport also returns EPERM here, even for
+  a child that only prints JSON. `test:scripts` consequently fails its win32
+  path simulation, while extension test files pass. This is an environment
+  limitation, not evidence that the registration logic needs replacement.
+- No history reset was attempted: the clean baseline itself fails the socket
+  probe, and none of the preceding five commits is verified green under this
+  restriction. Resetting history cannot restore a denied OS capability.
+- Once the external gate is green, finish the existing unknown-site Capture
+  Site assignment; the private pattern review already provides its inputs.
+  A useful later review would show how selected rules group example pages
+  into the same artifact before enabling them, within the existing review.
+
+### Cycle observations (2026-10-27 — repeated restricted health gate)
+
+- Cycle 2 confirms the same IPC restriction on the clean merged baseline.
+  No recent commit is verified green inside this sandbox, so resetting to
+  older code would discard work without restoring the denied OS capability.
+  Retain `00dbc75`; full socket and script coverage must remain enabled.
+- The useful next action is for the driver to run the full gate where Unix
+  bind/connect and Node synchronous child output are permitted, then make
+  that result available to the next cycle. Repeating the restricted run does
+  not establish `brwr-4vb`'s acceptance criteria.
+- Once the health gate is genuinely green, resume `brwr-1hj` through its
+  `brwr-t40` blocker. The next useful product increment remains host drafting
+  with selectable rules and example artifact grouping, using the existing
+  private pattern inputs; additional pattern diagnostics do not complete it.
