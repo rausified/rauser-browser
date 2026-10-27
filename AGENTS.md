@@ -65,7 +65,8 @@ Brauser's support directory with the native-messaging framing, and exits after
 resolving the record key itself; it starts a missing service with
 `launchctl kickstart`, checks the service's build identity with
 `service_hello`, and answers `service_unavailable` when the service is not
-installed or stays on another build. The service keeps one record directory
+installed or stays on another build. A host older than the binary on disk
+never restarts the service; it asks for an extension reload instead. The service keeps one record directory
 per run under `runs/`, runs at most two at once with one queued-or-running run
 per record key, times runs out after 10 minutes, kills the process group on
 cancel, marks orphaned runs failed on restart, prunes old records, and overlays
