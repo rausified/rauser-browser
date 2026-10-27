@@ -2618,7 +2618,11 @@ print(json.dumps([tables,row]))"#;
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{:?}", output.stderr);
-            assert_eq!(String::from_utf8(output.stdout).unwrap(), "2\n['link']\n");
+            // Python writes \r\n on Windows.
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap().replace("\r\n", "\n"),
+                "2\n['link']\n"
+            );
             // Do not rewrite historical payloads: their exact content detects
             // conflicting reuse of an event ID during replay and rebuilding.
             assert!(
