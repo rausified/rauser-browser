@@ -10,6 +10,8 @@ const {
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
+  withContainerLinks,
+  containerLinks,
 } = await import("../dist/starter-adapters.js");
 
 const vectors = JSON.parse(await readFile(new URL("../../protocol/adapter-templates/vectors.json", import.meta.url)));
@@ -176,4 +178,24 @@ test("GitHub drafts are scoped and preserve PR modes", () => {
   const issue = evaluate(doc, "https://github.com/acme-corp/widget/issues/77");
   assert.equal(issue.match, true);
   assert.equal(issue.artifact_id, "github.issue:github.com/acme-corp/widget/77");
+});
+
+test("withContainerLinks links only rules whose linked copy compiles, and leaves the rest as they are", () => {
+  const [pr, issue, repo] = starterOffers("https://github.com", ["acme-corp"]).map((offer) => offer.adapter);
+  const { within: _prWithin, ...bareIssue } = issue;
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{_}/pull/{number:int}" }],
+    id: "github.pr:{host}/{number}",
+  };
+  const otherOrigin = { ...bareIssue, origin: "https://ghe.example.com" };
+  const elsewhere = { ...pr, within: { type: "other.box", id: "other.box:{host}/{owner}" } };
+  const artifacts = [handWritten, bareIssue, otherOrigin, elsewhere];
+  assert.deepEqual(containerLinks(artifacts, repo), { linked: 1, skipped: 1 });
+  const linked = withContainerLinks(artifacts, repo);
+  assert.equal(linked[0], handWritten);
+  assert.deepEqual(linked[1], { ...bareIssue, within: { type: "github.repo", id: repo.id } });
+  assert.equal(linked[2], otherOrigin);
+  assert.equal(linked[3], elsewhere);
+  assert.deepEqual(containerLinks(artifacts, { ...repo, type: "github.other" }), { linked: 0, skipped: 0 });
 });

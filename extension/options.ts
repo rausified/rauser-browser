@@ -35,8 +35,8 @@ import {
 } from "./adapter-review.js";
 import {
   configuredGitHubOrganizations,
+  containerLinks,
   hasAdapter,
-  needsContainerLinks,
   orderContainedFirst,
   parseGitHubOrganizations,
   starterOffers,
@@ -104,6 +104,7 @@ let githubScopeText = "";
 let githubScopeEdited = false;
 
 const LINKS_EXISTING_RULES = "Also links your existing pull request and issue rules to their repositories.";
+const SKIPS_UNLINKABLE_RULES = "Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are.";
 
 // The host binds a folder selection to the revision it was made at, so any
 // save, from this page or another, makes it unusable.
@@ -586,10 +587,15 @@ function refreshAdapterEditor(): void {
   if (adapterEdit === null) return;
   const candidate = readAdapterCandidate();
   adapterValidation.classList.toggle("warning", !candidate.ok);
-  const links = candidate.ok && adapterEdit.kind === "new" && adapterEdit.linkContainers === true &&
-    needsContainerLinks(session.config?.adapters.artifacts ?? [], candidate.adapter);
+  const links = candidate.ok && adapterEdit.kind === "new" && adapterEdit.linkContainers === true
+    ? containerLinks(session.config?.adapters.artifacts ?? [], candidate.adapter)
+    : { linked: 0, skipped: 0 };
   adapterValidation.textContent = candidate.ok
-    ? `Valid here. The native host will validate the complete configuration again before saving.${links ? ` ${LINKS_EXISTING_RULES}` : ""}`
+    ? [
+      "Valid here. The native host will validate the complete configuration again before saving.",
+      ...(links.linked ? [LINKS_EXISTING_RULES] : []),
+      ...(links.skipped ? [SKIPS_UNLINKABLE_RULES] : []),
+    ].join(" ")
     : candidate.message;
   adapterPreview.replaceChildren();
   if (!candidate.ok) {

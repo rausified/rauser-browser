@@ -1,4 +1,5 @@
 import type { AdapterObject } from "./adapter-review.js";
+import { compileDocument } from "./adapter-templates.js";
 
 export type StarterKind = "jira" | "sharepoint" | "github";
 
@@ -225,26 +226,42 @@ export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): bool
 
 const LINKABLE_TO_REPOSITORY = new Set(["github.pr", "github.issue"]);
 
-/** The adapters `withContainerLinks` would change: `github.pr` and
- * `github.issue` rules on the repository's origin that declare no `within`. */
-function unlinked(artifacts: AdapterObject[], repo: AdapterObject): boolean[] {
-  return artifacts.map((adapter) => repo.type === GITHUB_REPOSITORY && typeof repo.id === "string" &&
-    adapter.origin === repo.origin && typeof adapter.type === "string" &&
-    LINKABLE_TO_REPOSITORY.has(adapter.type) && adapter.within === undefined);
+type LinkPlan = "link" | "skip" | null;
+
+/** For each adapter, whether adding `repo` links it ("link"), would link it
+ * but cannot ("skip"), or leaves it alone (null). Candidates are `github.pr`
+ * and `github.issue` rules on the repository's origin that declare no
+ * `within`. A candidate is linked only when its linked copy compiles on its
+ * own, so a hand-written rule whose ID and scope do not capture owner and
+ * repo is skipped rather than invalidating the whole document. */
+function linkPlan(artifacts: AdapterObject[], repo: AdapterObject): LinkPlan[] {
+  if (repo.type !== GITHUB_REPOSITORY || typeof repo.id !== "string") return artifacts.map(() => null);
+  const within = { type: GITHUB_REPOSITORY, id: repo.id };
+  return artifacts.map((adapter) => {
+    if (adapter.origin !== repo.origin || typeof adapter.type !== "string" ||
+      !LINKABLE_TO_REPOSITORY.has(adapter.type) || adapter.within !== undefined) return null;
+    return compileDocument({ format: 1, artifacts: [{ ...adapter, within }] }).ok ? "link" : "skip";
+  });
 }
 
-/** Whether adding `repo` would link any existing pull request or issue rule. */
-export function needsContainerLinks(artifacts: AdapterObject[], repo: AdapterObject): boolean {
-  return unlinked(artifacts, repo).some(Boolean);
+/** How many existing pull request and issue rules adding `repo` would link,
+ * and how many it must leave unlinked. */
+export function containerLinks(artifacts: AdapterObject[], repo: AdapterObject): { linked: number; skipped: number } {
+  const plan = linkPlan(artifacts, repo);
+  return {
+    linked: plan.filter((entry) => entry === "link").length,
+    skipped: plan.filter((entry) => entry === "skip").length,
+  };
 }
 
 /** `artifacts` with `within` naming `repo` added to each same-origin
- * `github.pr` and `github.issue` adapter that lacks one. Nothing else about
- * those adapters changes (their scope in particular), and adapters that
- * already declare a container are left as they are. */
+ * `github.pr` and `github.issue` adapter that lacks one and can take it.
+ * Nothing else about those adapters changes (their scope in particular);
+ * adapters that already declare a container, or cannot be linked, are
+ * returned as they are. */
 export function withContainerLinks(artifacts: AdapterObject[], repo: AdapterObject): AdapterObject[] {
-  const link = unlinked(artifacts, repo);
-  return artifacts.map((adapter, at) => link[at]
+  const plan = linkPlan(artifacts, repo);
+  return artifacts.map((adapter, at) => plan[at] === "link"
     ? { ...adapter, within: { type: GITHUB_REPOSITORY, id: repo.id as string } }
     : adapter);
 }

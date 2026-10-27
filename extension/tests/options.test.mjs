@@ -1285,3 +1285,42 @@ test("a repository starter with already-linked rules adds no linking line", asyn
   assert.match(env.elements.get("adapter-validation").textContent, /^Valid here\./);
   assert.doesNotMatch(env.elements.get("adapter-validation").textContent, /Also links/);
 });
+
+test("an existing rule that cannot be linked stays as it is and does not block repositories", async () => {
+  const [, issue] = existingGitHubRules(["acme-corp"], ["acme-corp"]);
+  // Hand-written: its ID has no {repo}, so a repository `within` cannot be built from it.
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{_}/pull/{number:int}" }],
+    id: "github.pr:{host}/{number}",
+  };
+  const saves = [];
+  const state = install({
+    adapters: [handWritten, issue],
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  repoButton().click();
+  const validation = env.elements.get("adapter-validation").textContent;
+  assert.match(validation, /^Valid here\./);
+  assert.match(validation, /Also links your existing pull request and issue rules to their repositories\./);
+  assert.match(validation, /Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are\./);
+  assert.equal(env.elements.get("save-adapter").disabled, false);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository save");
+  assert.equal(saves.length, 1);
+  const saved = saves[0].config.adapters.artifacts;
+  assert.deepEqual(saved.find((adapter) => adapter.type === "github.pr"), handWritten);
+  assert.deepEqual(saved.find((adapter) => adapter.type === "github.issue"),
+    { ...issue, within: { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" } });
+});
+
+test("pre-filling organizations and rendering the gallery saves nothing", async () => {
+  const state = install({ adapters: existingGitHubRules(["a"], ["b"]) });
+  await openSettings();
+  typeSite("https://github.com");
+  assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "a, b");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+});
