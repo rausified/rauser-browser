@@ -1688,6 +1688,7 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
 
 /// Whether both lists of `vocabulary` pass the checks a saved
 /// configuration's `[summary_vocabulary]` must.
+#[cfg(unix)] // Only the Unix-only service uses this.
 pub(crate) fn valid_summary_vocabulary(vocabulary: &SummaryVocabulary) -> bool {
     validate_vocabulary("document type", &vocabulary.document_types).is_ok()
         && validate_vocabulary("category", &vocabulary.categories).is_ok()

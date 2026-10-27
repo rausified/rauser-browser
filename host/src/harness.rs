@@ -231,6 +231,7 @@ pub fn detect(env: &HarnessEnv, run_env: &[(OsString, OsString)]) -> Vec<Detecte
 /// search [`detect`] uses for that environment, and passing the same install
 /// check, so a run never starts a program setup did not look at. The error is
 /// host-authored text.
+#[cfg(unix)] // Only the Unix-only service uses this.
 pub(crate) fn resolve_for_run(
     adapter: Adapter,
     run_env: &[(OsString, OsString)],
