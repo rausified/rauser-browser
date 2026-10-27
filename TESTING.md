@@ -19,6 +19,36 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and browser permission prompts are handled by granting access ahead of time.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Platform coverage in CI
+
+The shared build/check job targets `macos-15` and `windows-latest`. Both run
+protocol generation checks, Rust build/tests/Clippy (including the debug
+`scripted-dialogs` variant), TypeScript checks, extension build/tests, and
+5,000 generated cross-engine adapter cases. The native macOS Chrome smoke
+runner and the existing libFuzzer compile check stay on macOS. *The restored
+Windows job still needs its first passing run; this change was checked on a
+Linux VM, which cannot establish Windows acceptance.*
+
+Host SQLite tests use a shared subprocess helper: `python3` on Unix and
+`python` on Windows, with `-X utf8` so redirected text stays UTF-8. A real
+SQLite regression uses a Unicode filename and title. Assertions on Python's
+multi-line output compare lines, allowing Windows CRLF without changing the
+expected SQL results. Python 3 must be on PATH (CI uses setup-python).
+
+Unix shell and process-group fixtures remain gated by `cfg(unix)` because
+Windows harness execution is still refused (`brwr-ooy`). Unix symlink tests
+exercise Unix filesystem behavior without requiring Windows developer mode
+or elevated symlink privileges. Direct scripted dialog-child framing and
+parent-disconnect tests run on Windows too. The one host-kill integration
+fixture stays Unix-only: it isolates user configuration through HOME, while
+Windows Known Folders ignore that override. `brwr-3rt` tracks a disposable
+config-path seam before enabling that fixture on Windows. No test is allowed
+to read real user settings merely to gain platform coverage.
+
+Interactive Windows Chrome, picker, confirmation, and native registration
+acceptance remains the separate human-gated `brwr-i1g` task. A green CI run
+alone does not certify those interactions.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
@@ -114,6 +144,21 @@ This standard is meant to improve with use. When you change it:
 - If a change alters the hard rule, confirm it with the user first.
 
 ## Learning log
+
+- 2026-10-27: Prepared Windows CI without claiming a Windows run from Linux.
+  Nine SQLite subprocess call sites now share platform Python selection and
+  UTF-8 mode; multi-line output accepts CRLF. The successful-dialog fixture
+  reproduced EPIPE with an early-exit child and a 114,694-byte Unicode
+  request; consuming the byte-framed body passed 100 consecutive repetitions.
+  The HOME-only host-kill fixture is Unix-gated until `brwr-3rt` isolates
+  Windows Known Folders. Existing smoke dialog count remains 14. In this
+  sandbox, Node spawnSync reported EPERM even after a child produced output,
+  and the differential wrapper stalled. Generating seed-1 requests with the
+  exported `genCase`, running `brauser adapters eval` and
+  `node scripts/adapter-templates-eval.mjs` separately on that same JSONL file,
+  then comparing parsed results with `isDeepStrictEqual` passed all 5,000
+  cases (2,355 matched; 426 invalid documents). This verifies the engines;
+  it does not establish that the Node subprocess wrapper passed here.
 
 - 2026-10-27: Independent review reproduced an older URL note disappearing
   from a recovered context-only route when the shared note's creation route

@@ -1823,7 +1823,6 @@ fn read_sqlite_varint(bytes: &[u8]) -> Result<(u64, usize)> {
 mod tests {
     use super::*;
     use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
-    use std::process::Command;
     use tempfile::TempDir;
 
     fn storage(root: &Path) -> StorageConfig {
@@ -2052,7 +2051,7 @@ c=sqlite3.connect(sys.argv[1])
 tables=[r[0] for r in c.execute("select name from sqlite_schema where type='table' order by name")]
 row=c.execute("select title, url from artifacts").fetchone()
 print(json.dumps([tables,row]))"#;
-        let output = Command::new("python3")
+        let output = crate::test_support::python()
             .args(["-c", script])
             .arg(index.database_path())
             .output()
@@ -2358,7 +2357,7 @@ print(json.dumps([tables,row]))"#;
             .collect::<Vec<_>>();
         index.record_activities(events.iter(), &[]).unwrap();
         assert!(!root.path().join("artifacts").exists());
-        let output = Command::new("python3")
+        let output = crate::test_support::python()
             .args([
                 "-c",
                 "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from dirty_artifacts').fetchone()[0])",
@@ -2444,7 +2443,7 @@ print(json.dumps([tables,row]))"#;
         forged.title = Some("Forged retry".into());
         assert!(index.record_activity(&forged, &[]).is_err());
 
-        let output = Command::new("python3")
+        let output = crate::test_support::python()
             .args([
                 "-c",
                 "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select title from artifacts').fetchone()[0])",
@@ -2544,7 +2543,7 @@ print(json.dumps([tables,row]))"#;
             fs::metadata(index.database_path()).unwrap().len() > (5 * SQLITE_PAGE_SIZE) as u64,
             "the SQLite fixture did not exercise an interior B-tree page"
         );
-        let output = Command::new("python3").args([
+        let output = crate::test_support::python().args([
             "-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
         ]).arg(index.database_path()).output().unwrap();
         assert!(
@@ -2610,7 +2609,7 @@ print(json.dumps([tables,row]))"#;
             assert_eq!(artifact.focused_seconds, 125);
             assert_eq!(artifact.background_seconds, 61);
             assert_eq!(artifact.linked_count, 1);
-            let output = Command::new("python3")
+            let output = crate::test_support::python()
                 .args([
                     "-c",
                     "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from visits').fetchone()[0]); print([r[0] for r in c.execute('select kind from edges')])",
@@ -2619,7 +2618,13 @@ print(json.dumps([tables,row]))"#;
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{:?}", output.stderr);
-            assert_eq!(String::from_utf8(output.stdout).unwrap(), "2\n['link']\n");
+            assert_eq!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                ["2", "['link']"]
+            );
             // Do not rewrite historical payloads: their exact content detects
             // conflicting reuse of an event ID during replay and rebuilding.
             assert!(
@@ -2796,7 +2801,7 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(report.written, 1);
         let artifact = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
         assert!(artifact.contains("Rebuilt"));
-        let output = Command::new("python3").args([
+        let output = crate::test_support::python().args([
             "-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
         ]).arg(index.database_path()).output().unwrap();
         assert!(output.status.success());

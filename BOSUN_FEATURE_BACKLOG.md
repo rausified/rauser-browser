@@ -236,10 +236,6 @@ Their line numbers predate step 6.6, so re-check them.
   existing activity, notes, and index rows through explicit append-only
   alias/re-key events (the needed part of step 7.2). This replaces the
   conservative ID freeze instead of relaxing it.
-- [ ] `brwr-bzx` **Windows CI.** Add a `windows-latest` job for the host build,
-  tests, and clippy, plus the extension checks. Fix code and tests that have
-  assumed macOS/Unix since 2026-10-15, and keep the existing Windows code
-  paths. Interactive Windows checks are separate **[human]** work.
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
   Windows CI, record an isolated real-Chrome run with source and OS/browser
   versions, native registration, picker/consent and first grants, background
@@ -310,12 +306,6 @@ Their line numbers predate step 6.6, so re-check them.
   during debounce and an in-flight save, retaining any lost edits in durable
   recovery. This P2 stabilization gate precedes M2; use only isolated local
   fixtures and preserve setup smoke and dialog counts.
-- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
-  child can exit after printing its reply before the parent writes the framed
-  request, intermittently producing `EPIPE` even though production dialog
-  children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly; this was discovered during the current cycle's
-  final Rust verification and does not affect the shipped worker change.
 - [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
   drop that races the last in-flight batch stays counted and visible, but its
   marker currently waits for another authorized event to provide a safe log
@@ -373,15 +363,26 @@ Their line numbers predate step 6.6, so re-check them.
   format-1 replacement workspace so a user can salvage valid rules without
   asking an older build to interpret or migrate an unsupported future format.
 
+- [ ] `brwr-3rt` **Isolate Windows host lifecycle tests from user config.**
+  Add a debug scripted-dialogs-only config-path seam so the host-kill fixture
+  can run on Windows without Known Folders reading real per-user settings.
+  Direct child lifecycle coverage already runs on both platforms; preserve
+  the existing macOS smoke configuration and release-build exclusion.
+
 ## In Progress / This Iteration
 
-- None. `brwr-ezb` and its discovered scan-completeness fix `brwr-t61` are
-  complete after three failing-first regressions, a fresh full diff review and
-  the full gate (332 Rust tests, eight extension test files). Follow `bd ready`
-  next; Capture Site remains the major product investment behind its existing
-  queue prerequisites and the P3 proposals stay behind ordered plan work.
+- [ ] `brwr-bzx` **Windows CI.** Configured the shared job for `macos-15`
+  and `windows-latest`, preserving macOS-only Chrome smoke/fuzz checks.
+  Nine SQLite subprocess sites use platform Python selection and UTF-8;
+  multiline results accept CRLF and a new real-SQLite test uses a Unicode
+  path and title. All local checks pass. Still needs an actual green Windows
+  CI run and macOS CI confirmation before closure; no Windows runtime is
+  available here. Interactive acceptance remains the human `brwr-i1g` task.
+  The HOME-only host-kill fixture stays Unix-gated pending `brwr-3rt`.
 
 ## Shipped
+
+- **Category:** Testing & Verification. **Make the dialog reply fixture follow the real request handshake (2026-10-27).** `brwr-4vb` is complete: the successful fake child now consumes the decimal byte length and complete body before replying, removing a test-only early-exit race that could break otherwise green builds with EPIPE. A 114,694-byte Unicode request reproduces the old failure and passed 100 consecutive runs with the repaired child; production dialogs are unchanged. **Metrics:** 335 Rust tests (+1 Unicode SQLite regression), 307 scripted-build tests, 8 extension test files and both Clippy configurations green; 5,000 generated adapter cases agree through direct engine runs, with the Node wrapper blocked by the sandbox; macOS smoke unavailable on Linux, 14 dialogs unchanged.
 
 - **Category:** Bug Fix. **Keep shared and older notes reachable after capture rules are removed (2026-10-27).** Historical note recovery now retains the older URL-note list and its read-only viewing action after adapter removal, recognition narrowing and site removal. Both URL lookup directions share durable activity, mode and explicit-context evidence, so alternate routes and context-only history recover the same note without inventing activity. Native request tests prove separate URL notes, migration refusals, stale-key copy-out, cache deletion/reindex and suppressed capture preserve existing content. **Metrics:** 332 Rust tests (+5) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
 - **Category:** Security & Privacy. **Refuse incomplete historical note scans before autosave (2026-10-27).** Review of note removal reproduced a partial candidate scan selecting a note despite an omitted conflicting identity. Primary recovery now fails closed at the file-count, per-file byte or total-byte limit and on unreadable regular candidates; optional older-note discovery remains best effort. Native loads and saves return correlated unavailable-identity errors, preserve note bytes and recover once the fault clears. **Metrics:** 332 Rust tests and 8 extension test files passing; 4 scan-fault cases within 1 new regression, plus activity/context ambiguity and cache-failure coverage; full gate green.
@@ -413,6 +414,17 @@ Their line numbers predate step 6.6, so re-check them.
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- The Windows CI configuration is ready for a runner, not a claim of Windows
+  support. Continue `brwr-bzx` from an actual CI result; the Linux VM cannot
+  prove it green. Known Folders requires a test config-path seam (`brwr-3rt`)
+  rather than more HOME/APPDATA overrides. The opening workspace test count
+  was 334 (including two prior independent-review regressions), now 335.
+- Capture Site (`brwr-1hj`) remains the strongest daily-use improvement once
+  its real prerequisites are ready. Its confirmation should preview a few
+  actual remembered tickets/docs, and incoming trails (`brwr-1g2`) can then
+  explain the connection between tools. Those existing proposals cover the
+  product opportunity; no duplicate status or observability task was added.
 
 - `brwr-ee5` is fixed with a reproduced missing-append regression. The cache
   remains a provisional whole-history snapshot; `brwr-b2e` now records that
@@ -507,11 +519,10 @@ Their line numbers predate step 6.6, so re-check them.
   must preserve that invariant: reusing one fake revision for different
   documents can hide stale-policy bugs or create failures impossible in a real
   host exchange.
-- The full Rust rerun exposed `brwr-4vb`: the successful-dialog fixture can
-  answer without reading its framed request and race the parent into `EPIPE`.
-  It passed the opening gate, its isolated rerun, and the next complete suite;
-  the production child handshake is unaffected, and the focused fixture repair
-  remains queued instead of being mixed into this deploy-blocker cycle.
+- `brwr-4vb` is now fixed: the successful-dialog fake consumes the whole
+  framed request before replying. A request larger than the pipe buffer makes
+  the former early-exit EPIPE reproducible, and the fixed fixture passed 100
+  runs. This is a test-fixture repair, not a production dialog change.
 - Once the artifact card and worklog exist, a named focus session could supply
   the missing human intent that measured attention deliberately does not infer.
   `brwr-ued` keeps that proposal local and explicit: the user names the work,
