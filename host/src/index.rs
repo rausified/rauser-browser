@@ -115,6 +115,7 @@ impl CachedEvent {
             Self::Activity(event) => &event.artifact_id,
             Self::Why(event) => &event.artifact_id,
             Self::Legacy(event) => &event.artifact_id,
+            Self::Summary(event) => &event.artifact_id,
         }
     }
 
@@ -126,6 +127,7 @@ impl CachedEvent {
             Self::Activity(event) => (&event.url, &event.modes),
             Self::Why(event) => (&event.url, &[]),
             Self::Legacy(event) => (&event.url, &[]),
+            Self::Summary(event) => (&event.url, &[]),
         };
         std::iter::once(url).chain(modes.iter().map(|mode| mode.url.as_str()))
     }
