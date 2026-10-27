@@ -136,7 +136,9 @@ Type and category are open vocabularies seeded by the lists above (stored in con
 
 Location and identity follow DESIGN.md §5.2 as already specified: `summaries/<slug>.summary.md` (the fixed folder; per-folder settings were removed 2026-10-27), keyed by the same record key as the page note (so `/edit` and `/view` share it), host-written `brauser.kind: summary` ownership frontmatter, replaced whole on re-summarize, never adopting an unowned file. New content:
 
-As built in PR 4 (DESIGN.md §6.6), the identity block holds the canonical URL and exactly one key, `url_id` or `artifact_id`, rather than a `record_key` object; identity and other values are JSON-quoted; the page link is `[Page](<…>)` and the note link follows the profile (`[Page note](../notes/….md)` or `[[notes/…|Page note]]`); the **Entities** line lists only non-empty groups and is left out when all are empty; and **Related** appears only when the answer named related notes. The layout as specified:
+As built in PR 4 (DESIGN.md §6.6), the identity block holds the canonical URL and exactly one key, `url_id` or `artifact_id`, rather than a `record_key` object; identity and other values are JSON-quoted; the page link is `[Page](<…>)` and the note link follows the profile (`[Page note](../notes/….md)` or `[[notes/…|Page note]]`); the **Entities** line lists only non-empty groups and is left out when all are empty; and **Related** appears only when the answer named related notes. The block below is the layout as originally specified, before PR 4, not the shipped file; where it differs from the paragraph above, the paragraph wins. For the as-built example see DESIGN.md §6.6.
+
+Originally specified layout (superseded in the details above):
 
 ```markdown
 ---

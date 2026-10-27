@@ -1369,7 +1369,7 @@
     "SummaryView": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An artifact's latest summary, from its summary log event. summarized_at is RFC 3339 in the offset of the click that requested it; summary_path is relative to the notes folder.",
+      "description": "An artifact's latest summary, from its summary log event. summarized_at is RFC 3339 in the offset of the click that requested it; summary_path is relative to the home folder.",
       "required": ["summarized_at", "document_type", "category", "importance", "summary_path", "harness"],
       "properties": {
         "summarized_at": { "type": "string", "maxLength": 32 },
