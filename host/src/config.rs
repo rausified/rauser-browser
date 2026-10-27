@@ -2084,7 +2084,7 @@ fn recorded_readers(
     let mut readers = retired.to_vec();
     match adopted {
         AdoptedContracts::Read { contracts, .. } => readers.extend(contracts.iter().cloned()),
-        AdoptedContracts::Unreadable => {
+        AdoptedContracts::Unreadable { .. } => {
             if let Some(entry) = next
                 .strip_params
                 .iter()

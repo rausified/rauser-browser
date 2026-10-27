@@ -662,6 +662,7 @@ test("no strip_params notice without a conflict, and the fix waits for repair", 
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "choose the folder again",
         agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [] },
       }),
     },
   });
