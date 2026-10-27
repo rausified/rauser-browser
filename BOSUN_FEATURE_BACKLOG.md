@@ -297,12 +297,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 
 ### Focused quality follow-up
 
-- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
-  durable.** From the PR #75 Codex review: a failed terminal status write
-  still frees the run's slot and key, so the record says running and a second
-  run for the same key can start. Use bounded retries and an in-memory end
-  state, keeping the key reserved, rather than holding the queue on a failing
-  disk.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -449,19 +443,10 @@ were folded into `brwr-q7e` above rather than given their own item.
 - [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
   sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
   see show "○ Not an artifact" (~155 via `showNoPage` ~820).
-- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
-  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
-  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
-  whole-second forms. Make them agree.
 - [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
   the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
   rejects format 0 or more than 64 adapters, which the host returns with
   `adapter_issue` set, so the repair prompt is unreachable.
-- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
-  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
-  the cap that `write_request` (host/src/frame.rs ~64) enforces after
-  connecting; refuse it as too large before contacting the service.
-  Re-check against open access PR 3 (#98), which reworked the service run path.
 - [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
   host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
 - [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
@@ -511,6 +496,23 @@ were folded into `brwr-q7e` above rather than given their own item.
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- In progress in the Lane A session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
+  durable.** From the PR #75 Codex review: a failed terminal status write
+  still frees the run's slot and key, so the record says running and a second
+  run for the same key can start. Use bounded retries and an in-memory end
+  state, keeping the key reserved, rather than holding the queue on a failing
+  disk.
+- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
+  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
+  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
+  whole-second forms. Make them agree.
+- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
+  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
+  the cap that `write_request` (host/src/frame.rs ~64) enforces after
+  connecting; refuse it as too large before contacting the service.
+  Re-check against open access PR 3 (#98), which reworked the service run path.
 
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
   child can exit after printing its reply before the parent writes the framed
