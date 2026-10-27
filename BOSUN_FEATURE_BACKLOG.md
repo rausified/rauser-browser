@@ -519,6 +519,9 @@ were folded into `brwr-q7e` above rather than given their own item.
   close this bead (its queue status still says `blocked`).
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-smk` **Make the macOS headless smoke run deterministic under load (P1).**
+  main's required macOS smoke has failed on every merge since #98 with three
+  timing stops (loadUnpacked timeout, empty hourly totals, no claude runs).
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
   `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
   stripping a query key that an adapter rule matches on (Jira's
