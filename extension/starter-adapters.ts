@@ -1,4 +1,5 @@
 import type { AdapterObject } from "./adapter-review.js";
+import { canonicalCapture } from "./adapter-templates.js";
 
 export type StarterKind = "jira" | "sharepoint" | "github";
 
@@ -43,6 +44,19 @@ export function parseGitHubOrganizations(value: string): string[] | null {
     entry.length <= 39 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(entry))
     ? unique
     : null;
+}
+
+/** A typed comma-separated list of shared-origin tenants (workspaces or
+ * accounts): 1 to `max` distinct canonical `name|lower` values. */
+export function parseTenantList(value: string, max: number): string[] | null {
+  const entries = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  const unique: string[] = [];
+  for (const entry of entries) {
+    const lower = entry.toLowerCase();
+    if (canonicalCapture("name|lower", lower) !== lower) return null;
+    if (!unique.includes(lower)) unique.push(lower);
+  }
+  return unique.length && unique.length <= max ? unique : null;
 }
 
 function jira(origin: string): AdapterObject {
