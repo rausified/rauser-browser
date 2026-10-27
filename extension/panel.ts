@@ -1089,6 +1089,9 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageUrl.textContent = tab.url;
   showPageArea("note");
   currentPage = { url: tab.url, title, tabId: tab.id };
+  // Another page's summary line, and its Open summary, go now rather than
+  // when this page's lookup returns.
+  if (summaryPageUrl !== tab.url) renderPageSummary(null, null);
   updateControls();
   if (!changingNoteIdentity) await notes.showPage({ url: tab.url, title });
   void refreshArtifact();

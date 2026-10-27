@@ -1633,3 +1633,30 @@ test("a summarized Recent row says so and renders agent text as text", async () 
   await until(() => page.sent("open_summary").length === 1, "open_summary");
   assert.equal(page.sent("open_summary")[0].url, "https://read.example/spec");
 });
+
+test("following a new tab clears the previous page's summary before its lookup returns", async () => {
+  let release;
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+    intercept: (request) => {
+      if (request.type !== "get_artifact") return opensSummary(request);
+      if (request.url === ARTICLE_URL) return { type: "artifact_result", recognized: false, artifact: null, summary: SUMMARY };
+      return new Promise((resolve) => {
+        release = () => resolve({ type: "artifact_result", recognized: false, artifact: null, summary: null });
+      });
+    },
+  });
+  await until(() => page.el("page-summary").hidden === false, "the page's summary line");
+  page.followLink("https://read.example/slow", "Slow");
+  await until(() => page.sent("get_artifact").some((request) => request.url.endsWith("/slow")), "the next lookup");
+  await settle();
+  // The lookup is still out: the previous page's line is gone already.
+  assert.equal(page.el("page-summary").hidden, true);
+  assert.equal(page.el("page-summary-text").textContent, "");
+  page.el("page-summary-open").click();
+  await settle();
+  assert.equal(page.sent("open_summary").length, 0);
+  release();
+  await settle();
+  assert.equal(page.el("page-summary").hidden, true);
+});
