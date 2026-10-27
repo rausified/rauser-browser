@@ -72,6 +72,31 @@ the Unix fixture does not certify Windows runtime behavior.
 
 ## UI-free end-to-end: the recipe
 
+### Artifact panel interactions
+
+`npm run test:extension` includes `extension/tests/panel.test.mjs`, which loads
+the compiled panel against the built HTML's element IDs, a small DOM fixture,
+the real native client with scripted replies, and an in-memory clipboard.
+It covers card/context, combined Recent filters, worklog selection/Copy state,
+read-only older-note viewing and migration, background and explicit-sync
+refresh, and close/reopen during debounce or an in-flight save. Recovery tests
+also inject quota/blocked storage and concurrent panels. These tests prove
+module wiring and behavior, not Chrome lifecycle or rendering acceptance.
+
+The macOS `--headless` runner additionally seeds a real URL note through the
+native host before installing its fixture adapter, then drives View and Use
+as artifact note. It tests card/context, filters, all three worklog periods,
+Copy, and a new background tab delivered while Recent stays open. A CDP script
+in that disposable panel replaces clipboard writes with an in-page recorder
+and can hold a real save acknowledgement while the user keeps typing and
+closes. Reopening must show the saved note and the latest recovery copy
+separately. Input and close in the same JS turn cover the debounce boundary;
+either a confirmed note or explicit recovery must retain the text. No hooks
+are built into the product, no accounts or model calls are used, and the
+existing setup transcript still expects 14 dialogs. **These new macOS steps
+have not been executed on the Linux development VM; `brwr-9xg` remains open
+pending that run.**
+
 ### Browser
 
 - Launch Chrome with `--headless=new --user-data-dir=<temp dir> --no-first-run --no-default-browser-check --remote-debugging-pipe`.
@@ -165,6 +190,16 @@ This standard is meant to improve with use. When you change it:
 - If a change alters the hard rule, confirm it with the user first.
 
 ## Learning log
+
+- 2026-10-27: Panel close immediately disconnects the native port, so a flush
+  queued behind an in-flight save cannot guarantee preservation. The original
+  editor produced zero local recovery copies in a close-before-acknowledgement
+  reproducer. Input-time synchronous snapshots now retain the latest text,
+  including empty deletions, independently of native teardown. New snapshot
+  keys avoid cross-panel read/remove races. The compiled-panel fixture also
+  reproduced stale artifact/worklog data after background delivery before the
+  poll and explicit-sync refresh fix. Tests never touch the real clipboard.
+  Browser lifecycle acceptance remains macOS-only and pending; dialog count 14.
 
 - 2026-10-27: Prepared Windows CI without claiming a Windows run from Linux.
   Nine SQLite subprocess call sites now share platform Python selection and

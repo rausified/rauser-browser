@@ -77,10 +77,12 @@
           <textarea id="note-body" rows="6" maxlength="98304" disabled></textarea>
         </div>
         <button id="note-grant-origin" type="button" class="secondary" hidden>Keep working on this page from the panel</button>
+        <p id="note-recovery-warning" class="warning" role="status" hidden></p>
         <div id="note-conflict" class="setup-warning" hidden>
-          <p>This note changed elsewhere and your edit could not be saved. Copy it back in below:</p>
+          <p>Recovered note text. Check the current note before copying it back:</p>
           <textarea id="note-unsaved" rows="4" readonly></textarea>
           <button id="copy-unsaved" type="button" class="secondary">Copy</button>
+          <button id="discard-unsaved" type="button" class="secondary">Discard recovery copies</button>
         </div>
         <div id="older-notes" hidden>
           <h3>Older notes on this artifact</h3>

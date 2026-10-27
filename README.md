@@ -63,6 +63,16 @@ The host binds the chosen folder to its filesystem identity. If that folder is m
 
 Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Visit logging still checks the original URL against its confirmed site rule before normalizing or logging it, but notes work on any HTTP(S) page regardless of that allowlist. See [protocol/README.md](protocol/README.md) for the message contract.
 
+If you close the panel before a save finishes, reopening shows any recovery
+text separately from the current note, with its page URL. Check the current
+note, then copy back what you want. **Discard recovery copies** clears only
+the displayed copies. Recovery stays in this browser profile until its save
+is acknowledged or you discard it; removing the extension clears it. A warning
+appears if browser storage is blocked or full, so keep the panel open until
+the native save finishes. Recent and worklogs refresh on the 30-second status
+poll and after **Send pending records**, preserving filters and unfinished
+artifact context.
+
 Removing a site or changing its capture rules keeps existing shared notes
 reachable from their recorded URLs, including alternate routes remembered in
 activity or explicit context. Older URL notes stay separate and viewable. If
