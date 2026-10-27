@@ -72,8 +72,8 @@ function pageElements() {
 function statusFor() {
   return {
     queued: 0, next_retry_at: null, overflow_count: 0, rejected_count: 0, last_error: null,
-    retry_error: null, policy_expires_at: null, revoked_origins: [], pause_pending: false,
-    pause_token: null, navigation_ready: true, locally_removed_sites: [], live_activity: 0,
+    retry_error: null, policy_expires_at: null, pause_pending: false,
+    pause_token: null, pending_removals: [], live_activity: 0,
     host_error: null,
   };
 }

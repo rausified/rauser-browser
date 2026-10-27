@@ -75,7 +75,7 @@ let tickRunning = false;
 let closed = false;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 // The worker delivers capture records and renews its lease on its own; the panel only
-// polls to show the queue and to settle Chrome grant revocations.
+// polls to show the queue.
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
 // The site access the manifest grants at install (host_permissions).
@@ -350,11 +350,8 @@ function renderQueue(state: WorkerStatus): void {
   if (state.pause_pending && session.config?.capture_enabled) {
     messages.push("A local pause is active until the host confirms capture is off.");
   }
-  if (state.locally_removed_sites.length) {
-    messages.push("Some sites are locally off until their removal is saved in the host.");
-  }
-  if (!state.navigation_ready && session.config?.capture_enabled) {
-    messages.push("Chrome navigation listener is unavailable; activity capture has not started.");
+  if (state.pending_removals.length) {
+    messages.push("Some sites stay off until the settings page saves their removal in the host. Open settings to finish.");
   }
   queueWarning.textContent = messages.join(" ");
   // Open the strip on its own once there is something worth surfacing.
@@ -439,8 +436,7 @@ async function panelTick(): Promise<void> {
   tickRunning = true;
   updateControls();
   try {
-    const state = await session.refreshStatus();
-    if (state.revoked_origins.length) await session.reconcileRevocations();
+    await session.refreshStatus();
   } catch (error) {
     show(`Panel refresh failed: ${describe(error)}`, true);
   } finally {

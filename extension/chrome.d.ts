@@ -80,7 +80,7 @@ interface ChromeApi {
         ) => boolean | void,
       ): void;
     };
-    onInstalled: { addListener(listener: () => void): void };
+    onInstalled: { addListener(listener: (details: { reason: string }) => void): void };
     onStartup: { addListener(listener: () => void): void };
   };
   alarms: {
@@ -141,7 +141,7 @@ interface ChromeApi {
     onRemoved?: { addListener(listener: (tabId: number) => void): void };
     onReplaced?: { addListener(listener: (addedTabId: number, removedTabId: number) => void): void };
   };
-  webNavigation?: {
+  webNavigation: {
     onCommitted: { addListener(listener: (details: ChromeNavigationDetails) => void): void };
     onHistoryStateUpdated: { addListener(listener: (details: ChromeNavigationDetails) => void): void };
     onCreatedNavigationTarget?: {

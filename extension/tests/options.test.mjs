@@ -54,8 +54,8 @@ let loads = 0;
 function statusFor(overrides = {}) {
   return {
     queued: 0, next_retry_at: null, overflow_count: 0, rejected_count: 0, last_error: null,
-    retry_error: null, policy_expires_at: null, revoked_origins: [], pause_pending: false,
-    pause_token: null, navigation_ready: true, locally_removed_sites: [], ...overrides,
+    retry_error: null, policy_expires_at: null, pause_pending: false,
+    pause_token: null, pending_removals: [], ...overrides,
   };
 }
 
@@ -176,9 +176,6 @@ function install({
         state.workerRequests.push(request);
         const custom = worker[request.kind]?.(request, state);
         if (custom !== undefined) return { ok: true, value: custom };
-        if (request.kind === "remove_site") {
-          return { ok: true, value: statusFor({ ...workerStatus, locally_removed_sites: [request.site] }) };
-        }
         return { ok: true, value: statusFor(workerStatus) };
       },
     },
@@ -236,6 +233,13 @@ const statusText = () => env.elements.get("status").textContent;
 const idle = () => !env.elements.get("choose-folder").disabled;
 const nodeText = (node) => [node.textContent, ...(node.children ?? []).map(nodeText)].join(" ");
 
+function artifactFor(origin) {
+  return {
+    type: "work.item", origin,
+    match: [{ path: "/items/{id:int}" }], id: "work.item:{host}/{id}",
+  };
+}
+
 async function openSettings({ connected = true } = {}) {
   loads += 1;
   await import(`../dist/options.js?load=${loads}`);
@@ -288,7 +292,7 @@ test("removing a site never removes a Chrome permission", async () => {
 
 test("a settings load failure after hello is not reported as a missing host", async () => {
   install({
-    workerStatus: { revoked_origins: ["https://b.com"] },
+    workerStatus: { pending_removals: ["https://b.com"] },
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "config.json is unreadable",
@@ -301,10 +305,44 @@ test("a settings load failure after hello is not reported as a missing host", as
   assert.match(statusText(), /config\.json is unreadable/);
 });
 
-test("a Chrome revocation narrows host sites while adapter policy needs repair", async () => {
+// The worker reports pending removals until clear_pending_removals arrives.
+function pendingWorker(origins) {
+  return {
+    get_status: (_request, current) =>
+      statusFor({ pending_removals: current.pendingCleared ? [] : origins }),
+    clear_pending_removals: (_request, current) => {
+      current.pendingCleared = true;
+      return statusFor();
+    },
+  };
+}
+
+test("settings applies pending removals with one update_config", async () => {
+  const other = { origin: "https://b.com", path_prefix: "/" };
+  const state = install({
+    sites: [SITE, other],
+    adapters: [artifactFor(SITE.origin), artifactFor(other.origin)],
+    worker: pendingWorker([SITE.origin]),
+  });
+
+  await openSettings();
+  await until(() => state.pendingCleared, "pending removals to clear");
+
+  const updates = state.requests.filter((request) => request.type === "update_config");
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].config.sites, [other]);
+  assert.deepEqual(updates[0].config.adapters.artifacts.map((adapter) => adapter.origin), [other.origin]);
+  assert.equal(updates[0].config.capture_enabled, true);
+  const kinds = state.workerRequests.map((request) => request.kind);
+  assert.ok(kinds.lastIndexOf("install_policy") < kinds.lastIndexOf("clear_pending_removals"),
+    "the worker sees the narrowed lease before it is asked to clear");
+  assert.equal(kinds.includes("remove_site"), false);
+});
+
+test("pending removals narrow host sites while adapter policy needs repair", async () => {
   const futureAdapters = { format: 2, artifacts: [{ future: true }] };
   const state = install({
-    workerStatus: { revoked_origins: [SITE.origin] },
+    worker: pendingWorker([SITE.origin]),
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: String(current.revision),
@@ -316,67 +354,21 @@ test("a Chrome revocation narrows host sites while adapter policy needs repair",
   });
 
   await openSettings();
+  await until(() => state.pendingCleared, "pending removals to clear");
 
   assert.deepEqual(state.config.sites, []);
   assert.equal(state.config.capture_enabled, false);
   assert.deepEqual(state.config.adapters, futureAdapters);
-  assert.ok(state.requests.some((request) => request.type === "update_config"));
-});
-
-test("a stale Chrome revocation cannot reinstall an invalid adapter policy", async () => {
-  const state = install({
-    workerStatus: { revoked_origins: ["https://already-removed.example"] },
-    host: {
-      get_config: (_request, current) => ({
-        type: "config_result", revision: String(current.revision),
-        config: { ...current.config, adapters: { format: 2, artifacts: [{ future: true }] } },
-        config_issue: null, agent_status: AGENT_STATUS,
-        adapter_issue: "unsupported adapter format 2", adapter_warnings: [],
-      }),
-    },
-  });
-
-  await openSettings();
-
-  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+  assert.equal(state.requests.filter((request) => request.type === "update_config").length, 1);
   assert.equal(state.workerRequests.some((request) => request.kind === "install_policy"), false);
-  assert.ok(state.workerRequests.some((request) => request.kind === "suspend_policy"));
-  assert.ok(state.workerRequests.some((request) => request.kind === "ack_revocations"));
 });
 
-test("revocation reconciliation does not remove an origin re-enabled while it waits", async () => {
-  const futureAdapters = { format: 2, artifacts: [{ future: true }] };
-  const state = install({
-    sites: [],
-    host: {
-      get_config: (_request, current) => ({
-        type: "config_result", revision: String(current.revision),
-        config: { ...current.config, adapters: futureAdapters }, config_issue: null,
-        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
-        adapter_warnings: [],
-      }),
-    },
-    worker: {
-      get_status: (_request, current) => {
-        if (current.revocationObserved) return statusFor();
-        current.revocationObserved = true;
-        // Another settings page acquired the configuration lock first,
-        // re-enabled the origin, installed its revision, and acknowledged the
-        // old revocation before this page entered the lock.
-        current.config = {
-          ...configWith([SITE]),
-          adapters: futureAdapters,
-        };
-        current.revision += 1;
-        return statusFor({ revoked_origins: [SITE.origin] });
-      },
-    },
-  });
+test("a pending removal already absent from the host sends no update", async () => {
+  const state = install({ worker: pendingWorker(["https://already-removed.example"]) });
 
   await openSettings();
+  await until(() => state.pendingCleared, "pending removals to clear");
 
-  assert.deepEqual(state.config.sites, [SITE]);
-  assert.equal(state.config.capture_enabled, true);
   assert.equal(state.requests.some((request) => request.type === "update_config"), false);
 });
 

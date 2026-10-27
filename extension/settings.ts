@@ -33,10 +33,6 @@ export function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function sameSite(left: SiteConfig, right: SiteConfig): boolean {
-  return left.origin === right.origin && left.path_prefix === right.path_prefix;
-}
-
 /** Keep host configuration valid when an origin loses its final enabled site.
  * A site rule can narrow one origin by path, while adapters are origin-wide,
  * so adapters remain until every site entry for that origin is gone. */
@@ -193,13 +189,12 @@ export class ConfigSession {
     return this.status;
   }
 
-  /** Read the host and publish its policy, then settle Chrome revocations. */
+  /** Read the host and publish its policy. */
   async reload(): Promise<Awaited<ReturnType<ConfigSession["readHostConfig"]>>> {
     // Keep the host read and worker lease update together. Otherwise an older
     // page can reinstall a site after another page has removed it.
     const response = await withLatestHostState(
       withConfigMutationLock, () => this.readHostConfig(), (state) => this.applyHostConfig(state));
-    await this.reconcileRevocations();
     await this.refreshStatus();
     return response;
   }
@@ -277,48 +272,45 @@ export class ConfigSession {
     await this.refreshStatus();
   }
 
-  async reconcileRevocations(): Promise<void> {
-    if (!this.config || !this.revision) return;
+  /**
+   * Write the sites and adapters an earlier build removed or saw revoked out
+   * of the host config, in one update_config, then let the worker lift its
+   * capture block once the host's lease no longer holds them. `config` and
+   * `revision` are what this page last read. Returns whether it saved.
+   */
+  async applyPendingRemovals(config: ConfigSnapshot, revision: string): Promise<boolean> {
     const observed = await worker<WorkerStatus>({ kind: "get_status" });
-    if (!observed.revoked_origins.length) return;
+    if (!observed.pending_removals.length) return false;
+    let saved = false;
     await withConfigMutationLock(async () => {
-      // An origin may have been explicitly re-enabled by another page while
-      // this page waited for the lock. That flow acknowledges its old marker
-      // under this same lock, so never act on the snapshot taken above.
+      // Another page may have saved while this one waited for the lock.
+      if (this.revision !== revision) return;
       const state = await worker<WorkerStatus>({ kind: "get_status" });
-      if (!state.revoked_origins.length) return;
-      const revoked = new Set(state.revoked_origins);
-      // A different page may have committed since our previous read. Recompute
-      // from the host's current revision while holding the same mutation lock.
-      const latest = await this.readHostConfig();
-      this.setHostConfig(latest);
-      if (latest.config_issue) {
-        await worker<WorkerStatus>({ kind: "suspend_policy" });
-        throw new Error(latest.config_issue);
-      }
-      const sites = latest.config.sites.filter((site) => !revoked.has(site.origin));
-      if (sites.length !== latest.config.sites.length) {
+      if (!state.pending_removals.length) return;
+      const removed = new Set(state.pending_removals);
+      const sites = config.sites.filter((site) => !removed.has(site.origin));
+      // An invalid or future adapter document can only pass the host's
+      // narrow repair exception when echoed without structural changes, so
+      // it stays as it is; the worker keeps its block until a later fix.
+      const adapters = this.adapterIssue ? config.adapters : {
+        format: config.adapters.format,
+        artifacts: config.adapters.artifacts.filter((adapter) =>
+          typeof adapter.origin !== "string" || !removed.has(adapter.origin)),
+      };
+      if (sites.length !== config.sites.length ||
+          adapters.artifacts.length !== config.adapters.artifacts.length) {
         await this.saveConfig({
-          ...latest.config,
+          ...config,
           sites,
-          // An invalid or future adapter document can only pass the host's
-          // narrow repair exception when echoed without structural changes. Keep it inert
-          // while still writing the revoked Chrome origins out of host policy.
-          adapters: latest.adapter_issue
-            ? latest.config.adapters
-            : adaptersForSites(latest.config, sites),
-          capture_enabled: latest.config.capture_enabled && sites.length > 0,
+          adapters,
+          capture_enabled: config.capture_enabled && sites.length > 0,
         }, null);
-      } else if (latest.adapter_issue) {
-        // The revocation was already absent from host policy. Keep the bad
-        // adapter document inert rather than reinstalling it as a lease.
-        await worker<WorkerStatus>({ kind: "suspend_policy" });
-      } else {
-        await this.installHostPolicy();
+        saved = true;
       }
-      await worker<WorkerStatus>({ kind: "ack_revocations", origins: state.revoked_origins });
+      await worker<WorkerStatus>({ kind: "clear_pending_removals" });
     });
-    this.onChange();
+    await this.refreshStatus();
+    return saved;
   }
 
   /** Call while holding the config mutation lock. */

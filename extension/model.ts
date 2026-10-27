@@ -71,11 +71,12 @@ export interface WorkerStatus {
   last_error: string | null;
   retry_error: string | null;
   policy_expires_at: number | null;
-  revoked_origins: string[];
   pause_pending: boolean;
   pause_token: string | null;
-  navigation_ready: boolean;
-  locally_removed_sites: SiteConfig[];
+  // Origins an earlier build removed or saw revoked whose adapters the host
+  // config may still hold. Capture stays off for them until the settings page
+  // writes them out of the host config.
+  pending_removals: string[];
   // Why the worker's last background exchange with the host failed, or null
   // once one succeeds.
   host_error: string | null;
@@ -87,15 +88,13 @@ export type WorkerRequest =
   | { kind: "pause_capture" }
   | { kind: "get_pending_ids" }
   | { kind: "discard_pending"; event_ids: string[] }
-  | { kind: "remove_site"; site: SiteConfig }
   | { kind: "get_pending" }
   | { kind: "get_activity" }
   | { kind: "ack_visit"; event_id: string; outcome: VisitOutcome; reason: string | null }
   | { kind: "get_status" }
   | { kind: "sync_now" }
   | { kind: "clear_notices" }
-  | { kind: "ack_reenabled_origin"; origin: string; revision: string }
-  | { kind: "ack_revocations"; origins: string[] };
+  | { kind: "clear_pending_removals" };
 
 export interface WorkerReply<T> {
   ok: boolean;

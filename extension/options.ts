@@ -7,7 +7,6 @@ import {
   ConfigSession,
   describe,
   element,
-  sameSite,
   setupProblem,
   withConfigMutationLock,
   worker,
@@ -657,11 +656,6 @@ function renderConfig(): void {
       const label = document.createElement("span");
       label.textContent = `${site.origin}${site.path_prefix}`;
       item.append(label);
-      if (session.status?.locally_removed_sites.some((entry) => sameSite(entry, site))) {
-        const local = document.createElement("small");
-        local.textContent = " Locally off; host update pending.";
-        item.append(local);
-      }
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "secondary";
@@ -677,6 +671,10 @@ function renderConfig(): void {
   renderAgent();
   if (adapterEdit === null) updateControls();
   else refreshAdapterEditor();
+}
+
+function sameSite(left: SiteConfig, right: SiteConfig): boolean {
+  return left.origin === right.origin && left.path_prefix === right.path_prefix;
 }
 
 async function reloadConfig(): Promise<void> {
@@ -785,8 +783,8 @@ async function enableSite(): Promise<void> {
     return;
   }
   if (parsed.site.origin !== preflight.origin) return;
-  if (session.status?.locally_removed_sites.some((site) => sameSite(site, parsed.site))) {
-    show("Finish removing this site from the host before enabling it again.", true);
+  if (session.status?.pending_removals.includes(parsed.site.origin)) {
+    show("Finish removing this site from the host before enabling it again. Reload this page to retry.", true);
     return;
   }
   if (!picker && needsFolderPick()) {
@@ -816,11 +814,6 @@ async function enableSite(): Promise<void> {
       sites.push(parsed.site);
       const next: ConfigSnapshot = { ...config, storage, sites, capture_enabled: true };
       await session.saveConfig(next, selection?.token ?? null, undefined, true, initialPauseToken);
-      if (session.revision) {
-        await worker<WorkerStatus>({
-          kind: "ack_reenabled_origin", origin: parsed.site.origin, revision: session.revision,
-        });
-      }
     });
     const workerState = await session.refreshStatus();
     if (workerState.pause_pending) {
@@ -900,17 +893,13 @@ async function removeSite(site: SiteConfig): Promise<void> {
       !baseConfig.sites.some((entry) => sameSite(entry, site))) return;
   busy = true;
   updateControls();
-  let locallyRemoved = false;
   let hostCommitted = false;
   let hostFailure: string | null = null;
   let removedAdapters = 0;
   let refreshAfter = false;
   try {
-    // The worker serializes this with navigation capture and persists a local
-    // block before the host update. A failed update stays blocked on reload.
-    session.status = await worker<WorkerStatus>({ kind: "remove_site", site });
-    locallyRemoved = true;
-    renderConfig();
+    // One revision-checked host update. The lease it installs stops capture
+    // for the site; there is no separate local block.
     await withConfigMutationLock(async () => {
       const sites = baseConfig.sites.filter((entry) => !sameSite(entry, site));
       const adapters = adaptersForSites(baseConfig, sites);
@@ -939,19 +928,15 @@ async function removeSite(site: SiteConfig): Promise<void> {
     if (hostFailure) {
       const next = hostCommitted
         ? " The host removal is saved. Reload this page to refresh its policy."
-        : " The site remains locally off; use Remove again to finish the host update.";
+        : " The site is still enabled; use Remove again to retry.";
       show(`${hostFailure}${next}`, true);
-    } else if (hostCommitted) {
+    } else {
       show(`Removed ${site.origin}${site.path_prefix}.${removedAdapters
         ? ` Also removed ${removedAdapters} adapter${removedAdapters === 1 ? "" : "s"} for that origin.`
         : ""}`);
-    } else {
-      show("The site is locally off; reload this page to confirm the host update.", true);
     }
   } catch (error) {
-    show(locallyRemoved
-      ? `The site is locally off, but removal needs attention: ${describe(error)}`
-      : `Could not stop this site locally: ${describe(error)}`, true);
+    show(`Could not remove this site: ${describe(error)}`, true);
   } finally {
     busy = false;
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
@@ -1068,6 +1053,12 @@ void (async () => {
     try {
       await reloadConfig();
       if (hello.config_issue) show(hello.config_issue, true);
+      if (session.config && session.revision && !session.configIssue &&
+          await session.applyPendingRemovals(session.config, session.revision)) {
+        renderConfig();
+        refreshPreflight();
+        show("Finished removing sites that an earlier version turned off.");
+      }
     } catch (error) {
       // The host answered, so this is a settings problem, not a missing host.
       if (session.configIssue) showConfigState();
