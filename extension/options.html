@@ -16,8 +16,8 @@
       <div id="status" class="status" role="status" aria-live="polite">Connecting to native host…</div>
 
       <section aria-labelledby="setup-heading">
-        <h2 id="setup-heading">Private capture setup</h2>
-        <p>Choose a notes folder and one site to log. {{APP_NAME}} stays off until you save the setting.</p>
+        <h2 id="setup-heading">Capture setup</h2>
+        <p>Choose a notes folder, then add an adapter for each site you want logged. A site is on while it has at least one adapter; {{APP_NAME}} records nothing automatically anywhere else. Page notes work on every page either way.</p>
 
         <div class="field">
           <label>Notes folder</label>
@@ -26,29 +26,28 @@
         </div>
 
         <div class="field">
-          <label for="site-url">Site URL</label>
-          <input id="site-url" type="url" placeholder="https://example.com/" autocomplete="off" spellcheck="false" />
-          <small>Enter a scheme and host, with a port if needed, such as https://example.com. Wildcards are not accepted. Adapters below decide which pages on the site are recorded.</small>
+          <label for="site-origin">Site address</label>
+          <input id="site-origin" type="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" />
+          <small>A scheme and host, with a port if needed, such as https://example.com. Starter drafts and Add adapter below use this address.</small>
         </div>
 
-        <button id="enable-site" type="button" disabled>Enable this site</button>
         <button id="pause-capture" type="button" class="secondary" disabled>Pause capture and clear pending visits</button>
+        <button id="resume-capture" type="button" class="secondary" disabled>Resume capture</button>
 
         <div class="field">
-          <h3>Enabled sites</h3>
+          <h3>Sites with adapters</h3>
           <ul id="sites-list" class="plain-list"><li>None</li></ul>
         </div>
       </section>
 
       <section aria-labelledby="adapters-heading">
         <h2 id="adapters-heading">Artifact adapters</h2>
-        <p>Adapters decide which tickets, documents, and other work items count as artifacts. An enabled site records nothing unless one of these rules matches.</p>
-        <p class="sync-caution"><strong>Folder sync caution:</strong> matching page URLs and titles—and configured page fields in M1.5b—are written into your notes folder. If another app syncs that folder, it can sync those details too.</p>
+        <p>Adapters decide which tickets, documents, and other work items count as artifacts. On a site with adapters, only pages one of them matches are recorded.</p>
 
         <div class="field">
-          <h3>Starter drafts for your enabled sites</h3>
+          <h3>Starter drafts</h3>
           <p>Start from a readable template for common work tools, then inspect its rules and examples before you save it. These development templates use recorded fixtures and are not release-certified until their documentation records a live-tool check.</p>
-          <div id="starter-gallery" class="starter-gallery"><p>No compatible enabled sites yet.</p></div>
+          <div id="starter-gallery" class="starter-gallery"><p>Enter a Jira Cloud, SharePoint/OneDrive, or GitHub site address above to see starter drafts.</p></div>
         </div>
 
         <div id="adapter-overlaps" class="adapter-notices" role="status"></div>

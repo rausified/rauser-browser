@@ -1062,7 +1062,7 @@ async function run() {
       requireCondition(!(await maybeLstat(configPath)), "A config file appeared after picker cancellation");
     });
 
-    await step("Choosing a folder saves it before any site", async () => {
+    await step("Choosing a folder saves it before any adapter", async () => {
       // The clipboard is the user's; only a person choosing by hand needs it.
       if (!options.headless) await commandOutput("/bin/sh", ["-c", `printf %s ${shellQuote(notes)} | pbcopy`]);
       await inSettings((page) => page.click("#choose-folder"));
@@ -1077,16 +1077,16 @@ async function run() {
             throw Object.assign(new Error(`${chosen} is not empty; rerun and choose an empty folder`), { fatal: true });
           }
           notesRoot = chosen;
-          requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,
-            "Saving the folder changed sites or the capture switch");
+          requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0 &&
+            reply.config.adapters.artifacts.length === 0,
+          "Saving the folder changed adapters, sites, or the capture switch");
           const status = await settingsStatus();
-          requireCondition(status?.startsWith("No sites are enabled for capture."), `Settings page says: ${status}`);
+          requireCondition(status?.startsWith("No site has an adapter yet."), `Settings page says: ${status}`);
         }, () => pickFolder(notes));
       console.log(`  Using notes folder ${notesRoot}`);
-      await waitFor(() => onPanel(async (page) => {
-        const reason = await page.text("#setup-reason");
-        requireCondition(reason === "No sites are enabled for capture.", `Setup warning says: ${reason}`);
-      }));
+      // Having no adapters is a choice, not a setup problem.
+      await waitFor(() => onPanel(async (page) =>
+        requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")));
     });
 
     // Standing HTTP(S) access: with no site enabled and nothing granted during
@@ -1109,22 +1109,27 @@ async function run() {
     });
 
     await step("Confirmed setup", async () => {
+      // A site is on once it has an adapter. The fixture origin has no starter
+      // draft, so this saves Add adapter's template for the typed address.
       await onSettings(async (page) => {
-        await page.fill("#site-url", siteInput);
+        await page.fill("#site-origin", siteInput);
       });
       await waitFor(() => onSettings(async (page) =>
-        requireCondition(await page.enabled("#enable-site"), "Enable this site is disabled")));
+        requireCondition(await page.enabled("#new-adapter"), "Add adapter is disabled")));
+      await inSettings((page) => page.click("#new-adapter"));
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.enabled("#save-adapter"), "The adapter draft cannot be saved")));
       await inSettings(async (page) => {
         // Clear the previous step's result so only a new failure stops the run.
         await page.evaluate('document.getElementById("status").textContent = ""');
-        await page.click("#enable-site");
+        await page.click("#save-adapter");
       });
-      // Enabling a site asks Chrome for nothing: the extension already holds
+      // Saving an adapter asks Chrome for nothing: the extension already holds
       // HTTP(S) access, so the setting is saved straight to the host.
       await waitFor(async () => {
         const status = await settingsStatus().catch(() => null);
-        if (status?.startsWith("Setup failed")) {
-          throw Object.assign(new Error(`${status} Rerun the smoke test; a folder selection expires after five minutes.`), { fatal: true });
+        if (status?.startsWith("Could not save artifact adapters")) {
+          throw Object.assign(new Error(`${status} Rerun the smoke test.`), { fatal: true });
         }
         const reply = await hostConfig(wrapper);
         const selectedRoot = reply.config.storage?.root;
@@ -1134,10 +1139,14 @@ async function run() {
         requireCondition(reply.config.sites.length === 1 &&
           reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/",
         "Host site rule does not match the fixture origin");
+        requireCondition(reply.config.adapters.artifacts.length === 1 &&
+          reply.config.adapters.artifacts[0].origin === origin, "The host has no adapter for the fixture origin");
       }, { timeout: 30_000, interval: 500, signal: abort.signal });
       await waitFor(async () => {
         const status = await settingsStatus();
-        requireCondition(status?.startsWith("Capture enabled for"), `Settings page says: ${status}`);
+        requireCondition(status?.endsWith("adapter added."), `Settings page says: ${status}`);
+        const sites = await onSettings((page) => page.text("#sites-list"));
+        requireCondition(sites?.includes(origin), `The site list says: ${sites}`);
       }, { timeout: 20_000 });
       await openPanel();
       await waitFor(() => onPanel(async (page) =>
@@ -1485,20 +1494,21 @@ async function run() {
     }
 
     await step("Site removal", async () => {
-      await inSettings((page) => page.click(`button[aria-label="Remove ${origin}/"]`));
+      await inSettings((page) => page.click(`button[aria-label="Remove site ${origin}"]`));
       await waitFor(async () => {
         const reply = await hostConfig(wrapper);
-        requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,
-          "Host still has capture enabled or the site rule");
+        requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0 &&
+          reply.config.adapters.artifacts.length === 0,
+        "Host still has capture enabled, the site rule, or its adapter");
         // A capture change echoes the harness unchanged.
         if (options.headless) {
           requireCondition(reply.config.agent !== null, "Site removal dropped the AI harness");
         }
       }, { timeout: 20_000, interval: 1_000 });
       await waitFor(() => onPanel(async (page) => {
-        requireCondition(await page.hidden("#setup-warning") === false, "Panel does not show the setup warning");
-        const reason = await page.text("#setup-reason");
-        requireCondition(reason === "No sites are enabled for capture.", `Setup warning says: ${reason}`);
+        requireCondition(await page.hidden("#setup-warning") === true, "Panel shows a setup warning");
+        const strip = await page.text("#capture-strip-summary");
+        requireCondition(strip?.includes("Capture off"), `Capture strip says: ${strip}`);
       }), { timeout: 20_000 });
     });
 

@@ -3,7 +3,7 @@
 // across every open page, and the worker's policy lease tells a page when
 // another page has saved a different revision.
 import type {
-  AdapterWarning, AgentStatus, ConfigSnapshot, HarnessOffer, SiteConfig,
+  AdapterDocument, AdapterWarning, AgentStatus, ConfigSnapshot, HarnessOffer,
 } from "../protocol/ts/generated.js";
 import {
   POLICY_LEASE_MS,
@@ -33,16 +33,14 @@ export function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Keep host configuration valid when an origin loses its final enabled site.
- * A site rule can narrow one origin by path, while adapters are origin-wide,
- * so adapters remain until every site entry for that origin is gone. */
-export function adaptersForSites(config: ConfigSnapshot, sites: SiteConfig[]): ConfigSnapshot["adapters"] {
-  const origins = new Set(sites.map((site) => site.origin));
-  return {
-    format: config.adapters.format,
-    artifacts: config.adapters.artifacts.filter((adapter) =>
-      typeof adapter.origin === "string" && origins.has(adapter.origin)),
-  };
+/** The sites capture is on for: the sorted, distinct adapter origins. A site
+ * is on exactly when it has an adapter. */
+export function siteOrigins(adapters: AdapterDocument): string[] {
+  const origins = new Set<string>();
+  for (const adapter of adapters.artifacts) {
+    if (typeof adapter.origin === "string") origins.add(adapter.origin);
+  }
+  return [...origins].sort();
 }
 
 export async function withConfigMutationLock<T>(action: () => Promise<T>): Promise<T> {
@@ -70,14 +68,17 @@ export function leaseFor(config: ConfigSnapshot, currentRevision: string): Polic
   };
 }
 
-/** Why capture cannot run yet, or null once setup is complete. */
+/** Why Brauser cannot work yet, or null once setup is complete. Having no
+ * adapters, or capture paused, is a choice rather than a setup problem. */
 export function setupProblem(config: ConfigSnapshot | null, issue: string | null): string | null {
   if (issue) return `The host configuration needs repair: ${issue}`;
   if (!config) return null;
   if (!config.storage) return "No notes folder is chosen.";
-  if (!config.sites.length) return "No sites are enabled for capture.";
-  if (!config.capture_enabled) return "Capture is off.";
   return null;
+}
+
+export function captureStateText(config: ConfigSnapshot): string {
+  return config.capture_enabled ? "Capturing on sites with adapters." : "Capture is paused.";
 }
 
 export class ConfigSession {

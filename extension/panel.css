@@ -71,7 +71,6 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 .capture-strip summary::before { content: "▸ "; }
 .capture-strip[open] summary::before { content: "▾ "; }
 .capture-strip-body { padding: 0 14px 14px; }
-.sync-caution { border-left: 3px solid #b36b00; padding-left: 10px; }
 .adapter-list { display: grid; gap: 10px; margin: 12px 0; }
 .starter-gallery { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .starter-card { border: 1px solid #24619a66; border-radius: 7px; padding: 12px; }

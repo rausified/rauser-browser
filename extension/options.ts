@@ -1,13 +1,14 @@
 import type {
-  AdapterDocument, ConfigSnapshot, HarnessAdapter, HarnessOffer, SiteConfig, StorageConfig,
+  AdapterDocument, HarnessAdapter, HarnessOffer, StorageConfig,
 } from "../protocol/ts/generated.js";
 import { isHttpUrl, type WorkerStatus } from "./model.js";
 import {
-  adaptersForSites,
   ConfigSession,
+  captureStateText,
   describe,
   element,
   setupProblem,
+  siteOrigins,
   withConfigMutationLock,
   worker,
 } from "./settings.js";
@@ -39,9 +40,9 @@ import {
 const status = element<HTMLDivElement>("status");
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
-const siteUrl = element<HTMLInputElement>("site-url");
-const enableButton = element<HTMLButtonElement>("enable-site");
+const siteOrigin = element<HTMLInputElement>("site-origin");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
+const resumeButton = element<HTMLButtonElement>("resume-capture");
 const sitesList = element<HTMLUListElement>("sites-list");
 const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
 const adapterList = element<HTMLDivElement>("adapter-list");
@@ -70,8 +71,6 @@ const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
 let picker: { path: string; token: string } | null = null;
 let busy = false;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-// The site the URL box names, once it parses; Enable stays off until then.
-let preflight: { origin: string } | null = null;
 // What Detect harnesses last found. Setup names one by harness_id, and the
 // host detects and checks it again before running anything.
 let offers: HarnessOffer[] = [];
@@ -109,29 +108,36 @@ function show(message: string, warning = false): void {
 }
 
 function showConfigState(): void {
+  const config = session.config;
   const policyIssue = session.configIssue ?? session.adapterIssue;
-  const problem = setupProblem(session.config, policyIssue);
+  const problem = setupProblem(config, policyIssue);
   if (policyIssue) show(problem!, true);
-  else if (problem) {
-    show(`${problem} ${session.config?.storage ? "Enable" : "Choose a folder and enable"} a site to begin.`);
+  else if (problem) show(`${problem} Choose a folder, then add an adapter for each site you want logged.`);
+  else if (!config) return;
+  else if (!siteOrigins(config.adapters).length) {
+    show("No site has an adapter yet. Enter a site address, then save a starter or add an adapter to start capturing.");
   }
   else if (session.adapterWarnings.length) {
     const count = session.adapterWarnings.length;
     show(
-      `Capture is enabled, but ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
+      `${captureStateText(config)} ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
       true,
     );
   }
-  else show("Capture is enabled for the listed sites.");
+  else show(captureStateText(config));
 }
 
-/**
- * Whether a save must carry a fresh folder selection. The host keeps the
- * settings of a config whose folder is missing or changed, but it accepts no
- * save based on that folder until it is chosen again through the picker.
- */
-function needsFolderPick(): boolean {
-  return !session.config?.storage || session.configIssue !== null;
+/** The origin the Site address box names, or null until it parses as an
+ * HTTP(S) address without credentials. A pasted page URL names its origin. */
+function typedOrigin(): string | null {
+  const value = siteOrigin.value.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return isHttpUrl(url) && !url.username && !url.password ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 function updateControls(): void {
@@ -142,13 +148,16 @@ function updateControls(): void {
   const repairing = session.configIssue !== null;
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
-  enableButton.disabled = !connected || busy || preflight === null ||
-    (!picker && needsFolderPick());
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
+  // The host refuses capture without a notes folder and, until protocol v6
+  // drops sites, without at least one site.
+  resumeButton.disabled = !connected || busy || repairing || repairingAdapters ||
+    session.config?.capture_enabled !== false || !session.config.storage ||
+    !siteOrigins(session.config.adapters).length;
   for (const button of sitesList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters;
   }
-  newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters || !session.config?.sites.length;
+  newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters;
   resetAdaptersButton.disabled = !connected || busy || repairing || !repairingAdapters;
   refreshArtifactsButton.disabled = !connected || busy || repairing || !session.config?.storage;
   for (const button of adapterList.querySelectorAll("button")) {
@@ -329,13 +338,16 @@ function offerConfigured(offer: StarterOffer): boolean {
   return hasAdapter(session.config?.adapters.artifacts ?? [], offer);
 }
 
-function currentStarterOffer(site: SiteConfig, key: string): StarterOffer | null {
-  const scope = parseGitHubOrganizations(githubScopeText);
-  return starterOffers(site, scope).find((offer) => offer.key === key) ?? null;
+function githubScope(): string[] {
+  return parseGitHubOrganizations(githubScopeText) ?? [];
 }
 
-function setStarterButtonState(button: HTMLButtonElement, site: SiteConfig, key: string): void {
-  const offer = currentStarterOffer(site, key);
+function currentStarterOffer(origin: string, key: string): StarterOffer | null {
+  return starterOffers(origin, githubScope()).find((offer) => offer.key === key) ?? null;
+}
+
+function setStarterButtonState(button: HTMLButtonElement, origin: string, key: string): void {
+  const offer = currentStarterOffer(origin, key);
   const configured = offer ? offerConfigured(offer) : false;
   button.dataset.available = String(Boolean(offer?.adapter) && !configured);
   button.textContent = configured ? "Already configured" : "Review starter…";
@@ -345,15 +357,20 @@ function setStarterButtonState(button: HTMLButtonElement, site: SiteConfig, key:
 
 function renderStarterGallery(): void {
   starterGallery.replaceChildren();
-  const sites = session.config?.sites ?? [];
-  const compatible = sites.flatMap((site) => starterOffers(site, parseGitHubOrganizations(githubScopeText))
-    .map((offer) => ({ site, offer })));
+  // The typed site address first, then the sites that already have adapters.
+  const typed = typedOrigin();
+  const origins = [...new Set([
+    ...(typed ? [typed] : []),
+    ...(session.config ? siteOrigins(session.config.adapters) : []),
+  ])];
+  const compatible = origins.flatMap((origin) => starterOffers(origin, githubScope())
+    .map((offer) => ({ origin, offer })));
   if (!compatible.length) {
-    addText(starterGallery, "p", "Enable a root-scoped Jira Cloud, SharePoint/OneDrive, or GitHub site to see starter drafts. Narrow path policies stay custom.");
+    addText(starterGallery, "p", "Enter a Jira Cloud, SharePoint/OneDrive, or GitHub site address above to see starter drafts.");
     return;
   }
   let githubScopeRendered = false;
-  for (const { site, offer } of compatible) {
+  for (const { origin, offer } of compatible) {
     const card = document.createElement("article");
     card.className = "starter-card";
     addText(card, "h3", offer.label);
@@ -378,19 +395,19 @@ function renderStarterGallery(): void {
         const valid = parseGitHubOrganizations(githubScopeText) !== null;
         guidance.className = valid ? "" : "warning";
         for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
-          if (scoped.dataset.siteOrigin === site.origin) {
-            setStarterButtonState(scoped, site, scoped.dataset.starterKey ?? "");
+          if (scoped.dataset.siteOrigin === origin) {
+            setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
           }
         }
       });
     }
     const review = document.createElement("button");
     review.type = "button";
-    review.dataset.siteOrigin = site.origin;
+    review.dataset.siteOrigin = origin;
     review.dataset.starterKey = offer.key;
-    setStarterButtonState(review, site, offer.key);
+    setStarterButtonState(review, origin, offer.key);
     review.addEventListener("click", () => {
-      const selected = currentStarterOffer(site, offer.key);
+      const selected = currentStarterOffer(origin, offer.key);
       if (!selected?.adapter || offerConfigured(selected)) return;
       beginAdapterDraft(selected.adapter, selected.label);
     });
@@ -407,7 +424,9 @@ function renderAdapters(): void {
   }
 
   adapterList.replaceChildren();
-  if (!adapters.length) addText(adapterList, "p", "No adapters configured. Add one after enabling its site above.");
+  if (!adapters.length) {
+    addText(adapterList, "p", "No adapters configured. Enter a site address above, then save a starter or add an adapter.");
+  }
   adapters.forEach((adapter, index) => {
     const card = document.createElement("article");
     card.className = "adapter-card";
@@ -483,10 +502,6 @@ function readAdapterCandidate(): CandidateResult {
   }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
-  const origin = adapterOrigin(parsed.adapter);
-  if (!origin || !session.config.sites.some((site) => site.origin === origin)) {
-    return { ok: false, message: "Enable this adapter's exact origin in Private capture setup first." };
-  }
   const artifacts = [...session.config.adapters.artifacts];
   if (adapterEdit.kind === "new") artifacts.push(parsed.adapter);
   else {
@@ -574,7 +589,7 @@ function beginAdapterDraft(adapter: AdapterObject, label: string): void {
 function beginAdapterEdit(index: number | "new"): void {
   if (!session.config || busy) return;
   const adapter = index === "new"
-    ? newAdapter(session.config.sites[0]?.origin ?? "https://example.com")
+    ? newAdapter(typedOrigin() ?? "https://example.com")
     : session.config.adapters.artifacts[index];
   if (!adapter) return;
   const edit: AdapterEdit = index === "new"
@@ -594,12 +609,35 @@ function closeAdapterEditor(): void {
   updateControls();
 }
 
+/**
+ * Save a new adapter document. A site is on while it has an adapter, so the
+ * sites follow the document, and the first adapter saved with a notes folder
+ * turns capture on unless a pause is still pending. A folder selection the
+ * host has not saved yet is saved with it.
+ */
 async function saveAdapterDocument(document: AdapterDocument, success: string): Promise<void> {
   if (!session.config || busy) return;
   busy = true;
   updateControls();
+  const selection = picker;
   try {
-    await withConfigMutationLock(() => session.saveConfig({ ...session.config!, adapters: document }, null));
+    await withConfigMutationLock(async () => {
+      const config = session.config!;
+      const storage = selection ? storageFor(selection.path, config.storage) : config.storage;
+      // Transitional until protocol v6 drops sites (Task 9).
+      const sites = siteOrigins(document).map((origin) => ({ origin, path_prefix: "/" }));
+      const state = await worker<WorkerStatus>({ kind: "get_status" });
+      const first = config.adapters.artifacts.length === 0 && document.artifacts.length > 0 &&
+        storage !== null && !state.pause_pending;
+      await session.saveConfig({
+        ...config,
+        storage,
+        sites,
+        adapters: document,
+        capture_enabled: sites.length > 0 && (first || config.capture_enabled),
+      }, selection?.token ?? null);
+    });
+    if (selection && picker === selection) picker = null;
     closeAdapterEditor();
     show(success);
   } catch (error) {
@@ -615,6 +653,11 @@ async function saveAdapter(): Promise<void> {
   const candidate = readAdapterCandidate();
   if (!candidate.ok) {
     refreshAdapterEditor();
+    return;
+  }
+  const origin = adapterOrigin(candidate.adapter);
+  if (origin && session.status?.pending_removals.includes(origin)) {
+    show("Finish removing this site from the host before adding it again. Reload this page to retry.", true);
     return;
   }
   const action = adapterEdit?.kind === "new" ? "added" : "updated";
@@ -646,25 +689,25 @@ function renderConfig(): void {
   resetAdaptersButton.hidden = session.adapterIssue === null;
   folderPath.textContent = picker?.path ?? config?.storage?.root ?? "None selected";
   sitesList.replaceChildren();
-  if (!config?.sites.length) {
+  const origins = config ? siteOrigins(config.adapters) : [];
+  if (!origins.length) {
     const item = document.createElement("li");
     item.textContent = "None";
     sitesList.append(item);
-  } else {
-    for (const site of config.sites) {
-      const item = document.createElement("li");
-      const label = document.createElement("span");
-      label.textContent = `${site.origin}${site.path_prefix}`;
-      item.append(label);
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "secondary";
-      remove.textContent = "Remove";
-      remove.setAttribute("aria-label", `Remove ${site.origin}${site.path_prefix}`);
-      remove.addEventListener("click", () => void removeSite(site));
-      item.append(remove);
-      sitesList.append(item);
-    }
+  }
+  for (const origin of origins) {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = origin;
+    item.append(label);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary compact";
+    remove.textContent = "Remove site";
+    remove.setAttribute("aria-label", `Remove site ${origin}`);
+    remove.addEventListener("click", () => void removeSite(origin));
+    item.append(remove);
+    sitesList.append(item);
   }
   renderStarterGallery();
   renderAdapters();
@@ -673,13 +716,8 @@ function renderConfig(): void {
   else refreshAdapterEditor();
 }
 
-function sameSite(left: SiteConfig, right: SiteConfig): boolean {
-  return left.origin === right.origin && left.path_prefix === right.path_prefix;
-}
-
 async function reloadConfig(): Promise<void> {
   await session.reload();
-  refreshPreflight();
   showConfigState();
   if (session.status?.pause_pending && session.config?.capture_enabled && !session.configIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
@@ -705,27 +743,6 @@ function scheduleReload(): void {
         updateControls();
       });
   }, 250);
-}
-
-function parseSite(): { site: SiteConfig } {
-  const url = new URL(siteUrl.value.trim());
-  if (!isHttpUrl(url) || url.username || url.password) {
-    throw new Error("Enter an HTTP(S) site URL without credentials");
-  }
-  if (url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Enter only the site origin here; adapters decide which pages are recorded");
-  }
-  const site = { origin: url.origin, path_prefix: "/" };
-  return { site };
-}
-
-function refreshPreflight(): void {
-  try {
-    preflight = { origin: parseSite().site.origin };
-  } catch {
-    preflight = null;
-  }
-  updateControls();
 }
 
 /** The storage settings for a folder chosen through the native picker. */
@@ -760,7 +777,7 @@ async function chooseFolder(): Promise<void> {
     showConfigState();
   } catch (error) {
     // A canceled picker changed nothing. A failed save keeps the selection
-    // usable: the first site enabled on this page saves it too.
+    // usable: the next adapter saved on this page saves it too.
     show(describe(error), true);
     if (error instanceof HostError && error.code === "conflict") {
       picker = null;
@@ -772,80 +789,25 @@ async function chooseFolder(): Promise<void> {
   }
 }
 
-async function enableSite(): Promise<void> {
-  const currentConfig = session.config;
-  if (busy || !currentConfig || !session.revision || !preflight) return;
-  let parsed: ReturnType<typeof parseSite>;
-  try {
-    parsed = parseSite();
-  } catch (error) {
-    show(describe(error), true);
-    return;
-  }
-  if (parsed.site.origin !== preflight.origin) return;
-  if (session.status?.pending_removals.includes(parsed.site.origin)) {
-    show("Finish removing this site from the host before enabling it again. Reload this page to retry.", true);
-    return;
-  }
-  if (!picker && needsFolderPick()) {
-    show(session.configIssue
-      ? "Choose the notes folder again to repair the host configuration."
-      : "Choose a notes folder first.", true);
-    return;
-  }
-  if (!navigator.locks?.request) {
-    show("This Chrome build cannot coordinate configuration changes. Capture remains off.", true);
-    return;
-  }
-
-  // Chrome grants every HTTP(S) site at install, so enabling one is only a
-  // host configuration change.
-  const initialPauseToken = session.status?.pause_token ?? null;
-  const selection = picker;
+async function resumeCapture(): Promise<void> {
+  if (busy || !session.config || session.configIssue) return;
   busy = true;
   updateControls();
   try {
     await withConfigMutationLock(async () => {
-      const config = session.config!;
-      const storage: StorageConfig = selection
-        ? storageFor(selection.path, config.storage)
-        : { ...config.storage!, profile: "neutral" };
-      const sites = config.sites.filter((site) => !sameSite(site, parsed.site));
-      sites.push(parsed.site);
-      const next: ConfigSnapshot = { ...config, storage, sites, capture_enabled: true };
-      await session.saveConfig(next, selection?.token ?? null, undefined, true, initialPauseToken);
+      // An explicit resume also clears a local pause, unless another page
+      // paused again after this status was read.
+      const state = await worker<WorkerStatus>({ kind: "get_status" });
+      await session.saveConfig({ ...session.config!, capture_enabled: true }, null, undefined, true, state.pause_token);
     });
-    const workerState = await session.refreshStatus();
-    if (workerState.pause_pending) {
-      try {
-        await withConfigMutationLock(async () => {
-          // Another page may already have finished pausing while we
-          // waited. Only finish a pause that is still pending.
-          const latestState = await worker<WorkerStatus>({ kind: "get_status" });
-          if (latestState.pause_pending) await session.completePausedHostConfig();
-          await session.applyHostConfig(await session.readHostConfig());
-        });
-        show(session.config?.capture_enabled
-          ? "Capture settings changed on another page. Review the current sites."
-          : "Capture was paused on another page. Pending capture records were cleared.",
-        session.config?.capture_enabled === true);
-      } catch (error) {
-        show(`Capture is paused locally; the host pause needs attention: ${describe(error)}`, true);
-      }
-      return;
-    }
-    show(`Capture enabled for ${parsed.site.origin}${parsed.site.path_prefix}. The side panel sends buffered activity.`);
+    showConfigState();
   } catch (error) {
-    show(`Setup failed: ${describe(error)}`, true);
-    if (error instanceof HostError && error.code === "conflict") {
-      picker = null;
-      await reloadConfig().catch(() => undefined);
-    }
+    show(`Could not resume capture: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
     busy = false;
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
-    updateControls();
-    refreshPreflight();
+    renderConfig();
   }
 }
 
@@ -887,62 +849,15 @@ async function refreshArtifactFiles(): Promise<void> {
   }
 }
 
-async function removeSite(site: SiteConfig): Promise<void> {
-  const baseConfig = session.config;
-  if (busy || !baseConfig || !session.revision || session.configIssue || session.adapterIssue ||
-      !baseConfig.sites.some((entry) => sameSite(entry, site))) return;
-  busy = true;
-  updateControls();
-  let hostCommitted = false;
-  let hostFailure: string | null = null;
-  let removedAdapters = 0;
-  let refreshAfter = false;
-  try {
-    // One revision-checked host update. The lease it installs stops capture
-    // for the site; there is no separate local block.
-    await withConfigMutationLock(async () => {
-      const sites = baseConfig.sites.filter((entry) => !sameSite(entry, site));
-      const adapters = adaptersForSites(baseConfig, sites);
-      removedAdapters = baseConfig.adapters.artifacts.length - adapters.artifacts.length;
-      try {
-        await session.saveConfig({
-          ...baseConfig,
-          sites,
-          adapters,
-          capture_enabled: baseConfig.capture_enabled && sites.length > 0,
-        }, null, () => { hostCommitted = true; });
-      } catch (error) {
-        hostFailure = hostCommitted
-          ? `The host saved removal, but the extension policy refresh failed: ${describe(error)}`
-          : `Host update failed: ${describe(error)}`;
-        if (error instanceof HostError && error.code === "conflict") {
-          refreshAfter = true;
-        }
-      }
-    });
-    if (refreshAfter) {
-      await reloadConfig().catch((error: unknown) => {
-        hostFailure = `${hostFailure ?? "Host policy refresh failed."} ${describe(error)}`;
-      });
-    }
-    if (hostFailure) {
-      const next = hostCommitted
-        ? " The host removal is saved. Reload this page to refresh its policy."
-        : " The site is still enabled; use Remove again to retry.";
-      show(`${hostFailure}${next}`, true);
-    } else {
-      show(`Removed ${site.origin}${site.path_prefix}.${removedAdapters
-        ? ` Also removed ${removedAdapters} adapter${removedAdapters === 1 ? "" : "s"} for that origin.`
-        : ""}`);
-    }
-  } catch (error) {
-    show(`Could not remove this site: ${describe(error)}`, true);
-  } finally {
-    busy = false;
-    await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
-    updateControls();
-    refreshPreflight();
-  }
+/** Turn a site off by removing every adapter on its origin, in one update. */
+async function removeSite(origin: string): Promise<void> {
+  const config = session.config;
+  if (busy || !config || session.configIssue || session.adapterIssue) return;
+  const artifacts = config.adapters.artifacts.filter((adapter) => adapter.origin !== origin);
+  const removed = config.adapters.artifacts.length - artifacts.length;
+  if (!removed) return;
+  await saveAdapterDocument({ format: 1, artifacts },
+    `Removed ${origin} and its ${removed} adapter${removed === 1 ? "" : "s"}; its pages are no longer captured.`);
 }
 
 async function detectHarnesses(): Promise<void> {
@@ -1030,9 +945,12 @@ setupButton.addEventListener("click", () => void setupHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
 summariesInput.addEventListener("input", () => { summariesEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
-enableButton.addEventListener("click", () => void enableSite());
 pauseButton.addEventListener("click", () => void pauseCapture());
-siteUrl.addEventListener("input", refreshPreflight);
+resumeButton.addEventListener("click", () => void resumeCapture());
+siteOrigin.addEventListener("input", () => {
+  renderStarterGallery();
+  updateControls();
+});
 session.watchPolicy(scheduleReload);
 window.addEventListener("pagehide", () => {
   if (reloadTimer !== null) clearTimeout(reloadTimer);
@@ -1056,7 +974,6 @@ void (async () => {
       if (session.config && session.revision && !session.configIssue &&
           await session.applyPendingRemovals(session.config, session.revision)) {
         renderConfig();
-        refreshPreflight();
         show("Finished removing sites that an earlier version turned off.");
       }
     } catch (error) {
