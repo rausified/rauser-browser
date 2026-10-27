@@ -11,6 +11,7 @@ export const SUMMARIZE_MENU_ID = `${BINARY_NAME}-summarize`;
 export const SUMMARIZE_MENU_TITLE = `Summarize with ${APP_NAME}`;
 export const UNREADABLE_MESSAGE = `${APP_NAME} can't read this page's content.`;
 export const NOT_A_WEB_PAGE_MESSAGE = "Summaries work on http(s) pages.";
+export const PAGE_CHANGED_MESSAGE = "The page changed before it could be read. Summarize it again.";
 // The start_run schema's title bound.
 const MAX_TITLE_CHARS = 2048;
 
@@ -20,9 +21,22 @@ export interface SummarizeDeps {
   now(): Date;
 }
 
+/** Whether two addresses name the same page once parsed as the URL standard
+ * does (case, default port), as Chrome reports tab URLs. */
+function sameAddress(a: string, b: unknown): boolean {
+  if (typeof b !== "string") return false;
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return false;
+  }
+}
+
 /** Extracts `tab`'s top frame with the bundled Readability, then starts (or
  * joins) its summary run. A page that cannot be read throws
- * `HostError("unreadable")` and sends nothing. */
+ * `HostError("unreadable")`, and a tab that by then holds another address
+ * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`;
+ * neither sends anything. */
 export async function summarizeTab(
   tab: { id: number; url: string; title: string },
   deps: SummarizeDeps,
@@ -43,6 +57,8 @@ export async function summarizeTab(
   if (!page || typeof page.content !== "string" || page.content === "") {
     throw new HostError("unreadable", UNREADABLE_MESSAGE);
   }
+  // The run is keyed by `tab.url`, so its content must come from that page.
+  if (!sameAddress(tab.url, page.href)) throw new HostError("page_changed", PAGE_CHANGED_MESSAGE);
   const response = await deps.host.call({
     type: "start_run",
     protocol_version: PROTOCOL_VERSION,

@@ -14,8 +14,9 @@ export function newRequestId(): string {
 
 export class HostError extends Error {
   constructor(
-    // "unreadable" is the extension's own: a page it could not extract.
-    readonly code: ErrorCode | "disconnected" | "timeout" | "invalid_response" | "unreadable",
+    // "unreadable" and "page_changed" are the extension's own: a page it
+    // could not extract, or a tab that moved to another page meanwhile.
+    readonly code: ErrorCode | "disconnected" | "timeout" | "invalid_response" | "unreadable" | "page_changed",
     message: string,
   ) {
     super(message);

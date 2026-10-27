@@ -980,8 +980,19 @@ async function readablePage(injection) {
   if (injection.files) return [{ frameId: 0 }];
   return [{
     frameId: 0,
-    result: { title: "Readable title", content: "Body text", selection: "picked", truncated: false, readable: true },
+    result: {
+      title: "Readable title", content: "Body text", selection: "picked", truncated: false, readable: true,
+      href: ARTICLE_URL,
+    },
   }];
+}
+
+// The extractor read a document at `href`, not the page the run is for.
+function pageAt(href) {
+  return async (injection) => {
+    const [answer] = await readablePage(injection);
+    return [injection.files ? answer : { ...answer, result: { ...answer.result, href } }];
+  };
 }
 
 function startsRun(request) {
@@ -1066,13 +1077,33 @@ test("an executeScript failure shows \"can't read this page\"", async () => {
   const empty = await summarizePanel({
     local: new Map([[WARNING_SEEN_KEY, true]]),
     executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
-      frameId: 0, result: { title: "", content: "", selection: null, truncated: false, readable: false },
+      frameId: 0, result: { title: "", content: "", selection: null, truncated: false, readable: false, href: ARTICLE_URL },
     }],
   });
   await until(() => empty.el("summarize").disabled === false, "the button to enable");
   empty.el("summarize").click();
   await until(() => /can't read this page/.test(empty.el("run-area").textContent), "the unreadable message");
   assert.equal(empty.sent("start_run").length, 0);
+});
+
+test("Summarize refuses when the tab holds another document by extraction time", async () => {
+  // A navigation, or an SPA's pushState, between the click and the extractor.
+  for (const href of ["https://read.example/next", "https://read.example/article?page=2", undefined]) {
+    const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]), executeScript: pageAt(href) });
+    await until(() => page.el("summarize").disabled === false, "the button to enable");
+    page.el("summarize").click();
+    await until(() => /page changed/.test(page.el("run-area").textContent), "the page-changed message");
+    assert.equal(page.sent("start_run").length, 0);
+    teardown.splice(0).forEach((listener) => listener());
+  }
+
+  // The same address, spelled as Chrome canonicalizes it, is the same page.
+  const same = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]), executeScript: pageAt("HTTPS://READ.example:443/article"),
+  });
+  await until(() => same.el("summarize").disabled === false, "the button to enable");
+  same.el("summarize").click();
+  await until(() => same.sent("start_run").length === 1, "start_run");
 });
 
 test("the setup warning shows once", async () => {

@@ -1,7 +1,8 @@
 // Reads a page's main text for a summary run. Chrome serializes
 // extractReadablePage into the page, after injecting the bundled Readability,
 // so the function is self-contained: it uses only document, window,
-// TextEncoder, JSON, and the global Readability.
+// TextEncoder, JSON, and the global Readability. It reports the address of
+// the document it read, which the caller checks against the run's page.
 
 export interface ExtractLimits {
   // Encoded bytes: each field is measured as UTF-8 JSON, as it travels.
@@ -19,6 +20,8 @@ export interface ExtractedPage {
   selection: string | null;
   truncated: boolean;
   readable: boolean;
+  // window.location.href when the extractor ran.
+  href: string;
 }
 
 // 3 MiB of encoded content and selection leaves the rest of the host's 4 MiB
@@ -142,5 +145,5 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   const room = limits.maxRequestBytes - encoded(selection);
   const kept = fit(content, limits.maxContentChars, (prefix) => encoded(prefix) <= room);
   truncated ||= kept.length < content.length;
-  return { title, content: kept, selection, truncated, readable };
+  return { title, content: kept, selection, truncated, readable, href: String(window.location.href) };
 }

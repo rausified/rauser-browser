@@ -37,7 +37,10 @@ const panelOpens = [];
 const broadcasts = [];
 // Answers chrome.scripting.executeScript; the default reads a page.
 let executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
-  frameId: 0, result: { title: "Readable", content: "Body", selection: null, truncated: false, readable: true },
+  frameId: 0, result: {
+    title: "Readable", content: "Body", selection: null, truncated: false, readable: true,
+    href: "https://read.example/article",
+  },
 }];
 const alarms = new Map();
 // Every native port the code under test opened, newest last.

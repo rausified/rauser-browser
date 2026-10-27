@@ -11,6 +11,8 @@ const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
 
+const PAGE_URL = "https://read.example/article";
+
 const text = (value) => ({ nodeType: 3, nodeValue: value, childNodes: [], textContent: value });
 const el = (tag, ...children) => ({
   nodeType: 1,
@@ -23,7 +25,9 @@ const el = (tag, ...children) => ({
 
 // A page whose Readability finds `article` (null: no article), with
 // `bodyText` as the body's innerText and `selection` as the user's selection.
-function page({ title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "" } = {}) {
+function page({
+  title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
+} = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
   const document = {
     title,
@@ -33,7 +37,7 @@ function page({ title = "Page title", article = null, articleTitle = "", bodyTex
       return { clone: true };
     },
   };
-  const window = { getSelection: () => ({ toString: () => selection }) };
+  const window = { getSelection: () => ({ toString: () => selection }), location: { href } };
   class Readability {
     constructor(doc, options) {
       assert.deepEqual(doc, { clone: true });
@@ -81,6 +85,7 @@ test("extracts article blocks as text and drops images", () => {
     selection: "  picked words ",
     truncated: false,
     readable: true,
+    href: PAGE_URL,
   });
 });
 
@@ -90,11 +95,12 @@ test("falls back to body text when Readability finds no article", () => {
   assert.equal(seen.parsed, 1);
   assert.deepEqual({ ...result }, {
     title: "Doc title", content: "Body line one\nBody line two", selection: null, truncated: false, readable: false,
+    href: PAGE_URL,
   });
   // An article that holds no text falls back as well.
   const empty = page({ title: "Doc title", article: el("div", el("img")), bodyText: "Body" });
   assert.deepEqual({ ...run(empty.scope) }, {
-    title: "Doc title", content: "Body", selection: null, truncated: false, readable: false,
+    title: "Doc title", content: "Body", selection: null, truncated: false, readable: false, href: PAGE_URL,
   });
 });
 
@@ -140,13 +146,22 @@ test("truncation never splits a surrogate pair", () => {
   assert.equal(result.truncated, true);
 });
 
+test("reports the address of the document it read", () => {
+  // The page may have navigated, or changed its URL with pushState, since the
+  // caller chose it; summarizeTab compares this address with the run's.
+  const { scope } = page({ article: el("p", "Hello"), href: "https://read.example/elsewhere" });
+  assert.equal(run(scope).href, "https://read.example/elsewhere");
+});
+
 test("an empty page is unreadable, not an empty run", () => {
   const { scope } = page({ title: "", article: el("div", el("p", "  "), el("img")), bodyText: " \n\t " });
-  assert.deepEqual({ ...run(scope) }, { title: "", content: "", selection: null, truncated: false, readable: false });
+  assert.deepEqual({ ...run(scope) }, {
+    title: "", content: "", selection: null, truncated: false, readable: false, href: PAGE_URL,
+  });
   const nobody = page({ bodyText: "" });
   nobody.scope.document.body = null;
   assert.deepEqual({ ...run(nobody.scope) }, {
-    title: "Page title", content: "", selection: null, truncated: false, readable: false,
+    title: "Page title", content: "", selection: null, truncated: false, readable: false, href: PAGE_URL,
   });
 });
 

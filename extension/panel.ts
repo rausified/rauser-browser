@@ -662,7 +662,7 @@ async function showSetupWarningOnce(): Promise<void> {
 }
 
 function summarizeFailure(error: unknown): string {
-  if (error instanceof HostError && error.code === "unreadable") return error.message;
+  if (error instanceof HostError && (error.code === "unreadable" || error.code === "page_changed")) return error.message;
   if (error instanceof HostError && error.code === "service_unavailable") return serviceSetupText(error.message);
   return `Could not start the summary: ${describe(error)}`;
 }
