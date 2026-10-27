@@ -28,9 +28,9 @@ use super::open::{list_agent_env, open_target};
 use super::paths::{self, ServicePaths};
 use super::record::check_start_run;
 use super::setup;
-use super::supervisor::{EnvSource, ServiceOptions, StartRun, Supervisor};
+use super::supervisor::{CwdCheck, EnvSource, ServiceOptions, StartRun, Supervisor};
 use crate::brand::NAMESPACE;
-use crate::config::ConfigStore;
+use crate::config::{ConfigLock, ConfigStore};
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::native::{error, parse_envelope};
@@ -65,6 +65,23 @@ pub fn run_env(paths: &ServicePaths) -> Result<Vec<(OsString, OsString)>, AgentE
 pub fn env_source(paths: &ServicePaths) -> EnvSource {
     let paths = paths.clone();
     Arc::new(move || run_env(&paths).map_err(|error| error.to_string()))
+}
+
+/// The supervisor's [`CwdCheck`]: when a queued or resumed run starts, under
+/// the config lock, the folder it was queued for must still be the
+/// configured knowledge base folder with the identity recorded when the user
+/// picked it. `config` is the service's own store for this check.
+pub fn cwd_check(config: ConfigStore) -> CwdCheck {
+    let config = Mutex::new(config);
+    Arc::new(move |cwd: &Path| {
+        let mut config = lock(&config);
+        let (_config_lock, knowledge_base) =
+            locked_knowledge_base(&mut config).map_err(|(_, message)| message.to_owned())?;
+        if knowledge_base != cwd {
+            return Err(KNOWLEDGE_BASE_CHANGED.to_owned());
+        }
+        Ok(())
+    })
 }
 
 /// Serve the socket until the service is idle.
@@ -415,19 +432,7 @@ impl Server {
         requested: Option<HarnessId>,
     ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
-        let _config_lock = config.lock_current().map_err(|_| {
-            (
-                ErrorCode::Internal,
-                "The configuration could not be locked.",
-            )
-        })?;
-        if config.refresh().is_err() || config.config_issue().is_some() {
-            return Err((
-                ErrorCode::InvalidConfig,
-                "The configuration is unavailable or needs repair in Brauser settings.",
-            ));
-        }
-        let knowledge_base = checked_knowledge_base(&config)?;
+        let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
         let agent = config
             .snapshot()
             .agent
@@ -451,6 +456,27 @@ fn not_set_up(harness: HarnessId) -> &'static str {
         HarnessId::Codex => "Codex is not the summary harness set up in Brauser settings.",
         HarnessId::Claude => "Claude Code is not the summary harness set up in Brauser settings.",
     }
+}
+
+/// Take the config lock, refresh, and return the lock with the checked
+/// knowledge base folder. Hold the lock while acting on the folder.
+fn locked_knowledge_base(
+    config: &mut ConfigStore,
+) -> Result<(ConfigLock, PathBuf), (ErrorCode, &'static str)> {
+    let config_lock = config.lock_current().map_err(|_| {
+        (
+            ErrorCode::Internal,
+            "The configuration could not be locked.",
+        )
+    })?;
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return Err((
+            ErrorCode::InvalidConfig,
+            "The configuration is unavailable or needs repair in Brauser settings.",
+        ));
+    }
+    let knowledge_base = checked_knowledge_base(config)?;
+    Ok((config_lock, knowledge_base))
 }
 
 /// The knowledge base folder a harness runs in, which must still be the
@@ -614,6 +640,7 @@ mod tests {
 
         fn options(
             paths: &ServicePaths,
+            config: &ConfigStore,
             idle_exit: Duration,
             run_timeout: Duration,
         ) -> ServiceOptions {
@@ -623,6 +650,7 @@ mod tests {
                 idle_exit,
                 service_pid: std::process::id(),
                 run_env: env_source(paths),
+                run_cwd: cwd_check(config.reopen()),
                 opener: crate::open::default_opener(),
             }
         }
@@ -643,7 +671,7 @@ mod tests {
             let finisher_config = self.config();
             let program = self.program.clone();
             let handle = thread::spawn(move || {
-                let options = Self::options(&paths, idle_exit, run_timeout);
+                let options = Self::options(&paths, &config, idle_exit, run_timeout);
                 serve(&paths, config, &options, || {
                     let registry = HarnessRegistry::from_lookup(|name| {
                         (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
@@ -910,6 +938,88 @@ mod tests {
         );
     }
 
+    /// What a queued or resumed run is checked against when it starts: the
+    /// configured knowledge base folder, with the identity recorded when it
+    /// was picked.
+    #[test]
+    fn a_starting_run_rechecks_the_knowledge_base_folder_identity() {
+        let world = World::unconfigured(&answer());
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        let mut config = world.config();
+        config.refresh().unwrap();
+        let queued_cwd = checked_knowledge_base(&config).unwrap();
+        let check = cwd_check(world.config());
+        assert_eq!(check(&queued_cwd), Ok(()));
+
+        // Replaced at the same path while the run waited: fails closed.
+        let moved = world._temp.path().join("kb-old");
+        std::fs::rename(&knowledge_base, &moved).unwrap();
+        std::fs::create_dir(&knowledge_base).unwrap();
+        assert_eq!(check(&queued_cwd), Err(KNOWLEDGE_BASE_CHANGED.to_owned()));
+        // Missing: fails closed.
+        std::fs::remove_dir(&knowledge_base).unwrap();
+        assert_eq!(check(&queued_cwd), Err(KNOWLEDGE_BASE_CHANGED.to_owned()));
+        // The picked folder back at its path passes again.
+        std::fs::rename(&moved, &knowledge_base).unwrap();
+        assert_eq!(check(&queued_cwd), Ok(()));
+        // A run queued for another folder than the one now configured.
+        assert_eq!(check(&world.notes), Err(KNOWLEDGE_BASE_CHANGED.to_owned()));
+        // No notes folder at all.
+        std::fs::remove_file(world.support.join("config.toml")).unwrap();
+        assert!(check(&queued_cwd).is_err());
+    }
+
+    #[test]
+    fn a_queued_run_whose_knowledge_base_was_replaced_fails_closed() {
+        let world = World::unconfigured(&format!(
+            "while [ ! -e \"$0.release\" ]; do sleep 0.05; done\n{}",
+            answer()
+        ));
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        world.start(Duration::from_secs(600));
+        let ids: Vec<String> = ["a", "b", "c"]
+            .into_iter()
+            .map(|key| {
+                let record_key = RecordKey {
+                    kind: RecordKeyKind::Url,
+                    value: format!("https://example.com/{key}"),
+                };
+                match world.start_run(Some(record_key)) {
+                    Response::RunStarted(started) => started.run.run_id,
+                    other => panic!("unexpected response: {other:?}"),
+                }
+            })
+            .collect();
+        // Two blocked runs hold both slots, so the third waits in the queue.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ids[..2]
+            .iter()
+            .any(|id| world.get_run(id).run.state != RunState::Running)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the first two runs never started"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(world.get_run(&ids[2]).run.state, RunState::Queued);
+        std::fs::rename(&knowledge_base, world._temp.path().join("kb-old")).unwrap();
+        std::fs::create_dir(&knowledge_base).unwrap();
+        std::fs::write(world.program.with_extension("release"), "").unwrap();
+        let fetched = world.wait_finished(&ids[2]);
+        assert_eq!(fetched.run.state, RunState::Failed, "{fetched:?}");
+        assert_eq!(fetched.run.error.as_deref(), Some(KNOWLEDGE_BASE_CHANGED));
+        assert_eq!(fetched.run.started_at, None);
+        assert!(fetched.stream_text.is_empty(), "{fetched:?}");
+        for id in &ids[..2] {
+            world.wait_finished(id);
+        }
+    }
+
     #[test]
     fn start_run_prompts_with_the_configured_vocabulary() {
         let world = World::unconfigured(&format!("cat > \"$0.prompt\"\n{}", answer()));
@@ -1087,7 +1197,12 @@ mod tests {
         let exit = serve(
             &world.paths,
             world.config(),
-            &World::options(&world.paths, Duration::from_secs(600), DEFAULT_RUN_TIMEOUT),
+            &World::options(
+                &world.paths,
+                &world.config(),
+                Duration::from_secs(600),
+                DEFAULT_RUN_TIMEOUT,
+            ),
             || {
                 flag.store(true, Ordering::SeqCst);
                 anyhow::bail!("a second instance must not build a supervisor")
@@ -1185,7 +1300,12 @@ mod tests {
         let error = serve(
             &world.paths,
             world.config(),
-            &World::options(&world.paths, Duration::from_secs(600), DEFAULT_RUN_TIMEOUT),
+            &World::options(
+                &world.paths,
+                &world.config(),
+                Duration::from_secs(600),
+                DEFAULT_RUN_TIMEOUT,
+            ),
             || anyhow::bail!("not reached"),
         );
         assert!(error.is_err());

@@ -436,11 +436,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
   rejects format 0 or more than 64 adapters, which the host returns with
   `adapter_issue` set, so the repair prompt is unreachable.
-- [ ] `brwr-ylm` **Queued and resumed runs launch in a stale notes folder.**
-  `run_cwd` (host/src/service/server.rs ~335) skips the identity check and
-  `resume`/`Inner::run` (supervisor.rs ~341/~663) reuse the recorded cwd;
-  re-check under the lock and fail closed. Latent until a runner ships.
-  Re-check against open access PR 3 (#98), which reworked the service run path.
 - [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
   `record_key` (host/src/native.rs ~494) can push a frame-sized request past
   the cap that `write_request` (host/src/frame.rs ~64) enforces after
