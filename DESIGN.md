@@ -742,7 +742,7 @@ new or changed entry stripping a parameter some reader reads or a new or
 changed rule reading a parameter an entry strips, is refused as
 `invalid_config` with a message naming the adapter, its origin, the
 parameter, and the entry; the host checks before the update and again
-under the config lock. A conflict is one reading rule (with its adapter's
+under the config lock. While `adopted-contracts.json` is unreadable, a hand-removed reader cannot be checked, so any new or changed entry is refused (naming the file) until it is fixed or moved aside, as adapter additions are; removing or reordering entries still saves. A conflict is one reading rule (with its adapter's
 origin, type, and `id` template) and the entry that strips its parameter, so
 a save that keeps an existing one (reordering entries, pausing capture,
 editing the adapter's other fields, or removing or restoring that adapter)

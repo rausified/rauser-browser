@@ -898,7 +898,13 @@ impl ConfigStore {
         validate_strip_params_readers(
             &current.config,
             &next,
-            &recorded_readers(&current.retired_adapter_contracts, &adopted),
+            &recorded_readers(
+                &current.retired_adapter_contracts,
+                &adopted,
+                &current.config,
+                &next,
+                &adopted_contracts_path(&parent),
+            )?,
         )?;
         let adapters_unchanged = current.config.adapters == next.adapters;
         let empty_adapter_document = AdapterDocument {
@@ -1893,25 +1899,58 @@ pub(crate) fn validate_strip_params_readers(
 impl ConfigStore {
     /// `validate_strip_params_readers` against this store's last read.
     pub(crate) fn validate_strip_params(&self, next: &ConfigSnapshot) -> Result<()> {
+        let state = self
+            .path
+            .parent()
+            .map(adopted_contracts_path)
+            .unwrap_or_default();
         validate_strip_params_readers(
             &self.config,
             next,
-            &recorded_readers(&self.retired_adapter_contracts, &self.adopted),
+            &recorded_readers(
+                &self.retired_adapter_contracts,
+                &self.adopted,
+                &self.config,
+                next,
+                &state,
+            )?,
         )
     }
 }
 
-/// The recorded contracts `validate_strip_params_readers` counts. An
-/// unreadable adopted-contract state adds none.
+/// The recorded contracts `validate_strip_params_readers` counts. While the
+/// adopted-contract state at `state` is unreadable, a hand-removed reader
+/// cannot be checked, so a save that adds or changes a `strip_params` entry
+/// is refused, as adapter additions are (brwr-hrr): accepting it would let a
+/// collision back in once the file is restored. Removing or reordering
+/// entries strips less and still saves.
 fn recorded_readers(
     retired: &[serde_json::Value],
     adopted: &AdoptedContracts,
-) -> Vec<serde_json::Value> {
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+    state: &Path,
+) -> Result<Vec<serde_json::Value>> {
     let mut readers = retired.to_vec();
-    if let AdoptedContracts::Read { contracts, .. } = adopted {
-        readers.extend(contracts.iter().cloned());
+    match adopted {
+        AdoptedContracts::Read { contracts, .. } => readers.extend(contracts.iter().cloned()),
+        AdoptedContracts::Unreadable => {
+            if let Some(entry) = next
+                .strip_params
+                .iter()
+                .find(|entry| !current.strip_params.contains(entry))
+            {
+                return Err(StripParamsRefusal(format!(
+                    "strip_params cannot add {entry:?} while Brauser's record of the adapters it has used ({}) cannot be read: an adapter removed by hand may read that parameter. Move adopted-contracts.json aside (keeping a backup) or fix it, then save again.",
+                    state.display(),
+                ))
+                .into());
+            }
+        }
+        // The locked recheck rereads the state before writing.
+        AdoptedContracts::Unread => {}
     }
-    readers
+    Ok(readers)
 }
 
 /// Whether both lists of `vocabulary` pass the checks a saved
@@ -5616,6 +5655,51 @@ mod tests {
             let next = with_strip(&store, "selected*");
             let message = refused(&mut store, next);
             assert!(message.contains("removed adapter"), "{message}");
+        }
+
+        /// While adopted-contracts.json is unreadable, a hand-removed reader
+        /// cannot be checked, so a new or changed entry is refused rather
+        /// than letting a collision back in once the file is restored.
+        #[test]
+        fn unreadable_adopted_state_refuses_new_entries_but_not_removals() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"fbclid\"]",
+                &[JIRA, SEARCH],
+            );
+            let mut store = ConfigStore::for_test(path.clone());
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"fbclid\"]",
+                &[SEARCH],
+            );
+            let state = adopted_contracts_path(folder.path());
+            fs::write(&state, b"{").unwrap();
+            let mut store = loaded(&path);
+
+            for entry in ["selectedIssue", "gclid"] {
+                let next = with_strip(&store, entry);
+                let message = refused(&mut store, next);
+                assert!(message.contains("adopted-contracts.json"), "{message}");
+            }
+            let mut next = store.snapshot().clone();
+            next.strip_params[0] = "utm_source".into();
+            refused(&mut store, next);
+
+            // Removing or reordering entries strips less; it still saves.
+            let mut next = store.snapshot().clone();
+            next.strip_params.reverse();
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let mut next = store.snapshot().clone();
+            next.strip_params.retain(|entry| entry != "fbclid");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(fs::read(&state).unwrap(), b"{");
         }
 
         #[test]
