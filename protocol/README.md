@@ -213,6 +213,14 @@ artifact-keyed note exists, publishing without clobber before removing the
 source. `get_artifact`, `list_artifacts`, and `worklog` expose bounded derived
 index views; `refresh_artifacts` runs the owned-file regeneration pass and
 returns bounded conflict paths for unrelated occupants it did not replace.
+Both `ArtifactListItem` and `ArtifactResult` carry a required, nullable
+`summary` (`SummaryView`): on a list row, that local day's latest summary of
+the artifact; on `get_artifact`, the artifact's latest summary. An
+unrecognized page answers `recognized: false` and a null `artifact`, but its
+`summary` is still the latest one logged under the key its note uses (the
+page's `web.page` identity, or a removed adapter's recorded artifact); a
+failed lookup there leaves `summary` null rather than erroring. A summary is
+never counted as an open, so it adds to no worklog or Recent open count.
 
 Harness setup is two messages, answered by the Brauser service (the native
 host forwards them; off macOS they answer `service_unavailable`), and has no

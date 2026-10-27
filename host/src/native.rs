@@ -1691,6 +1691,20 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             "choose a home folder first",
         );
     };
+    let Some(matched) = matched else {
+        // An unrecognized page is not an artifact, but a summary may still
+        // describe it (spec §7.2). Looking one up is best-effort: when the
+        // index or log catch-up fails the page is simply unrecognized, as
+        // it was before summaries, rather than an error on every tab.
+        let summary = unrecognized_page_summary(config, storage, &value.url, &canonical);
+        return Response::ArtifactResult(ArtifactResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            recognized: false,
+            artifact: None,
+            summary,
+        });
+    };
     let cache_dir = match config.cache_dir() {
         Ok(path) => path,
         Err(_) => {
@@ -1718,53 +1732,34 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             "artifact history is unavailable; log catch-up could not complete",
         )
     };
-    let Some(matched) = matched else {
-        // An unrecognized page is not an artifact, but a summary made it a
-        // `web.page` artifact keyed by its canonical URL (spec §7.2).
-        let summary = match crate::summary::web_page_artifact_id(&canonical) {
-            Ok(artifact_id) => match index.summary_for(&artifact_id) {
-                Ok(summary) => summary,
-                Err(_) => return history_unavailable(&value.request_id),
+    let (artifact, summary) = match index.artifact_with_summary(&matched.artifact_id) {
+        Ok((Some(artifact), summary)) => (artifact, summary),
+        Ok((None, _)) => (
+            ArtifactView {
+                // Context can be saved before the artifact's first activity is
+                // delivered, since activity derives rows but context does not
+                // wait on it; look it up directly instead of hardcoding `None`
+                // and blanking context the user just saved.
+                why: index.latest_why(&matched.artifact_id).ok().flatten(),
+                artifact_id: matched.artifact_id,
+                artifact_type: matched.artifact_type,
+                title: matched
+                    .title
+                    .map(|title| title.title)
+                    .or(value.title)
+                    .unwrap_or_else(|| "Untitled".into()),
+                url: canonical,
+                first_seen: String::new(),
+                last_seen: String::new(),
+                focused_seconds: 0,
+                background_seconds: 0,
+                opens: 0,
+                days_opened: 0,
+                last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
+                linked_count: 0,
             },
-            Err(_) => None,
-        };
-        return Response::ArtifactResult(ArtifactResult {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id,
-            recognized: false,
-            artifact: None,
-            summary,
-        });
-    };
-    let summary = match index.summary_for(&matched.artifact_id) {
-        Ok(summary) => summary,
-        Err(_) => return history_unavailable(&value.request_id),
-    };
-    let artifact = match index.artifact(&matched.artifact_id) {
-        Ok(Some(artifact)) => artifact,
-        Ok(None) => ArtifactView {
-            // Context can be saved before the artifact's first activity is
-            // delivered, since activity derives rows but context does not
-            // wait on it; look it up directly instead of hardcoding `None`
-            // and blanking context the user just saved.
-            why: index.latest_why(&matched.artifact_id).ok().flatten(),
-            artifact_id: matched.artifact_id,
-            artifact_type: matched.artifact_type,
-            title: matched
-                .title
-                .map(|title| title.title)
-                .or(value.title)
-                .unwrap_or_else(|| "Untitled".into()),
-            url: canonical,
-            first_seen: String::new(),
-            last_seen: String::new(),
-            focused_seconds: 0,
-            background_seconds: 0,
-            opens: 0,
-            days_opened: 0,
-            last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
-            linked_count: 0,
-        },
+            None,
+        ),
         Err(_) => return history_unavailable(&value.request_id),
     };
     Response::ArtifactResult(ArtifactResult {
@@ -1774,6 +1769,31 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         artifact: Some(artifact),
         summary,
     })
+}
+
+/// The latest summary of a page no live adapter recognizes, keyed the way
+/// `resolve_key_parts` keys its note: a recorded contract's artifact (a
+/// removed adapter's page) or else the page's `web.page` identity. Any
+/// failure, including a contract this host cannot read, means no summary.
+fn unrecognized_page_summary(
+    config: &ConfigStore,
+    storage: &brauser_protocol::StorageConfig,
+    url: &str,
+    canonical: &str,
+) -> Option<brauser_protocol::SummaryView> {
+    let artifact_id = match config.note_key_rule(url) {
+        NoteKeyRule::Artifact(artifact_id) => artifact_id,
+        NoteKeyRule::Unavailable => return None,
+        NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Uncovered => {
+            crate::summary::web_page_artifact_id(canonical).ok()?
+        }
+    };
+    let cache_dir = config.cache_dir().ok()?;
+    open_index(config, storage, &cache_dir)
+        .ok()?
+        .summary_for(&artifact_id)
+        .ok()
+        .flatten()
 }
 
 fn list_artifacts(
@@ -4532,6 +4552,69 @@ id = "work:{host}/{id}"
         let result = artifact_result(&mut config, "https://example.com/spec");
         assert!(!result.recognized);
         assert_eq!((result.artifact, result.summary), (None, None));
+    }
+
+    /// A summary is extra information on an unrecognized page: when the
+    /// artifact history cannot be read, the page is still plainly
+    /// unrecognized rather than an error on every ordinary tab.
+    #[test]
+    fn get_artifact_on_an_unrecognized_page_stays_quiet_when_history_is_unavailable() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        // A file where the log folder belongs: catch-up cannot complete.
+        std::fs::write(notes.join("logs"), b"not a folder").unwrap();
+        let storage = config.snapshot().storage.clone().unwrap();
+        let index = open_index(&config, &storage, &config.cache_dir().unwrap()).unwrap();
+        assert!(index.summary_for("web:https://example.com/spec").is_err());
+        let result = artifact_result(&mut config, "https://example.com/spec");
+        assert!(!result.recognized);
+        assert_eq!((result.artifact, result.summary), (None, None));
+    }
+
+    /// A page whose adapter was removed keeps the summary logged under its
+    /// recorded artifact key, the key open_summary and Recent use too.
+    #[test]
+    fn get_artifact_reports_a_removed_adapters_summary_under_its_artifact_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let event = record_page_summary(
+            &config,
+            url,
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "work:work.example/7".into(),
+            },
+            "work.item",
+        );
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.clear();
+        let revision = config.revision().to_owned();
+        config.update(next, &revision).unwrap().unwrap();
+        assert!(matches!(
+            config.note_key_rule(url),
+            crate::config::NoteKeyRule::Artifact(_)
+        ));
+
+        let result = artifact_result(&mut config, url);
+        assert!(!result.recognized);
+        assert_eq!(result.artifact, None);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
     }
 
     #[test]

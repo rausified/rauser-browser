@@ -1059,13 +1059,26 @@ impl ArtifactIndex {
     /// Return the current derived record for one recognized artifact. The
     /// append-only log remains authoritative; this never trusts index.db.
     pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>> {
+        Ok(self.artifact_with_summary(artifact_id)?.0)
+    }
+
+    /// The artifact's derived record and its latest summary from one
+    /// catch-up, so a panel request reads the logs once. A summary always
+    /// derives a row, so a missing row means no summary either.
+    pub fn artifact_with_summary(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(Option<ArtifactView>, Option<SummaryView>)> {
         let derived = self.derive(&self.load_or_rebuild()?);
-        Ok(derived.artifacts.get(artifact_id).map(|row| {
-            artifact_view(
-                row,
-                linked_count(&derived.edges, &derived.artifacts, artifact_id),
-            )
-        }))
+        let Some(row) = derived.artifacts.get(artifact_id) else {
+            return Ok((None, None));
+        };
+        let view = artifact_view(
+            row,
+            linked_count(&derived.edges, &derived.artifacts, artifact_id),
+        );
+        // Rows keep summaries sorted by instant, then event ID.
+        Ok((Some(view), row.summaries.last().and_then(summary_view)))
     }
 
     /// The artifact's latest summary (by instant, then event ID, as the
@@ -1084,7 +1097,7 @@ impl ArtifactIndex {
             .max_by(|a, b| {
                 timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
             })
-            .map(summary_view))
+            .and_then(summary_view))
     }
 
     /// Canonical URLs previously recorded for an artifact, including mode
@@ -1168,7 +1181,7 @@ impl ArtifactIndex {
                 });
             // Visits are in time order, so the day's latest summary wins.
             if let Some(summary) = &visit.summary {
-                row.summary = Some(summary_view(summary));
+                row.summary = summary_view(summary);
             }
             row.focused_seconds =
                 saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
@@ -1367,25 +1380,26 @@ fn migrate_v4_state(state: &mut IndexState) {
 
 /// The wire view of a summary event. `summarized_at` is the event's own
 /// timestamp; one longer than the wire's 32 bytes (fractional seconds in a
-/// hand-edited log) is shown at whole seconds in the same offset.
-fn summary_view(event: &SummaryEvent) -> SummaryView {
+/// hand-edited log) is shown at whole seconds in the same offset. A
+/// timestamp that still cannot fit is not shown as a summary at all, so
+/// `summarized_at` is always the RFC 3339 instant the schema promises.
+fn summary_view(event: &SummaryEvent) -> Option<SummaryView> {
     let summarized_at = if event.occurred_at.len() <= 32 {
         event.occurred_at.clone()
     } else {
         parsed_timestamp(&event.occurred_at)
             .and_then(|at| at.replace_nanosecond(0).ok())
             .and_then(|at| at.format(&Rfc3339).ok())
-            .filter(|value| value.len() <= 32)
-            .unwrap_or_default()
+            .filter(|value| value.len() <= 32)?
     };
-    SummaryView {
+    Some(SummaryView {
         summarized_at,
         document_type: event.document_type.clone(),
         category: event.category.clone(),
         importance: event.importance,
         summary_path: event.summary_path.clone(),
         harness: event.harness,
-    }
+    })
 }
 
 fn saturating_u32(value: u64) -> u32 {
@@ -4963,7 +4977,17 @@ print(json.dumps([tables,row]))"#;
             index.summary_for(&measured.artifact_id).unwrap(),
             Some(expected_view(&late))
         );
+        // The panel's single-load lookup picks the same latest summary.
+        let (artifact, latest) = index.artifact_with_summary(&measured.artifact_id).unwrap();
+        assert_eq!(artifact.unwrap().artifact_id, measured.artifact_id);
+        assert_eq!(latest, Some(expected_view(&late)));
         assert_eq!(index.summary_for("work:example.com/none").unwrap(), None);
+        assert_eq!(
+            index
+                .artifact_with_summary("work:example.com/none")
+                .unwrap(),
+            (None, None)
+        );
     }
 
     #[test]
@@ -4971,14 +4995,17 @@ print(json.dumps([tables,row]))"#;
         let url = "https://news.ycombinator.com/item?id=50251344";
         let short = web_summary(url, "2026-10-26T14:05:00-07:00");
         assert_eq!(
-            summary_view(&short).summarized_at,
+            summary_view(&short).unwrap().summarized_at,
             "2026-10-26T14:05:00-07:00"
         );
         let long = web_summary(url, "2026-10-26T14:05:00.123456789-07:00");
         assert_eq!(
-            summary_view(&long).summarized_at,
+            summary_view(&long).unwrap().summarized_at,
             "2026-10-26T14:05:00-07:00"
         );
+        // Too long and not a timestamp: no view rather than an empty time.
+        let unparseable = web_summary(url, "2026-10-26 sometime in the afternoon, local");
+        assert_eq!(summary_view(&unparseable), None);
     }
 
     #[test]
