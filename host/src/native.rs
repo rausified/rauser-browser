@@ -266,8 +266,7 @@ fn dispatch(
             Response::HelloResult(HelloResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
-                host_version: concat!(env!("CARGO_PKG_VERSION"), "+", env!("BRAUSER_BUILD_ID"))
-                    .to_owned(),
+                host_version: crate::BUILD_LABEL.to_owned(),
                 configured: config.configured(),
                 config_issue: config.config_issue().map(str::to_owned),
             })

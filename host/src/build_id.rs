@@ -21,7 +21,6 @@ pub const SOURCES: &[&str] = &[
     "../rust-toolchain.toml",
     "../protocol",
     "../adapter-templates",
-    "../macos-alert",
 ];
 
 /// Formats `git rev-parse --short HEAD` and `git status --porcelain` output,
