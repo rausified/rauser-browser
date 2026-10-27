@@ -2137,6 +2137,7 @@ fn validate_adapter_transition_with_history(
             if origin == previous_origin
                 && (id != previous_id || artifact_type != previous_type)
                 && adapter_contracts_overlap(previous, candidate)?
+                && !declares_container(previous, next, (artifact_type, id))
             {
                 bail!(
                     "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
@@ -2181,6 +2182,7 @@ fn adapter_contract(value: &serde_json::Value) -> Option<serde_json::Value> {
         "scope",
         "unscoped",
         "path_case",
+        "within",
     ];
     let source = value.as_object()?;
     let mut contract = serde_json::Map::new();
@@ -2210,6 +2212,41 @@ fn adapter_contract_identity(value: &serde_json::Value) -> Option<(&str, &str)> 
 
 fn adapter_contract_type(value: &serde_json::Value) -> Option<&str> {
     value.get("type")?.as_str()
+}
+
+/// The container a contract's `within` declares, if any: `(type, id)`, the
+/// latter an exact ID template string.
+fn declared_container(value: &serde_json::Value) -> Option<(&str, &str)> {
+    let within = value.get("within")?;
+    Some((within.get("type")?.as_str()?, within.get("id")?.as_str()?))
+}
+
+/// Ruling 2: `previous` counts as declaring container `target` (the
+/// candidate's own `(type, id)`) either because `previous` itself declares
+/// `within` that container, or because `next` holds a live adapter sharing
+/// `previous`'s `(origin, type, id)` identity that declares it. The latter
+/// lets a retired contract that predates `within` release its routes once
+/// the surviving adapter grows the declaration, without reaching for a
+/// migration tool that does not exist yet.
+fn declares_container(
+    previous: &serde_json::Value,
+    next: &ConfigSnapshot,
+    target: (&str, &str),
+) -> bool {
+    if declared_container(previous) == Some(target) {
+        return true;
+    }
+    let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
+        return false;
+    };
+    let Some(previous_type) = adapter_contract_type(previous) else {
+        return false;
+    };
+    adapter_contracts(next).iter().any(|candidate| {
+        adapter_contract_identity(candidate) == Some((previous_origin, previous_id))
+            && adapter_contract_type(candidate) == Some(previous_type)
+            && declared_container(candidate) == Some(target)
+    })
 }
 
 /// Pair unchanged contracts first, then pair recognition edits that retain the
@@ -3777,6 +3814,120 @@ mod tests {
             error.contains("cannot change until artifact migrations"),
             "{error}"
         );
+    }
+
+    const GITHUB_REPO_CONTAINER_ID: &str = "github.repo:{host}/{owner}/{repo}";
+
+    fn github_pr_adapter(owners: &[&str]) -> serde_json::Value {
+        let mut pr = adapter(
+            "https://github.com",
+            "github.pr",
+            "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}",
+            "github.pr:{host}/{owner}/{repo}/{number}",
+        );
+        pr["scope"] = json!({"owner": owners});
+        pr
+    }
+
+    fn github_repo_adapter(owners: &[&str]) -> serde_json::Value {
+        let mut repo = adapter(
+            "https://github.com",
+            "github.repo",
+            "/{owner:name|lower}/{repo:name|lower}/{*}",
+            GITHUB_REPO_CONTAINER_ID,
+        );
+        repo["scope"] = json!({"owner": owners});
+        repo
+    }
+
+    fn within_github_repo(mut adapter: serde_json::Value) -> serde_json::Value {
+        adapter["within"] = json!({"type": "github.repo", "id": GITHUB_REPO_CONTAINER_ID});
+        adapter
+    }
+
+    #[test]
+    fn a_declared_container_may_overlap_retired_contained_routes() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let revision = store
+            .update(adapter_config(vec![pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let repo = github_repo_adapter(&["a"]);
+        store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn an_undeclared_overlap_still_cannot_return_under_a_new_type() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = github_pr_adapter(&["a"]);
+        let revision = store
+            .update(adapter_config(vec![pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let repo = github_repo_adapter(&["a"]);
+        let error = store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn adding_within_to_an_existing_adapter_is_a_same_identity_edit() {
+        let current = adapter_config(vec![github_pr_adapter(&["a"])]);
+        let next = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_repo_adapter(&["a"]),
+        ]);
+        validate_adapter_transition(&current, &next).unwrap();
+    }
+
+    /// Ruling 2: `previous` also counts as declaring container C when the
+    /// *next* config has an adapter sharing `previous`'s (origin, type, id)
+    /// that itself declares `within` C. A retired PR contract that predates
+    /// `within` still releases its routes once the live adapter grows the
+    /// declaration, so long-lived users are not stuck re-migrating.
+    #[test]
+    fn declaring_within_on_the_live_adapter_releases_a_predating_retired_contract() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let retired_pr = github_pr_adapter(&["b"]);
+        let revision = store
+            .update(adapter_config(vec![retired_pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let next = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_repo_adapter(&["a"]),
+        ]);
+        store.update(next, &revision).unwrap().unwrap();
     }
 
     #[test]
