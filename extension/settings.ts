@@ -285,6 +285,28 @@ export class ConfigSession {
     await this.refreshStatus();
   }
 
+  /** The names agent.env sets, from the service. Values never leave it. */
+  async listAgentEnv(): Promise<{ names: string[]; problem: string | null }> {
+    const reply = await this.host.call({
+      type: "get_agent_env",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+    }, "agent_env_listed");
+    return { names: reply.names, problem: reply.problem };
+  }
+
+  /** Show agent.env selected in Finder. The service creates it, empty and
+   * private, when it is missing. */
+  async revealAgentEnv(): Promise<void> {
+    await this.host.call({
+      type: "open_path",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      target: "agent_env",
+      run_id: null,
+    }, "path_opened");
+  }
+
   /**
    * Write the adapters for sites an earlier build removed or saw revoked out
    * of the host config, in one update_config, then let the worker lift its

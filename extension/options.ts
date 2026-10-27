@@ -17,9 +17,12 @@ import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import {
   SETUP_WARNING,
+  agentEnvText,
   agentStateText,
   harnessFoundText,
-  harnessOfferNote,
+  harnessName,
+  serviceSetupText,
+  vocabularyFromText,
 } from "./agent.js";
 import {
   adapterLabel,
@@ -61,26 +64,36 @@ const adapterPreviewTitle = element<HTMLInputElement>("adapter-preview-title");
 const adapterPreview = element<HTMLUListElement>("adapter-preview");
 const saveAdapterButton = element<HTMLButtonElement>("save-adapter");
 const cancelAdapterButton = element<HTMLButtonElement>("cancel-adapter");
-const agentState = element<HTMLParagraphElement>("agent-state");
+const harnessState = element<HTMLParagraphElement>("harness-state");
 const detectButton = element<HTMLButtonElement>("detect-harnesses");
-const offersList = element<HTMLUListElement>("harness-offers");
-const envList = element<HTMLUListElement>("harness-env");
+const harnessList = element<HTMLUListElement>("harness-list");
+const timeoutInput = element<HTMLInputElement>("harness-timeout");
 const summariesInput = element<HTMLInputElement>("summaries-dir");
 const knowledgeBasePath = element<HTMLOutputElement>("kb-path");
 const chooseKnowledgeBaseButton = element<HTMLButtonElement>("choose-kb");
 const knowledgeBaseUseNotesButton = element<HTMLButtonElement>("kb-use-notes");
-const setupButton = element<HTMLButtonElement>("setup-harness");
+const testButton = element<HTMLButtonElement>("test-harness");
 const harnessWarning = element<HTMLParagraphElement>("harness-warning");
 const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
+const agentEnvNames = element<HTMLParagraphElement>("agent-env-names");
+const revealAgentEnvButton = element<HTMLButtonElement>("reveal-agent-env");
+const vocabularyTypes = element<HTMLTextAreaElement>("vocab-types");
+const vocabularyCategories = element<HTMLTextAreaElement>("vocab-categories");
+const saveVocabularyButton = element<HTMLButtonElement>("save-vocabulary");
 
 let picker: { path: string; token: string } | null = null;
 let busy = false;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-// What Detect harnesses last found. Setup names one harness, and the
+// What Detect harnesses last found. Test and use names one harness, and the
 // service detects and probes it again before committing anything.
-let offers: HarnessFound[] = [];
+let harnesses: HarnessFound[] = [];
 let selectedHarnessId: HarnessId | null = null;
+// Fields the user has typed in keep their text across config renders.
 let summariesEdited = false;
+let timeoutEdited = false;
+let vocabularyEdited = false;
+// Setup instructions while the last service request found no service.
+let serviceProblem: string | null = null;
 type AdapterEdit =
   | { kind: "new" }
   | { kind: "existing"; identity: string; snapshot: string };
@@ -178,19 +191,17 @@ function updateControls(): void {
   cancelAdapterButton.disabled = busy;
   const idle = connected && !busy;
   detectButton.disabled = !idle || session.configIssue !== null;
-  setupButton.disabled = !idle || !session.config?.storage || selectedOffer() === null;
+  testButton.disabled = !idle || !session.config?.storage || selectedHarness() === null;
   removeHarnessButton.disabled = !idle || !session.config?.agent;
+  revealAgentEnvButton.disabled = !idle;
+  saveVocabularyButton.disabled = !idle || session.configIssue !== null;
   // The knowledge base is stored with the notes folder, so it needs one.
   const folderReady = idle && !repairing && !!session.config?.storage;
   chooseKnowledgeBaseButton.disabled = !folderReady;
   knowledgeBaseUseNotesButton.disabled = !folderReady || !session.config?.storage?.knowledge_base_dir;
-  for (const input of offersList.querySelectorAll<HTMLInputElement>("input")) {
+  for (const input of harnessList.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
-}
-
-function harnessName(harness: HarnessId): string {
-  return harness === "claude" ? "Claude Code" : "Codex";
 }
 
 /** A harness the service found and can use. */
@@ -198,69 +209,86 @@ function usable(found: HarnessFound): boolean {
   return found.binary !== null && found.problem === null;
 }
 
-function clearOffers(): void {
-  offers = [];
+function clearHarnesses(): void {
+  harnesses = [];
   selectedHarnessId = null;
 }
 
-function selectedOffer(): HarnessFound | null {
-  return offers.find((offer) => usable(offer) && offer.harness === selectedHarnessId) ?? null;
+function selectedHarness(): HarnessFound | null {
+  return harnesses.find((found) => usable(found) && found.harness === selectedHarnessId) ?? null;
 }
 
-function selectOffer(harness: HarnessId | null): void {
-  selectedHarnessId = harness;
+/** Record what the last service request showed: no service means the
+ * harness state gives setup instructions until the service answers again. */
+function noteServiceError(error: unknown): void {
+  if (error instanceof HostError && error.code === "service_unavailable") {
+    serviceProblem = serviceSetupText(error.message);
+  }
+}
+
+/** The run time limit in whole minutes, or null outside 1 to 60. */
+function timeoutMinutes(): number | null {
+  const text = timeoutInput.value.trim();
+  if (!/^\d{1,2}$/.test(text)) return null;
+  const minutes = Number(text);
+  return minutes >= 1 && minutes <= 60 ? minutes : null;
 }
 
 function renderAgent(): void {
   const config = session.config;
+  const agent = config?.agent ?? null;
   const state = [agentStateText(session.agentStatus)];
-  if (config?.agent) state.push(`Harness: ${config.agent.binary}.`);
+  if (agent) {
+    const minutes = Math.max(1, Math.round(agent.timeout_secs / 60));
+    state.push(`Harness: ${harnessName(agent.harness)} (${agent.binary}), up to ${minutes} minute${minutes === 1 ? "" : "s"} per run.`);
+  }
   if (config?.storage?.summaries_dir) state.push(`Summaries folder: ${config.storage.summaries_dir}.`);
-  agentState.textContent = state.join(" ");
+  harnessState.textContent = serviceProblem ?? state.join(" ");
+  harnessState.classList.toggle("warning", serviceProblem !== null);
   if (!summariesEdited) summariesInput.value = config?.storage?.summaries_dir ?? "summaries";
+  if (!timeoutEdited) timeoutInput.value = String(agent ? Math.max(1, Math.round(agent.timeout_secs / 60)) : 10);
+  if (!vocabularyEdited && config) {
+    vocabularyTypes.value = config.summary_vocabulary.document_types.join("\n");
+    vocabularyCategories.value = config.summary_vocabulary.categories.join("\n");
+  }
   const storage = config?.storage ?? null;
   knowledgeBasePath.textContent = storage?.knowledge_base_dir ??
     (storage ? `Same as the notes folder (${storage.root})` : "Same as the notes folder");
 
-  offersList.replaceChildren();
-  if (!offers.length) {
+  harnessList.replaceChildren();
+  if (!harnesses.length) {
     const item = document.createElement("li");
     item.textContent = "Not detected yet.";
-    offersList.append(item);
+    harnessList.append(item);
   }
-  for (const [index, offer] of offers.entries()) {
-    const ready = usable(offer);
+  for (const [index, found] of harnesses.entries()) {
+    const ready = usable(found);
     const item = document.createElement("li");
-    item.dataset.harness = offer.harness;
+    item.dataset.harness = found.harness;
     item.dataset.ready = String(ready);
-    if (offer.binary !== null) item.dataset.binary = offer.binary;
     const label = document.createElement("label");
     const radio = document.createElement("input");
     radio.type = "radio";
-    radio.name = "harness-offer";
-    radio.id = `harness-offer-${index}`;
-    radio.value = offer.harness;
+    radio.name = "harness";
+    radio.id = `harness-${index}`;
+    radio.value = found.harness;
     radio.dataset.ready = String(ready);
-    radio.checked = ready && offer.harness === selectedHarnessId;
+    radio.checked = ready && found.harness === selectedHarnessId;
     radio.addEventListener("change", () => {
-      selectOffer(offer.harness);
+      selectedHarnessId = found.harness;
       renderConfig();
     });
-    const version = offer.version ? ` ${offer.version}` : "";
     const text = document.createElement("span");
-    text.textContent = `${harnessName(offer.harness)}${version}${offer.binary ? `: ${offer.binary}` : ""}`;
+    text.textContent = harnessFoundText(found);
     label.append(radio, text);
     item.append(label);
-    const note = document.createElement("small");
-    note.textContent = ` ${harnessOfferNote(offer)}`;
-    item.append(note);
-    offersList.append(item);
+    if (ready && found.binary !== null) {
+      const path = document.createElement("small");
+      path.textContent = ` ${found.binary}`;
+      item.append(path);
+    }
+    harnessList.append(item);
   }
-
-  // Runs get the service's environment plus agent.env; nothing is chosen here.
-  const item = document.createElement("li");
-  item.textContent = `Runs get the ${APP_NAME} service's environment plus the names in agent.env.`;
-  envList.replaceChildren(item);
 }
 
 function objectValue(value: unknown): AdapterObject | null {
@@ -929,18 +957,24 @@ async function detectHarnesses(): Promise<void> {
   busy = true;
   updateControls();
   try {
-    offers = await session.discoverHarnesses();
-    const ready = offers.find(usable);
-    selectOffer(ready?.harness ?? null);
+    harnesses = await session.discoverHarnesses();
+    serviceProblem = null;
+    // Keep the harness already in use chosen when it is still usable.
+    const current = harnesses.find((found) => usable(found) && found.harness === session.config?.agent?.harness);
+    const ready = current ?? harnesses.find(usable);
+    selectedHarnessId = ready?.harness ?? null;
     if (ready) {
-      show(harnessFoundText(harnessName(ready.harness), ready.version, !!session.config?.storage));
+      show(session.config?.storage
+        ? `Found ${harnessFoundText(ready)}. Choose Test and use to run a test prompt through it.`
+        : `Found ${harnessFoundText(ready)}. Choose a notes folder first, then test the harness.`);
     } else {
-      show(offers.some((offer) => offer.binary !== null)
-        ? "No harness found here can be set up yet; see the reasons below."
+      show(harnesses.some((found) => found.binary !== null)
+        ? "No harness found here can be used yet; see the reasons below."
         : `No supported harness was found on the ${APP_NAME} service's PATH.`, true);
     }
   } catch (error) {
-    clearOffers();
+    clearHarnesses();
+    noteServiceError(error);
     show(`Could not detect harnesses: ${describe(error)}`, true);
   } finally {
     busy = false;
@@ -948,9 +982,11 @@ async function detectHarnesses(): Promise<void> {
   }
 }
 
-async function setupHarness(): Promise<void> {
-  const offer = selectedOffer();
-  if (busy || !offer) return;
+/** Run the probe through the chosen harness; the service commits it only
+ * when the probe answers. */
+async function testHarness(): Promise<void> {
+  const found = selectedHarness();
+  if (busy || !found) return;
   if (!session.config?.storage) {
     show("Choose a notes folder first.", true);
     return;
@@ -960,15 +996,88 @@ async function setupHarness(): Promise<void> {
     show("Enter a summaries folder name.", true);
     return;
   }
+  const minutes = timeoutMinutes();
+  if (minutes === null) {
+    show("Enter the run time limit as a whole number of minutes from 1 to 60.", true);
+    return;
+  }
   busy = true;
   updateControls();
   try {
-    await withConfigMutationLock(() =>
-      session.setupHarness(offer.harness, null, summaries));
+    await withConfigMutationLock(() => session.setupHarness(found.harness, minutes * 60, summaries));
+    serviceProblem = null;
     summariesEdited = false;
-    show(`${harnessName(offer.harness)} is set up. ${agentStateText(session.agentStatus)}`);
+    timeoutEdited = false;
+    await reloadConfig();
+    show(`${harnessName(found.harness)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
-    show(`Harness setup did not finish: ${describe(error)}`, true);
+    noteServiceError(error);
+    show(`The harness test did not pass: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
+/** Read the names agent.env sets. Never holds the page busy: the first
+ * service request may wait for launchd to start the service. */
+async function refreshAgentEnv(): Promise<void> {
+  try {
+    const listed = await session.listAgentEnv();
+    serviceProblem = null;
+    agentEnvNames.textContent = agentEnvText(listed.names, listed.problem);
+  } catch (error) {
+    noteServiceError(error);
+    agentEnvNames.textContent = error instanceof HostError && error.code === "service_unavailable"
+      ? "agent.env names show here once the service runs."
+      : `Could not read agent.env: ${describe(error)}`;
+  }
+  renderConfig();
+}
+
+async function revealAgentEnv(): Promise<void> {
+  if (busy || !session.connected) return;
+  busy = true;
+  updateControls();
+  try {
+    await session.revealAgentEnv();
+    serviceProblem = null;
+    // The service creates a missing agent.env, so read its names again.
+    await refreshAgentEnv();
+    show("Showed agent.env in Finder. Add KEY=VALUE lines to it; each run reads it when it starts.");
+  } catch (error) {
+    noteServiceError(error);
+    show(`Could not show agent.env: ${describe(error)}`, true);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
+async function saveVocabulary(): Promise<void> {
+  if (busy || !session.config || session.configIssue) return;
+  const documentTypes = vocabularyFromText(vocabularyTypes.value);
+  const categories = vocabularyFromText(vocabularyCategories.value);
+  if (!documentTypes.length) {
+    show("Enter at least one document type.", true);
+    return;
+  }
+  if (!categories.length) {
+    show("Enter at least one category.", true);
+    return;
+  }
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      summary_vocabulary: { document_types: documentTypes, categories },
+    }, null));
+    vocabularyEdited = false;
+    show("Summary vocabulary saved. New summaries use it.");
+  } catch (error) {
+    show(`Could not save the summary vocabulary: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
     busy = false;
@@ -1001,9 +1110,14 @@ cancelAdapterButton.addEventListener("click", closeAdapterEditor);
 adapterJson.addEventListener("input", refreshAdapterEditor);
 adapterPreviewUrl.addEventListener("input", refreshAdapterEditor);
 adapterPreviewTitle.addEventListener("input", refreshAdapterEditor);
-setupButton.addEventListener("click", () => void setupHarness());
+testButton.addEventListener("click", () => void testHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
+revealAgentEnvButton.addEventListener("click", () => void revealAgentEnv());
+saveVocabularyButton.addEventListener("click", () => void saveVocabulary());
 summariesInput.addEventListener("input", () => { summariesEdited = true; });
+timeoutInput.addEventListener("input", () => { timeoutEdited = true; });
+vocabularyTypes.addEventListener("input", () => { vocabularyEdited = true; });
+vocabularyCategories.addEventListener("input", () => { vocabularyEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
 chooseKnowledgeBaseButton.addEventListener("click", () => void chooseKnowledgeBase());
 knowledgeBaseUseNotesButton.addEventListener("click", () => void useNotesFolderAsKnowledgeBase());
@@ -1048,4 +1162,5 @@ void (async () => {
     await session.refreshStatus().catch(() => undefined);
     updateControls();
   }
+  if (session.connected) await refreshAgentEnv();
 })();

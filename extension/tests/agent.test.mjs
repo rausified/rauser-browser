@@ -3,7 +3,10 @@ import test from "node:test";
 
 // Run after build:extension. agent.js is pure: no chrome or DOM access.
 const agent = await import("../dist/agent.js");
-const { SETUP_WARNING, agentStateText, harnessFoundText, harnessOfferNote } = agent;
+const {
+  SERVICE_SETUP_INSTRUCTIONS, SETUP_WARNING, agentEnvText, agentStateText, harnessFoundText,
+  serviceSetupText, vocabularyFromText,
+} = agent;
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
 const config = {
@@ -17,25 +20,40 @@ const config = {
   adapters: { format: 1, artifacts: [] },
 };
 
-test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
-  const withFolder = harnessFoundText("Claude Code", "2.1.284", true);
-  assert.equal(withFolder, "Found Claude Code 2.1.284. Choose Set up harness to run a test prompt.");
-  assert.doesNotMatch(withFolder, /Review it below/);
-  const withoutFolder = harnessFoundText("Claude Code", "2.1.284", false);
-  assert.match(withoutFolder, /^Found Claude Code 2\.1\.284\./);
-  assert.match(withoutFolder, /Choose a notes folder first/);
-  assert.doesNotMatch(withoutFolder, /then choose Set up harness\.$/);
-  assert.match(harnessFoundText("Codex", null, true), /^Found Codex\. /);
+test("harnessFoundText names each harness with its version, or why it cannot be used", () => {
+  const codex = { harness: "codex", binary: "/bin/codex", version: "0.144.4", problem: null };
+  assert.equal(harnessFoundText(codex), "Codex 0.144.4");
+  assert.equal(harnessFoundText({ ...codex, version: null }), "Codex");
+  assert.equal(harnessFoundText({ harness: "claude", binary: "/bin/claude", version: "2.1.310", problem: null }),
+    "Claude Code 2.1.310");
+  assert.equal(harnessFoundText({ harness: "claude", binary: null, version: null, problem: null }),
+    "Claude Code not found on the service PATH");
+  assert.equal(harnessFoundText({ ...codex, version: null, problem: "codex --version failed (exit 1)" }),
+    "Codex: codex --version failed (exit 1)");
+  assert.equal(harnessFoundText({ harness: "codex", binary: null, version: null, problem: "/bin is world-writable" }),
+    "Codex: /bin is world-writable");
+  assert.equal("harnessOfferNote" in agent, false);
+  assert.equal("CODEX_DISCLOSURE" in agent, false);
 });
 
-test("harness notes say whether the service found and can use each harness", () => {
-  const found = { harness: "codex", binary: "/bin/codex", version: "0.144.4", problem: null };
-  assert.equal("CODEX_DISCLOSURE" in agent, false);
-  assert.equal(harnessOfferNote(found), "Ready to set up.");
-  assert.equal(harnessOfferNote({ ...found, version: null, problem: "codex --version failed (exit 1)" }),
-    "Cannot be set up: codex --version failed (exit 1).");
-  assert.equal(harnessOfferNote({ harness: "claude", binary: null, version: null, problem: null }),
-    "Not found on the Brauser service's PATH.");
+test("agentEnvText shows names or the problem, never values", () => {
+  assert.equal(agentEnvText(["AWS_PROFILE", "AWS_REGION"], null),
+    "Runs also get AWS_PROFILE, AWS_REGION from agent.env.");
+  assert.equal(agentEnvText([], null),
+    "agent.env sets nothing, so runs get only the Brauser service's environment.");
+  assert.equal(agentEnvText([], "agent.env must have mode 0600, not 0644"),
+    "agent.env cannot be used: agent.env must have mode 0600, not 0644");
+});
+
+test("vocabularyFromText trims, drops blanks, and dedupes case-insensitively", () => {
+  assert.deepEqual(vocabularyFromText(" report \r\n\n\tmemo\nREPORT\nMemo \n  "), ["report", "memo"]);
+  assert.deepEqual(vocabularyFromText(""), []);
+  assert.deepEqual(vocabularyFromText("research paper\nnews"), ["research paper", "news"]);
+});
+
+test("serviceSetupText puts the setup instructions before the host's message", () => {
+  assert.match(SERVICE_SETUP_INSTRUCTIONS, /register-dev-host\.mjs/);
+  assert.equal(serviceSetupText("Not installed."), `${SERVICE_SETUP_INSTRUCTIONS} Not installed.`);
 });
 
 test("the setup warning is the exact full-access text", () => {
