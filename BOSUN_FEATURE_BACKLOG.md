@@ -533,7 +533,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
   Latest verification: see the current health handoff below for clean
-  baseline `898af0c`. The same IPC restriction remains; the existing repair
+  baseline `1dba758`. The same IPC restriction remains; the existing repair
   is retained and this item is not closed.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
@@ -872,7 +872,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `baefd43`)
+### Current health handoff (2026-10-27 — baseline `1dba758`)
 
 - Clean workspace; no quarantine failure file or incomplete implementation.
   The required unfiltered Cargo gate passes 26 adapter-template tests and 447
@@ -883,34 +883,26 @@ were folded into `brwr-q7e` above rather than given their own item.
   npm install, typecheck, lint, extension build, all 13 extension test files,
   current-state validation and queue consistency pass. The script gate fails;
   its non-isolated diagnostic reports 8 pass, 1 fail and 1 platform skip.
-- Independent probes confirm the runner restriction: a workspace AF_UNIX
+- Independent probes reproduce the runner restriction: a workspace AF_UNIX
   bind returns errno 1 EPERM; a JSON-only Node spawnSync returns status 0,
-  error EPERM and empty stdout. The first fake-service bind is at
-  `host/src/service/client.rs:436`; server fixtures time out waiting for a
-  listener. TESTING.md already documents these diagnostics. Keep the tests
-  enabled and production IPC unchanged.
-- The same restriction was observed on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4`,
-  `21d06c3`, `5231f9e`, `2f1e64c`, `2f06f4b`, `b52332f`, `7877d0b`,
-  `1276c9d`, `7d550bd`, `6f057ca`, `898af0c`, `fc11c73`,
-  `ddc0ecc` and now `baefd43`.
-  Current Cargo failure output is in
-  `target/overnight-health/baseline-baefd43/rust-test.log`; earlier logs remain in
-  `target/overnight-health/baseline-fc11c73/`,
-  `target/overnight-health/baseline-898af0c/`,
-  `target/overnight-health/baseline-6f057ca/`,
-  `target/overnight-health/baseline-bdbbbb4/` and
-  `target/overnight-health/baseline-5231f9e/` (gitignored). No preceding
-  commit among the last five is verified green under this restriction;
-  resetting history would discard work without restoring the denied
-  operations, so no reset was attempted. No feature or contract shipped.
+  error EPERM and empty stdout. Reviewed the framed dialog reader, the
+  fake-service bind (`host/src/service/client.rs:436`) and the script's
+  child-output boundary. No repository repair can grant denied OS operations.
+  Keep socket coverage and production IPC intact; TESTING.md documents why.
+- Current probe JSON, script failure output and scripted Clippy output are in
+  `target/overnight-health/baseline-1dba758/` (gitignored). The opening Cargo
+  failure output is in this cycle's tool transcript and overnight-run.log.
+  Prior baseline evidence remains in the neighboring baseline directories.
+  The last five commits are health handoffs and merges, none verified green
+  under this restriction. No reset was attempted: discarding clean work
+  cannot restore these denied operations. No feature or contract shipped.
 - Before scheduling another cycle, the driver needs to report its unfiltered
   gate result with the baseline SHA and provide a runner allowing local IPC
   and synchronous child output. Repeated unchanged restricted runs cannot
-  advance the assigned product work. This handoff consolidates prior repeated
-  health notes; overnight-run.log retains the append-only cycle history.
+  advance assigned product work. This handoff replaces repeated health notes;
+  overnight-run.log retains the append-only cycle history.
 - Once health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
   selectable rules and example artifact grouping using the existing private
   pattern inputs. Resolve the Notion leading-literal contradiction
   (`brwr-gf1`) before claiming its identity cases. Existing proposals cover
-  the useful next steps; another internal health surface is unnecessary.
+  these user-facing next steps; another internal health surface is unnecessary.
