@@ -154,11 +154,12 @@ Their line numbers predate step 6.6, so re-check them.
   Confirmed duplication and made single delivery reuse `check_activity_policy`.
   No current behavioral divergence reproduced: 13-scenario parity passes both
   before and after consolidation, with explicit policy outcomes and real writes.
-- [ ] `brwr-ee5` **Recover missing index ingestion from durable logs.** A valid
-  but incomplete ingestion cache must catch up after append/index interruption
-  on the next delivery or query without requiring event replay or explicit
-  reindex. Keep log acknowledgement independent of disposable-cache success;
-  report stale history if catch-up cannot complete.
+- [x] `brwr-ee5` **Recover missing index ingestion from durable logs.**
+  Reproduced the missing-B failure and fixed it with bounded per-file log
+  checkpoints checked before delivery and query use, including after restart.
+  Durable capture stays acknowledged during cache failure; history APIs report
+  unavailable until catch-up and publication succeed. Unchanged logs are skipped,
+  partial trailing markers are revisited, and old caches rebuild automatically.
 - [ ] `brwr-ezb` **Keep artifact notes reachable after adapter or site removal.**
   Verify the current historical-identity handling against the full native
   save/remove/load acceptance matrix: alternate routes, occupied URL notes,
@@ -364,11 +365,13 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## In Progress / This Iteration
 
-- None. Next take `brwr-ee5`, the first remaining ready deploy blocker,
-  following `bd ready`, then `brwr-ezb`. Capture Site remains the next major
-  product step after those blockers; the P3 proposals stay behind plan work.
+- None. Next take `brwr-ezb`, the remaining ready deploy blocker, following
+  `bd ready`. Capture Site remains the next major product step after the
+  blocker; the P3 proposals stay behind plan work.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Recover missing artifact history from durable logs (2026-10-27).** Per-file ingestion checkpoints now catch up valid older caches before delivery updates and history queries, including after restart without replaying the missing event. Changed logs reparse in full, unchanged logs are skipped, SQLite publishes before the checkpoint cache, and all cache work shares the configuration lock. Durable capture stays acknowledged during cache failures, while artifact, Recent, and worklog queries report unavailable history instead of silently incomplete totals; bounded failures publish no partial checkpoint. **Metrics:** 326 Rust tests (+4) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
 
 - **Category:** Reliability. **Share activity authorization across single and batch delivery (2026-10-27).** Single activity delivery now calls the same host policy checker as batches under the existing configuration lock, removing duplicate identity, mode, trail, reference, and shape checks. A 13-scenario parity test verifies explicit outcomes and reasons, refusal before log/index writes, and exact decoded durable payloads for valid activity through both paths. The baseline already agreed, so no existing behavioral bypass is claimed. **Metrics:** 322 Rust tests and 8 extension test files passing; 1 new test covering 26 deliveries; full required build/quality gate and both Clippy configurations green.
 - **Category:** Security & Privacy. **Keep invisible formatting out of generated work history (2026-10-27).** A shared host sanitizer now replaces Unicode format and control characters with spaces in daily row titles/context, regenerated artifact titles/context, and plain worklogs, and escapes Obsidian comments, highlights, and tags in generated Markdown. Both single and batch delivery use it while canonical encoded event payloads stay exact; reindex regenerates safe owned files without changing source logs. The review recorded legacy interrupted-entry recovery across renderer upgrades separately as `brwr-3cc`. **Metrics:** 319 Rust tests (+4) and 8 extension suites passing; two failing-first regressions, all 170 Unicode 17 format scalars verified locally, and full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, and extension build/tests green.
@@ -396,11 +399,25 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Notes / Ideas for Later
 
+- `brwr-ee5` is fixed with a reproduced missing-append regression. The cache
+  remains a provisional whole-history snapshot; `brwr-b2e` now records that
+  transactional SQLite ingestion should resume bounded batches across requests,
+  rather than permanently stop at the current per-pass read cap. Preserve the
+  new recovery and unavailable-history assertions when replacing it.
+- `brwr-ezb` should check the complete note-removal matrix next. Independent
+  review reproduced a wrong-note load and save when catch-up failure hid a
+  conflicting historical identity. Recovery now refuses incomplete lookups,
+  with a regression for log bounds and cache-publication failures. The broader
+  adapter/site-removal acceptance matrix remains open.
+- Capture Site remains the next visible product investment once the remaining
+  deploy blocker is closed. Re-learn and named focus sessions already cover the
+  useful follow-ups; another internal health view would duplicate existing work.
+
 - `brwr-992` is preventive consolidation, not a reproduced behavioral fix:
   the complete parity matrix passed before and after. Keep explicit expected
   outcomes in cross-path tests so two permissive paths cannot pass by agreement.
   `brwr-o1l` still owns the broader authorize/open deduplication; do not widen
-  this cycle into that refactor. The next deploy blocker is `brwr-ee5`.
+  this cycle into that refactor. The next deploy blocker is now `brwr-ezb`.
 - Product direction remains Capture Site (`brwr-1hj`): the confirmation should
   use concrete matched pages and plain exclusions so someone can start useful
   capture without understanding adapter JSON. Existing Recent/worklog and the
