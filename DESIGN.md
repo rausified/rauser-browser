@@ -547,31 +547,66 @@ Because `artifact_id` is the record key below, an `id` template is durable. The 
 - **Aliases follow the artifact.** A record stays at the filename it was created under. When the index resolves its `artifact_id` to a newer canonical ID, lookups for either ID find it. If both IDs already had a note before the alias was learned, the panel shows the canonical note and lists the other as "note from before the move"; nothing is merged automatically. An `unalias` separates them again. When a note is reached through an alias, the panel says so.
 - **Older URL-keyed records stay findable.** Notes from M1, and notes made before an adapter existed, are left where they are. At reindex, the host maps each URL-keyed record's `canonical_url` through the current adapters, so the panel lists every older note on any URL of the artifact as "older note on this URL". It is still editable in place. When the artifact has no note yet, **Use as artifact note** rekeys one: the host writes it under the artifact key with a no-clobber create, then removes the URL-keyed file after checking its identity. If an adapter is later removed, an artifact-keyed record is still listed on the URLs it recorded.
 
-As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. When no current adapter recognizes a URL, historical key recovery requires both the note scan and the history lookup to succeed before deciding whether their combined candidates are unique. A lookup or catch-up failure returns an unavailable-note-identity error on load and save; it must never count as an empty candidate set or redirect a save into a different artifact note. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
+As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
 
-**Policy removal acceptance (2026-10-27).** Removing an adapter or its site,
-or narrowing its recognition rules, preserves the existing shared note on
-its recorded URLs without authorizing further capture. Historical URL
-evidence includes activity, its mode URLs, and explicit `why` context even
-before any measured activity. Older-note discovery also includes the shared
-note's verified creation URL, so a separate URL note there remains viewable
-from another recorded route even without activity on the creation route.
-Both lookup directions use that same evidence;
-recovered artifact notes retain the older URL-note list and its read-only
-viewing action. A separate URL note remains separate, and an occupied artifact
-note still blocks explicit migration. With several historical artifact IDs
-for one canonical URL the host uses the URL key, preserving any existing URL
-note; a stale artifact key is refused. Neither cache deletion nor reindex
-changes these decisions. With no delivered history, the note's original
-creation URL still recovers its identity; other routes need recorded evidence.
-Historical key selection requires a complete bounded note scan (4,096 Markdown
-entries, 4 MiB per regular file, 16 MiB total). Hitting a bound or encountering
-an unreadable regular candidate returns unavailable identity, never a partial
-choice; symlinks are skipped. Optional older-note discovery on a currently
-recognized page remains best effort, so a broken optional note does not hide
-the primary note. The panel does not yet list the preserved artifact-note
-candidates when history is ambiguous; explicit read-only candidate viewing
-is a separate follow-up and must not change the primary autosave key.
+**Note keys outlive capture (2026-10-27).** When the capture policy does not
+recognize a URL, its note key comes from the note-only contracts config.toml
+still records: the superseded recognition contracts in `[[adapter_id_history]]`
+and, while an adapter document is inert (an `adapter_issue`), that current
+document. They name record keys only and never authorize capture. Removing an
+adapter or its site, narrowing its rules, or an inert document therefore keeps
+one note per artifact on every route its contract matched, including routes
+with no recorded activity and documents first noted afterwards. Exactly one
+named artifact gives its key; several give the URL key. A recorded contract
+this host cannot compile (an unsupported document format or a damaged history
+entry) makes identity on its origin unavailable: loads and saves there refuse
+rather than choose a key. An origin any current
+or recorded contract covers is decided by those contracts alone: every
+recorded artifact URL was matched by one of them, so a URL none of them
+matches is not that artifact, even when its canonical form equals one an
+artifact recorded after `strip_params` removed the identifying query value (a
+Jira board and the issue modal opened on it). The older-note list, which also
+authorizes viewing and **Use as artifact note**, keeps only candidate URLs
+that map to the same artifact: by the current policy when it matches (a
+current match naming another artifact is final), otherwise by these
+contracts. A URL on an origin no contract covers never qualifies, not even
+the artifact's own indexed routes or its note's creation URL.
+
+**Policy removal acceptance (2026-10-27, revised the same day).** When
+config.toml no longer records any contract for an origin (for example, a
+repair replaced the file, or an adapter was removed before
+`[[adapter_id_history]]` existed), the host uses the URL key on that origin
+and does not recover an artifact key from recorded evidence. Every recorded
+URL (activity, mode URLs, explicit `why` context, an artifact note's creation
+URL) is a stripped canonical form, so without a contract the host cannot tell
+an artifact's page from another page with the same form: a Jira board and
+every issue modal on it share one once `selectedIssue` is stripped. Review
+reproduced the earlier recovery reading the board, and another issue's modal,
+as the first issue and autosaving over its note, and authorizing the board's
+URL note to migrate into it. Such a page therefore needs no history lookup or
+note scan, so a large notes folder or an unavailable history cache cannot
+block notes on it. The artifact note itself is never changed or deleted; it
+stays reachable from any route a current or recorded contract still covers
+and in the notes folder, and a client holding its key gets `key_changed`
+rather than an autosave. Removing an adapter or site through settings records
+its contract, so this applies only once that record is gone. Neither cache
+deletion nor reindex changes these decisions. Optional older-note discovery
+on a recognized page remains best effort, so a broken optional note does not
+hide the primary note.
+
+**Known gap: hand-removed contracts (2026-10-27, `brwr-hrc`).** Only a
+removal through settings records `[[adapter_id_history]]`. If config.toml is
+edited by hand to delete one adapter while another adapter still covers the
+origin (for example, deleting `jira.board` beside a `jira.issue` rule whose
+modal route reads the stripped `selectedIssue`), the remaining contract
+decides the origin alone. It does not match the board, so the board gets the
+URL key: its artifact note stays on disk and is never overwritten, but the
+board page no longer reaches it, and the next autosave starts a separate URL
+note. The planned fix has the host record every contract it has adopted and,
+when one vanishes from config.toml, keep it in a host-owned retired-contracts
+state file that note identity reads like `[[adapter_id_history]]`. The test
+`hand_removing_only_the_board_adapter_keeps_its_note_beside_the_modal_rule`
+pins the expected behavior and stays ignored until then.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
@@ -1048,7 +1083,7 @@ The plan follows Chrome's current [optional-permission rules](https://developer.
    4. **Activity events: done (2026-10-16).** Automatic capture now keeps offset-qualified local-hour totals in trusted `storage.local` and the tab/artifact, pending-source, active-window, focus, and idle context in `storage.session`. Cold opens, focused and background milliseconds, modes (each with its evidence URL), refs, and capped trails freeze at the hour boundary into stable-ID `activity` events; the same protocol version also carries append-only `why` events. The worker retains and drains older M1 visits after upgrade, but new navigation capture no longer creates visit rows. `idle` is a required no-warning permission and is set to five minutes. The host independently re-evaluates the activity artifact, each claimed mode, every trail source URL, and title refs before an idempotent measured Markdown append; neither activity nor why uses M1 near-repeat suppression. Each human-readable line's existing owned marker now adds `kind=activity|why` and a hex-encoded canonical wire payload, keeping the append-only log sufficient to rebuild modes, trails, refs, and why text in step 6.6 without trusting the prose rendering; the primary, mode-evidence, and trail URLs are normalized only after authorization, and M1 visit markers remain valid. Tests cover hour and UTC-offset boundaries (including the repeated daylight-saving hour), restored pending totals, focus/background/idle/lock accounting, reloads and restored/discarded tab replacement, same-artifact routes and duplicate tabs, forward/back and created-target trails, SPA title timing, worker-start map repair for active/loading/ungranted tabs, legacy-queue delivery, host identity/mode/trail tampering, and why-event replay. The remaining browser-order and real idle/lock limitations stay those recorded by the step 6.1 probes and `TESTING.md`.
    5. **Delivery and durability: done (2026-10-16).** The worker freezes up to 64 ready records from one local calendar day under a stable batch ID, persists the batch's exact overflow snapshot across retries, and applies terminal acknowledgements together. The host validates policy before vault I/O and publishes all surviving entries with one compact in-flight intent, one combined append, and one log sync; a replay completes only the exact intended suffix or recognizes complete event markers, and the bounded index replaces current delivery's one-file-per-event journal while legacy `record_visit` remains for upgrade draining. At 80% of either queue cap the toolbar badge lights, duplicate undispatched hourly activity coalesces only when the result still fits the byte cap, and dropped-hour count and range remain in the panel until an idempotent overflow marker is durably acknowledged. `near_repeat_secs` is absent from protocol v5 and new config writes, accepted and ignored when loading M1 config, and removed from consent and log scanning, so two deliberate `/log` actions a minute apart both persist. Tests cover batching and replay, overflow acknowledgement loss with concurrent drops, hard-cap coalescing, malformed compact-index bounds, and the two manual entries.
    6. **Index tables and artifact files: done (2026-10-16).** Each durably accepted activity updates an atomically replaced, disposable SQLite `index.db` with `artifacts`, `visits`, `edges`, and `dirty_artifacts`; a bounded host cache avoids reparsing all prior logs on every delivery while leaving owned machine markers authoritative. Duplicate retries and upgrade-era visits reconcile from those markers instead of trusting the incoming retry body, conflicting reuse of an event ID is refused, and the explicit reindex shares the host's configuration/write lock. Connection close regenerates dirty artifact Markdown through capability-scoped, exact ownership-checked replacement, preserves mtimes when bytes are unchanged, neutralizes presentation text, and rolls old daily activity into chronologically ordered weekly then monthly Timeline rows. Case-colliding IDs receive distinct hash-suffixed paths. `brauser reindex` discards the cache, reparses bounded owned logs, and recreates both database and files. Older configs choose a non-overlapping artifact directory when `artifacts` is already occupied. The settings-facing manual trigger remains with step 6.7. Tests cover a hostile title (embeds and YAML breakers), a case-colliding ID, an external edit to an artifact file being replaced, a day of heavy use producing no file write until regeneration, standard SQLite reads across multiple B-tree pages, malformed-marker and conflicting-ID isolation, offset chronology, passive carry-over activity, legacy delivery, config migration, and a year of daily opens staying within the rollup bounds.
-   7. **Panel, worklog, and record keys: done (2026-10-17).** The panel shows the current artifact's identity, mode, measured focus/background/open totals, links, and append-only one-line context; Recent groups artifact-day rows across tools with type/title filters, and the host generates copyable today, yesterday, or current-week worklogs without an agent. `get_artifact`, `list_artifacts`, `worklog`, and the settings `refresh_artifacts` action read the disposable index under host-side bounds, with regeneration conflicts and paths visible instead of overwritten. `load_note` and `save_note` now resolve and return a host-derived URL or artifact key, stale keys fail as `key_changed`, alternate routes share one note, and guarded **Use as artifact note** migration keeps older URL-keyed notes findable. When no adapter currently recognizes a URL (its adapter or last enabled site was removed), the host checks the index for a URL previously recorded under an artifact before falling back to a fresh URL key, so an existing shared note stays reachable instead of appearing empty. A new `view_older_note` message opens an older URL-keyed note read-only, by its own key, so notes beyond the one a sibling migration already moved into the shared note stay reachable even though their own URL now resolves to it. Tests cover the Google Doc, Jira modal, mid-edit adapter change, occupied artifact note, unchanged M1 note, message bounds, recent/worklog derivation, conflict reporting, removed-adapter note recovery, context saved before the first activity, the older-note candidate cap, and read-only older-note viewing (including its own authorization check) cases named for this step.
+   7. **Panel, worklog, and record keys: done (2026-10-17).** The panel shows the current artifact's identity, mode, measured focus/background/open totals, links, and append-only one-line context; Recent groups artifact-day rows across tools with type/title filters, and the host generates copyable today, yesterday, or current-week worklogs without an agent. `get_artifact`, `list_artifacts`, `worklog`, and the settings `refresh_artifacts` action read the disposable index under host-side bounds, with regeneration conflicts and paths visible instead of overwritten. `load_note` and `save_note` now resolve and return a host-derived URL or artifact key, stale keys fail as `key_changed`, alternate routes share one note, and guarded **Use as artifact note** migration keeps older URL-keyed notes findable. When no adapter currently recognizes a URL (its adapter or last enabled site was removed), the recorded contracts in config.toml decide its key (§6.2; the index fallback this step first used was withdrawn on 2026-10-27). A new `view_older_note` message opens an older URL-keyed note read-only, by its own key, so notes beyond the one a sibling migration already moved into the shared note stay reachable even though their own URL now resolves to it. Tests cover the Google Doc, Jira modal, mid-edit adapter change, occupied artifact note, unchanged M1 note, message bounds, recent/worklog derivation, conflict reporting, removed-adapter note recovery, context saved before the first activity, the older-note candidate cap, and read-only older-note viewing (including its own authorization check) cases named for this step.
    8. **First three starter drafts: gallery built; live certification pending (2026-10-16).** Settings recognizes enabled Jira Cloud, SharePoint/OneDrive, and GitHub origins and resolves the format-1 recorded fixtures to the exact origin. GitHub refuses to produce a draft until the user supplies one or more syntactically valid organization owners, then puts them in `scope.owner`; the starter path never offers `unscoped`. Each choice opens as editable JSON in the existing complete-document validation, match-preview, safety-probe, and native-confirmation flow, and an already-configured type/origin is not offered twice. The bundled documentation records example routes, ID contracts, scope behavior, and known limits. These are deliberately labeled development drafts rather than release-certified starter adapters: tonight's isolated build could validate the recorded fixtures in both engines but could not perform the required live-tool UI checks. Complete those checks and record their date in `docs/adapters/` before changing that label or treating step 6.8 as done.
 7. **Build M1.5b (artifacts, continued)** once M1.5a has been in daily use for a few weeks. **Resequenced 2026-10-16 (§14):** Create adapter (step 7.6) ships as **Capture Site** right after M1.5a step 6.7, together with the alias/re-key migration from step 7.2 that a re-learned site needs. Agent drafting (step 7.7) follows M2 host invocation (step 8.2) and comes before the rest of M2. The rest of M1.5b keeps the daily-use gate. Moved issues and renamed repositories are rare, so aliases wait until there is a real log to judge them against. M1.5b can run alongside the rest of M2 (step 8); if it adds messages, it takes the next protocol version.
    1. Alias probes: that `onBeforeNavigate` plus a committed `server_redirect` qualifier pairs the requested and final URLs for a moved Jira issue and a renamed GitHub repository. If Jira's move redirect turns out to be client-side, only the title signal is used for it.

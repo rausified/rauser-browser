@@ -810,34 +810,6 @@ impl ArtifactIndex {
             .collect())
     }
 
-    /// Every distinct artifact previously recorded for a canonical URL,
-    /// checking explicit context, an activity's own URL and any mode-evidence
-    /// URL hourly coalescing may have folded into a later event's primary URL (so an
-    /// alternate route such as `/edit` is not lost once a visit's primary
-    /// URL settles on `/view`). Note lookup falls back to this when no
-    /// adapter currently recognizes the URL (for example, the adapter that
-    /// matched it was removed), so an existing shared artifact note stays
-    /// discoverable instead of silently switching to a fresh URL-keyed one.
-    /// Returns the raw candidate set rather than collapsing it: the caller
-    /// must combine it with any other recovery source before deciding
-    /// uniqueness, since stripped query identity can make two different
-    /// artifacts share one canonical form, and a wrong guess from either
-    /// source alone would silently redirect a save into an unrelated
-    /// artifact's note. M1's legacy `web:<host>/<url_id>` identity
-    /// (`web.page`, a reserved synthetic scheme no real adapter may use) is
-    /// always excluded from the candidates.
-    pub fn artifact_candidates_for_url(&self, url: &str) -> Result<BTreeSet<String>> {
-        Ok(self
-            .load_or_rebuild()?
-            .events
-            .values()
-            .filter(|event| {
-                !event.artifact_id().starts_with("web:") && event.urls().any(|seen| seen == url)
-            })
-            .map(|event| event.artifact_id().to_owned())
-            .collect())
-    }
-
     /// Latest "why I'm here" context recorded for an artifact, independent of
     /// whether any activity has created its artifact row yet. A newly
     /// recognized artifact can have saved context before its first hourly
@@ -2661,7 +2633,7 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
-    fn artifact_candidates_for_url_includes_mode_evidence_urls() {
+    fn artifact_urls_include_mode_evidence_urls() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -2688,93 +2660,8 @@ print(json.dumps([tables,row]))"#;
         index.record_activity(&event, &[]).unwrap();
 
         assert_eq!(
-            index.artifact_candidates_for_url(edit_url).unwrap(),
-            BTreeSet::from(["gdoc:docs.example/abc".to_string()])
-        );
-        assert_eq!(
-            index.artifact_candidates_for_url(view_url).unwrap(),
-            BTreeSet::from(["gdoc:docs.example/abc".to_string()])
-        );
-    }
-
-    #[test]
-    fn artifact_candidates_for_url_includes_every_artifact_sharing_an_ambiguous_url() {
-        let root = TempDir::new().unwrap();
-        let cache = TempDir::new().unwrap();
-        let index = index(&root, &cache);
-        let url = "https://work.example/board?selectedIssue=stripped";
-        let event_a = ActivityEvent {
-            event_id: "00000000-0000-4000-8000-000000000004".into(),
-            artifact_id: "work:a/1".into(),
-            artifact_type: "work.item".into(),
-            url: url.into(),
-            title: Some("A".into()),
-            occurred_at: "2026-10-16T12:00:00+00:00".into(),
-            incognito: false,
-            opens: 1,
-            focused_seconds: 5,
-            background_seconds: 0,
-            modes: Vec::new(),
-            trails: Vec::new(),
-            refs: Vec::new(),
-        };
-        let event_b = ActivityEvent {
-            event_id: "00000000-0000-4000-8000-000000000005".into(),
-            artifact_id: "work:b/2".into(),
-            ..event_a.clone()
-        };
-        index.record_activity(&event_a, &[]).unwrap();
-        index.record_activity(&event_b, &[]).unwrap();
-
-        assert_eq!(
-            index.artifact_candidates_for_url(url).unwrap(),
-            BTreeSet::from(["work:a/1".to_string(), "work:b/2".to_string()])
-        );
-    }
-
-    #[test]
-    fn artifact_candidates_for_url_prefers_a_real_artifact_over_an_earlier_legacy_identity() {
-        let root = TempDir::new().unwrap();
-        let cache = TempDir::new().unwrap();
-        let index = index(&root, &cache);
-        let url = "https://example.com/items/7";
-        let legacy_event = ActivityEvent {
-            event_id: "00000000-0000-4000-8000-000000000001".into(),
-            artifact_id: "web:example.com/abc123".into(),
-            artifact_type: "web.page".into(),
-            url: url.into(),
-            title: Some("Before an adapter recognized it".into()),
-            occurred_at: "2026-10-15T12:00:00+00:00".into(),
-            incognito: false,
-            opens: 1,
-            focused_seconds: 10,
-            background_seconds: 0,
-            modes: Vec::new(),
-            trails: Vec::new(),
-            refs: Vec::new(),
-        };
-        let real_event = ActivityEvent {
-            event_id: "00000000-0000-4000-8000-000000000002".into(),
-            artifact_id: "work:example.com/7".into(),
-            artifact_type: "work.item".into(),
-            url: url.into(),
-            title: Some("Issue 7".into()),
-            occurred_at: "2026-10-16T12:00:00+00:00".into(),
-            incognito: false,
-            opens: 1,
-            focused_seconds: 20,
-            background_seconds: 0,
-            modes: Vec::new(),
-            trails: Vec::new(),
-            refs: Vec::new(),
-        };
-        // Oldest first: the legacy M1 visit predates the real adapter match.
-        index.record_activity(&legacy_event, &[]).unwrap();
-        index.record_activity(&real_event, &[]).unwrap();
-
-        assert_eq!(
-            index.artifact_candidates_for_url(url).unwrap(),
-            BTreeSet::from(["work:example.com/7".to_string()])
+            index.artifact_urls("gdoc:docs.example/abc").unwrap(),
+            vec![edit_url.to_string(), view_url.to_string()]
         );
     }
 
