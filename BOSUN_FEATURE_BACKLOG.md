@@ -359,7 +359,8 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   service tests and `npm run test:scripts`. Cookie's codex workspace-write
   sandbox denies local IPC, so its health gate saw 32 socket-test failures and
   refused product work for 10 cycles. CI sets the flag, so CI never skips.
-  Waits for `brwr-sr3` (PR #98): open access PR 3 rewrites those tests.
+  Open access PR 3 (#98, merged 2026-10-27) rewrote those tests; recheck which
+  still bind sockets before starting.
 - [ ] `brwr-2za` **Neutralize `$` math in daily-log titles and Why text.**
   `safe_markdown_line` (host/src/capture.rs) still allows `$` math there.
   Moving them to `markdown::inline` needs a second frozen renderer generation

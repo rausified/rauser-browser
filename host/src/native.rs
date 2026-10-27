@@ -507,11 +507,11 @@ fn start_run(
     // too when it reads the run's working directory.
     let resolved = match config.lock_current() {
         Ok(_config_lock) => resolve_record_key(config, &value.url),
-        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable")),
+        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable".into())),
     };
     match resolved {
         Ok(key) => value.record_key = Some(key),
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     }
     forward(&Request::StartRun(value), service)
 }
@@ -1236,6 +1236,9 @@ struct NoteContext {
     older_urls: Vec<String>,
 }
 
+/// A request refusal: its code and the message shown to the user.
+pub(crate) type Refusal = (ErrorCode, std::borrow::Cow<'static, str>);
+
 /// The key-only part of `note_context`, shared by notes, the run proxy, and
 /// the run finisher, so a run and the page's note always agree on the record
 /// they belong to. It never lists older notes. Callers hold `lock_current`.
@@ -1244,7 +1247,7 @@ struct NoteContext {
 pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
-) -> Result<RecordKey, (ErrorCode, &'static str)> {
+) -> Result<RecordKey, Refusal> {
     resolve_key_parts(config, url).map(|parts| parts.key)
 }
 
@@ -1256,23 +1259,23 @@ struct KeyParts {
     key: RecordKey,
 }
 
-fn resolve_key_parts(
-    config: &mut ConfigStore,
-    url: &str,
-) -> Result<KeyParts, (ErrorCode, &'static str)> {
+fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Refusal> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
             ErrorCode::InvalidConfig,
-            "configuration is unavailable or needs repair",
+            "configuration is unavailable or needs repair".into(),
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
+        return Err((
+            ErrorCode::NotConfigured,
+            "choose a home folder first".into(),
+        ));
     };
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
-        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
+        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable"))?;
+        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable".into()))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule
@@ -1305,7 +1308,13 @@ fn resolve_key_parts(
             NoteKeyRule::Unavailable => {
                 return Err((
                     ErrorCode::Internal,
-                    "note identity is unavailable; an adapter contract cannot be read",
+                    "note identity is unavailable; an adapter contract cannot be read".into(),
+                ));
+            }
+            NoteKeyRule::StateUnavailable => {
+                return Err((
+                    ErrorCode::Internal,
+                    config.adopted_contracts_unavailable().into(),
                 ));
             }
         },
@@ -1321,7 +1330,7 @@ fn note_context(
     config: &mut ConfigStore,
     url: &str,
     include_older_notes: bool,
-) -> Result<NoteContext, (ErrorCode, &'static str)> {
+) -> Result<NoteContext, Refusal> {
     let KeyParts {
         canonical,
         vault,
@@ -1348,6 +1357,7 @@ fn note_context(
             NoteKeyRule::Ambiguous
             | NoteKeyRule::Unrecognized
             | NoteKeyRule::Unavailable
+            | NoteKeyRule::StateUnavailable
             | NoteKeyRule::Uncovered => false,
         }
     };
@@ -1357,7 +1367,10 @@ fn note_context(
     }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
         let Some(storage) = config.snapshot().storage.as_ref() else {
-            return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+            return Err((
+                ErrorCode::NotConfigured,
+                "choose a notes folder first".into(),
+            ));
         };
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = open_index(config, storage, &cache_dir)
@@ -1420,7 +1433,7 @@ fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore)
     };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     match note::load_keyed_note(
         &context.vault,
@@ -1460,7 +1473,7 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
     // loads and explicit migrations, not repeated after each keystroke.
     let context = match note_context(config, &value.url, false) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     if value.expected_key != context.key {
         return match note::load_keyed_note(
@@ -1537,7 +1550,7 @@ fn use_artifact_note(
     };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     if context.key.kind != RecordKeyKind::Artifact {
         return error(
@@ -1609,7 +1622,7 @@ fn view_older_note(
     };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     if context.key.kind != RecordKeyKind::Artifact {
         return error(
@@ -3545,10 +3558,18 @@ id = "jira.board:{host}/{id}"
             let root = folder.path().join("notes");
             let board_bytes = std::fs::read(root.join(&board.relative_path)).unwrap();
             hand_remove_board_adapter(&path);
-            std::fs::write(config::adopted_contracts_path(folder.path()), b"{").unwrap();
+            let state = config::adopted_contracts_path(folder.path());
+            std::fs::write(&state, b"{").unwrap();
             config = loaded(&path);
 
-            let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal);
+            // The refusal names the state file and its repair, not just a
+            // contract that cannot be read.
+            let named = |message: &str| {
+                message.starts_with("Notes on this page are paused to protect note identity")
+                    && message.contains(&state.display().to_string())
+                    && message.contains("Move adopted-contracts.json aside")
+            };
+            let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal && named(&reply.message));
             let loaded_board = load_note(
                 brauser_protocol::LoadNoteRequest {
                     protocol_version: PROTOCOL_VERSION,
@@ -3571,6 +3592,18 @@ id = "jira.board:{host}/{id}"
             assert_eq!(
                 note_load(&mut config, BROWSE_123).key.kind,
                 RecordKeyKind::Artifact
+            );
+
+            // Moving the file aside, as the message says, forgets the board
+            // contract: the board gets its URL note again, and the artifact
+            // note stays untouched on disk.
+            std::fs::rename(&state, folder.path().join("adopted-contracts.json.bak")).unwrap();
+            let reloaded = note_load(&mut config, BOARD);
+            assert_eq!(reloaded.key, crate::vault::url_record_key(BOARD).unwrap());
+            assert!(!reloaded.exists);
+            assert_eq!(
+                std::fs::read(root.join(&board.relative_path)).unwrap(),
+                board_bytes
             );
         }
     }
