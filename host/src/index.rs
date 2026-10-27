@@ -1077,15 +1077,20 @@ impl ArtifactIndex {
             row,
             linked_count(&derived.edges, &derived.artifacts, artifact_id),
         );
-        // Rows keep summaries sorted by instant, then event ID.
-        Ok((Some(view), row.summaries.last().and_then(summary_view)))
+        // Rows keep summaries sorted by instant, then event ID; the newest
+        // that renders is the latest, so a broken one hides no earlier one.
+        Ok((
+            Some(view),
+            row.summaries.iter().rev().find_map(summary_view),
+        ))
     }
 
     /// The artifact's latest summary (by instant, then event ID, as the
-    /// artifact file's Summary line picks it), or `None` when it has none.
+    /// artifact file's Summary line picks it) that renders as a view, or
+    /// `None` when it has none.
     pub fn summary_for(&self, artifact_id: &str) -> Result<Option<SummaryView>> {
-        Ok(self
-            .load_or_rebuild()?
+        let cache = self.load_or_rebuild()?;
+        let mut summaries = cache
             .events
             .values()
             .filter_map(|event| match event {
@@ -1094,10 +1099,11 @@ impl ArtifactIndex {
                 }
                 _ => None,
             })
-            .max_by(|a, b| {
-                timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
-            })
-            .and_then(summary_view))
+            .collect::<Vec<_>>();
+        summaries.sort_by(|a, b| {
+            timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
+        });
+        Ok(summaries.into_iter().rev().find_map(summary_view))
     }
 
     /// Canonical URLs previously recorded for an artifact, including mode
@@ -1179,9 +1185,10 @@ impl ArtifactIndex {
                     why: artifact.why.clone(),
                     summary: None,
                 });
-            // Visits are in time order, so the day's latest summary wins.
-            if let Some(summary) = &visit.summary {
-                row.summary = summary_view(summary);
+            // Visits are in time order, so the day's latest summary that
+            // renders wins.
+            if let Some(view) = visit.summary.as_ref().and_then(summary_view) {
+                row.summary = Some(view);
             }
             row.focused_seconds =
                 saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
@@ -4988,6 +4995,38 @@ print(json.dumps([tables,row]))"#;
                 .unwrap(),
             (None, None)
         );
+    }
+
+    /// A latest summary with no view (an unparseable, over-long time) does
+    /// not hide an earlier one that renders.
+    #[test]
+    fn a_latest_summary_without_a_view_falls_back_to_the_newest_that_renders() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let valid = web_summary(url, "2026-10-16T08:00:00Z");
+        let broken = web_summary(url, "2026-10-16T23:59:59 and later, in the evening, local");
+        assert_eq!(summary_view(&broken), None);
+        assert_eq!(
+            timestamp_order(&broken.occurred_at, &valid.occurred_at),
+            std::cmp::Ordering::Greater
+        );
+        index.record_summary(&valid).unwrap();
+        index.record_summary(&broken).unwrap();
+
+        assert_eq!(
+            index.summary_for(&valid.artifact_id).unwrap(),
+            Some(expected_view(&valid))
+        );
+        let (_, latest) = index.artifact_with_summary(&valid.artifact_id).unwrap();
+        assert_eq!(latest, Some(expected_view(&valid)));
+        let (recent, _, _) = index.recent(None, None, 32).unwrap();
+        let row = recent
+            .iter()
+            .find(|row| row.artifact_id == valid.artifact_id)
+            .expect("the summarized page is listed");
+        assert_eq!(row.summary, Some(expected_view(&valid)));
     }
 
     #[test]
