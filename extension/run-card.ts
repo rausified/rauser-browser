@@ -173,8 +173,12 @@ class RunCard {
   private disposed = false;
   private problem: string | null = null;
   // The summary file the card last asked get_artifact about, so it asks once
-  // per saved file, and the page's saved summary that call returned.
+  // per saved file, and the page's saved summary that call returned. A
+  // failed call is retried once, a poll interval later (`summaryRetried`
+  // names the file it was retried for).
   private summaryAskedFor: string | null = null;
+  private summaryRetried: string | null = null;
+  private summaryTimer: ReturnType<typeof setTimeout> | null = null;
   private saved: SummaryView | null = null;
 
   constructor(
@@ -217,6 +221,8 @@ class RunCard {
     this.disposed = true;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
+    if (this.summaryTimer !== null) clearTimeout(this.summaryTimer);
+    this.summaryTimer = null;
   }
 
   private done(): boolean {
@@ -238,8 +244,8 @@ class RunCard {
   }
 
   /** Asks get_artifact once for the page's saved summary when the run has
-   * saved one. A failure leaves only the line out: Open summary still works
-   * from the run's url. */
+   * saved one, retrying a failure once on a later poll. A failure leaves
+   * only the line out: Open summary still works from the run's url. */
   private async loadSavedSummary(): Promise<void> {
     const path = this.savedPath();
     if (path === null || path === this.summaryAskedFor || this.disposed) return;
@@ -253,6 +259,14 @@ class RunCard {
       if (this.disposed || this.summaryAskedFor !== path) return;
       this.saved = result.summary;
     } catch {
+      if (this.disposed || this.summaryAskedFor !== path || this.summaryRetried === path) return;
+      this.summaryRetried = path;
+      this.summaryTimer = setTimeout(() => {
+        this.summaryTimer = null;
+        if (this.summaryAskedFor !== path) return;
+        this.summaryAskedFor = null;
+        void this.loadSavedSummary();
+      }, POLL_MS);
       return;
     }
     this.render();

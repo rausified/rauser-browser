@@ -554,8 +554,43 @@ test("a failed get_artifact keeps Open summary and shows no saved line", async (
   page.runCards.show(done);
   await settle();
   const [card] = cards(page.container);
+  assert.deepEqual(page.sent("get_artifact").map((r) => [r.url, r.title]), [[done.url, done.title]]);
   assert.ok(!card.textContent.includes("importance"));
   assert.ok(buttonTexts(card).includes("Open summary"));
+  // One retry on a later poll, then no more.
+  await tick();
+  assert.equal(page.sent("get_artifact").length, 2);
+  await tick(POLL_MS * 4);
+  assert.equal(page.sent("get_artifact").length, 2);
+  assert.ok(!card.textContent.includes("importance"));
+  page.runCards.dispose();
+});
+
+test("a get_artifact that fails once is retried on a later poll and shows the saved line", async () => {
+  const done = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER, summary_path: SAVED.summary_path,
+  });
+  const replies = [
+    new HostError("internal", "The index is busy."),
+    { type: "artifact_result", recognized: false, artifact: null, summary: SAVED },
+  ];
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "get_artifact") return replies.shift();
+      return null;
+    },
+  });
+  page.runCards.show(done);
+  await settle();
+  const [card] = cards(page.container);
+  assert.equal(page.sent("get_artifact").length, 1);
+  assert.ok(!card.textContent.includes("importance"));
+  await tick();
+  assert.equal(page.sent("get_artifact").length, 2);
+  assert.match(card.textContent, /report · news · high importance/);
+  await tick(POLL_MS * 4);
+  assert.equal(page.sent("get_artifact").length, 2);
   page.runCards.dispose();
 });
 
