@@ -61,6 +61,8 @@ With `scope.owner = ["acme-corp"]` and the PR and issue starters ahead of it:
   aliases yet; they wait for the planned alias flow.
 - Personal repositories are captured only when their owner is entered as a
   scope, and enterprise GitHub on a private origin is not auto-suggested.
-- Because this catch-all overlaps every GitHub path with two or more segments,
-  settings reports its overlap with the PR and issue rules (they win), and a
-  Tier 2 draft for another GitHub route is dropped as overlapping.
+- This catch-all overlaps every GitHub path with two or more segments, so a
+  Tier 2 draft for another GitHub route is dropped as overlapping. Its overlap
+  with the PR and issue rules is a declared fall-through and is not reported
+  as needing review while they come first (adapter-templates.md §10.3);
+  settings will not move them below it.

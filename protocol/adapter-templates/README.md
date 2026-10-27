@@ -175,6 +175,7 @@ This is the conservative §10.3 comparison:
   - Each pair has rules from different adapters on the same origin that may overlap.
   - `first` is the earlier rule in config order, the one that wins.
   - Pairs are ordered by `first`, then by `second`.
+  - A declared fall-through is not a pair: when the earlier adapter declares `within` whose type is the later adapter's type on the same origin (§8.3), none of their rule pairs are reported. The reverse order, and the same rules without `within`, are reported.
 
 ### `draft` (rust)
 
@@ -411,8 +412,8 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | draft | 38 | rust |
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
-| overlap_report | 4 | rust |
-| **Total** | **1294** | |
+| overlap_report | 6 | rust |
+| **Total** | **1296** | |
 
 ## Maintenance
 
@@ -425,7 +426,7 @@ The eight `eval.bounds` cases added later (`longest_uuid`, `4_title_entries_*`, 
 
 The limit, folding, trimming, refs-cap, and `long_once` cases added with SQ-V25 were derived by hand, then checked against both engines. Each was also run against a mutated engine (20-ref cap off by one, Unicode case folding, U+0085 dropped from the trim set, ID cap at 513 bytes) to confirm it catches that mutation. The `bounds_ci_alts` budgets fail when an insensitive comparison lowercases the whole segment per literal.
 
-The `github.repo` starter changed `starters`: the `eval.github.repo_*` cases and `draft.github_inside_repo_overlaps` were added, and five GitHub URLs the PR and issue rules miss (`repo_root`, `pulls_list`, `issue_new`, `pr_bad_number`, `pr_leading_zero`) now fall through to the repository. Their expectations, the `within` on every PR and issue match, and the two `overlap_report.starters` pairs were derived by hand, then checked against both engines. `draft.github_scope_copied` and `draft.github_first_capture` moved to `github_without_repo`, because the catch-all overlaps every GitHub draft path with two or more segments, `/orgs/{owner}/projects/{number}` included (overlap ignores scope).
+The `github.repo` starter changed `starters`: the `eval.github.repo_*` cases and `draft.github_inside_repo_overlaps` were added, and five GitHub URLs the PR and issue rules miss (`repo_root`, `pulls_list`, `issue_new`, `pr_bad_number`, `pr_leading_zero`) now fall through to the repository. Their expectations, the `within` on every PR and issue match, and the `overlap_report.starters` and `overlap_report.container_*` results were derived by hand, then checked against both engines. `draft.github_scope_copied` and `draft.github_first_capture` moved to `github_without_repo`, because the catch-all overlaps every GitHub draft path with two or more segments, `/orgs/{owner}/projects/{number}` included (overlap ignores scope).
 
 `npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) complements these vectors. It generates seeded random documents, URLs, and titles, including near misses, and runs them through `brauser adapters eval` and the TypeScript engine. It fails on any difference. Reproduce a failure with `--seed S --only N`.
 

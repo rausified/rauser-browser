@@ -2334,7 +2334,9 @@ fn adapter_contracts_overlap(
         },
         ..empty_config()
     };
-    Ok(!compile_adapters(&config)?.overlap_report().is_empty())
+    // Every shared URL counts here, declared container fall-throughs included:
+    // the history guard has its own, narrower container allowance.
+    Ok(!compile_adapters(&config)?.overlapping_rules().is_empty())
 }
 
 fn updated_adapter_history(
@@ -3891,6 +3893,56 @@ mod tests {
             error.contains("cannot change until artifact migrations"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_container_with_another_id_still_cannot_claim_retired_contained_routes() {
+        // The overlap warnings skip a declared fall-through, but the history
+        // guard must still see it: only the exact declared container passes.
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let revision = store
+            .update(adapter_config(vec![pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let mut repo = github_repo_adapter(&["a"]);
+        repo["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        let error = store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_declared_container_fall_through_is_not_an_overlap_warning() {
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let repo = github_repo_adapter(&["a"]);
+        let ordered = adapter_config(vec![pr.clone(), repo.clone()]);
+        assert!(validate_adapters(&ordered).unwrap().is_empty());
+
+        // The container first would claim the PR pages: still reported.
+        let misordered = adapter_config(vec![repo.clone(), pr]);
+        let warnings = validate_adapters(&misordered).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            (warnings[0].first_adapter, warnings[0].second_adapter),
+            (0, 1)
+        );
+
+        // Without the declaration it is an ordinary overlap.
+        let undeclared = adapter_config(vec![github_pr_adapter(&["a"]), repo]);
+        assert_eq!(validate_adapters(&undeclared).unwrap().len(), 1);
     }
 
     #[test]

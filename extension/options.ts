@@ -484,7 +484,9 @@ function renderAdapters(): void {
       move.type = "button";
       move.className = "secondary";
       move.textContent = label;
-      move.dataset.boundary = String(index + offset < 0 || index + offset >= adapters.length);
+      const held = moveHeldByContainer(adapters, index, index + offset);
+      move.dataset.boundary = String(index + offset < 0 || index + offset >= adapters.length || held);
+      if (held) move.title = CONTAINED_MOVE_HELD;
       move.addEventListener("click", () => void moveAdapter(index, offset));
       actions.append(move);
     }
@@ -732,10 +734,31 @@ async function removeAdapter(index: number): Promise<void> {
   await saveAdapterDocument({ format: 1, artifacts }, `${label} adapter removed; its pages are no longer captured.`);
 }
 
+const CONTAINED_MOVE_HELD = "A pull request or issue rule must stay ahead of its repository rule.";
+
+/** Whether swapping `index` and `target` would put a contained adapter after
+ * its container, which every save would undo (`orderContainedFirst`). */
+function moveHeldByContainer(adapters: AdapterDocument["artifacts"], index: number, target: number): boolean {
+  if (target < 0 || target >= adapters.length) return false;
+  const swapped = [...adapters];
+  [swapped[index], swapped[target]] = [swapped[target]!, swapped[index]!];
+  // A document that is already out of order is reordered by any save, so
+  // only a move that newly breaks the order is held.
+  return misordered(swapped) && !misordered(adapters);
+}
+
+function misordered(adapters: AdapterDocument["artifacts"]): boolean {
+  return orderContainedFirst(adapters).some((adapter, at) => adapter !== adapters[at]);
+}
+
 async function moveAdapter(index: number, offset: -1 | 1): Promise<void> {
   const config = session.config;
   const target = index + offset;
   if (!config || busy || target < 0 || target >= config.adapters.artifacts.length) return;
+  if (moveHeldByContainer(config.adapters.artifacts, index, target)) {
+    show(CONTAINED_MOVE_HELD, true);
+    return;
+  }
   const artifacts = [...config.adapters.artifacts];
   const current = artifacts[index]!;
   artifacts[index] = artifacts[target]!;

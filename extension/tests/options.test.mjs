@@ -830,6 +830,45 @@ test("adapter workspace edits, reorders, and removes through revisioned saves", 
   assert.ok(state.revision >= 4);
 });
 
+test("a pull request or issue rule cannot be moved below its repository rule", async () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  const scope = { owner: ["acme-corp"] };
+  const pr = {
+    type: "github.pr", origin: "https://github.com", scope, within,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  };
+  const issue = {
+    type: "github.issue", origin: "https://github.com", scope, within,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+    id: "github.issue:{host}/{owner}/{repo}/{number}",
+  };
+  const repo = {
+    type: "github.repo", origin: "https://github.com", scope,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }], id: within.id,
+  };
+  const state = install({ adapters: [pr, issue, repo] });
+  await openSettings();
+  const held = "A pull request or issue rule must stay ahead of its repository rule.";
+  // Each card has Edit, Move up, Move down, Remove.
+  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
+  assert.equal(buttons()[2].disabled, false, "PR and issue may swap");
+  assert.equal(buttons()[6].disabled, true, "the issue cannot move below the repository");
+  assert.equal(buttons()[6].title, held);
+  assert.equal(buttons()[9].disabled, true, "the repository cannot move above the issue");
+
+  // Even if the click arrives, nothing is saved and the reason is shown.
+  buttons()[6].dispatch("click");
+  await until(idle, "the held move");
+  assert.equal(statusText(), held);
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+
+  buttons()[2].click();
+  await until(() => state.config.adapters.artifacts[0].type === "github.issue" && idle(), "the allowed swap");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type),
+    ["github.issue", "github.pr", "github.repo"]);
+});
+
 test("an open adapter edit follows its target across an external reorder", async () => {
   const issue = {
     type: "work.issue", origin: "https://a.com",

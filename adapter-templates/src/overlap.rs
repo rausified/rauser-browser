@@ -154,13 +154,31 @@ impl Document {
         rules_may_overlap(aa, &aa.rules[a.1], ab, &ab.rules[b.1])
     }
 
-    /// Every pair of rules from different adapters on one origin that may
-    /// overlap, ordered by `first` and then `second`.
+    /// The overlap warnings (§10.3): every pair of rules from different
+    /// adapters on one origin that may overlap, ordered by `first` and then
+    /// `second`, except a declared fall-through. When the earlier adapter
+    /// declares `within` the later adapter's type (§8.3), the later one is its
+    /// container's catch-all and the overlap is intended, so it is not
+    /// reported. The reverse order, where the container would win, still is.
     pub fn overlap_report(&self) -> Vec<OverlapPair> {
+        self.pairs(true)
+    }
+
+    /// Every pair of rules from different adapters on one origin that may
+    /// overlap, including declared fall-throughs, in `overlap_report` order.
+    /// For checks that must see every shared URL, such as route history.
+    pub fn overlapping_rules(&self) -> Vec<OverlapPair> {
+        self.pairs(false)
+    }
+
+    fn pairs(&self, skip_declared: bool) -> Vec<OverlapPair> {
         let mut out = Vec::new();
         for (i, a) in self.adapters.iter().enumerate() {
-            for (ri, ra) in a.rules.iter().enumerate() {
-                for (j, b) in self.adapters.iter().enumerate().skip(i + 1) {
+            for (j, b) in self.adapters.iter().enumerate().skip(i + 1) {
+                if skip_declared && sits_within(a, b) {
+                    continue;
+                }
+                for (ri, ra) in a.rules.iter().enumerate() {
                     for (rj, rb) in b.rules.iter().enumerate() {
                         if rules_may_overlap(a, ra, b, rb) {
                             out.push(OverlapPair {
@@ -172,6 +190,16 @@ impl Document {
                 }
             }
         }
+        out.sort_by_key(|pair| (pair.first, pair.second));
         out
     }
+}
+
+/// Whether `contained` declares `within` the type of `container` on its origin.
+fn sits_within(contained: &Adapter, container: &Adapter) -> bool {
+    contained.origin == container.origin
+        && contained
+            .within
+            .as_ref()
+            .is_some_and(|within| within.artifact_type == container.artifact_type)
 }

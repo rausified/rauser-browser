@@ -337,7 +337,7 @@ When config loads, the host checks every rule in §4.1, §5, §6, §7, §8, and 
 
 Because the language has no free-form patterns, the host can decide whether two rules could match the same URL. It compares them segment by segment: literals against literals, literals against type membership, types against types by alphabet and length range, with optional segments and rests expressed as length ranges. The comparison is conservative: it treats `@tail`, `jira_key`'s structure, and query conditions by their alphabets and length ranges, so it can report an overlap that no URL actually produces, but it never misses one. A fixed-shape `@tail` capture anchors a template (§4.1), but overlap still compares its whole segment as a range: any segment long enough to end in the capture. Messages therefore say "may overlap". The host uses this to:
 
-- warn when two user-written adapters on one origin overlap, naming the rule that would win;
+- warn when two user-written adapters on one origin overlap, naming the rule that would win. An adapter that declares `within` a type, placed before an adapter of that type on its origin, is not warned about: the container is the intended fall-through for its other pages (§8.3). The reverse order is still reported, because the container would claim the contained pages;
 - drop each Tier 2 draft rule that overlaps an existing adapter on its origin;
 - list, in the match preview, which already-recognized artifacts a change would re-map.
 

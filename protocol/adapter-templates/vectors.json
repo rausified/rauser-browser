@@ -24450,10 +24450,26 @@
     {
       "id": "overlap_report.starters",
       "kind": "overlap_report",
-      "why": "§10.3: the PR and issue starters overlap the repository catch-all, and win because they precede it",
+      "why": "§10.3, §8.3: the starters do not overlap, except the PR and issue rules falling through to the repository catch-all they declare within, which is not reported",
       "impls": ["rust"],
       "doc": {"$fixture": "starters"},
-      "expect": {"pairs": [{"first": [3, 0], "second": [5, 0]}, {"first": [4, 0], "second": [5, 0]}]}
+      "expect": {"pairs": []}
+    },
+    {
+      "id": "overlap_report.container_misordered",
+      "kind": "overlap_report",
+      "why": "§10.3, §8.3: a container catch-all ahead of the adapter declared within it still wins its pages, so the overlap is reported",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}, {"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
+    },
+    {
+      "id": "overlap_report.container_undeclared",
+      "kind": "overlap_report",
+      "why": "§10.3: without a within declaration, a PR rule ahead of a repository catch-all is an ordinary overlap",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}"}, {"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}]},
+      "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
     },
     {
       "id": "overlap_report.basic",
