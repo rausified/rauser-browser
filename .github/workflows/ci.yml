@@ -23,17 +23,20 @@ jobs:
       os: windows-latest
 
   # GitHub's hosted macos-15 pool is sometimes starved: the job is never
-  # acquired by a runner and GitHub cancels it with zero steps run. Its result
-  # is then 'cancelled', but so is a job that timed out or was interrupted
-  # after it started, so this job asks the API whether the macos-15 job ever
-  # ran a step. Only a zero-step cancellation counts as starvation. A real
-  # macos-15 failure (result 'failure') never falls back.
+  # acquired by a runner and GitHub cancels it with zero steps run. The job
+  # shows as cancelled, and `needs.<job>.result` reads 'abandoned' (seen live
+  # on PR #107, run 40552639162). 'cancelled' also covers a job that timed out
+  # or was interrupted after it started, so this job asks the API whether the
+  # macos-15 job ever ran a step; only a zero-step cancellation counts as
+  # starvation. A real macos-15 failure (result 'failure') never falls back.
   # GitHub has no queue timeout for hosted jobs (job timeout-minutes only
   # counts time on a runner), so this waits for GitHub's own cancellation.
   macos-starvation-check:
     name: Detect macOS runner starvation
     needs: build-macos
-    if: always() && needs.build-macos.result == 'cancelled'
+    if: >-
+      always() &&
+      (needs.build-macos.result == 'cancelled' || needs.build-macos.result == 'abandoned')
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -86,7 +89,8 @@ jobs:
           echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-14 fallback: $FALLBACK"
           test "$WINDOWS" = success
           if [ "$MACOS" = success ]; then exit 0; fi
-          test "$MACOS" = cancelled && test "$STARVED" = true && test "$FALLBACK" = success
+          case "$MACOS" in cancelled|abandoned) ;; *) exit 1 ;; esac
+          test "$STARVED" = true && test "$FALLBACK" = success
 
   cargo-deny:
     name: Rust dependency policy
