@@ -46,9 +46,6 @@ const PROTOCOL_VERSION = 6;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const EXTENSION_ID = /^[a-p]{32}$/;
-const CLAUDE_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "claude_help.txt");
-const CODEX_EXEC_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "codex_exec_help.txt");
-const CODEX_FEATURES = path.join(REPO, "host", "tests", "fixtures", "harness", "codex_features.txt");
 // The probe argv the host must run: the §7.1 Claude Code template with its
 // test prompt in place of {prompt}. Any other flag is a fallback it must not try.
 const PROBE_ARGV = [
@@ -255,20 +252,11 @@ async function installFakeHarnesses(runDir) {
   const fakeBin = path.join(runDir, "fake-bin");
   const fakeInstall = path.join(runDir, "fake-install");
   const argvLog = path.join(runDir, "harness-argv.log");
-  const help = path.join(fakeInstall, "claude-help.txt");
   for (const dir of [fakeBin, fakeInstall, ...["good", "bad", "codex"].map((name) => path.join(fakeInstall, name))]) {
     await mkdir(dir, { mode: 0o700 });
     await chmod(dir, 0o700);
   }
-  await writeFile(help, await readFile(CLAUDE_HELP), { mode: 0o600 });
-  const codexHelp = path.join(fakeInstall, "codex-exec-help.txt");
-  const codexFeatures = path.join(fakeInstall, "codex-features.txt");
-  await writeFile(codexHelp, await readFile(CODEX_EXEC_HELP), { mode: 0o600 });
-  await writeFile(codexFeatures, await readFile(CODEX_FEATURES), { mode: 0o600 });
-  const checks = `case "$1" in
-  --version) echo '2.1.284 (Claude Code)'; exit 0 ;;
-  --help) /bin/cat ${shellQuote(help)}; exit 0 ;;
-esac
+  const checks = `if [ "$1" = --version ]; then echo '2.1.284 (Claude Code)'; exit 0; fi
 /bin/cat > /dev/null`;
   const scripts = {
     good: fakeHarnessScript("claude-good", argvLog, `${checks}
@@ -276,22 +264,8 @@ printf '%s\\n' '{"type":"system","subtype":"init","tools":[]}' '{"type":"result"
     bad: fakeHarnessScript("claude-bad", argvLog, `${checks}
 echo 'fake harness: simulated failure' >&2
 exit 1`),
-    // A reviewed codex-cli whose features list honors the --disable pairs it
-    // is given, and fails unless the host gave it an empty CODEX_HOME (runs
-    // ignore the user's config, so the list must too). Its exec run prints
-    // only allowlisted text events; any other run fails.
+    // A codex-cli whose exec run prints only text events; any other run fails.
     codex: fakeHarnessScript("codex", argvLog, `if [ "$1" = --version ]; then echo 'codex-cli 0.144.4'; exit 0; fi
-if [ "$1" = exec ] && [ "$2" = --help ]; then /bin/cat ${shellQuote(codexHelp)}; exit 0; fi
-if [ "$1" = features ] && [ "$2" = list ]; then
-  [ -d "$CODEX_HOME" ] && [ -z "$(/bin/ls -A "$CODEX_HOME")" ] || exit 3
-  disabled=' '; previous=''
-  for arg in "$@"; do [ "$previous" = --disable ] && disabled="$disabled$arg "; previous=$arg; done
-  while IFS= read -r feature; do
-    case "$disabled" in *" \${feature%% *} "*) feature="\${feature% true} false" ;; esac
-    printf '%s\\n' "$feature"
-  done < ${shellQuote(codexFeatures)}
-  exit 0
-fi
 if [ "$1" = exec ]; then
   /bin/cat > /dev/null
   printf '%s\\n' '{"type":"thread.started","thread_id":"t"}' '{"type":"turn.started"}' \\
