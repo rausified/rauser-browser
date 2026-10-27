@@ -1154,7 +1154,7 @@ fn capture_outcome_is_duplicate(outcome: &CaptureOutcome) -> bool {
 
 /// Open the artifact index with the confirmed adapter document, which
 /// resolves title refs into mentions edges (adapter-templates.md §10.1).
-fn open_index(
+pub(crate) fn open_index(
     config: &ConfigStore,
     storage: &brauser_protocol::StorageConfig,
     cache_dir: &std::path::Path,

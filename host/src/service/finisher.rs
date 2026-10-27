@@ -5,13 +5,24 @@
 //!
 //! `save` holds the config lock from its refresh to the end, because the
 //! artifact index has no lock of its own (`brwr-7vf`). Every failure is a
-//! user-facing reason that ends in what to do, then Retry save; a retry
-//! re-reads the kept answer, so the agent never runs again. A retry is
-//! idempotent: the event time is the run's `answered_at` stamp, not the
-//! clock, so every save builds the same entry and file; the run ID is the
-//! log event's ID, so its line is written once (and an entry rolled back
-//! after its intent was journaled replays), and the identical summary
+//! user-facing reason that ends in what to do: Retry save when a retry can
+//! work; a retry re-reads the kept answer, so the agent never runs again.
+//! A retry is idempotent: the event time is the run's `answered_at` stamp,
+//! not the clock, so every save builds the same entry and file; the run ID
+//! is the log event's ID, so its line is written once (and an entry rolled
+//! back after its intent was journaled replays), and the identical summary
 //! file is left unchanged.
+//!
+//! The daily log is authoritative, and the artifact index catches up from
+//! it: once the event is logged, a failure to open or update the index is
+//! only reported to stderr, and the save still succeeds.
+//!
+//! One limit: an append that failed after its intent was journaled can be
+//! completed only as it was first built, in the home folder it was built
+//! for (`CaptureStore`'s replay). If the home folder or an adapter changed
+//! before the retry, the summary file follows the change but the log event
+//! cannot be completed, and the reason says so (`LOG_ORIGINAL_FOLDER`,
+//! `LOG_INTERRUPTED`) instead of offering a retry that cannot work.
 
 use std::path::{Path, PathBuf};
 
@@ -27,8 +38,9 @@ use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url};
 use crate::config::ConfigStore;
 use crate::index::ArtifactIndex;
+use crate::layout;
 use crate::markdown::link_style;
-use crate::native::{HOME_UNAVAILABLE, resolve_record_key};
+use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key};
 use crate::summary::{
     MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, WEB_PAGE_TYPE, render_summary,
 };
@@ -37,9 +49,25 @@ use crate::vault::{OwnedWrite, Vault, url_record_key};
 const INVALID_ANSWER: &str = "The stored answer is not a valid summary.";
 const NEEDS_REPAIR: &str = "The configuration needs repair. Fix it in settings, then Retry save.";
 const NO_STORAGE: &str = "Choose a notes folder in settings, then Retry save.";
-const NO_SUMMARIES_DIR: &str = "No summaries folder is set. Set one in settings, then Retry save.";
+const LAYOUT_MOVING: &str = concat!(
+    "Your notes folders are moving to the fixed layout. Open ",
+    crate::app_name!(),
+    " settings to finish the move, then Retry save."
+);
 const FOLDER_UNAVAILABLE: &str = "The notes folder is unavailable or was replaced. Choose it again in settings, then Retry save.";
 const FILE_UNWRITABLE: &str = "The summary file could not be written. Retry save.";
+const LOG_UNWRITABLE: &str = "The daily log could not be written. Retry save.";
+const LOG_CLOCK: &str = "The daily log did not accept this summary's time. Check the computer's clock, then Retry save.";
+const LOG_FULL: &str =
+    "The day's daily log is full, so this summary cannot be logged. The summary file was saved.";
+const LOG_NAME_CONFLICT: &str = concat!(
+    "A file ",
+    crate::app_name!(),
+    " does not own is where the daily log goes, in logs/. Move it, then Retry save."
+);
+const LOG_INVALID: &str = "The run's details are not valid for the daily log, so this summary cannot be logged. The summary file was saved.";
+const LOG_INTERRUPTED: &str = "An earlier attempt to log this summary was interrupted, and its daily log entry has changed since, so it cannot be completed. The summary file was saved.";
+const LOG_ORIGINAL_FOLDER: &str = "An earlier attempt to log this summary was interrupted in a notes folder that has since changed. Choose that folder again in settings, then Retry save.";
 
 /// Writes a run's summary under the config read at save time.
 pub struct SummaryFinisher {
@@ -87,11 +115,14 @@ impl RunFinisher for SummaryFinisher {
             }
             .into());
         };
-        if storage.summaries_dir.is_none() {
-            return Err(NO_SUMMARIES_DIR.into());
-        }
         let vault = Vault::open_checked(&storage, config.root_identity())
             .map_err(|_| FOLDER_UNAVAILABLE.to_string())?;
+        // An older layout (one without a summaries folder included) is a
+        // config issue too, but its fix is finishing the move, which
+        // settings does when it opens.
+        if !layout::is_fixed(&storage) {
+            return Err(LAYOUT_MOVING.into());
+        }
         if config.config_issue().is_some() || !config.configured() {
             return Err(NEEDS_REPAIR.into());
         }
@@ -143,12 +174,9 @@ impl RunFinisher for SummaryFinisher {
             Err(error) => return Err(unwritable(&error)),
         }
 
-        let index = config.cache_dir().and_then(|cache_dir| {
-            Ok(
-                ArtifactIndex::open_in(&storage, config.root_identity(), &cache_dir)?
-                    .with_adapters(config.adapter_document().ok()),
-            )
-        });
+        let index = config
+            .cache_dir()
+            .and_then(|cache_dir| open_index(&config, &storage, &cache_dir));
         if let Err(error) = &index {
             eprintln!("{NAMESPACE} service: opening the artifact index: {error:#}");
         }
@@ -170,7 +198,7 @@ impl RunFinisher for SummaryFinisher {
         let store = config
             .dir()
             .and_then(|dir| CaptureStore::open_in(&storage, config.root_identity(), dir))
-            .map_err(|error| log_unwritable(&format!("{error:#}")))?;
+            .map_err(|error| log_failure(&format!("{error:#}")))?;
         let origins = config.capture_origins();
         let policy = CapturePolicy {
             enabled: config.snapshot().capture_enabled,
@@ -187,9 +215,9 @@ impl RunFinisher for SummaryFinisher {
             }
             (CaptureOutcome::Persisted { .. }, None) => None,
             (CaptureOutcome::Suppressed { reason } | CaptureOutcome::Rejected { reason }, _) => {
-                return Err(log_unwritable(reason));
+                return Err(log_refusal(reason));
             }
-            (CaptureOutcome::Retryable { message }, _) => return Err(log_unwritable(message)),
+            (CaptureOutcome::Retryable { message }, _) => return Err(log_failure(message)),
         };
         // The daily log is authoritative and already holds the event; the
         // index catches up from it on its next read.
@@ -220,8 +248,38 @@ fn unwritable(error: &anyhow::Error) -> String {
     FILE_UNWRITABLE.into()
 }
 
-fn log_unwritable(reason: &str) -> String {
-    format!("The daily log could not be written ({reason}). Retry save.")
+/// The daily log's refusal of the event, as a reason in words. Only a
+/// refusal the user can fix offers Retry save; the raw reason goes to
+/// stderr. (A summary is an explicit action, so `capture_disabled` and
+/// `site_not_allowed` do not apply to it.)
+fn log_refusal(reason: &str) -> String {
+    eprintln!("{NAMESPACE} service: the daily log refused a summary event: {reason}");
+    match reason {
+        // A retry re-stamps an answer outside the window (`retry_save`).
+        "timestamp_too_old" | "timestamp_in_future" => LOG_CLOCK,
+        "daily_log_full" => LOG_FULL,
+        "daily_log_name_conflict" => LOG_NAME_CONFLICT,
+        _ => LOG_INVALID,
+    }
+    .into()
+}
+
+/// A failed append (`CaptureOutcome::Retryable`, or the store not opening)
+/// in words. A replay of an interrupted append that its home folder or
+/// entry no longer matches cannot be fixed by retrying; any other failure
+/// (I/O, mostly) can.
+fn log_failure(message: &str) -> String {
+    eprintln!("{NAMESPACE} service: appending a summary event: {message}");
+    if message.contains("original home folder changed")
+        || message.contains("previously selected home folder")
+    {
+        LOG_ORIGINAL_FOLDER
+    } else if message.contains("manual repair is required") || message.contains("is not owned by") {
+        LOG_INTERRUPTED
+    } else {
+        LOG_UNWRITABLE
+    }
+    .into()
 }
 
 /// A `/`-separated home-relative path, as a summary event links it.
@@ -324,17 +382,42 @@ mod tests {
     const WORK_ADAPTER: &str = "[[artifacts]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n";
     const WORK_HISTORY: &str = "[[adapter_id_history]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n";
 
+    /// The click time of every test run; only its offset is used.
+    const REQUESTED_AT: &str = "2026-10-26T14:00:00-07:00";
+
+    /// The clock of a first save: a whole minute shortly before the test
+    /// started, the same on every call. Relative to the real clock, since
+    /// the daily log refuses an event outside its window
+    /// (`capture::MAX_PAST_SECS`).
     fn fixed_now() -> OffsetDateTime {
-        OffsetDateTime::parse("2026-10-26T21:05:00Z", &Rfc3339).unwrap()
+        static BASE: std::sync::OnceLock<OffsetDateTime> = std::sync::OnceLock::new();
+        *BASE.get_or_init(|| {
+            let now = OffsetDateTime::now_utc() - time::Duration::minutes(10);
+            now.replace_second(0)
+                .and_then(|now| now.replace_nanosecond(0))
+                .unwrap()
+        })
     }
 
     /// A minute after [`fixed_now`], as the clock reads on a later retry.
     fn later_now() -> OffsetDateTime {
-        OffsetDateTime::parse("2026-10-26T21:06:00Z", &Rfc3339).unwrap()
+        fixed_now() + time::Duration::minutes(1)
     }
 
-    /// The record stamp the supervisor writes when it keeps the answer.
-    const ANSWERED_AT: &str = "2026-10-26T21:04:30.250000000Z";
+    /// The record stamp the supervisor writes when it keeps the answer:
+    /// 29.75 seconds before [`fixed_now`].
+    fn answered_at() -> OffsetDateTime {
+        fixed_now() - time::Duration::milliseconds(29_750)
+    }
+
+    fn answered_stamp() -> String {
+        timestamp(answered_at())
+    }
+
+    /// `at` as the summary file and log event show it for a test run.
+    fn shown(at: OffsetDateTime) -> String {
+        summarized_at(at, REQUESTED_AT)
+    }
 
     /// A home folder and a config.toml naming it, in a temp directory.
     struct World {
@@ -475,7 +558,7 @@ mod tests {
             written_key: None,
             url: url.into(),
             title: "A page".into(),
-            requested_at: "2026-10-26T14:00:00-07:00".into(),
+            requested_at: REQUESTED_AT.into(),
             created_at: "2026-10-26T21:00:00Z".into(),
             started_at: None,
             finished_at: None,
@@ -515,7 +598,7 @@ mod tests {
             "{file}"
         );
         assert!(
-            file.contains("summarized_at: \"2026-10-26T14:05:00-07:00\""),
+            file.contains(&format!("summarized_at: \"{}\"", shown(fixed_now()))),
             "{file}"
         );
         assert!(file.contains("harness: codex"), "{file}");
@@ -525,7 +608,7 @@ mod tests {
         assert_eq!(events.len(), 1, "{events:?}");
         let event = &events[0];
         assert_eq!(event.event_id, run.run_id);
-        assert_eq!(event.occurred_at, "2026-10-26T14:05:00-07:00");
+        assert_eq!(event.occurred_at, shown(fixed_now()));
         assert_eq!(event.artifact_type, "web.page");
         assert_eq!(event.record_key, url_record_key(PAGE).unwrap());
         assert_eq!(event.harness, HarnessId::Codex);
@@ -704,7 +787,10 @@ mod tests {
 
         let error = world.finisher().save(&run, &answer()).unwrap_err();
 
-        assert_eq!(error, NEEDS_REPAIR);
+        assert_eq!(
+            error,
+            "Your notes folders are moving to the fixed layout. Open Brauser settings to finish the move, then Retry save."
+        );
         assert!(!world.root.join("other").exists());
         assert!(!world.root.join("summaries").exists());
         assert!(world.summary_events().is_empty());
@@ -714,19 +800,16 @@ mod tests {
     fn a_stamped_run_uses_its_answer_time_not_the_clock() {
         let world = World::new();
         let mut run = run(&world, PAGE, HarnessId::Codex);
-        run.answered_at = Some(ANSWERED_AT.into());
+        run.answered_at = Some(answered_stamp());
 
         world.later_finisher().save(&run, &answer()).unwrap();
 
         let file = fs::read_to_string(world.root.join(world.summary_path(PAGE))).unwrap();
         assert!(
-            file.contains("summarized_at: \"2026-10-26T14:04:30-07:00\""),
+            file.contains(&format!("summarized_at: \"{}\"", shown(answered_at()))),
             "{file}"
         );
-        assert_eq!(
-            world.summary_events()[0].occurred_at,
-            "2026-10-26T14:04:30-07:00"
-        );
+        assert_eq!(world.summary_events()[0].occurred_at, shown(answered_at()));
     }
 
     /// Review Focus 4: an append that failed and was rolled back leaves its
@@ -736,7 +819,7 @@ mod tests {
     fn a_retry_after_a_rolled_back_log_append_succeeds_with_a_later_clock() {
         let world = World::new();
         let mut run = run(&world, PAGE, HarnessId::Codex);
-        run.answered_at = Some(ANSWERED_AT.into());
+        run.answered_at = Some(answered_stamp());
         world.finisher().save(&run, &answer()).unwrap();
         let log = world.log_file();
         let text = fs::read_to_string(&log).unwrap();
@@ -748,14 +831,117 @@ mod tests {
 
         let events = world.summary_events();
         assert_eq!(events.len(), 1, "{events:?}");
-        assert_eq!(events[0].occurred_at, "2026-10-26T14:04:30-07:00");
+        assert_eq!(events[0].occurred_at, shown(answered_at()));
+    }
+
+    /// Leave `run`'s log entry as an append that failed after its intent
+    /// was journaled and was rolled back: save it, then cut the entry.
+    fn interrupt_the_log_append(world: &World, run: &RunStatusFile) {
+        world.finisher().save(run, &answer()).unwrap();
+        let log = world.log_file();
+        let text = fs::read_to_string(&log).unwrap();
+        let cut = text.rfind("\n- ").unwrap();
+        fs::write(&log, &text[..cut]).unwrap();
+        assert!(world.summary_events().is_empty());
+    }
+
+    /// The module doc's limit: an interrupted append is completed only as
+    /// it was first built, so an adapter added since cannot be followed for
+    /// the log event (the summary file still is), and the reason does not
+    /// offer a retry that cannot work.
+    #[test]
+    fn an_interrupted_log_append_then_an_added_adapter_cannot_be_completed() {
+        let world = World::new();
+        let mut run = run(&world, WORK_PAGE, HarnessId::Codex);
+        run.answered_at = Some(answered_stamp());
+        interrupt_the_log_append(&world, &run);
+        world.configure(&world.root, WORK_ADAPTER);
+
+        let error = world.later_finisher().save(&run, &answer()).unwrap_err();
+
+        assert_eq!(
+            error,
+            "An earlier attempt to log this summary was interrupted, and its daily log entry has changed since, so it cannot be completed. The summary file was saved."
+        );
+        let key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: WORK_ID.into(),
+        };
+        let relative = world
+            .vault()
+            .summary_relative_path(&key, WORK_PAGE)
+            .unwrap();
+        assert!(world.root.join(&relative).is_file());
+        assert!(world.summary_events().is_empty());
+    }
+
+    #[test]
+    fn an_interrupted_log_append_then_a_new_home_folder_names_the_original() {
+        let world = World::new();
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        run.answered_at = Some(answered_stamp());
+        interrupt_the_log_append(&world, &run);
+        let moved = world.dir.path().join("elsewhere");
+        fs::create_dir(&moved).unwrap();
+        world.configure(&moved, "");
+
+        let error = world.later_finisher().save(&run, &answer()).unwrap_err();
+
+        assert_eq!(
+            error,
+            "An earlier attempt to log this summary was interrupted in a notes folder that has since changed. Choose that folder again in settings, then Retry save."
+        );
+        assert!(!moved.join("logs").exists());
+    }
+
+    /// The supervisor re-stamps such an answer before a retry; a save given
+    /// one anyway names the clock rather than a raw reason.
+    #[test]
+    fn an_answer_older_than_the_daily_log_window_names_the_clock() {
+        let world = World::new();
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        run.answered_at = Some(timestamp(fixed_now() - time::Duration::days(31)));
+
+        let error = world.finisher().save(&run, &answer()).unwrap_err();
+
+        assert_eq!(
+            error,
+            "The daily log did not accept this summary's time. Check the computer's clock, then Retry save."
+        );
+        assert!(world.summary_events().is_empty());
+    }
+
+    #[test]
+    fn log_refusals_are_plain_reasons() {
+        assert_eq!(
+            log_refusal("daily_log_full"),
+            "The day's daily log is full, so this summary cannot be logged. The summary file was saved."
+        );
+        assert_eq!(
+            log_refusal("daily_log_name_conflict"),
+            "A file Brauser does not own is where the daily log goes, in logs/. Move it, then Retry save."
+        );
+        assert_eq!(log_refusal("timestamp_in_future"), LOG_CLOCK);
+        for reason in ["invalid_summary_key", "title_too_long", "something_new"] {
+            assert_eq!(
+                log_refusal(reason),
+                "The run's details are not valid for the daily log, so this summary cannot be logged. The summary file was saved."
+            );
+        }
+        assert_eq!(
+            log_failure("appending daily log entry"),
+            "The daily log could not be written. Retry save."
+        );
+        for reason in [&log_refusal("daily_log_full"), LOG_INVALID, LOG_INTERRUPTED] {
+            assert!(!reason.contains("Retry save"), "{reason}");
+        }
     }
 
     #[test]
     fn a_retry_after_success_with_a_later_clock_leaves_the_file_unchanged() {
         let world = World::new();
         let mut run = run(&world, PAGE, HarnessId::Codex);
-        run.answered_at = Some(ANSWERED_AT.into());
+        run.answered_at = Some(answered_stamp());
         world.finisher().save(&run, &answer()).unwrap();
         let path = world.root.join(world.summary_path(PAGE));
         let written = fs::read(&path).unwrap();

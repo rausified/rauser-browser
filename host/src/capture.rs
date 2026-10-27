@@ -33,8 +33,8 @@ const MAX_BATCH_ENTRIES: usize = 65;
 const MAX_URL_BYTES: usize = 8192;
 const MAX_TITLE_BYTES: usize = 2048;
 const MAX_STRIP_RULES: usize = 64;
-const MAX_FUTURE_SECS: i64 = 5 * 60;
-const MAX_PAST_SECS: i64 = 30 * 24 * 60 * 60;
+pub(crate) const MAX_FUTURE_SECS: i64 = 5 * 60;
+pub(crate) const MAX_PAST_SECS: i64 = 30 * 24 * 60 * 60;
 /// Real-world UTC offsets range from -12:00 to +14:00.
 const MAX_UTC_OFFSET_MINUTES: u16 = 14 * 60;
 

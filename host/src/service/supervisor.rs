@@ -569,8 +569,9 @@ impl Supervisor {
             ));
         };
         // A record kept before answers were stamped gets its stamp now,
-        // before the save, so later retries reuse it.
-        if status.answered_at.is_none() {
+        // before the save, so later retries reuse it; so does one whose
+        // stamp the daily log's window no longer accepts.
+        if !loggable_stamp(status.answered_at.as_deref(), OffsetDateTime::now_utc()) {
             status.answered_at = Some(now_timestamp());
             inner.store.write_status(&status).map_err(|error| {
                 eprintln!("brauser service: stamping run {id} answer: {error:#}");
@@ -1112,6 +1113,23 @@ pub fn timeout_message(timeout: Duration) -> String {
     };
     let plural = if count == 1 { "" } else { "s" };
     format!("Timed out after {count} {unit}{plural}")
+}
+
+/// Whether a retry may reuse the answer stamp `answered_at`: it parses and
+/// the daily log still accepts it at `now` (`capture::check_event_window`),
+/// with a day's margin for the save itself. The log checks that window
+/// before its duplicate and intent checks, so an event stamped outside it
+/// was never logged, and a new stamp loses no deduplication (unless its
+/// first append was interrupted after its intent was journaled, which no
+/// stamp can complete now; see the finisher's module doc).
+fn loggable_stamp(answered_at: Option<&str>, now: OffsetDateTime) -> bool {
+    const MARGIN_SECS: i64 = 24 * 60 * 60;
+    let Some(at) = answered_at.and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok()) else {
+        return false;
+    };
+    let (at, now) = (at.unix_timestamp(), now.unix_timestamp());
+    at >= now - (crate::capture::MAX_PAST_SECS - MARGIN_SECS)
+        && at <= now + crate::capture::MAX_FUTURE_SECS
 }
 
 /// RFC 3339 UTC with exactly nine fraction digits, so timestamps sort as
@@ -2126,6 +2144,104 @@ mod tests {
         assert!(seen.answered_at.is_some());
         let stored = fixture.supervisor.store().status(id).unwrap();
         assert_eq!(stored.answered_at, seen.answered_at);
+    }
+
+    /// Seed a save-failed record with a kept answer stamped `answered_at`.
+    fn seed_save_failed(store: &RunStore, cwd: &Path, answered_at: &str) -> Uuid {
+        let id = seed_record(store, cwd, RunState::Failed, answered_at);
+        let mut status = store.status(id).unwrap();
+        status.error_kind = Some(RunErrorKind::SaveFailed);
+        status.error = Some("The summary file could not be written. Retry save.".into());
+        status.answered_at = Some(answered_at.into());
+        store.write_status(&status).unwrap();
+        store
+            .write_result(id, &serde_json::from_str(TEST_ANSWER).unwrap())
+            .unwrap();
+        id
+    }
+
+    fn days_ago(days: i64) -> String {
+        timestamp(OffsetDateTime::now_utc() - time::Duration::days(days))
+    }
+
+    #[test]
+    fn a_retry_re_stamps_an_answer_the_daily_log_window_no_longer_accepts() {
+        let stale = days_ago(31);
+        let mut seeded = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            seeded = Some(seed_save_failed(store, cwd, &stale));
+        });
+        let id = seeded.unwrap();
+        let before = OffsetDateTime::now_utc();
+
+        fixture.supervisor.retry_save(id).unwrap();
+
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        let fresh = OffsetDateTime::parse(seen.answered_at.as_deref().unwrap(), &Rfc3339).unwrap();
+        assert!(fresh >= before.replace_nanosecond(0).unwrap(), "{fresh}");
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(stored.answered_at, seen.answered_at);
+    }
+
+    #[test]
+    fn a_retry_keeps_an_answer_stamp_inside_the_window() {
+        let kept = days_ago(28);
+        let mut seeded = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            seeded = Some(seed_save_failed(store, cwd, &kept));
+        });
+        let id = seeded.unwrap();
+
+        fixture.supervisor.retry_save(id).unwrap();
+
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        assert_eq!(seen.answered_at.as_deref(), Some(kept.as_str()));
+    }
+
+    #[test]
+    fn loggable_stamp_is_the_daily_log_window_less_a_day() {
+        let now = OffsetDateTime::parse("2026-10-27T12:00:00Z", &Rfc3339).unwrap();
+        let at = |offset: time::Duration| timestamp(now + offset);
+        assert!(loggable_stamp(Some(&at(time::Duration::ZERO)), now));
+        assert!(loggable_stamp(Some(&at(-time::Duration::days(29))), now));
+        assert!(!loggable_stamp(
+            Some(&at(-time::Duration::days(29) - time::Duration::seconds(1))),
+            now
+        ));
+        assert!(loggable_stamp(Some(&at(time::Duration::minutes(5))), now));
+        assert!(!loggable_stamp(Some(&at(time::Duration::minutes(6))), now));
+        assert!(!loggable_stamp(Some("yesterday"), now));
+        assert!(!loggable_stamp(None, now));
+    }
+
+    /// End to end: a run whose save failed (say, the notes drive was
+    /// unmounted) and that is retried more than 30 days later is logged.
+    #[test]
+    fn a_save_retried_after_the_daily_log_window_succeeds() {
+        let stale = days_ago(31);
+        let mut seeded = None;
+        let fixture = Fixture::seeded_with_fault(
+            ANSWER,
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+            Some(Box::new(|dir: &Path| {
+                let root = dir.join("home");
+                std::fs::create_dir(&root).unwrap();
+                let config = dir.join("config.toml");
+                crate::config::fixtures::write(&config, &root, "", "", "");
+                Box::new(SummaryFinisher::new(config)) as Box<dyn RunFinisher>
+            })),
+            |store, cwd| {
+                seeded = Some(seed_save_failed(store, cwd, &stale));
+            },
+        );
+        let id = seeded.unwrap();
+
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        assert_eq!(summary_lines(&fixture.path("home").join("logs")), 1);
     }
 
     #[test]

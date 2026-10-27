@@ -141,7 +141,13 @@ pub struct RunStatusFile {
     pub vocabulary: Option<SummaryVocabulary>,
     /// When the validated answer was kept, stamped once before its first
     /// save, so every save of the run (a retry included) writes the same
-    /// event time. An older record gets it on its first retry.
+    /// event time. An older record gets it on its first retry, and a retry
+    /// re-stamps one the daily log's window no longer accepts.
+    ///
+    /// Like the two fields above, this is optional but not forward
+    /// compatible: `deny_unknown_fields` means a service built before it
+    /// cannot read a record that has it. `STATUS_VERSION` stays 1 because
+    /// none of these has been released.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<String>,
 }
