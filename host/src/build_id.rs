@@ -3,7 +3,7 @@
 //! `BRAUSER_BUILD_ID`; the extension's copy is `extension/build-id.mjs`.
 //! Keep the two in step.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Commits are abbreviated to a fixed length so both builds print the same.
@@ -60,9 +60,19 @@ pub fn git_build_id(host_dir: &Path) -> String {
     build_id(commit.as_deref(), git(host_dir, &status).as_deref())
 }
 
+/// What to watch for `path`: the path itself, or else the nearest directory
+/// it would appear in. Cargo reruns every build for a missing path, and a
+/// packed branch has no loose ref until its next commit writes one.
+pub fn watch_path(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find(|ancestor| ancestor.exists())
+        .unwrap_or(path)
+        .to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{COMMIT_LENGTH, build_id, git, git_build_id};
+    use super::{COMMIT_LENGTH, build_id, git, git_build_id, watch_path};
     use std::fs;
     use std::path::Path;
 
@@ -125,5 +135,16 @@ mod tests {
         if git(dir.path(), &["rev-parse", "HEAD"]).is_none() {
             assert_eq!(git_build_id(dir.path()), "unknown");
         }
+    }
+
+    #[test]
+    fn watch_path_falls_back_to_the_directory_a_missing_ref_would_appear_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let heads = dir.path().join("refs/heads");
+        fs::create_dir_all(&heads).unwrap();
+        fs::write(heads.join("main"), "ref\n").unwrap();
+        assert_eq!(watch_path(&heads.join("main")), heads.join("main"));
+        // A packed branch has no loose ref until its next commit writes one.
+        assert_eq!(watch_path(&heads.join("feat/packed")), heads);
     }
 }

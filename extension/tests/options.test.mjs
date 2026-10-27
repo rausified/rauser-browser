@@ -278,6 +278,23 @@ test("the header names the host build and flags one from another commit", async 
     " · host 0123456789ab (not the extension's commit; rebuild both)");
 });
 
+test("a restarted host's build replaces the exited one's in the header", async () => {
+  const state = install({ host: { hello: (_request, current) => ({
+    type: "hello_result", host_version: `0.1.0+${current.connects === 1 ? "abc1234def56" : "0123456789ab"}`,
+    configured: true, config_issue: null,
+  }) } });
+  await openSettings();
+  assert.equal(env.elements.get("host-build").textContent, " · host abc1234def56");
+
+  state.exitHost();
+  // Whatever answers next may be a rebuilt binary.
+  assert.equal(env.elements.get("host-build").textContent, "");
+  env.elements.get("refresh-artifacts").click();
+  await until(() => env.elements.get("host-build").textContent !== "", "the new host's build");
+  assert.equal(env.elements.get("host-build").textContent,
+    " · host 0123456789ab (not the extension's commit; rebuild both)");
+});
+
 test("the site list is the distinct adapter origins", async () => {
   install({ adapters: [
     artifactFor("https://b.example", "work.doc"),

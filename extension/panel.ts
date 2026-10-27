@@ -18,6 +18,10 @@ import type {
 const status = element<HTMLDivElement>("status");
 const buildId = element<HTMLSpanElement>("build-id");
 const hostBuild = element<HTMLSpanElement>("host-build");
+
+function showHostBuild(hostVersion: string): void {
+  hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
+}
 const settingsButton = element<HTMLButtonElement>("open-settings");
 const setupWarning = element<HTMLDivElement>("setup-warning");
 const setupReason = element<HTMLSpanElement>("setup-reason");
@@ -72,6 +76,13 @@ const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 
 const session = new ConfigSession(render);
+
+// The header names the host process that answered. Another one, possibly
+// from a rebuilt binary, starts on the next call after it exits.
+session.host.onHostExit(() => { hostBuild.textContent = ""; });
+session.host.onHostRestart(() => {
+  void session.hello().then((hello) => showHostBuild(hello.host_version), () => undefined);
+});
 let busy = false;
 let replaying = false;
 let tickRunning = false;
@@ -821,7 +832,7 @@ void (async () => {
   try {
     const hello = await session.hello();
     reachedHost = true;
-    hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hello.host_version);
+    showHostBuild(hello.host_version);
     await reloadConfig();
     if (hello.config_issue) show(hello.config_issue, true);
     initialized = true;

@@ -24,11 +24,7 @@ fn main() {
         build_id::git(dir, &["symbolic-ref", "-q", "HEAD"]).and_then(|name| git_path(name.trim()));
     for path in [head, reference, packed].into_iter().flatten() {
         // --git-path answers relative to the working directory it ran in.
-        // Cargo reruns every build for a missing path, and a branch ref may
-        // live only in packed-refs.
-        let path = dir.join(path.trim());
-        if path.exists() {
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
+        let path = build_id::watch_path(&dir.join(path.trim()));
+        println!("cargo:rerun-if-changed={}", path.display());
     }
 }
