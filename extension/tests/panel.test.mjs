@@ -487,7 +487,7 @@ test("page-pattern review on an unknown site reads links only on click without c
   });
   await until(() => !page.el("site-pattern-area").hidden && !page.el("site-pattern-review").disabled, "pattern review to be ready");
   assert.equal(page.state.scripts.length, 0);
-  assert.equal(page.el("capture-site-area").hidden, true, "unknown-site capture is still unavailable");
+  assert.equal(page.el("capture-site-review").hidden, true, "Capture Site reads nothing until clicked");
   page.el("site-pattern-review").click();
   await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
   const [injection] = page.state.scripts;
@@ -770,15 +770,14 @@ test("configured sites, missing folders, and invalid policies cannot use Capture
   }
 });
 
-test("unknown origins and private tabs do not offer the starter flow", async () => {
-  for (const tab of [
-    { id: 1, url: "https://unknown.example/items/1" },
-    { id: 1, url: JIRA_URL, incognito: true },
-  ]) {
-    const page = await install({ tab });
-    await until(() => page.calls("tabs.query") > 0, "tab query");
-    assert.equal(page.el("capture-site-area").hidden, true);
-  }
+test("private tabs do not offer Capture Site and unknown origins never get the starter flow", async () => {
+  const page = await install({ tab: { id: 1, url: JIRA_URL, incognito: true } });
+  await until(() => page.calls("tabs.query") > 0, "tab query");
+  assert.equal(page.el("capture-site-area").hidden, true);
+  const unknown = await install({ tab: { id: 1, url: "https://unknown.example/items/1" } });
+  await until(() => !unknown.el("capture-site-area").hidden, "the drafted flow to be offered");
+  assert.equal(unknown.el("capture-site-github").hidden, true);
+  assert.equal(unknown.el("capture-site-review").hidden, true);
 });
 
 test("pending note edits save before capture changes identity, then load the new identity", async () => {
@@ -891,6 +890,405 @@ test("a policy update makes an open review stale before it can be saved", async 
   await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "policy revision refresh");
   assert.equal(page.el("capture-site-save").disabled, true);
   assert.equal(updates(page).length, 0);
+});
+
+// --- Capture Site: drafted review for unknown sites ------------------------
+
+const WIKI = "https://wiki.example.com";
+const WIKI_URL = `${WIKI}/pages/42`;
+const LINEAR_URL = "https://linear.app/acme/issue/ABC-12";
+const draftRule = (index, example, extra = {}) => ({
+  rule: index, checked: true, unchecked_reason: null, visited: 1, links: 0, example, ...extra,
+});
+
+function wikiDraft(revision = "1") {
+  return {
+    type: "site_drafted", revision, drafter: "structural",
+    adapters: [
+      {
+        adapter: {
+          type: "wiki.pages", origin: WIKI,
+          match: [{ path: "/pages/{num:int}" }, { path: "/archive/{num:int}" }],
+          id: "wiki.pages:{host}/{num}",
+        },
+        scope: "not_shared", tenant: null,
+        rules: [
+          draftRule(0, `${WIKI}/pages/123`, { visited: 3, links: 2 }),
+          draftRule(1, `${WIKI}/archive/123`, { checked: false, unchecked_reason: "link_only", visited: 0, links: 4 }),
+        ],
+      },
+      {
+        adapter: { type: "wiki.space", origin: WIKI, match: [{ path: "/space/{id:token}" }], id: "wiki.space:{host}/{id}" },
+        scope: "not_shared", tenant: null,
+        rules: [draftRule(0, `${WIKI}/space/a1b2`, { checked: false, unchecked_reason: "token_only" })],
+      },
+    ],
+    dropped: [
+      { shape: "/search?q={slug}", adapter: null, rule: null, reason: "search_or_paging" },
+      { shape: "/share/{id}", adapter: null, rule: null, reason: "blocked_route" },
+      { shape: "/dashboard", adapter: null, rule: null, reason: "probe" },
+      { shape: "/{slug}/{tailhex32}", adapter: null, rule: null, reason: "no_route_word" },
+      { shape: null, adapter: 0, rule: 2, reason: "draft_overlap" },
+    ],
+    preview: [
+      { source: "visited", shape: "/pages/{num}", url: `${WIKI}/pages/123`, adapter: 0, rule: 0, artifact_id: "wiki.pages:wiki.example.com/123" },
+      { source: "visited", shape: "/settings", url: `${WIKI}/settings`, adapter: null, rule: null, artifact_id: null },
+      { source: "link", shape: "/archive/{num}", url: `${WIKI}/archive/123`, adapter: 0, rule: 1, artifact_id: "wiki.pages:wiki.example.com/123" },
+      { source: "link", shape: "/space/{id}", url: `${WIKI}/space/a1b2`, adapter: 1, rule: 0, artifact_id: "wiki.space:wiki.example.com/a1b2" },
+      { source: "link", shape: "/search?q={slug}", url: `${WIKI}/search?q=example`, adapter: null, rule: null, artifact_id: null },
+      { source: "probe", shape: "/login", url: `${WIKI}/login`, adapter: null, rule: null, artifact_id: null },
+      { source: "probe", shape: "/share", url: `${WIKI}/share`, adapter: null, rule: null, artifact_id: null },
+    ],
+    taken_types: [], remapped: 0,
+  };
+}
+
+function linearDraft(revision = "1") {
+  return {
+    type: "site_drafted", revision, drafter: "structural",
+    adapters: [{
+      adapter: {
+        type: "linear.issue", origin: "https://linear.app",
+        match: [{ path: "/{workspace:name|lower}/issue/{key:jira_key}" }],
+        id: "linear.issue:{host}/{workspace}/{key}",
+      },
+      scope: "pending", tenant: { segment: 0, capture: "workspace" },
+      rules: [draftRule(0, "https://linear.app/example/issue/ABC-123")],
+    }],
+    dropped: [],
+    preview: [{ source: "visited", shape: "/{slug}/issue/{key}", url: "https://linear.app/example/issue/ABC-123", adapter: 0, rule: 0, artifact_id: "linear.issue:linear.app/example/ABC-123" }],
+    taken_types: [], remapped: 0,
+  };
+}
+
+// Every element below `root`, depth first.
+function descendants(root) {
+  return root.children.flatMap((child) => [child, ...descendants(child)]);
+}
+const ruleBox = (page, adapter, rule) => descendants(page.el("capture-site-draft"))
+  .find((node) => node.tagName === "INPUT" && node.dataset.rule === `${adapter}/${rule}`);
+const typeField = (page, adapter) => descendants(page.el("capture-site-draft"))
+  .find((node) => node.tagName === "INPUT" && node.dataset.type === String(adapter));
+const draftText = (page) => ["capture-site-draft", "capture-site-preview", "capture-site-dropped", "capture-site-message"]
+  .map((id) => page.el(id).textContent).join("\n");
+// The host requests sent from `from` on, less the panel's own background
+// reads of its tab and settings (artifact lookups follow startup delivery).
+const BACKGROUND = new Set(["get_config", "get_artifact", "load_note", "list_runs"]);
+const sentAfter = (page, from) => [...new Set(page.state.requests.slice(from).map((request) => request.type))]
+  .filter((type) => !BACKGROUND.has(type));
+
+// Opens Capture Site on an unknown site. `draft` answers draft_site (a
+// function of the request and state, or a reply); the host is otherwise the
+// default fake.
+async function draftReview(url = WIKI_URL, options = {}) {
+  const { draft = () => wikiDraft(), title = "Work page", intercept, script, ...rest } = options;
+  const page = await install({
+    tab: { id: 1, url, title },
+    script: script ?? (async () => ({ current: "/pages/{num}", links: [{ shape: "/archive/{num}", count: 4 }, { shape: "/space/{id}", count: 1 }] })),
+    intercept: (request, state) => request.type === "draft_site"
+      ? (typeof draft === "function" ? draft(request, state) : draft)
+      : intercept?.(request, state),
+    ...rest,
+  });
+  await until(() => !page.el("capture-site").disabled && !page.el("capture-site-area").hidden, "Capture Site to be ready");
+  await until(() => !page.el("note-body").disabled, "the note to load");
+  await until(() => !page.el("capture-site").disabled, "startup delivery to finish");
+  page.from = page.state.requests.length;
+  page.el("capture-site").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  return page;
+}
+const drafted = (page) => until(() => page.el("capture-site-draft").children.length > 0 ||
+  page.el("capture-site-advanced").hidden === false, "the drafted review");
+
+test("Capture Site on an unknown site drafts with no permission request or native dialog", async () => {
+  let confirms = 0;
+  const page = await draftReview();
+  globalThis.window.confirm = () => { confirms += 1; return false; };
+  await drafted(page);
+  assert.equal(page.calls("permissions.request"), 0);
+  assert.equal(page.calls("permissions.remove"), 0);
+  assert.equal(confirms, 0);
+  assert.deepEqual(sentAfter(page, page.from), ["draft_site"]);
+  const [request] = page.sent("draft_site");
+  assert.equal(request.origin, WIKI);
+  assert.deepEqual(request.visited, [{ shape: "/pages/{num}", count: 1 }]);
+  assert.deepEqual(request.links, [{ shape: "/archive/{num}", count: 4 }, { shape: "/space/{id}", count: 1 }]);
+  // The origin has no adapter, so the worker has no sample to read.
+  assert.equal(page.state.workerRequests.filter((message) => message.kind === "get_site_patterns").length, 0);
+  assert.equal(page.el("capture-site-heading").textContent, "Capture work on wiki.example.com");
+  assert.equal(page.el("capture-site-github").hidden, true);
+  assert.equal(updates(page).length, 0);
+});
+
+test("link-only and token-only rules start unchecked with their labels", async () => {
+  const page = await draftReview();
+  await drafted(page);
+  assert.equal(ruleBox(page, 0, 0).checked, true);
+  assert.equal(ruleBox(page, 0, 1).checked, false);
+  assert.equal(ruleBox(page, 1, 0).checked, false);
+  const rows = descendants(page.el("capture-site-draft")).filter((node) => node.tagName === "LABEL");
+  const labelOf = (adapter, rule) => rows.find((row) => row.children.includes(ruleBox(page, adapter, rule))).textContent;
+  assert.match(labelOf(0, 1), /seen only in links on this page/);
+  assert.match(labelOf(1, 0), /loose: its ID has no fixed shape/);
+  assert.doesNotMatch(labelOf(0, 0), /seen only in links|loose/);
+  assert.equal(typeField(page, 0).value, "wiki.pages");
+});
+
+test("the review lists what will and will not be captured with the real current page", async () => {
+  const page = await draftReview();
+  await drafted(page);
+  const text = () => draftText(page);
+  assert.match(text(), /Brauser will remember: wiki\.pages — pages like \/pages\/<number>/);
+  assert.match(text(), /Illustrative example: https:\/\/wiki\.example\.com\/pages\/123/);
+  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured — https:\/\/wiki\.example\.com\/pages\/42/);
+  assert.match(page.el("capture-site-preview").textContent, /Matches 1 of 2 visited patterns and 0 of 3 link patterns/);
+  assert.match(page.el("capture-site-preview").textContent, /Illustrative example \(captured\): https:\/\/wiki\.example\.com\/pages\/123/);
+  assert.doesNotMatch(text(), /"match"|"id"|\{num:int\}/);
+  assert.equal(page.el("capture-site-save").disabled, false);
+  // Opting into the link-only rule counts its link pattern.
+  ruleBox(page, 0, 1).checked = true;
+  ruleBox(page, 0, 1).dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Matches 1 of 2 visited patterns and 1 of 3 link patterns/);
+  // With this page's rule dropped, the review says so.
+  ruleBox(page, 0, 0).checked = false;
+  ruleBox(page, 0, 0).dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /This page: will not be captured/);
+  // Nothing checked leaves nothing to save.
+  ruleBox(page, 0, 1).checked = false;
+  ruleBox(page, 0, 1).dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.match(page.el("capture-site-message").textContent, /Choose at least one/);
+  // A rename that collides with the other kind is refused in words.
+  ruleBox(page, 0, 0).checked = true;
+  ruleBox(page, 0, 0).dispatch("input");
+  ruleBox(page, 1, 0).checked = true;
+  ruleBox(page, 1, 0).dispatch("input");
+  typeField(page, 0).value = "wiki.space";
+  typeField(page, 0).dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.match(page.el("capture-site-message").textContent, /both named "wiki\.space"/);
+  typeField(page, 0).value = "wiki.doc";
+  typeField(page, 0).dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  assert.match(text(), /Brauser will remember: wiki\.doc/);
+  assert.equal(updates(page).length, 0);
+});
+
+test("dropped rules and safety probes are listed in plain words", async () => {
+  const page = await draftReview();
+  await drafted(page);
+  const dropped = page.el("capture-site-dropped").textContent;
+  assert.match(dropped, /Brauser won't capture/);
+  assert.match(dropped, /\/search\?q=\{slug\}: search or paging pages/);
+  assert.match(dropped, /\/share\/\{id\}: sign-in, sharing or account pages/);
+  assert.match(dropped, /\/dashboard: .*dashboard/);
+  assert.match(dropped, /no fixed route word/);
+  assert.match(dropped, /already captured/);
+  assert.match(dropped, /Safety checks: 2 sign-in, search, dashboard, sharing and other pages skipped/);
+  assert.match(dropped, /Skipped: https:\/\/wiki\.example\.com\/login/);
+  assert.doesNotMatch(dropped, /draft_|search_or_paging|blocked_route|no_route_word/);
+});
+
+test("canceling, closing or switching tabs discards the draft and its link shapes and saves nothing", async () => {
+  const cleared = (page) => {
+    assert.equal(page.el("capture-site-review").hidden, true);
+    assert.equal(page.el("capture-site-draft").children.length, 0);
+    assert.equal(page.el("capture-site-dropped").children.length, 0);
+    assert.equal(page.el("capture-site-preview").children.length, 0);
+    assert.doesNotMatch(draftText(page), /archive|space/);
+  };
+  const page = await draftReview();
+  await drafted(page);
+  page.el("capture-site-cancel").click();
+  cleared(page);
+  page.el("capture-site-save").click();
+  // Opening again drafts afresh.
+  page.el("capture-site").click();
+  await drafted(page);
+  assert.equal(page.sent("draft_site").length, 2);
+  // A reload of the reviewed tab (same URL) discards the review.
+  page.tabUpdated({ status: "loading" });
+  cleared(page);
+  page.el("capture-site").click();
+  await drafted(page);
+  page.navigate("https://other.example/pages/1", 2);
+  await until(() => page.el("capture-site-review").hidden, "a tab switch to discard the draft");
+  cleared(page);
+  assert.equal(updates(page).length, 0);
+
+  // A draft that answers after Cancel is dropped.
+  let finish;
+  const held = new Promise((resolve) => { finish = resolve; });
+  const second = await draftReview(WIKI_URL, { draft: () => held.then(() => wikiDraft()) });
+  await until(() => second.sent("draft_site").length === 1, "the held draft");
+  second.el("capture-site-cancel").click();
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  cleared(second);
+  assert.equal(updates(second).length, 0);
+});
+
+test("a page that navigated before links were read cancels the draft without calling draft_site", async () => {
+  // The tab moved on while the link shapes were being read.
+  const moved = await draftReview(WIKI_URL, { script: async (_injection, state) => {
+    state.tab.url = `${WIKI}/pages/43`;
+    return { current: "/pages/{num}", links: [{ shape: "/stale/{num}", count: 1 }] };
+  } });
+  await until(() => moved.el("capture-site-review").hidden, "the draft to cancel");
+  assert.equal(moved.sent("draft_site").length, 0);
+  // A reload while the read is held.
+  let finish;
+  const held = new Promise((resolve) => { finish = resolve; });
+  const reloaded = await draftReview(WIKI_URL, { script: () => held });
+  await until(() => reloaded.state.scripts.length === 1, "the held link read");
+  reloaded.tabUpdated({ status: "loading" });
+  finish({ current: "/pages/{num}", links: [{ shape: "/stale/{num}", count: 1 }] });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(reloaded.el("capture-site-review").hidden, true);
+  assert.equal(reloaded.sent("draft_site").length, 0);
+  // The inspector itself found another document there.
+  const stale = await draftReview(WIKI_URL, { script: async () => ({ current: null, links: [] }) });
+  await until(() => stale.el("capture-site-message").textContent.startsWith("Could not draft"), "the honest error");
+  assert.equal(stale.sent("draft_site").length, 0);
+  assert.equal(stale.el("capture-site-save").disabled, true);
+});
+
+test("a shared origin with pending scope keeps Save disabled until the user chooses", async () => {
+  const page = await draftReview(LINEAR_URL, { draft: () => linearDraft(),
+    script: async () => ({ current: "/{slug}/issue/{key}", links: [] }) });
+  await drafted(page);
+  assert.equal(page.el("capture-site-scope").hidden, false);
+  assert.equal(page.el("capture-site-scope-values").value, "acme", "prefilled from this tab's URL");
+  assert.equal(page.el("capture-site-scoped").checked, false);
+  assert.equal(page.el("capture-site-unscoped").checked, false);
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.match(page.el("capture-site-message").textContent, /workspaces or accounts/);
+  assert.match(page.el("capture-site-scope").textContent, /every account in this Chrome profile/);
+  assert.match(page.el("capture-site-scope").textContent, /separate Chrome profile for work/);
+  // The prefill never came from the host: the draft's example names a stand-in.
+  assert.doesNotMatch(JSON.stringify(page.sent("draft_site")), /acme/);
+  page.el("capture-site-scoped").checked = true;
+  page.el("capture-site-scoped").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
+  page.el("capture-site-scope-values").value = "";
+  page.el("capture-site-scope-values").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  page.el("capture-site-unscoped").checked = true;
+  page.el("capture-site-unscoped").dispatch("input");
+  assert.equal(page.el("capture-site-scoped").checked, false, "the two choices exclude each other");
+  assert.equal(page.el("capture-site-scope-values").disabled, true);
+  assert.equal(page.el("capture-site-save").disabled, false);
+  page.el("capture-site-unscoped").checked = false;
+  page.el("capture-site-unscoped").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+
+  // A not-shared origin shows no scope controls.
+  const wiki = await draftReview();
+  await drafted(wiki);
+  assert.equal(wiki.el("capture-site-scope").hidden, true);
+  // An origin with no tenant position offers only the unscoped statement.
+  const docsUrl = "https://docs.google.com/document/d/a1b2c3d4e5f6a7b8c9d0e1/edit";
+  const docs = await draftReview(docsUrl, { draft: () => ({
+    ...linearDraft(),
+    adapters: [{
+      adapter: { type: "docs.document", origin: "https://docs.google.com", match: [{ path: "/document/d/{doc:token}/edit" }], id: "docs.document:{host}/{doc}" },
+      scope: "unscoped_only", tenant: null,
+      rules: [draftRule(0, "https://docs.google.com/document/d/a1b2/edit")],
+    }],
+  }), script: async () => ({ current: "/document/d/{id}/edit", links: [] }) });
+  await drafted(docs);
+  assert.equal(docs.el("capture-site-scope").hidden, false);
+  assert.equal(docs.el("capture-site-scope-values").hidden, true);
+  assert.equal(docs.el("capture-site-scoped").hidden, true);
+  assert.equal(docs.el("capture-site-save").disabled, true);
+  docs.el("capture-site-unscoped").checked = true;
+  docs.el("capture-site-unscoped").dispatch("input");
+  assert.equal(docs.el("capture-site-save").disabled, false);
+});
+
+test("an empty draft explains why and offers advanced settings", async () => {
+  let opened = 0;
+  const page = await draftReview(WIKI_URL, { draft: () => ({
+    ...wikiDraft(), adapters: [], preview: [],
+    dropped: [{ shape: "/{slug}/{tailhex32}", adapter: null, rule: null, reason: "draft_no_leading_literal" }],
+  }) });
+  chrome.runtime.openOptionsPage = async () => { opened += 1; };
+  await drafted(page);
+  assert.equal(page.el("capture-site-advanced").hidden, false);
+  assert.match(page.el("capture-site-message").textContent, /could not draft/i);
+  assert.match(page.el("capture-site-dropped").textContent, /no fixed route word/);
+  assert.equal(page.el("capture-site-save").disabled, true);
+  page.el("capture-site-advanced").click();
+  assert.equal(opened, 1);
+  page.el("capture-site-cancel").click();
+  assert.equal(page.el("capture-site-advanced").hidden, true);
+  assert.equal(updates(page).length, 0);
+});
+
+test("the tab title is shown only in the review and never sent to the drafter", async () => {
+  const title = "Secret Launch Plan · Acme Wiki";
+  const page = await draftReview(WIKI_URL, { title });
+  await drafted(page);
+  assert.equal(page.el("capture-site-title").hidden, false);
+  assert.match(page.el("capture-site-title-current").textContent, /Secret Launch Plan · Acme Wiki/);
+  page.el("capture-site-title-suffix").value = " · Acme Wiki";
+  page.el("capture-site-title-suffix").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  page.el("capture-site-title-suffix").value = " · Other";
+  page.el("capture-site-title-suffix").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.match(page.el("capture-site-message").textContent, /does not end with/);
+  // Only the origin and shapes cross: no raw URL, link href or tab title.
+  const [request] = page.sent("draft_site");
+  assert.deepEqual(Object.keys(request).sort(), ["links", "origin", "protocol_version", "request_id", "type", "visited"]);
+  assert.equal(request.origin, WIKI);
+  const shapes = JSON.stringify([request.visited, request.links]);
+  for (const secret of ["Secret", "Acme Wiki", "http", "42", "wiki.example"]) assert.doesNotMatch(shapes, new RegExp(secret));
+  assert.equal(page.sent("draft_site").length, 1);
+  assert.deepEqual(sentAfter(page, page.from), ["draft_site"]);
+});
+
+test("an older host without draft_site asks for a host rebuild", async () => {
+  const page = await draftReview(WIKI_URL, { draft: () => ({
+    type: "error", code: "invalid_request", message: "invalid or unsupported request JSON",
+  }) });
+  await until(() => /rebuild/i.test(page.el("capture-site-message").textContent), "the rebuild message");
+  assert.match(page.el("capture-site-message").textContent, /Rebuild and reinstall the Brauser host/);
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(page.el("capture-site-draft").children.length, 0);
+  // Any other refusal is shown as it is.
+  const other = await draftReview(WIKI_URL, { draft: () => ({
+    type: "error", code: "invalid_config", message: "adapter policy is unavailable",
+  }) });
+  await until(() => other.el("capture-site-message").textContent.includes("adapter policy is unavailable"), "the refusal");
+  assert.doesNotMatch(other.el("capture-site-message").textContent, /rebuild/i);
+});
+
+test("a draft from another revision is stale before it can be saved", async () => {
+  const page = await draftReview(WIKI_URL, { draft: () => wikiDraft("2") });
+  await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "the stale draft");
+  assert.equal(page.el("capture-site-save").disabled, true);
+});
+
+test("Page patterns review still works through the shared collector", async () => {
+  const page = await draftReview();
+  await drafted(page);
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  assert.equal(page.state.scripts.length, 2);
+  for (const injection of page.state.scripts) {
+    assert.deepEqual(injection.target, { tabId: 1, frameIds: [0] });
+    assert.equal(injection.world, "ISOLATED");
+    assert.deepEqual(injection.args, [WIKI_URL, true]);
+  }
+  assert.equal(page.state.scripts[0].func, page.state.scripts[1].func);
+  assert.match(page.el("site-pattern-rows").textContent, /Current page: \/pages\/\{num\}/);
+  // Each review keeps its own state: closing one leaves the other.
+  page.el("site-pattern-close").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  assert.ok(page.el("capture-site-draft").children.length > 0);
 });
 
 // --- Artifact card: "Why I'm here" -------------------------------------------

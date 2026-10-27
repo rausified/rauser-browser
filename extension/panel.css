@@ -115,5 +115,7 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 #capture-site-preview { overflow-wrap: anywhere; }
 #site-pattern-area { overflow-wrap: anywhere; }
 #site-pattern-rows { max-height: 240px; overflow: auto; }
-#capture-site-preview details { margin: 12px 0; }
-#capture-site-preview details ul { max-height: 200px; overflow: auto; }
+#capture-site-preview details, #capture-site-dropped details { margin: 12px 0; }
+#capture-site-preview details ul, #capture-site-dropped details ul { max-height: 200px; overflow: auto; }
+#capture-site-draft, #capture-site-dropped { overflow-wrap: anywhere; }
+#capture-site-scope input[type="text"] { margin: 4px 0 8px; }

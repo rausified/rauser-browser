@@ -1,12 +1,21 @@
+import type { DraftDropReason, SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
 import type { WorkerStatus } from "./model.js";
+import { HostError } from "./native.js";
 import { ConfigSession, describe, element, withConfigMutationLock, worker } from "./settings.js";
-import { captureOrigin, planCaptureSite, siteConfigured, type CapturePlan } from "./capture-site.js";
+import {
+  captureMode, captureOrigin, draftRequest, planCaptureSite, planDraftedSite, siteConfigured, tenantPrefill,
+  type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
+} from "./capture-site.js";
+import { httpOrigin, type SampledShape } from "./site-patterns.js";
 import { starterKind } from "./starter-adapters.js";
-import { SitePatternPanel } from "./site-pattern-panel.js";
+import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 
 export interface CapturePage {
   url: string;
   tabId: number | undefined;
+  /** The tab title. It is shown only in the drafted review and is never
+   * sent to the host's drafter. */
+  title?: string;
 }
 
 interface CaptureActions {
@@ -15,6 +24,96 @@ interface CaptureActions {
   show(message: string, warning?: boolean): void;
   beforeSave(): Promise<void>;
   afterSave(): Promise<void>;
+  openSettings(): void;
+}
+
+const STARTER_SOURCE = "Development starter draft · live-tool certification is still pending.";
+const DRAFT_SOURCE = "Drafted by Brauser from this site's page patterns. No agent and no page content were used; review each kind of page before saving.";
+const STALE = "Settings changed. Cancel and open Capture Site again to review the current settings.";
+
+const UNCHECKED_LABELS: Record<UncheckedReason, string> = {
+  link_only: "seen only in links on this page",
+  token_only: "loose: its ID has no fixed shape",
+};
+
+const SAFETY_PAGES = "a sign-in, search, dashboard or sharing page";
+const NO_ROUTE_WORD = "no fixed route word to draft from safely";
+const FAILED_CHECKS = "it did not pass Brauser's safety checks";
+const DROP_REASONS: Record<DraftDropReason, string> = {
+  root: "the site's home page",
+  probe: SAFETY_PAGES,
+  search_or_paging: "search or paging pages",
+  blocked_route: "sign-in, sharing or account pages",
+  param_name: "its ID would come from a search, paging or tracking setting",
+  already_recognized: "already captured by this site's rules",
+  no_route_word: NO_ROUTE_WORD,
+  no_identifier: "no page ID in the address",
+  limit: "more kinds of page than Brauser drafts at once",
+  draft_forbidden_key: FAILED_CHECKS,
+  draft_no_scope_source: FAILED_CHECKS,
+  draft_scope_conflict: FAILED_CHECKS,
+  draft_no_leading_literal: NO_ROUTE_WORD,
+  draft_rest_second: "it would match too many pages",
+  draft_id_needs_typed_capture: "its ID has no fixed shape",
+  draft_search_capture: "its ID would come from search or paging",
+  draft_matches_probe: `it would also capture ${SAFETY_PAGES}`,
+  draft_overlap: "already captured by this site's rules",
+  draft_blocked_route: "sign-in, sharing or account pages",
+  draft_paging_capture: "its ID would come from search or paging",
+  draft_invalid_rule: FAILED_CHECKS,
+  draft_scope_pending: FAILED_CHECKS,
+  draft_scope_choice: FAILED_CHECKS,
+};
+
+/** One capture of a path template, in words. */
+function captureWords(source: string): string {
+  if (source === "*" || source === "_") return "…";
+  const colon = source.indexOf(":");
+  const name = (colon < 0 ? source : source.slice(0, colon)).replace(/\?$/, "");
+  const ctype = colon < 0 ? "token" : source.slice(colon + 1);
+  const optional = source.slice(0, colon < 0 ? source.length : colon).endsWith("?");
+  let words: string;
+  if (ctype.startsWith("(")) {
+    words = ctype.slice(1, ctype.indexOf(")")).split("|").join(" or ");
+  } else {
+    const type = /^[a-z_]+/.exec(ctype)?.[0] ?? "token";
+    words = ctype.includes("@tail") ? "<title-ID>"
+      : type === "int" ? "<number>"
+      : type === "jira_key" ? "<key>"
+      : type === "name" ? `<${name}>`
+      : "<ID>";
+  }
+  return optional ? `[${words}]` : words;
+}
+
+/** A drafted rule in words, such as "/wiki/…/pages/<number>". Only the
+ * rule's literals and capture classes are used. */
+export function describeRule(rule: unknown): string {
+  if (typeof rule !== "object" || rule === null || typeof (rule as { path?: unknown }).path !== "string") return "pages";
+  const { path, query } = rule as { path: string; query?: unknown };
+  let text = path.replace(/\{([^}]*)\}/g, (_, source: string) => captureWords(source));
+  if (typeof query === "object" && query !== null) {
+    const conditions = Object.entries(query).map(([key, value]) =>
+      `${key}=${typeof value === "string" ? value.replace(/\{([^}]*)\}/g, (_, source: string) => captureWords(source)) : "…"}`);
+    if (conditions.length) text += `?${conditions.join("&")}`;
+  }
+  return text;
+}
+
+function child<K extends keyof HTMLElementTagNameMap>(
+  parent: HTMLElement, tag: K, text = "", className = "",
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (text) node.textContent = text;
+  if (className) node.className = className;
+  parent.append(node);
+  return node;
+}
+
+interface DraftKindView {
+  heading: HTMLElement;
+  type: HTMLInputElement;
+  rules: HTMLInputElement[];
 }
 
 /** An in-panel, revision-bound review. All transient page URLs and scopes
@@ -35,9 +134,29 @@ export class CaptureSitePanel {
   private readonly message = element<HTMLElement>("capture-site-message");
   private readonly save = element<HTMLButtonElement>("capture-site-save");
   private readonly cancel = element<HTMLButtonElement>("capture-site-cancel");
+  private readonly source = element<HTMLElement>("capture-site-source");
+  private readonly kinds = element<HTMLElement>("capture-site-draft");
+  private readonly scopeArea = element<HTMLElement>("capture-site-scope");
+  private readonly scopedLabel = element<HTMLElement>("capture-site-scoped-label");
+  private readonly scoped = element<HTMLInputElement>("capture-site-scoped");
+  private readonly scopeValuesLabel = element<HTMLElement>("capture-site-scope-values-label");
+  private readonly scopeValues = element<HTMLInputElement>("capture-site-scope-values");
+  private readonly unscoped = element<HTMLInputElement>("capture-site-unscoped");
+  private readonly titleArea = element<HTMLElement>("capture-site-title");
+  private readonly titleCurrent = element<HTMLElement>("capture-site-title-current");
+  private readonly titleSuffix = element<HTMLInputElement>("capture-site-title-suffix");
+  private readonly dropped = element<HTMLElement>("capture-site-dropped");
+  private readonly advanced = element<HTMLButtonElement>("capture-site-advanced");
   private page: CapturePage | null = null;
-  private target: (CapturePage & { revision: string }) | null = null;
+  private target: (CapturePage & { revision: string; mode: CaptureMode; origin: string }) | null = null;
   private plan: CapturePlan | null = null;
+  // The drafted flow. The link shapes (in `draftInput`) and the draft live
+  // only here and are cleared by close().
+  private draft: SiteDrafted | null = null;
+  private draftInput: DraftRequest | null = null;
+  private draftPlan: DraftPlan | null = null;
+  private draftProblem: string | null = null;
+  private draftViews: DraftKindView[] = [];
   private previewMessage = "";
   saving = false;
 
@@ -52,17 +171,38 @@ export class CaptureSitePanel {
     for (const input of [this.prs, this.prOrgs, this.issues, this.issueOrgs]) {
       input.addEventListener("input", () => this.updatePreview());
     }
+    this.scoped.addEventListener("input", () => {
+      if (this.scoped.checked) this.unscoped.checked = false;
+      this.updateDraftPreview();
+    });
+    this.unscoped.addEventListener("input", () => {
+      if (this.unscoped.checked) this.scoped.checked = false;
+      this.updateDraftPreview();
+    });
+    for (const input of [this.scopeValues, this.titleSuffix]) {
+      input.addEventListener("input", () => this.updateDraftPreview());
+    }
+    this.advanced.addEventListener("click", () => this.actions.openSettings());
+    // As for Page patterns: a reload or document replacement keeps the tab
+    // ID and can keep the URL, so any new load or URL change in the reviewed
+    // tab discards a drafted review and its link shapes.
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+      if (this.target?.mode === "draft" && tabId === this.target.tabId && !this.saving &&
+        (changeInfo.status === "loading" || changeInfo.url !== undefined)) this.close();
+    });
   }
 
   render(page: CapturePage | null, busy: boolean): void {
     this.patterns.render(page, busy);
     this.page = page;
     if (this.target && !this.samePage(page, this.target)) this.close();
-    const origin = page ? captureOrigin(page.url) : null;
-    this.area.hidden = !origin;
-    if (!origin) return;
     const config = this.session.config;
-    const configured = config !== null && siteConfigured(config, origin);
+    const mode = page ? captureMode(config, page.url) : "unsupported";
+    // A configured starter site still says where its rules are managed.
+    const offered = mode === "starter" || mode === "draft" || (mode === "configured" && captureOrigin(page!.url) !== null);
+    this.area.hidden = !offered;
+    if (!offered) return;
+    const configured = mode === "configured";
     this.start.hidden = configured || this.target !== null;
     this.start.disabled = configured || busy || !this.session.connected || !config?.storage ||
       !!this.session.configIssue || !!this.session.adapterIssue;
@@ -79,51 +219,250 @@ export class CaptureSitePanel {
 
   private open(): void {
     if (this.actions.isBusy() || !this.page || !this.session.revision || this.start.disabled || this.start.hidden) return;
-    this.target = { ...this.page, revision: this.session.revision };
+    const mode = captureMode(this.session.config, this.page.url);
+    const origin = mode === "starter" ? captureOrigin(this.page.url) : mode === "draft" ? httpOrigin(this.page.url) : null;
+    if (!origin) return;
+    this.target = { ...this.page, revision: this.session.revision, mode, origin };
     this.review.hidden = false;
     this.start.hidden = true;
-    const origin = captureOrigin(this.page.url)!;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
-    this.github.hidden = starterKind(origin) !== "github";
+    this.source.textContent = mode === "draft" ? DRAFT_SOURCE : STARTER_SOURCE;
+    this.github.hidden = mode !== "starter" || starterKind(origin) !== "github";
     this.prs.checked = true;
     this.issues.checked = true;
     this.prOrgs.value = "";
     this.issueOrgs.value = "";
-    this.updatePreview();
+    if (mode === "draft") void this.startDraft(this.target);
+    else this.updatePreview();
     this.heading.focus();
   }
 
   private close(): void {
     this.target = null;
     this.plan = null;
+    this.draft = null;
+    this.draftInput = null;
+    this.draftPlan = null;
+    this.draftProblem = null;
+    this.draftViews = [];
+    this.previewMessage = "";
     this.review.hidden = true;
     this.prOrgs.value = "";
     this.issueOrgs.value = "";
     this.preview.replaceChildren();
+    this.kinds.replaceChildren();
+    this.dropped.replaceChildren();
+    this.scopeArea.hidden = true;
+    this.scoped.checked = false;
+    this.unscoped.checked = false;
+    this.scopeValues.value = "";
+    this.titleArea.hidden = true;
+    this.titleCurrent.textContent = "";
+    this.titleSuffix.value = "";
+    this.advanced.hidden = true;
+    this.message.textContent = "";
     this.start.hidden = false;
+  }
+
+  /** Read this page's shapes on the click, then have the host draft from
+   * the origin and shapes alone. Raw URLs, link hrefs and the tab title
+   * never leave the panel. */
+  private async startDraft(target: NonNullable<CaptureSitePanel["target"]>): Promise<void> {
+    const isCurrent = (): boolean => this.target === target && this.samePage(this.page, target);
+    this.previewMessage = "Reading this page's patterns…";
+    this.updateControls(this.actions.isBusy());
+    try {
+      const patterns = await collectPagePatterns(target, isCurrent);
+      if (!patterns) {
+        // The page navigated: its link shapes are not this page's.
+        if (this.target === target) this.close();
+        return;
+      }
+      // The worker samples only origins that already have capture rules.
+      let samples: SampledShape[] = [];
+      const config = this.session.config;
+      if (config && siteConfigured(config, target.origin)) {
+        samples = await worker<SampledShape[]>({ kind: "get_site_patterns", origin: target.origin }).catch(() => []);
+        if (!isCurrent()) return;
+      }
+      const input = draftRequest(target.origin, patterns, samples);
+      this.previewMessage = "Drafting capture rules from this site's page patterns…";
+      this.updateControls(this.actions.isBusy());
+      const draft = await this.session.draftSite(input.origin, input.visited, input.links);
+      if (!isCurrent()) return;
+      if (draft.revision !== target.revision) {
+        this.draftProblem = STALE;
+        this.updateControls(this.actions.isBusy());
+        return;
+      }
+      this.draft = draft;
+      this.draftInput = input;
+      this.renderDraft(draft, target);
+    } catch (error) {
+      if (this.target !== target) return;
+      this.previewMessage = error instanceof HostError && error.code === "invalid_request" &&
+          /unsupported request/.test(error.message)
+        ? "This Brauser host is older than the extension and cannot draft capture rules. Rebuild and reinstall the Brauser host, then open Capture Site again."
+        : `Could not draft capture rules: ${describe(error)}`;
+      this.updateControls(this.actions.isBusy());
+    }
+  }
+
+  /** The plain-language review: what Brauser will and will not remember,
+   * with the controls that shape the selection. */
+  private renderDraft(draft: SiteDrafted, target: NonNullable<CaptureSitePanel["target"]>): void {
+    this.kinds.replaceChildren();
+    this.draftViews = [];
+    for (const [a, view] of draft.adapters.entries()) {
+      const card = child(this.kinds, "div", "", "adapter-card");
+      const heading = child(card, "p");
+      const field = child(card, "div", "", "field");
+      const label = child(field, "label", "Kind name");
+      const type = child(field, "input");
+      type.type = "text";
+      type.id = `capture-site-type-${a}`;
+      label.htmlFor = type.id;
+      type.maxLength = 32;
+      type.autocomplete = "off";
+      type.spellcheck = false;
+      type.value = String(view.adapter.type);
+      type.dataset.type = String(a);
+      type.addEventListener("input", () => this.updateDraftPreview());
+      const match = Array.isArray(view.adapter.match) ? view.adapter.match : [];
+      const rules: HTMLInputElement[] = [];
+      for (const entry of view.rules) {
+        const row = child(card, "label", "", "check-label");
+        const box = child(row, "input");
+        box.type = "checkbox";
+        box.checked = entry.checked;
+        box.dataset.rule = `${a}/${entry.rule}`;
+        box.addEventListener("input", () => this.updateDraftPreview());
+        const reason = entry.unchecked_reason ? ` · ${UNCHECKED_LABELS[entry.unchecked_reason]}` : "";
+        child(row, "span", `Pages like ${describeRule(match[entry.rule])}${reason}`);
+        child(card, "p", `Illustrative example: ${entry.example}`, "page-url");
+        rules.push(box);
+      }
+      this.draftViews.push({ heading, type, rules });
+    }
+    const pending = draft.adapters.find((view) => view.scope === "pending");
+    const unscopedOnly = draft.adapters.some((view) => view.scope === "unscoped_only");
+    this.scopeArea.hidden = !pending && !unscopedOnly;
+    for (const node of [this.scopedLabel, this.scoped, this.scopeValuesLabel, this.scopeValues]) node.hidden = !pending;
+    this.scoped.checked = false;
+    this.unscoped.checked = false;
+    // The prefill is read from this tab's own URL at the host's position.
+    this.scopeValues.value = pending ? tenantPrefill(target.url, pending.tenant) : "";
+    this.titleArea.hidden = draft.adapters.length === 0;
+    this.titleCurrent.textContent = `This tab's title: ${target.title ?? ""}`;
+    this.titleSuffix.value = "";
+    this.renderDropped(draft);
+    this.advanced.hidden = draft.adapters.length !== 0;
+    if (!draft.adapters.length) {
+      const noRouteWord = draft.dropped.some((row) => row.reason === "no_route_word" || row.reason === "draft_no_leading_literal");
+      this.previewMessage = `Brauser could not draft capture rules for this site from what this page shows.${noRouteWord
+        ? " This site's pages have no fixed route word to draft from safely." : ""} You can write rules by hand in advanced settings.`;
+      this.updateControls(this.actions.isBusy());
+      return;
+    }
+    this.updateDraftPreview();
+  }
+
+  private renderDropped(draft: SiteDrafted): void {
+    this.dropped.replaceChildren();
+    if (draft.dropped.length) {
+      child(this.dropped, "p", "Brauser won't capture:");
+      const list = child(this.dropped, "ul", "", "plain-list");
+      for (const row of draft.dropped) {
+        const type = row.adapter === null ? undefined : draft.adapters[row.adapter]?.adapter.type;
+        const subject = row.shape ?? (typeof type === "string" ? `A drafted ${type} rule` : "A drafted rule");
+        child(list, "li", `${subject}: ${DROP_REASONS[row.reason]}`);
+      }
+    }
+    const probes = draft.preview.filter((row) => row.source === "probe");
+    if (probes.length) {
+      const details = child(this.dropped, "details");
+      child(details, "summary", `Safety checks: ${probes.length} sign-in, search, dashboard, sharing and other pages skipped`);
+      const list = child(details, "ul", "", "plain-list");
+      for (const row of probes) {
+        child(list, "li", `${row.adapter === null ? "Skipped" : "Would be captured"}: ${row.url}`, row.adapter === null ? "" : "warning");
+      }
+    }
+  }
+
+  private selection(): DraftSelection {
+    const draft = this.draft!;
+    return {
+      checked: this.draftViews.map((view) => view.rules.map((box) => box.checked)),
+      types: this.draftViews.map((view) => view.type.value),
+      scope: draft.adapters.map((view) =>
+        view.scope === "pending"
+          ? this.unscoped.checked ? "unscoped" : this.scoped.checked ? { values: this.scopeValues.value } : null
+          : view.scope === "unscoped_only" && this.unscoped.checked ? "unscoped" : null),
+      titleSuffix: this.titleSuffix.value,
+    };
+  }
+
+  private updateDraftPreview(): void {
+    const target = this.target;
+    const draft = this.draft;
+    const config = this.session.config;
+    if (!target || target.mode !== "draft" || !draft || !config || this.saving) return;
+    const selection = this.selection();
+    for (const [a, view] of this.draftViews.entries()) {
+      const match = Array.isArray(draft.adapters[a]!.adapter.match) ? draft.adapters[a]!.adapter.match as unknown[] : [];
+      const kept = draft.adapters[a]!.rules.filter((_, r) => selection.checked[a]![r]);
+      const shown = (kept.length ? kept : draft.adapters[a]!.rules).map((entry) => describeRule(match[entry.rule]));
+      const name = view.type.value.trim() || String(draft.adapters[a]!.adapter.type);
+      view.heading.textContent = `${kept.length ? "Brauser will remember" : "Not remembered"}: ${name} — pages like ${shown.join(" or ")}`;
+    }
+    this.preview.replaceChildren();
+    const result = planDraftedSite(config, draft, selection, target.url, target.title ?? "");
+    this.draftPlan = result.ok ? result.plan : null;
+    this.previewMessage = result.ok
+      ? result.plan.startsCapture ? "Saving enables these pages. Other sites keep their existing rules."
+        : "Capture is paused for all sites. This saves the site; resume capture in settings when you are ready."
+      : result.message;
+    if (result.ok) {
+      const plan = result.plan;
+      const { visited, visitedTotal, links, linksTotal } = plan.counts;
+      child(this.preview, "p", "Recognized pages contribute titles, opens and measured focused/background time to your local worklog.");
+      child(this.preview, "p", `Matches ${visited} of ${visitedTotal} visited patterns and ${links} of ${linksTotal} link patterns.`);
+      child(this.preview, "p", `This page: ${plan.current.result.match ? "will be captured" : "will not be captured"} — ${plan.current.url}`);
+      const examples = child(this.preview, "ul", "", "plain-list");
+      for (const example of plan.examples) {
+        child(examples, "li", `Illustrative example (${example.result.match ? "captured" : "skipped"}): ${example.url}`);
+      }
+    }
+    this.updateControls(this.actions.isBusy());
   }
 
   private updateControls(busy: boolean): void {
     const stale = this.target?.revision !== this.session.revision;
     const state = this.session.status;
-    const origin = this.plan?.origin ?? (this.target ? captureOrigin(this.target.url) : null);
+    const origin = this.target?.origin ?? null;
     const removal = origin !== null && state?.pending_removals.includes(origin);
-    const problem = stale ? "Settings changed. Cancel and open Capture Site again to review the current settings."
+    const problem = stale || this.draftProblem ? STALE
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings first."
       : state?.pause_pending ? "A pause is still being saved. Finish it in settings before capturing a site."
       : removal ? "This site has a pending removal. Finish it in settings before adding it again."
       : null;
+    const plan = this.target?.mode === "draft" ? this.draftPlan : this.plan;
     this.message.textContent = problem ?? this.previewMessage;
-    this.save.disabled = busy || !this.plan || !!problem || !this.session.connected;
+    this.save.disabled = busy || !plan || !!problem || !this.session.connected;
     this.cancel.disabled = this.saving;
     for (const input of [this.prs, this.prOrgs, this.issues, this.issueOrgs]) input.disabled = this.saving || stale;
     this.prOrgs.disabled ||= !this.prs.checked;
     this.issueOrgs.disabled ||= !this.issues.checked;
-    this.save.textContent = this.saving ? "Saving…" : this.plan?.startsCapture ? "Start capturing this site" : "Save site · keep capture paused";
+    const draftInputs = [
+      ...this.draftViews.flatMap((view) => [view.type, ...view.rules]), this.scoped, this.unscoped, this.titleSuffix,
+    ];
+    for (const input of draftInputs) input.disabled = this.saving || stale;
+    this.scopeValues.disabled = this.saving || stale || !this.scoped.checked;
+    this.save.textContent = this.saving ? "Saving…" : plan?.startsCapture ? "Start capturing this site" : "Save site · keep capture paused";
   }
 
   private updatePreview(): void {
-    if (!this.target || !this.session.config || this.saving) return;
+    if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving) return;
     this.preview.replaceChildren();
     const result = planCaptureSite(this.session.config, this.target.url, {
       pullRequests: this.prs.checked ? this.prOrgs.value : null,
@@ -178,7 +517,9 @@ export class CaptureSitePanel {
   private async commit(): Promise<void> {
     const target = this.target;
     const plan = this.plan;
-    if (!target || !plan || this.save.disabled || this.actions.isBusy()) return;
+    // A drafted site is saved only after the host re-checks the selection
+    // (check_site_draft); until that path exists, nothing is saved here.
+    if (!target || target.mode !== "starter" || !plan || this.save.disabled || this.actions.isBusy()) return;
     this.saving = true;
     this.actions.changed();
     let committed = false;

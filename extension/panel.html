@@ -61,7 +61,7 @@
         <button id="capture-site" type="button">Capture Site</button>
         <div id="capture-site-review" hidden>
           <h2 id="capture-site-heading" tabindex="-1">Review site capture</h2>
-          <p class="page-url">Development starter draft · live-tool certification is still pending.</p>
+          <p id="capture-site-source" class="page-url">Development starter draft · live-tool certification is still pending.</p>
           <div id="capture-site-github" hidden>
             <p>Choose the kinds of work to remember and the work organizations for each. Only repositories owned by the names you enter are included. Leave personal accounts out.</p>
             <div class="field">
@@ -75,8 +75,24 @@
               <input id="capture-site-issue-orgs" type="text" maxlength="1312" placeholder="acme-corp" autocomplete="off" spellcheck="false" />
             </div>
           </div>
+          <div id="capture-site-draft"></div>
+          <div id="capture-site-scope" hidden>
+            <p>This site holds many workspaces and accounts. Choose which ones Brauser remembers.</p>
+            <label id="capture-site-scoped-label" class="check-label"><input id="capture-site-scoped" type="checkbox" /> Only these workspaces or accounts</label>
+            <label id="capture-site-scope-values-label" for="capture-site-scope-values">Workspaces or accounts, separated by commas</label>
+            <input id="capture-site-scope-values" type="text" maxlength="6464" placeholder="acme" autocomplete="off" spellcheck="false" />
+            <label class="check-label"><input id="capture-site-unscoped" type="checkbox" /> Record every account in this Chrome profile</label>
+            <p class="page-url">Brauser then records every matching page from every account signed in to this Chrome profile, personal ones included. Use a separate Chrome profile for work.</p>
+          </div>
+          <div id="capture-site-title" class="field" hidden>
+            <label for="capture-site-title-suffix">Remove this ending from titles (optional)</label>
+            <p id="capture-site-title-current" class="page-url"></p>
+            <input id="capture-site-title-suffix" type="text" maxlength="512" placeholder=" · Site name" autocomplete="off" spellcheck="false" />
+          </div>
           <div id="capture-site-preview"></div>
+          <div id="capture-site-dropped"></div>
           <p id="capture-site-message" role="status" aria-live="polite"></p>
+          <button id="capture-site-advanced" type="button" class="secondary" hidden>Open advanced settings</button>
           <button id="capture-site-save" type="button" disabled>Start capturing this site</button>
           <button id="capture-site-cancel" type="button" class="secondary">Cancel</button>
         </div>
