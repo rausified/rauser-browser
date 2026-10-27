@@ -1354,8 +1354,8 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   };
   assert.equal(isConfig(config), true);
   const agent = {
-    harness_id: "claude-code", adapter: "claude_code", binary: "/usr/local/bin/claude",
-    args: ["-p", "{prompt}"], env_allow: [], timeout_secs: 120,
+    harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284",
+    timeout_secs: 600, probed_at: "2026-10-27T10:00:00Z",
   };
   assert.equal(isConfig({ ...config, agent }), true);
   for (const key of ["agent", "adapters"]) {
@@ -1366,7 +1366,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   assert.equal(isConfig({ ...config, agent_denylist: ["bank.example"] }), false);
   assert.equal(isConfig({ ...config, agent_denylist_confirmed: false }), false);
   assert.equal(isConfig({ ...config, log_incognito: false }), false);
-  assert.equal(isConfig({ ...config, agent: { ...agent, adapter: "claude-code" } }), false);
+  assert.equal(isConfig({ ...config, agent: { ...agent, harness: "claude-code" } }), false);
   // The host always sends summaries_dir, as null until a folder is chosen.
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
@@ -1387,35 +1387,22 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   assert.equal(isResponseShape({ ...result, agent_status: { ...agentStatus, state: "on" } }), false);
   assert.equal(isResponseShape({
     type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0",
-  }), true);
+  }), false);
 
-  // Harness setup: every offer key is present, nullable ones as null.
-  const offer = {
-    adapter: "claude_code", harness_id: "claude-code",
-    binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-    args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
-    env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
-  };
-  const refused = {
-    ...offer, adapter: "codex", harness_id: "codex", real_path: null,
-    version: null, env_optional: [], refusal: "codex --version output was not recognized",
-  };
-  const discovered = { type: "harnesses_discovered", offers: [offer, refused] };
+  // Discovery reports both harnesses, every key present, nullable ones as null.
+  const found = { harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284", problem: null };
+  const unusable = { harness: "codex", binary: "/usr/local/bin/codex", version: null,
+    problem: "codex --version output was not recognized" };
+  const discovered = { type: "harnesses_discovered", harnesses: [unusable, found] };
   assert.equal(isResponseShape(discovered), true);
-  assert.equal(isResponseShape({ ...discovered, offers: [] }), true);
-  assert.equal(isResponseShape({ ...discovered, offers: null }), false);
-  for (const key of Object.keys(offer)) {
-    const without = { ...offer };
+  assert.equal(isResponseShape({ ...discovered, harnesses: [] }), true);
+  assert.equal(isResponseShape({ ...discovered, harnesses: null }), false);
+  for (const key of Object.keys(found)) {
+    const without = { ...found };
     delete without[key];
-    assert.equal(isResponseShape({ ...discovered, offers: [without] }), false, key);
+    assert.equal(isResponseShape({ ...discovered, harnesses: [without] }), false, key);
   }
-  assert.equal(isResponseShape({ ...discovered, offers: [{ ...offer, adapter: "generic" }] }), false);
-  assert.equal(isResponseShape({
-    ...discovered, offers: [{ ...offer, env_optional: ["ANTHROPIC_API_KEY"] }],
-  }), false);
-  assert.equal(isResponseShape({
-    ...discovered, offers: [{ ...offer, env_optional: [{ name: "X", present: "yes" }] }],
-  }), false);
+  assert.equal(isResponseShape({ ...discovered, harnesses: [{ ...found, harness: "generic" }] }), false);
 
   // Harness setup answers config_updated; the v5 token response is gone.
   const setUp = { type: "harness_setup_confirmed", harness_token: "t", config, summary: "Harness" };

@@ -28,18 +28,14 @@ test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   assert.match(harnessFoundText("Codex", null, true), /^Found Codex\. /);
 });
 
-test("harness offer notes carry no offer id and no Codex disclosure", () => {
-  const offer = {
-    adapter: "codex", harness_id: "codex", binary: "/bin/codex",
-    real_path: "/bin/codex", version: "0.144.4", args: [], env_required: ["HOME", "PATH"],
-    env_optional: [], refusal: null,
-  };
+test("harness notes say whether the service found and can use each harness", () => {
+  const found = { harness: "codex", binary: "/bin/codex", version: "0.144.4", problem: null };
   assert.equal("CODEX_DISCLOSURE" in agent, false);
-  assert.equal(harnessOfferNote(offer), "Ready to set up.");
-  assert.equal(harnessOfferNote({ ...offer, refusal: "Codex 0.1.0 has not been reviewed" }),
-    "Cannot be set up: Codex 0.1.0 has not been reviewed.");
-  const claude = { ...offer, adapter: "claude_code", harness_id: "claude-code" };
-  assert.equal(harnessOfferNote(claude), "Ready to set up.");
+  assert.equal(harnessOfferNote(found), "Ready to set up.");
+  assert.equal(harnessOfferNote({ ...found, version: null, problem: "codex --version failed (exit 1)" }),
+    "Cannot be set up: codex --version failed (exit 1).");
+  assert.equal(harnessOfferNote({ harness: "claude", binary: null, version: null, problem: null }),
+    "Not found on the Brauser service's PATH.");
 });
 
 test("the setup warning is the exact full-access text", () => {
@@ -81,22 +77,47 @@ test("isConfig requires exactly the v6 keys", () => {
 });
 
 test("isResponseShape_accepts_new_responses_and_rejects_unknown", () => {
-  const offer = {
-    adapter: "claude_code", harness_id: "claude-code",
-    binary: "/bin/claude", real_path: "/opt/claude", version: "2.1.284", args: ["-p", "{prompt}"],
-    env_required: ["HOME", "PATH"], env_optional: [{ name: "ANTHROPIC_API_KEY", present: false }],
-    refusal: null,
-  };
-  assert.equal(isResponseShape({ type: "harnesses_discovered", offers: [offer] }), true);
+  const found = { harness: "claude", binary: "/bin/claude", version: "2.1.284", problem: null };
+  const missing = { harness: "codex", binary: null, version: null, problem: null };
+  assert.equal(isResponseShape({ type: "harnesses_discovered", harnesses: [missing, found] }), true);
+  assert.equal(isResponseShape({ type: "harnesses_discovered", offers: [found] }), false);
+  assert.equal(isResponseShape({ type: "harnesses_discovered", harnesses: [found, found, found] }), false);
+  for (const key of Object.keys(found)) {
+    const without = { ...found };
+    delete without[key];
+    assert.equal(isResponseShape({ type: "harnesses_discovered", harnesses: [without] }), false, key);
+  }
+  for (const bad of [{ ...found, harness: "claude_code" }, { ...found, refusal: null }, { ...found, version: 2 }]) {
+    assert.equal(isResponseShape({ type: "harnesses_discovered", harnesses: [bad] }), false, JSON.stringify(bad));
+  }
   assert.equal(isResponseShape({
     type: "harness_setup_confirmed", harness_token: "t", config, summary: "s",
   }), false);
   assert.equal(isResponseShape({ type: "config_updated", config, revision: "r" }), true);
+  // check_agent and its answer are gone in v6.
   assert.equal(isResponseShape({
     type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.284",
-  }), true);
-  assert.equal(isResponseShape({ type: "harness_ready", offers: [offer] }), false);
-  assert.equal(isResponseShape({ type: "agent_checked", harness_id: "claude-code" }), false);
+  }), false);
+});
+
+test("isConfig accepts the service's summary harness entry only", () => {
+  const agent = {
+    harness: "codex", binary: "/opt/homebrew/bin/codex", version: "0.144.4",
+    timeout_secs: 600, probed_at: "2026-10-27T10:00:00Z",
+  };
+  assert.equal(isConfig({ ...config, agent }), true);
+  assert.equal(isConfig({ ...config, agent: { ...agent, version: null } }), true);
+  for (const key of Object.keys(agent)) {
+    const without = { ...agent };
+    delete without[key];
+    assert.equal(isConfig({ ...config, agent: without }), false, key);
+  }
+  for (const bad of [
+    { ...agent, harness: "claude-code" }, { ...agent, timeout_secs: "600" },
+    { ...agent, env_allow: ["HOME"] }, { ...agent, harness_id: "codex" },
+  ]) {
+    assert.equal(isConfig({ ...config, agent: bad }), false, JSON.stringify(bad));
+  }
 });
 
 test("artifact list responses enforce the protocol type bound", () => {

@@ -153,19 +153,12 @@ pub struct StorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    pub harness_id: String,
-    pub adapter: HarnessAdapter,
+    pub harness: HarnessId,
     pub binary: String,
-    pub args: Vec<String>,
-    pub env_allow: Vec<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub version: Option<String>,
     pub timeout_secs: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HarnessAdapter {
-    ClaudeCode,
-    Codex,
+    pub probed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,13 +302,6 @@ pub struct WorklogRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshArtifactsRequest {
-    pub protocol_version: u32,
-    pub request_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckAgentRequest {
     pub protocol_version: u32,
     pub request_id: String,
 }
@@ -517,15 +503,6 @@ pub struct ArtifactsRefreshed {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentChecked {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub harness_id: String,
-    pub harness_version: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VisitEvent {
     pub event_id: String,
     pub url: String,
@@ -656,8 +633,9 @@ pub struct SetUpHarnessRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub expected_revision: String,
-    pub harness_id: String,
-    pub env_names: Vec<String>,
+    pub harness: HarnessId,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub timeout_secs: Option<u32>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summaries_dir: Option<String>,
 }
@@ -667,31 +645,19 @@ pub struct SetUpHarnessRequest {
 pub struct HarnessesDiscovered {
     pub protocol_version: u32,
     pub request_id: String,
-    pub offers: Vec<HarnessOffer>,
+    pub harnesses: Vec<HarnessFound>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HarnessOffer {
-    pub adapter: HarnessAdapter,
-    pub harness_id: String,
-    pub binary: String,
+pub struct HarnessFound {
+    pub harness: HarnessId,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub real_path: Option<String>,
+    pub binary: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub version: Option<String>,
-    pub args: Vec<String>,
-    pub env_required: Vec<String>,
-    pub env_optional: Vec<EnvName>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub refusal: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnvName {
-    pub name: String,
-    pub present: bool,
+    pub problem: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -893,7 +859,6 @@ pub enum Request {
     ListArtifacts(ListArtifactsRequest),
     Worklog(WorklogRequest),
     RefreshArtifacts(RefreshArtifactsRequest),
-    CheckAgent(CheckAgentRequest),
     DiscoverHarnesses(DiscoverHarnessesRequest),
     SetUpHarness(SetUpHarnessRequest),
     StartRun(StartRunRequest),
@@ -923,7 +888,6 @@ impl Request {
             Self::ListArtifacts(value) => value.protocol_version,
             Self::Worklog(value) => value.protocol_version,
             Self::RefreshArtifacts(value) => value.protocol_version,
-            Self::CheckAgent(value) => value.protocol_version,
             Self::DiscoverHarnesses(value) => value.protocol_version,
             Self::SetUpHarness(value) => value.protocol_version,
             Self::StartRun(value) => value.protocol_version,
@@ -953,7 +917,6 @@ impl Request {
             Self::ListArtifacts(value) => &value.request_id,
             Self::Worklog(value) => &value.request_id,
             Self::RefreshArtifacts(value) => &value.request_id,
-            Self::CheckAgent(value) => &value.request_id,
             Self::DiscoverHarnesses(value) => &value.request_id,
             Self::SetUpHarness(value) => &value.request_id,
             Self::StartRun(value) => &value.request_id,
@@ -985,7 +948,6 @@ pub enum Response {
     ArtifactListResult(ArtifactListResult),
     WorklogResult(WorklogResult),
     ArtifactsRefreshed(ArtifactsRefreshed),
-    AgentChecked(AgentChecked),
     HarnessesDiscovered(HarnessesDiscovered),
     RunStarted(RunStarted),
     RunFetched(RunFetched),
@@ -1013,7 +975,6 @@ impl Response {
             Self::ArtifactListResult(value) => value.protocol_version,
             Self::WorklogResult(value) => value.protocol_version,
             Self::ArtifactsRefreshed(value) => value.protocol_version,
-            Self::AgentChecked(value) => value.protocol_version,
             Self::HarnessesDiscovered(value) => value.protocol_version,
             Self::RunStarted(value) => value.protocol_version,
             Self::RunFetched(value) => value.protocol_version,
@@ -1041,7 +1002,6 @@ impl Response {
             Self::ArtifactListResult(value) => &value.request_id,
             Self::WorklogResult(value) => &value.request_id,
             Self::ArtifactsRefreshed(value) => &value.request_id,
-            Self::AgentChecked(value) => &value.request_id,
             Self::HarnessesDiscovered(value) => &value.request_id,
             Self::RunStarted(value) => &value.request_id,
             Self::RunFetched(value) => &value.request_id,

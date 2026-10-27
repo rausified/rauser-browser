@@ -44,6 +44,9 @@ const RELAUNCH_AFTER: Duration = Duration::from_secs(1);
 /// Run requests are answered from records on disk; anything slower than
 /// this means the service is stuck, and the panel can retry.
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Harness setup waits out detection and the probe; the settings page
+/// gives up at two minutes.
+const SETUP_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(115);
 
 /// What asking launchd (or a test seam) to start the service did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,11 +236,15 @@ impl ServiceLink {
 /// Send one request and read its correlated response.
 fn exchange(stream: &mut UnixStream, request: &Request) -> Result<Response, ServiceError> {
     let unavailable = |_| ServiceError::Unavailable(NO_ANSWER.into());
+    let timeout = match request {
+        Request::SetUpHarness(_) => SETUP_EXCHANGE_TIMEOUT,
+        _ => EXCHANGE_TIMEOUT,
+    };
     stream
-        .set_read_timeout(Some(EXCHANGE_TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .map_err(unavailable)?;
     stream
-        .set_write_timeout(Some(EXCHANGE_TIMEOUT))
+        .set_write_timeout(Some(timeout))
         .map_err(unavailable)?;
     write_request(stream, request)
         .map_err(|error| ServiceError::Protocol(format!("sending to the service: {error:#}")))?;

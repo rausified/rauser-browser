@@ -90,8 +90,14 @@ Removed in version 6:
 - The AI denylist and incognito flag: `ConfigSnapshot.agent_denylist`,
   `agent_denylist_confirmed`, and `log_incognito`, which the host now refuses
   as unknown keys. `AgentState` drops `denylist_unconfirmed`, so a harness
-  committed by setup is enough for `ready`. `check_agent` carries no `url`, and
-  `agent_checked` no `url_allowed`.
+  committed by setup is enough for `ready`.
+- The readiness check `check_agent` and its `agent_checked` answer; settings
+  reads `agent_status` from `config_result`, and the service checks a run
+  when it starts.
+- The lockdown harness entry: `AgentConfig.harness_id`, `adapter`, `args`, and
+  `env_allow`, with `HarnessAdapter` and `EnvName`, and `HarnessOffer`. A v5
+  TOML `[agent]` table and `[harness_record]` load as not set up and are
+  dropped on the next save.
 - The harness setup dialog and its token: `confirm_harness_setup`,
   `harness_setup_confirmed`, `update_config.harness_token`,
   `HarnessOffer.offer_id`, and `discover_harnesses.expected_revision`.
@@ -101,11 +107,15 @@ Removed in version 6:
 
 Added in version 6:
 
-- `set_up_harness` names a detected `harness_id` with `expected_revision`,
-  `env_names`, and `summaries_dir`. The host detects that harness again, runs
-  one test prompt, and commits it, answering `config_updated`. A failed test
-  run is `invalid_config` and changes nothing; `update_config` still cannot
-  set a harness entry.
+- `set_up_harness` names a `harness` (`HarnessId`) with `expected_revision`,
+  `timeout_secs` (60 to 3600, `null` for 600), and `summaries_dir`. The
+  native host forwards it to the Brauser service, which detects that harness
+  on its own `PATH`, runs one probe prompt through its real invocation, and
+  commits it, answering `config_updated`. A failed probe is `invalid_config`
+  and changes nothing; `update_config` still cannot set a harness entry.
+- `AgentConfig` is the service's summary harness: `harness`, the `binary` it
+  found, its `version` (`null` when unreadable), `timeout_secs`, and
+  `probed_at`. TOML keeps it in a `[summarizer]` table.
 - `StorageConfig.knowledge_base_dir`, required and nullable: the absolute
   folder a summary agent reads as its knowledge base, with `null` meaning the
   notes folder. `choose_folder` now names a `purpose` (`notes_folder` or
@@ -188,17 +198,19 @@ source. `get_artifact`, `list_artifacts`, and `worklog` expose bounded derived
 index views; `refresh_artifacts` runs the owned-file regeneration pass and
 returns bounded conflict paths for unrelated occupants it did not replace.
 
-Harness setup is two messages and has no native dialog. `discover_harnesses`
-returns `harnesses_discovered` with at most eight offers. Each offer has its
-`harness_id`, the binary the host found, its resolved `real_path`, `version`,
-argument template, the environment names it requires, and optional names with
-a `present` flag; values are never sent. A refused offer (an unsafe path, for
-example) carries a `refusal`. `set_up_harness` names one `harness_id`, the
-optional environment names to pass through, and `summaries_dir` (`null` keeps
-the current folder or uses `summaries`). The host rediscovers that harness,
-re-checks the binary's identity, runs one short test prompt, and only when it
-passes commits the harness entry at `expected_revision`. The extension never
-supplies a binary path.
+Harness setup is two messages, answered by the Brauser service (the native
+host forwards them; off macOS they answer `service_unavailable`), and has no
+native dialog. `discover_harnesses` returns `harnesses_discovered` with both
+harnesses, `codex` then `claude`, as found with the service's `PATH` and run
+environment: the `binary` found (`null` when it is not), its `version`, and a
+`problem` when it was found but cannot be used. Any well-formed version is
+accepted. `set_up_harness` names one `harness`, `timeout_secs`, and
+`summaries_dir` (`null` keeps the current folder or uses `summaries`). The
+service detects that harness again, runs one probe prompt through the real
+invocation in the knowledge base folder with its environment plus
+`agent.env`, and only when the answer contains "ok" commits the harness entry
+at `expected_revision`, checked again under the config lock. The extension
+never supplies a binary path or arguments.
 
 `choose_folder` opens the native OS directory picker for one `purpose`. A
 successful `folder_chosen` returns a canonical path and a five-minute,

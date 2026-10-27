@@ -996,21 +996,17 @@ test("a notes folder change keeps the chosen knowledge base folder", async () =>
   assert.equal(lastUpdate().picker_token, "notes");
 });
 
-const CLAUDE_OFFER = {
-  adapter: "claude_code", harness_id: "claude-code",
-  binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-  args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
-  env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
-};
+const CLAUDE_FOUND = { harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284", problem: null };
+const CODEX_MISSING = { harness: "codex", binary: null, version: null, problem: null };
 
 test("harness setup sends set_up_harness and no confirmation", async () => {
   const agent = {
-    harness_id: "claude-code", adapter: "claude_code", binary: CLAUDE_OFFER.binary,
-    args: CLAUDE_OFFER.args, env_allow: ["HOME", "PATH", "ANTHROPIC_API_KEY"], timeout_secs: 120,
+    harness: "claude", binary: CLAUDE_FOUND.binary, version: "2.1.284",
+    timeout_secs: 600, probed_at: "2026-10-27T10:00:00Z",
   };
   const state = install({
     host: {
-      discover_harnesses: () => ({ type: "harnesses_discovered", offers: [CLAUDE_OFFER] }),
+      discover_harnesses: () => ({ type: "harnesses_discovered", harnesses: [CODEX_MISSING, CLAUDE_FOUND] }),
       set_up_harness: (request, current) => {
         current.config = {
           ...current.config, agent,
@@ -1036,11 +1032,11 @@ test("harness setup sends set_up_harness and no confirmation", async () => {
   const discover = state.requests.find((request) => request.type === "discover_harnesses");
   assert.equal("expected_revision" in discover, false);
   const setUp = state.requests.find((request) => request.type === "set_up_harness");
-  assert.equal(setUp.harness_id, "claude-code");
-  assert.equal(setUp.expected_revision, "1");
-  assert.deepEqual(setUp.env_names, ["ANTHROPIC_API_KEY"]);
-  assert.equal(setUp.summaries_dir, "summaries");
-  assert.equal(state.config.agent.harness_id, "claude-code");
+  const { type: _type, protocol_version: _version, request_id: _id, ...fields } = setUp;
+  assert.deepEqual(fields, {
+    expected_revision: "1", harness: "claude", timeout_secs: null, summaries_dir: "summaries",
+  });
+  assert.equal(state.config.agent.harness, "claude");
 });
 
 test("settings shows the exact setup warning", async () => {

@@ -15,6 +15,7 @@ pub mod prompt;
 pub mod queue;
 pub mod record;
 pub mod server;
+pub mod setup;
 pub mod supervisor;
 
 use std::time::Duration;

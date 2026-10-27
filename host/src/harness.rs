@@ -1,7 +1,9 @@
-//! AI harness discovery and setup checks (DESIGN §7.1). Native harness setup
-//! calls these. Every search and
-//! process run takes an injected [`HarnessEnv`], so tests never read the
-//! host's own `PATH` or environment.
+//! AI harness detection (spec §6.1). The service's harness setup calls
+//! [`detect`] with the search path and child environment it runs harnesses
+//! with, so tests never read the host's own `PATH` or environment. The
+//! lockdown checks below it (reviewed argument templates, `--help` and
+//! feature checks, a cleared environment, and host-owned work directories)
+//! have no caller left; they go in the next change.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -11,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::HarnessAdapter;
+use brauser_protocol::HarnessId;
 use sha2::{Digest, Sha256};
 
 use crate::brand::APP_NAME;
@@ -178,31 +180,43 @@ pub fn probe_limits(timeout_secs: u32) -> Limits {
     }
 }
 
-/// Where harness setup looks and what a harness run may inherit. There is
-/// deliberately no `Debug`: `vars` holds the host's environment values.
-#[derive(Clone)]
+/// Where harness detection looks.
+#[derive(Debug, Clone)]
 pub struct HarnessEnv {
+    pub search_path: OsString,
+    pub home: Option<PathBuf>,
+}
+
+impl HarnessEnv {
+    /// The search a run with this child environment gets: its `PATH` plus
+    /// `$HOME/.local/bin`, as the runners look their programs up.
+    pub fn from_run_env(run_env: &[(OsString, OsString)]) -> Self {
+        let get = |name: &str| {
+            run_env
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        let home = get("HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute());
+        Self {
+            search_path: search_path(get("PATH").as_deref(), home.as_deref()),
+            home,
+        }
+    }
+}
+
+/// What the lockdown checks search and pass on. There is deliberately no
+/// `Debug`: `vars` holds environment values.
+#[derive(Clone)]
+pub struct LockdownEnv {
     pub search_path: OsString,
     pub home: Option<PathBuf>,
     pub vars: BTreeMap<String, OsString>,
     /// Host-owned; each run gets a fresh `run` directory inside it.
     pub work_root: PathBuf,
-}
-
-impl HarnessEnv {
-    pub fn from_process(config_dir: &Path) -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|home| home.is_absolute());
-        Self {
-            search_path: search_path(std::env::var_os("PATH").as_deref(), home.as_deref()),
-            home,
-            vars: std::env::vars_os()
-                .filter_map(|(name, value)| Some((name.into_string().ok()?, value)))
-                .collect(),
-            work_root: config_dir.join(WORK_ROOT_NAME),
-        }
-    }
 }
 
 /// The directory under the config directory that holds per-run work
@@ -245,7 +259,7 @@ impl Adapter {
         }
     }
 
-    fn program(self) -> &'static str {
+    pub(crate) fn program(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
@@ -293,20 +307,20 @@ impl Adapter {
     }
 }
 
-impl From<HarnessAdapter> for Adapter {
-    fn from(value: HarnessAdapter) -> Self {
+impl From<Adapter> for HarnessId {
+    fn from(value: Adapter) -> Self {
         match value {
-            HarnessAdapter::ClaudeCode => Self::ClaudeCode,
-            HarnessAdapter::Codex => Self::Codex,
+            Adapter::ClaudeCode => Self::Claude,
+            Adapter::Codex => Self::Codex,
         }
     }
 }
 
-impl From<Adapter> for HarnessAdapter {
-    fn from(value: Adapter) -> Self {
+impl From<HarnessId> for Adapter {
+    fn from(value: HarnessId) -> Self {
         match value {
-            Adapter::ClaudeCode => Self::ClaudeCode,
-            Adapter::Codex => Self::Codex,
+            HarnessId::Claude => Self::ClaudeCode,
+            HarnessId::Codex => Self::Codex,
         }
     }
 }
@@ -438,7 +452,7 @@ pub fn required_env(candidate: &Candidate) -> Vec<String> {
         .collect()
 }
 
-pub fn proposed_env_names(adapter: Adapter, env: &HarnessEnv) -> Vec<EnvName> {
+pub fn proposed_env_names(adapter: Adapter, env: &LockdownEnv) -> Vec<EnvName> {
     known_env_names(adapter)
         .map(|name| EnvName {
             name: name.to_owned(),
@@ -466,7 +480,7 @@ pub struct Candidate {
 /// Look for each known harness on the injected search path and check it.
 /// This runs `--version` and `--help` only (for Codex, `exec --help` and
 /// `features list`), with `HOME`, `PATH`, and the user's `CODEX_HOME`.
-pub fn discover(env: &HarnessEnv) -> Vec<Candidate> {
+pub fn discover(env: &LockdownEnv) -> Vec<Candidate> {
     Adapter::ALL
         .into_iter()
         .filter_map(|adapter| discover_adapter(adapter, env))
@@ -475,14 +489,14 @@ pub fn discover(env: &HarnessEnv) -> Vec<Candidate> {
 
 /// [`discover`] for the one harness named `harness_id`, checking only it.
 /// `None` when no known harness has that ID or it is not on the search path.
-pub fn rediscover(env: &HarnessEnv, harness_id: &str) -> Option<Candidate> {
+pub fn rediscover(env: &LockdownEnv, harness_id: &str) -> Option<Candidate> {
     let adapter = Adapter::ALL
         .into_iter()
         .find(|adapter| adapter.harness_id() == harness_id)?;
     discover_adapter(adapter, env)
 }
 
-fn discover_adapter(adapter: Adapter, env: &HarnessEnv) -> Option<Candidate> {
+fn discover_adapter(adapter: Adapter, env: &LockdownEnv) -> Option<Candidate> {
     let found_at = find_on_path(&env.search_path, adapter.program())?;
     let mut candidate = Candidate {
         adapter,
@@ -521,7 +535,7 @@ fn executable(metadata: &fs::Metadata) -> bool {
     metadata.is_file()
 }
 
-fn examine(candidate: &mut Candidate, env: &HarnessEnv) -> Result<(), String> {
+fn examine(candidate: &mut Candidate, env: &LockdownEnv) -> Result<(), String> {
     let adapter = candidate.adapter;
     let identity = identity(&candidate.found_at)
         .map_err(|_| format!("{} could not be read", candidate.found_at.display()))?;
@@ -596,6 +610,93 @@ fn examine(candidate: &mut Candidate, env: &HarnessEnv) -> Result<(), String> {
     Ok(())
 }
 
+/// One supported harness as [`detect`] found it. `binary` is where it was
+/// found on the search path, `None` when it was not; `problem` is
+/// host-authored text saying why a harness that was found cannot be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Detected {
+    pub adapter: Adapter,
+    pub binary: Option<PathBuf>,
+    pub version: Option<String>,
+    pub problem: Option<String>,
+}
+
+/// Look for each supported harness on `env`'s search path, Codex first, and
+/// read its version. Only `--version` runs, with the `HOME`, `PATH`, and
+/// `CODEX_HOME` of `run_env`. Any well-formed version is accepted.
+pub fn detect(env: &HarnessEnv, run_env: &[(OsString, OsString)]) -> Vec<Detected> {
+    [Adapter::Codex, Adapter::ClaudeCode]
+        .into_iter()
+        .map(|adapter| {
+            let Some(binary) = find_on_path(&env.search_path, adapter.program()) else {
+                return Detected {
+                    adapter,
+                    binary: None,
+                    version: None,
+                    problem: None,
+                };
+            };
+            let (version, problem) = match installed_version(adapter, &binary, run_env) {
+                Ok(version) => (Some(version), None),
+                Err(problem) => (None, Some(problem)),
+            };
+            Detected {
+                adapter,
+                binary: Some(binary),
+                version,
+                problem,
+            }
+        })
+        .collect()
+}
+
+/// Check the install `found` resolves to, then run its `--version`.
+fn installed_version(
+    adapter: Adapter,
+    found: &Path,
+    run_env: &[(OsString, OsString)],
+) -> Result<String, String> {
+    let real =
+        fs::canonicalize(found).map_err(|_| format!("{} could not be read", found.display()))?;
+    check_install(&real)?;
+    let program = adapter.program();
+    let command = format!("{program} --version");
+    let passed: Vec<(OsString, OsString)> = run_env
+        .iter()
+        .filter(|(name, _)| {
+            name.to_str().is_some_and(|name| {
+                REQUIRED_ENV.contains(&name) || adapter.home_names().contains(&name)
+            })
+        })
+        .cloned()
+        .collect();
+    let output = run_limited(
+        &real,
+        &["--version".to_owned()],
+        &passed,
+        None,
+        &[],
+        VERSION_LIMITS,
+    )
+    .map_err(|error| {
+        eprintln!("{APP_NAME}: {command} could not run: {error:#}");
+        format!("{command} could not run")
+    })?;
+    log_stderr(&command, &output.stderr);
+    match output.status {
+        RunStatus::Exited(0) => {}
+        RunStatus::Exited(code) => return Err(format!("{command} failed (exit {code})")),
+        RunStatus::Signaled => return Err(format!("{command} failed (killed by a signal)")),
+        RunStatus::TimedOut => return Err(format!("{command} timed out")),
+        RunStatus::OutputTooLarge => return Err(format!("{command} produced too much output")),
+    }
+    match adapter {
+        Adapter::ClaudeCode => parse_claude_version(&output.stdout),
+        Adapter::Codex => parse_codex_version(&output.stdout),
+    }
+    .ok_or_else(|| format!("{command} output was not recognized"))
+}
+
 /// The real path must be an executable regular file that neither it nor
 /// its directory lets another user replace.
 #[cfg(unix)]
@@ -631,7 +732,7 @@ fn run_check(
     program: &str,
     argv: &[&str],
     env_allow: &[String],
-    env: &HarnessEnv,
+    env: &LockdownEnv,
     limits: Limits,
 ) -> Result<Vec<u8>, String> {
     // Named by its subcommand only; the --disable pairs would crowd the error.
@@ -883,7 +984,28 @@ pub fn run_bounded(
     real_path: &Path,
     argv: &[String],
     env_allow: &[String],
-    env: &HarnessEnv,
+    env: &LockdownEnv,
+    stdin: &[u8],
+    limits: Limits,
+) -> Result<RunOutput> {
+    let run_dir = WorkDir::new(&env.work_root, "run")?;
+    let vars: Vec<(OsString, OsString)> = env_allow
+        .iter()
+        .filter_map(|name| Some((OsString::from(name), env.vars.get(name)?.clone())))
+        .collect();
+    run_limited(real_path, argv, &vars, Some(run_dir.path()), stdin, limits)
+}
+
+/// Run `real_path` directly (no shell) with exactly `env`, in `cwd` (or the
+/// caller's own directory), with capped output and a deadline. On timeout or
+/// overflow the whole process group is killed; it is also killed after a
+/// normal exit so no background child outlives the run.
+#[cfg(unix)]
+fn run_limited(
+    real_path: &Path,
+    argv: &[String],
+    env: &[(OsString, OsString)],
+    cwd: Option<&Path>,
     stdin: &[u8],
     limits: Limits,
 ) -> Result<RunOutput> {
@@ -901,12 +1023,11 @@ pub fn run_bounded(
     const POLL: Duration = Duration::from_millis(10);
     const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-    let run_dir = WorkDir::new(&env.work_root, "run")?;
     let mut command = Command::new(real_path);
     command
         .args(argv)
         .env_clear()
-        .current_dir(run_dir.path())
+        .envs(env.iter().map(|(name, value)| (name, value)))
         .stdin(if stdin.is_empty() {
             Stdio::null()
         } else {
@@ -915,10 +1036,8 @@ pub fn run_bounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    for name in env_allow {
-        if let Some(value) = env.vars.get(name) {
-            command.env(name, value);
-        }
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
     }
     let mut child = command
         .spawn()
@@ -1022,7 +1141,19 @@ pub fn run_bounded(
     _real_path: &Path,
     _argv: &[String],
     _env_allow: &[String],
-    _env: &HarnessEnv,
+    _env: &LockdownEnv,
+    _stdin: &[u8],
+    _limits: Limits,
+) -> Result<RunOutput> {
+    bail!(UNSUPPORTED_PLATFORM)
+}
+
+#[cfg(not(unix))]
+fn run_limited(
+    _real_path: &Path,
+    _argv: &[String],
+    _env: &[(OsString, OsString)],
+    _cwd: Option<&Path>,
     _stdin: &[u8],
     _limits: Limits,
 ) -> Result<RunOutput> {
@@ -1207,7 +1338,7 @@ impl fmt::Display for ProbeFailure {
 pub fn probe(
     candidate: &Candidate,
     env_allow: &[String],
-    env: &HarnessEnv,
+    env: &LockdownEnv,
     timeout_secs: u32,
 ) -> Result<(), ProbeFailure> {
     probe_with_limits(candidate, env_allow, env, probe_limits(timeout_secs))
@@ -1216,7 +1347,7 @@ pub fn probe(
 fn probe_with_limits(
     candidate: &Candidate,
     env_allow: &[String],
-    env: &HarnessEnv,
+    env: &LockdownEnv,
     limits: Limits,
 ) -> Result<(), ProbeFailure> {
     if let Some(refusal) = &candidate.refusal {
@@ -1377,8 +1508,8 @@ mod tests {
     pub(crate) const CODEX_FEATURES: &str =
         include_str!("../tests/fixtures/harness/codex_features.txt");
 
-    fn env_with(vars: &[(&str, &str)]) -> HarnessEnv {
-        HarnessEnv {
+    fn env_with(vars: &[(&str, &str)]) -> LockdownEnv {
+        LockdownEnv {
             search_path: OsString::new(),
             home: None,
             vars: vars
@@ -1794,7 +1925,7 @@ pub(crate) mod fake {
     use std::path::{Path, PathBuf};
 
     use super::tests::{CLAUDE_HELP, CODEX_EXEC_HELP, features_after_disables};
-    use super::{HarnessEnv, codex_args, disabled_features};
+    use super::{LockdownEnv, codex_args, disabled_features};
 
     pub(crate) const PASSING_BODY: &str = r#"cat > "$log/stdin.log"
 printf '%s\n' '{"type":"system","subtype":"init","tools":[]}' '{"type":"result","subtype":"success","is_error":false,"result":"OK"}'"#;
@@ -1918,7 +2049,7 @@ fi
             self.install("codex", version, "", &body)
         }
 
-        pub(crate) fn env(&self, extra: &[(&str, &str)]) -> HarnessEnv {
+        pub(crate) fn env(&self, extra: &[(&str, &str)]) -> LockdownEnv {
             let home = self.path("home");
             let mut vars = BTreeMap::from([
                 ("HOME".to_owned(), OsString::from(&home)),
@@ -1927,7 +2058,7 @@ fi
             for (name, value) in extra {
                 vars.insert((*name).to_owned(), OsString::from(value));
             }
-            HarnessEnv {
+            LockdownEnv {
                 search_path: self.path("bin").into_os_string(),
                 home: Some(home),
                 vars,
@@ -1965,7 +2096,7 @@ mod process_tests {
     use super::tests::CLAUDE_HELP;
     use super::*;
 
-    fn claude_candidate(env: &HarnessEnv) -> Candidate {
+    fn claude_candidate(env: &LockdownEnv) -> Candidate {
         let candidate = discover(env)
             .into_iter()
             .find(|candidate| candidate.adapter == Adapter::ClaudeCode)
@@ -1998,7 +2129,7 @@ mod process_tests {
         // No search path means nothing is found, even with a real harness
         // installed for this user. Relative entries are never searched.
         for search_path in ["", "bin"] {
-            let empty = HarnessEnv {
+            let empty = LockdownEnv {
                 search_path: OsString::from(search_path),
                 ..fake.env(&[])
             };
@@ -2078,7 +2209,7 @@ mod process_tests {
         );
     }
 
-    fn codex_candidate(env: &HarnessEnv) -> Candidate {
+    fn codex_candidate(env: &LockdownEnv) -> Candidate {
         discover(env)
             .into_iter()
             .find(|candidate| candidate.adapter == Adapter::Codex)
@@ -2528,7 +2659,7 @@ printf '%s\n' '{{"type":"thread.started","thread_id":"t"}}' '{{"type":"turn.star
         let script = fake.claude(PASSING_BODY);
         let elsewhere = fake.path("elsewhere");
         fs::create_dir(&elsewhere).unwrap();
-        let env = HarnessEnv {
+        let env = LockdownEnv {
             work_root: fake.path("link"),
             ..fake.env(&[])
         };

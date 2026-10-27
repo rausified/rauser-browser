@@ -1,5 +1,5 @@
 import type {
-  AdapterDocument, FolderPurpose, HarnessAdapter, HarnessOffer, StorageConfig,
+  AdapterDocument, FolderPurpose, HarnessFound, HarnessId, StorageConfig,
 } from "../protocol/ts/generated.js";
 import { isHttpUrl, type WorkerStatus } from "./model.js";
 import {
@@ -14,6 +14,7 @@ import {
   worker,
 } from "./settings.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { APP_NAME } from "./brand.js";
 import {
   SETUP_WARNING,
   agentStateText,
@@ -75,11 +76,10 @@ const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
 let picker: { path: string; token: string } | null = null;
 let busy = false;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-// What Detect harnesses last found. Setup names one by harness_id, and the
-// host detects and checks it again before running anything.
-let offers: HarnessOffer[] = [];
-let selectedHarnessId: string | null = null;
-const envChoices = new Map<string, boolean>();
+// What Detect harnesses last found. Setup names one harness, and the
+// service detects and probes it again before committing anything.
+let offers: HarnessFound[] = [];
+let selectedHarnessId: HarnessId | null = null;
 let summariesEdited = false;
 type AdapterEdit =
   | { kind: "new" }
@@ -187,30 +187,28 @@ function updateControls(): void {
   for (const input of offersList.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
-  for (const input of envList.querySelectorAll<HTMLInputElement>("input")) {
-    input.disabled = !idle || input.dataset.required === "true";
-  }
 }
 
-function harnessName(adapter: HarnessAdapter): string {
-  return adapter === "claude_code" ? "Claude Code" : "Codex";
+function harnessName(harness: HarnessId): string {
+  return harness === "claude" ? "Claude Code" : "Codex";
+}
+
+/** A harness the service found and can use. */
+function usable(found: HarnessFound): boolean {
+  return found.binary !== null && found.problem === null;
 }
 
 function clearOffers(): void {
   offers = [];
   selectedHarnessId = null;
-  envChoices.clear();
 }
 
-function selectedOffer(): HarnessOffer | null {
-  return offers.find((offer) => offer.refusal === null && offer.harness_id === selectedHarnessId) ?? null;
+function selectedOffer(): HarnessFound | null {
+  return offers.find((offer) => usable(offer) && offer.harness === selectedHarnessId) ?? null;
 }
 
-function selectOffer(harnessId: string | null): void {
-  selectedHarnessId = harnessId;
-  envChoices.clear();
-  // Credentials the host has are proposed; the user can untick any of them.
-  for (const env of selectedOffer()?.env_optional ?? []) envChoices.set(env.name, env.present);
+function selectOffer(harness: HarnessId | null): void {
+  selectedHarnessId = harness;
 }
 
 function renderAgent(): void {
@@ -231,27 +229,26 @@ function renderAgent(): void {
     offersList.append(item);
   }
   for (const [index, offer] of offers.entries()) {
-    const ready = offer.refusal === null;
+    const ready = usable(offer);
     const item = document.createElement("li");
-    item.dataset.adapter = offer.adapter;
+    item.dataset.harness = offer.harness;
     item.dataset.ready = String(ready);
-    if (offer.real_path !== null) item.dataset.realPath = offer.real_path;
+    if (offer.binary !== null) item.dataset.binary = offer.binary;
     const label = document.createElement("label");
     const radio = document.createElement("input");
     radio.type = "radio";
     radio.name = "harness-offer";
     radio.id = `harness-offer-${index}`;
-    radio.value = offer.harness_id;
+    radio.value = offer.harness;
     radio.dataset.ready = String(ready);
-    radio.checked = ready && offer.harness_id === selectedHarnessId;
+    radio.checked = ready && offer.harness === selectedHarnessId;
     radio.addEventListener("change", () => {
-      selectOffer(offer.harness_id);
+      selectOffer(offer.harness);
       renderConfig();
     });
     const version = offer.version ? ` ${offer.version}` : "";
-    const runs = offer.real_path && offer.real_path !== offer.binary ? ` (runs ${offer.real_path})` : "";
     const text = document.createElement("span");
-    text.textContent = `${harnessName(offer.adapter)}${version}: ${offer.binary}${runs}`;
+    text.textContent = `${harnessName(offer.harness)}${version}${offer.binary ? `: ${offer.binary}` : ""}`;
     label.append(radio, text);
     item.append(label);
     const note = document.createElement("small");
@@ -260,35 +257,10 @@ function renderAgent(): void {
     offersList.append(item);
   }
 
-  envList.replaceChildren();
-  const offer = selectedOffer();
-  if (!offer) {
-    const item = document.createElement("li");
-    item.textContent = "Detect a harness first.";
-    envList.append(item);
-  } else {
-    const names = [
-      ...offer.env_required.map((name) => ({ name, required: true, present: true })),
-      ...offer.env_optional.map((env) => ({ name: env.name, required: false, present: env.present })),
-    ];
-    for (const env of names) {
-      const item = document.createElement("li");
-      const label = document.createElement("label");
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.dataset.env = env.name;
-      box.dataset.required = String(env.required);
-      box.checked = env.required || envChoices.get(env.name) === true;
-      box.addEventListener("change", () => { envChoices.set(env.name, box.checked); });
-      const text = document.createElement("span");
-      text.textContent = env.required
-        ? `${env.name} (always passed)`
-        : `${env.name} (${env.present ? "set" : "not set"} in the native host)`;
-      label.append(box, text);
-      item.append(label);
-      envList.append(item);
-    }
-  }
+  // Runs get the service's environment plus agent.env; nothing is chosen here.
+  const item = document.createElement("li");
+  item.textContent = `Runs get the ${APP_NAME} service's environment plus the names in agent.env.`;
+  envList.replaceChildren(item);
 }
 
 function objectValue(value: unknown): AdapterObject | null {
@@ -958,14 +930,14 @@ async function detectHarnesses(): Promise<void> {
   updateControls();
   try {
     offers = await session.discoverHarnesses();
-    const ready = offers.find((offer) => offer.refusal === null);
-    selectOffer(ready?.harness_id ?? null);
+    const ready = offers.find(usable);
+    selectOffer(ready?.harness ?? null);
     if (ready) {
-      show(harnessFoundText(harnessName(ready.adapter), ready.version, !!session.config?.storage));
+      show(harnessFoundText(harnessName(ready.harness), ready.version, !!session.config?.storage));
     } else {
-      show(offers.length
+      show(offers.some((offer) => offer.binary !== null)
         ? "No harness found here can be set up yet; see the reasons below."
-        : "No supported harness was found on the native host's PATH.", true);
+        : `No supported harness was found on the ${APP_NAME} service's PATH.`, true);
     }
   } catch (error) {
     clearOffers();
@@ -988,14 +960,13 @@ async function setupHarness(): Promise<void> {
     show("Enter a summaries folder name.", true);
     return;
   }
-  const envNames = offer.env_optional.filter((env) => envChoices.get(env.name)).map((env) => env.name);
   busy = true;
   updateControls();
   try {
     await withConfigMutationLock(() =>
-      session.setupHarness(offer.harness_id, envNames, summaries));
+      session.setupHarness(offer.harness, null, summaries));
     summariesEdited = false;
-    show(`${harnessName(offer.adapter)} is set up. ${agentStateText(session.agentStatus)}`);
+    show(`${harnessName(offer.harness)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
     show(`Harness setup did not finish: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);

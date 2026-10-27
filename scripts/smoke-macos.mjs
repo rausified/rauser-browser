@@ -1619,9 +1619,6 @@ async function run() {
           good[0].env.join(",") === "ANTHROPIC_API_KEY,HOME,PATH",
         `Expected one passing test run with the chosen env names; got ${JSON.stringify(probes)}`);
         requireCondition(!(await readFile(configPath, "utf8")).includes(secret), "config.toml holds an environment value");
-        const checked = await agentRequest({ type: "check_agent" });
-        requireCondition(checked.type === "agent_checked" && checked.harness_version === "2.1.284" &&
-          !("url_allowed" in checked), `check_agent answered ${JSON.stringify(checked)}`);
       });
 
       // Codex runs under the user's own HOME (and CODEX_HOME when set).

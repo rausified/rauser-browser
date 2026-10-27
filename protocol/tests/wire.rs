@@ -243,38 +243,59 @@ fn with_agent(agent: &str) -> String {
 }
 
 #[test]
-fn agent_config_rejects_unknown_fields() {
-    let agent = r#"{"harness_id":"claude-code","adapter":"claude_code","binary":"/usr/local/bin/claude","args":["-p","{prompt}"],"env_allow":["HOME"],"timeout_secs":120}"#;
+fn agent_config_requires_every_key_and_rejects_unknown_fields() {
+    let agent = r#"{"harness":"claude","binary":"/usr/local/bin/claude","version":"2.1.284","timeout_secs":600,"probed_at":"2026-10-27T10:00:00Z"}"#;
     assert!(serde_json::from_str::<Request>(&with_agent(agent)).is_ok());
+    let unknown_version = agent.replace(r#""version":"2.1.284""#, r#""version":null"#);
+    assert!(serde_json::from_str::<Request>(&with_agent(&unknown_version)).is_ok());
+    for key in [
+        r#""binary":"/usr/local/bin/claude","#,
+        r#""version":"2.1.284","#,
+        r#""timeout_secs":600,"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Request>(&with_agent(&agent.replace(key, ""))).is_err(),
+            "{key}"
+        );
+    }
     let extra = agent.replace(
-        r#""timeout_secs":120"#,
-        r#""timeout_secs":120,"stdin":"page""#,
+        r#""timeout_secs":600"#,
+        r#""timeout_secs":600,"args":["-p"]"#,
     );
     assert!(serde_json::from_str::<Request>(&with_agent(&extra)).is_err());
 }
 
 #[test]
-fn harness_adapter_rejects_hyphenated_value() {
-    let agent = r#"{"harness_id":"claude-code","adapter":"claude-code","binary":"/usr/local/bin/claude","args":[],"env_allow":[],"timeout_secs":120}"#;
-    assert!(serde_json::from_str::<Request>(&with_agent(agent)).is_err());
+fn agent_config_rejects_the_v5_harness_names() {
+    for harness in ["claude_code", "claude-code"] {
+        let agent = format!(
+            r#"{{"harness":"{harness}","binary":"/usr/local/bin/claude","version":null,"timeout_secs":600,"probed_at":"2026-10-27T10:00:00Z"}}"#
+        );
+        assert!(
+            serde_json::from_str::<Request>(&with_agent(&agent)).is_err(),
+            "{harness}"
+        );
+    }
 }
 
 #[test]
-fn check_agent_carries_no_url() {
-    let plain = r#"{"type":"check_agent","protocol_version":6,"request_id":"r1"}"#;
-    assert!(serde_json::from_str::<Request>(plain).is_ok());
-    let with_url = r#"{"type":"check_agent","protocol_version":6,"request_id":"r1","url":null}"#;
-    assert!(serde_json::from_str::<Request>(with_url).is_err());
+fn v6_retires_check_agent() {
+    let check = r#"{"type":"check_agent","protocol_version":6,"request_id":"r1"}"#;
+    assert!(serde_json::from_str::<Request>(check).is_err());
+    let checked = r#"{"type":"agent_checked","protocol_version":6,"request_id":"r1","harness_id":"claude-code","harness_version":"2.1.284"}"#;
+    assert!(serde_json::from_str::<Response>(checked).is_err());
 }
 
 #[test]
 fn set_up_harness_requires_every_key() {
-    let full = r#"{"type":"set_up_harness","protocol_version":6,"request_id":"r1","expected_revision":"missing","harness_id":"claude-code","env_names":["HOME"],"summaries_dir":null}"#;
+    let full = r#"{"type":"set_up_harness","protocol_version":6,"request_id":"r1","expected_revision":"missing","harness":"claude","timeout_secs":null,"summaries_dir":null}"#;
     assert!(serde_json::from_str::<Request>(full).is_ok());
+    let timed = full.replace(r#""timeout_secs":null"#, r#""timeout_secs":900"#);
+    assert!(serde_json::from_str::<Request>(&timed).is_ok());
     for key in [
         r#","expected_revision":"missing""#,
-        r#","harness_id":"claude-code""#,
-        r#","env_names":["HOME"]"#,
+        r#","harness":"claude""#,
+        r#","timeout_secs":null"#,
         r#","summaries_dir":null"#,
     ] {
         assert!(
@@ -282,12 +303,19 @@ fn set_up_harness_requires_every_key() {
             "{key}"
         );
     }
-    // The extension never names a binary; an extra path key is refused.
-    let with_binary = full.replace(
-        r#""harness_id":"claude-code""#,
-        r#""harness_id":"claude-code","binary":"/bin/sh""#,
-    );
-    assert!(serde_json::from_str::<Request>(&with_binary).is_err());
+    // The extension never names a binary or environment names.
+    for extra in [r#","binary":"/bin/sh""#, r#","env_names":["HOME"]"#] {
+        let with_extra = full.replace(
+            r#","summaries_dir":null"#,
+            &format!("{extra},\"summaries_dir\":null"),
+        );
+        assert!(
+            serde_json::from_str::<Request>(&with_extra).is_err(),
+            "{extra}"
+        );
+    }
+    let v5 = full.replace(r#""harness":"claude""#, r#""harness_id":"claude-code""#);
+    assert!(serde_json::from_str::<Request>(&v5).is_err());
 }
 
 #[test]
@@ -306,24 +334,27 @@ fn v6_retires_confirm_harness_setup_and_offer_ids() {
 }
 
 #[test]
-fn harnesses_discovered_offers_require_nullable_keys() {
-    let offer = r#"{"adapter":"codex","harness_id":"codex","binary":"/usr/local/bin/codex","real_path":null,"version":null,"args":[],"env_required":["HOME","PATH"],"env_optional":[{"name":"OPENAI_API_KEY","present":false}],"refusal":"codex --version output was not recognized"}"#;
-    let message = |offer: &str| {
+fn harnesses_discovered_requires_nullable_keys() {
+    let found = r#"{"harness":"codex","binary":"/usr/local/bin/codex","version":null,"problem":"codex --version output was not recognized"}"#;
+    let message = |found: &str| {
         format!(
-            r#"{{"type":"harnesses_discovered","protocol_version":6,"request_id":"r1","offers":[{offer}]}}"#
+            r#"{{"type":"harnesses_discovered","protocol_version":6,"request_id":"r1","harnesses":[{found}]}}"#
         )
     };
-    assert!(serde_json::from_str::<Response>(&message(offer)).is_ok());
-    for key in [r#""real_path":null,"#, r#""version":null,"#] {
+    assert!(serde_json::from_str::<Response>(&message(found)).is_ok());
+    let missing = r#"{"harness":"claude","binary":null,"version":null,"problem":null}"#;
+    assert!(serde_json::from_str::<Response>(&message(missing)).is_ok());
+    for key in [r#""binary":"/usr/local/bin/codex","#, r#""version":null,"#] {
         assert!(
-            serde_json::from_str::<Response>(&message(&offer.replace(key, ""))).is_err(),
+            serde_json::from_str::<Response>(&message(&found.replace(key, ""))).is_err(),
             "{key}"
         );
     }
-    let with_help = offer.replace(r#""args":[]"#, r#""args":[],"help":"usage""#);
-    assert!(serde_json::from_str::<Response>(&message(&with_help)).is_err());
-    let with_offer_id = offer.replace(r#""adapter""#, r#""offer_id":null,"adapter""#);
-    assert!(serde_json::from_str::<Response>(&message(&with_offer_id)).is_err());
+    let with_refusal = found.replace(r#""problem""#, r#""refusal":null,"problem""#);
+    assert!(serde_json::from_str::<Response>(&message(&with_refusal)).is_err());
+    let v5 =
+        r#"{"type":"harnesses_discovered","protocol_version":6,"request_id":"r1","offers":[]}"#;
+    assert!(serde_json::from_str::<Response>(v5).is_err());
 }
 
 #[test]

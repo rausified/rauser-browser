@@ -1,15 +1,17 @@
 // AI harness settings helpers. Pure: no chrome or DOM access, so the tests
 // load this module directly. The host validates every value again (§7.3);
 // these only let the settings page explain a problem before sending.
-import type { AgentStatus, HarnessOffer } from "../protocol/ts/generated.js";
+import type { AgentStatus, HarnessFound } from "../protocol/ts/generated.js";
+import { APP_NAME } from "./brand.js";
 
 /** Shown above Set up harness (spec §6). Summaries run with full access. */
 export const SETUP_WARNING =
   "Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.";
 
 /** The note under a detected harness: whether it can be set up. */
-export function harnessOfferNote(offer: HarnessOffer): string {
-  return offer.refusal === null ? "Ready to set up." : `Cannot be set up: ${offer.refusal}.`;
+export function harnessOfferNote(found: HarnessFound): string {
+  if (found.binary === null) return `Not found on the ${APP_NAME} service's PATH.`;
+  return found.problem === null ? "Ready to set up." : `Cannot be set up: ${found.problem}.`;
 }
 
 /** What Detect harnesses reports for a ready offer. Set up harness needs a

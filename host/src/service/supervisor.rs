@@ -390,6 +390,12 @@ impl Supervisor {
         Inner::pump(inner);
     }
 
+    /// The runners this service starts runs with; harness setup probes
+    /// through them too.
+    pub fn registry(&self) -> &HarnessRegistry {
+        &self.inner.registry
+    }
+
     /// Queue a run, or return the queued-or-running run for the same record
     /// key (`true` = existing).
     pub fn start_run(&self, mut req: StartRun) -> Result<(RunView, bool), (ErrorCode, String)> {

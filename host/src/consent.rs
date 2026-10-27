@@ -225,12 +225,12 @@ fn folder_noun(purpose: FolderPurpose) -> &'static str {
     }
 }
 
-/// Only harness setup (`harness_setup::set_up`) sets a harness entry. The
-/// extension may echo it unchanged or remove it.
+/// Only the service's harness setup (`service::setup::set_up`) sets a
+/// harness entry. The extension may echo it unchanged or remove it.
 fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     let trusted_current = config::validate_base(current).is_ok();
     if next.agent.is_some() && (!trusted_current || next.agent != current.agent) {
-        bail!("the AI harness can only be set by native harness setup");
+        bail!("the summary harness can only be set by harness setup");
     }
     Ok(())
 }
@@ -277,13 +277,12 @@ mod tests {
 
     fn agent() -> brauser_protocol::AgentConfig {
         brauser_protocol::AgentConfig {
-            harness_id: "claude-code".into(),
-            adapter: brauser_protocol::HarnessAdapter::ClaudeCode,
+            harness: brauser_protocol::HarnessId::Claude,
             // Valid here, so `set_up()` is a trusted current config.
             binary: crate::config::fixtures::absent_binary("claude"),
-            args: crate::harness::template_args(crate::harness::Adapter::ClaudeCode),
-            env_allow: Vec::new(),
-            timeout_secs: 120,
+            version: Some("2.1.284".into()),
+            timeout_secs: 600,
+            probed_at: "2026-10-27T10:00:00Z".into(),
         }
     }
 

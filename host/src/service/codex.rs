@@ -56,6 +56,11 @@ impl HarnessRunner for CodexRunner {
         HarnessId::Codex
     }
 
+    /// The probe asks for one word, which the answer schema would forbid.
+    fn for_probe(&self) -> Option<Box<dyn HarnessRunner>> {
+        Some(Box::new(Self::new(self.search_path.clone(), None)))
+    }
+
     fn start(&self, spec: &RunSpec, slot: &ProcessSlot) -> anyhow::Result<Box<dyn HarnessSession>> {
         let program = find_on_path(&self.search_path, "codex")
             .ok_or_else(|| anyhow::anyhow!("codex is not on the service's PATH"))?;
@@ -967,6 +972,20 @@ done
 
         let fake = Fake::turns(&simple_turn());
         run(fake.runner(None), fake.spec(), &["the prompt"]);
+        assert!(fake.requests()[3]["params"].get("outputSchema").is_none());
+    }
+
+    /// Setup's probe asks for one word, so it must not be held to the
+    /// summary answer's shape.
+    #[test]
+    fn probe_runner_sends_no_output_schema() {
+        let schema = json!({"type": "object", "required": ["title"]});
+        let fake = Fake::turns(&simple_turn());
+        let probe = fake.runner(Some(schema)).for_probe().unwrap();
+        assert_eq!(probe.harness(), HarnessId::Codex);
+        let mut session = probe.start(&fake.spec(), &ProcessSlot::default()).unwrap();
+        session.turn("the prompt", &mut |_| {});
+        session.close();
         assert!(fake.requests()[3]["params"].get("outputSchema").is_none());
     }
 

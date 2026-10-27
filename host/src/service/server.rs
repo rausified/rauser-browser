@@ -1,7 +1,8 @@
 //! The service's private Unix socket: one listener in the 0700 support
 //! directory, one thread per connection, and the same length-prefixed JSON
-//! framing as native messaging. The service answers `service_hello` and the
-//! five run messages; it exits after `idle_exit` with nothing queued or
+//! framing as native messaging. The service answers `service_hello`, the
+//! five run messages, and harness setup (`discover_harnesses`,
+//! `set_up_harness`); it exits after `idle_exit` with nothing queued or
 //! running and no request.
 
 use std::ffi::OsString;
@@ -16,18 +17,21 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ErrorCode, HarnessId, PROTOCOL_VERSION, Request, Response, RunFetched, RunStarted, RunUpdated,
-    RunsListed, ServiceReady, SummaryVocabulary,
+    ConfigUpdated, ErrorCode, HarnessId, HarnessesDiscovered, PROTOCOL_VERSION, Request, Response,
+    RunFetched, RunStarted, RunUpdated, RunsListed, ServiceReady, SetUpHarnessRequest,
+    SummaryVocabulary,
 };
 use uuid::Uuid;
 
 use super::agent_env::{AgentEnv, AgentEnvError};
 use super::paths::{self, ServicePaths};
 use super::record::check_start_run;
+use super::setup;
 use super::supervisor::{EnvSource, ServiceOptions, StartRun, Supervisor};
 use crate::brand::NAMESPACE;
-use crate::config::{ConfigStore, harness_id};
+use crate::config::ConfigStore;
 use crate::frame::{FrameError, read_frame, write_frame};
+use crate::harness::HarnessEnv;
 use crate::native::{error, parse_envelope};
 use crate::vault::selected_root_identity;
 
@@ -332,7 +336,43 @@ impl Server {
                 };
                 run_updated(&id, self.supervisor.retry_save(run_id))
             }
+            // Detected with the environment a run gets, so what settings
+            // shows is what runs.
+            Request::DiscoverHarnesses(value) => match run_env(&self.paths) {
+                Ok(env) => Response::HarnessesDiscovered(HarnessesDiscovered {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    harnesses: setup::discover(&HarnessEnv::from_run_env(&env), &env),
+                }),
+                Err(env_error) => error(&id, ErrorCode::InvalidConfig, &env_error.to_string()),
+            },
+            Request::SetUpHarness(value) => self.set_up_harness(value),
             _ => error(&id, ErrorCode::InvalidRequest, "not a service request"),
+        }
+    }
+
+    /// Detect and probe the harness, then commit it. Setup gets its own
+    /// config store, so the probe never holds up another connection.
+    fn set_up_harness(&self, value: SetUpHarnessRequest) -> Response {
+        let env = match run_env(&self.paths) {
+            Ok(env) => env,
+            Err(env_error) => {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &env_error.to_string(),
+                );
+            }
+        };
+        let mut config = lock(&self.config).reopen();
+        match setup::set_up(&mut config, self.supervisor.registry(), &value, env) {
+            Ok((config, revision)) => Response::ConfigUpdated(ConfigUpdated {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                config,
+                revision,
+            }),
+            Err((code, message)) => error(&value.request_id, code, &message),
         }
     }
 
@@ -358,21 +398,12 @@ impl Server {
                 "The configuration is unavailable or needs repair in Brauser settings.",
             ));
         }
-        let knowledge_base = match config.knowledge_base_dir() {
-            Some(folder) if config.configured() => folder,
-            _ => return Err((ErrorCode::NotConfigured, NOT_CONFIGURED)),
-        };
+        let knowledge_base = checked_knowledge_base(&config)?;
         let agent = config.snapshot().agent.as_ref();
         let harness = requested
-            .or(agent.map(|agent| harness_id(agent.adapter)))
+            .or(agent.map(|agent| agent.harness))
             .ok_or((ErrorCode::NotConfigured, SET_UP_HARNESS))?;
         let timeout = agent.map(|agent| Duration::from_secs(agent.timeout_secs.into()));
-        // `selected_root_identity` fails on anything but a folder.
-        let unchanged = selected_root_identity(&knowledge_base)
-            .is_ok_and(|actual| Some(actual.as_str()) == config.knowledge_base_identity());
-        if !unchanged {
-            return Err((ErrorCode::NotConfigured, KNOWLEDGE_BASE_CHANGED));
-        }
         Ok(RunSetup {
             harness,
             cwd: knowledge_base,
@@ -380,6 +411,24 @@ impl Server {
             vocabulary: config.snapshot().summary_vocabulary.clone(),
         })
     }
+}
+
+/// The knowledge base folder a harness runs in, which must still be the
+/// folder the user picked. Call right after `refresh`.
+pub(crate) fn checked_knowledge_base(
+    config: &ConfigStore,
+) -> Result<PathBuf, (ErrorCode, &'static str)> {
+    let knowledge_base = match config.knowledge_base_dir() {
+        Some(folder) if config.configured() => folder,
+        _ => return Err((ErrorCode::NotConfigured, NOT_CONFIGURED)),
+    };
+    // `selected_root_identity` fails on anything but a folder.
+    let unchanged = selected_root_identity(&knowledge_base)
+        .is_ok_and(|actual| Some(actual.as_str()) == config.knowledge_base_identity());
+    if !unchanged {
+        return Err((ErrorCode::NotConfigured, KNOWLEDGE_BASE_CHANGED));
+    }
+    Ok(knowledge_base)
 }
 
 /// What [`Server::run_setup`] resolved for a new run.
@@ -468,7 +517,7 @@ mod tests {
         }
 
         /// Write config.toml for the notes folder. `agent` adds a Claude Code
-        /// entry with these extra keys; `knowledge_base` is a separately
+        /// entry followed by these extra tables; `knowledge_base` is a separately
         /// picked knowledge base folder, recorded with its current identity.
         fn configure(&self, agent: Option<&str>, knowledge_base: Option<&Path>) {
             let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
@@ -523,9 +572,13 @@ mod tests {
             self.paths.socket().unwrap()
         }
 
-        fn options(paths: &ServicePaths, idle_exit: Duration) -> ServiceOptions {
+        fn options(
+            paths: &ServicePaths,
+            idle_exit: Duration,
+            run_timeout: Duration,
+        ) -> ServiceOptions {
             ServiceOptions {
-                run_timeout: DEFAULT_RUN_TIMEOUT,
+                run_timeout,
                 forced_run_timeout: None,
                 idle_exit,
                 service_pid: std::process::id(),
@@ -535,12 +588,21 @@ mod tests {
 
         /// Run `serve` on a thread and wait until its socket accepts.
         fn start(&self, idle_exit: Duration) -> JoinHandle<Result<ServeExit>> {
+            self.start_with(idle_exit, DEFAULT_RUN_TIMEOUT)
+        }
+
+        /// [`World::start`] with the service's own run time limit.
+        fn start_with(
+            &self,
+            idle_exit: Duration,
+            run_timeout: Duration,
+        ) -> JoinHandle<Result<ServeExit>> {
             let paths = self.paths.clone();
             let config = self.config();
             let finisher_config = self.config();
             let program = self.program.clone();
             let handle = thread::spawn(move || {
-                let options = Self::options(&paths, idle_exit);
+                let options = Self::options(&paths, idle_exit, run_timeout);
                 serve(&paths, config, &options, || {
                     let registry = HarnessRegistry::from_lookup(|name| {
                         (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
@@ -905,14 +967,36 @@ mod tests {
 
     #[test]
     fn agent_timeout_secs_bounds_the_run() {
-        // The service's own limit is 10 minutes; the entry's 1 second wins.
-        let world = World::unconfigured("exec sleep 30\n");
-        world.configure(Some("timeout_secs = 1\n"), None);
-        world.start(Duration::from_secs(600));
+        // The service's own limit is 1 second here; the entry's 10 minutes
+        // win, so a 2 second answer finishes.
+        let world = World::new(&format!("/bin/sleep 2\n{}", answer()));
+        world.start_with(Duration::from_secs(600), Duration::from_secs(1));
         let started = Instant::now();
         let run_id = world.started_run_id();
         let fetched = world.wait_finished(&run_id);
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+
+        // Without an entry, the service's limit applies.
+        let world = World::unconfigured("exec /bin/sleep 30\n");
+        world.configure(None, None);
+        world.start_with(Duration::from_secs(600), Duration::from_secs(1));
+        let request = StartRunRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "timed".into(),
+            url: "https://example.com/a".into(),
+            title: "Page A".into(),
+            content: "Body text".into(),
+            selection: None,
+            harness: Some(HarnessId::Claude),
+            record_key: Some(url_key()),
+            requested_at: "2026-10-26T10:00:00Z".into(),
+        };
+        let run_id = match world.call(&Request::StartRun(request)) {
+            Response::RunStarted(started) => started.run.run_id,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        let fetched = world.wait_finished(&run_id);
         assert_eq!(fetched.run.state, RunState::Failed, "{fetched:?}");
         assert_eq!(fetched.run.error_kind, Some(RunErrorKind::TimedOut));
         assert_eq!(
@@ -952,7 +1036,7 @@ mod tests {
         let exit = serve(
             &world.paths,
             world.config(),
-            &World::options(&world.paths, Duration::from_secs(600)),
+            &World::options(&world.paths, Duration::from_secs(600), DEFAULT_RUN_TIMEOUT),
             || {
                 flag.store(true, Ordering::SeqCst);
                 anyhow::bail!("a second instance must not build a supervisor")
@@ -1010,7 +1094,7 @@ mod tests {
         let error = serve(
             &world.paths,
             world.config(),
-            &World::options(&world.paths, Duration::from_secs(600)),
+            &World::options(&world.paths, Duration::from_secs(600), DEFAULT_RUN_TIMEOUT),
             || anyhow::bail!("not reached"),
         );
         assert!(error.is_err());

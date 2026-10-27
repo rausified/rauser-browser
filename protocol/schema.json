@@ -63,9 +63,6 @@
           "$ref": "#/$defs/RefreshArtifactsRequest"
         },
         {
-          "$ref": "#/$defs/CheckAgentRequest"
-        },
-        {
           "$ref": "#/$defs/DiscoverHarnessesRequest"
         },
         {
@@ -125,9 +122,6 @@
         },
         {
           "$ref": "#/$defs/ArtifactsRefreshed"
-        },
-        {
-          "$ref": "#/$defs/AgentChecked"
         },
         {
           "$ref": "#/$defs/HarnessesDiscovered"
@@ -639,59 +633,45 @@
     "AgentConfig": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A confirmed harness entry. Only native harness setup can create or change it.",
+      "description": "The summary harness the Brauser service set up after its probe passed. Only set_up_harness can create or change it; update_config may echo it unchanged or clear it.",
       "required": [
-        "harness_id",
-        "adapter",
+        "harness",
         "binary",
-        "args",
-        "env_allow",
-        "timeout_secs"
+        "version",
+        "timeout_secs",
+        "probed_at"
       ],
       "properties": {
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "adapter": {
-          "$ref": "#/$defs/HarnessAdapter"
+        "harness": {
+          "$ref": "#/$defs/HarnessId"
         },
         "binary": {
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
         },
-        "args": {
-          "type": "array",
-          "maxItems": 64,
-          "items": {
-            "type": "string",
-            "maxLength": 256
-          }
-        },
-        "env_allow": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
+        "version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "timeout_secs": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 600
+          "minimum": 60,
+          "maximum": 3600
+        },
+        "probed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
         }
       }
-    },
-    "HarnessAdapter": {
-      "type": "string",
-      "enum": [
-        "claude_code",
-        "codex"
-      ]
     },
     "AgentStatus": {
       "type": "object",
@@ -988,30 +968,6 @@
         "type": { "const": "refresh_artifacts" },
         "protocol_version": { "type": "integer", "const": 6 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
-      }
-    },
-    "CheckAgentRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Ask whether AI commands may run.",
-      "required": [
-        "type",
-        "protocol_version",
-        "request_id"
-      ],
-      "properties": {
-        "type": {
-          "const": "check_agent"
-        },
-        "protocol_version": {
-          "type": "integer",
-          "const": 6
-        },
-        "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        }
       }
     },
     "FolderChosen": {
@@ -1404,40 +1360,6 @@
         "conflict_paths": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } }
       }
     },
-    "AgentChecked": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "protocol_version",
-        "request_id",
-        "harness_id",
-        "harness_version"
-      ],
-      "properties": {
-        "type": {
-          "const": "agent_checked"
-        },
-        "protocol_version": {
-          "type": "integer",
-          "const": 6
-        },
-        "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "harness_version": {
-          "type": "string",
-          "maxLength": 256
-        }
-      }
-    },
     "VisitEvent": {
       "type": "object",
       "additionalProperties": false,
@@ -1597,7 +1519,7 @@
     "DiscoverHarnessesRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ask the host to look for supported AI harnesses on its own search path. The extension never supplies a binary path.",
+      "description": "Ask the Brauser service which supported harnesses it finds on its own PATH. The extension never supplies a binary path.",
       "required": [
         "type",
         "protocol_version",
@@ -1621,14 +1543,14 @@
     "SetUpHarnessRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ask the host to rediscover one harness by harness_id, run one test prompt through it, and commit it when the test passes. Answered by config_updated.",
+      "description": "Ask the Brauser service to detect one harness on its PATH, run one probe prompt through its real invocation in the knowledge base folder, and commit it when the probe passes. timeout_secs null means 600. Answered by config_updated.",
       "required": [
         "type",
         "protocol_version",
         "request_id",
         "expected_revision",
-        "harness_id",
-        "env_names",
+        "harness",
+        "timeout_secs",
         "summaries_dir"
       ],
       "properties": {
@@ -1649,19 +1571,20 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+        "harness": {
+          "$ref": "#/$defs/HarnessId"
         },
-        "env_names": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
+        "timeout_secs": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 3600
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "summaries_dir": {
           "oneOf": [
@@ -1680,11 +1603,12 @@
     "HarnessesDiscovered": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Both supported harnesses, codex then claude, as the service found them on its PATH.",
       "required": [
         "type",
         "protocol_version",
         "request_id",
-        "offers"
+        "harnesses"
       ],
       "properties": {
         "type": {
@@ -1699,45 +1623,30 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "offers": {
+        "harnesses": {
           "type": "array",
-          "maxItems": 8,
+          "maxItems": 2,
           "items": {
-            "$ref": "#/$defs/HarnessOffer"
+            "$ref": "#/$defs/HarnessFound"
           }
         }
       }
     },
-    "HarnessOffer": {
+    "HarnessFound": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One harness the host found. refusal is non-null exactly when it cannot be set up. Help and command output are never included.",
+      "description": "One supported harness as the service sees it on its own PATH. binary is null when it was not found; problem is non-null when it was found but cannot be used.",
       "required": [
-        "adapter",
-        "harness_id",
+        "harness",
         "binary",
-        "real_path",
         "version",
-        "args",
-        "env_required",
-        "env_optional",
-        "refusal"
+        "problem"
       ],
       "properties": {
-        "adapter": {
-          "$ref": "#/$defs/HarnessAdapter"
-        },
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+        "harness": {
+          "$ref": "#/$defs/HarnessId"
         },
         "binary": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 4096
-        },
-        "real_path": {
           "oneOf": [
             {
               "type": "string",
@@ -1760,31 +1669,7 @@
             }
           ]
         },
-        "args": {
-          "type": "array",
-          "maxItems": 64,
-          "items": {
-            "type": "string",
-            "maxLength": 256
-          }
-        },
-        "env_required": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
-        },
-        "env_optional": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "$ref": "#/$defs/EnvName"
-          }
-        },
-        "refusal": {
+        "problem": {
           "oneOf": [
             {
               "type": "string",
@@ -1794,25 +1679,6 @@
               "type": "null"
             }
           ]
-        }
-      }
-    },
-    "EnvName": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "An environment variable name the harness may need. Values are never sent.",
-      "required": [
-        "name",
-        "present"
-      ],
-      "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "present": {
-          "type": "boolean"
         }
       }
     },

@@ -156,6 +156,12 @@ impl ProcessSlot {
 pub trait HarnessRunner: Send + Sync {
     fn harness(&self) -> HarnessId;
     fn start(&self, spec: &RunSpec, slot: &ProcessSlot) -> anyhow::Result<Box<dyn HarnessSession>>;
+
+    /// The runner harness setup's probe uses, when it differs from this one:
+    /// the same invocation without what shapes a summary answer.
+    fn for_probe(&self) -> Option<Box<dyn HarnessRunner>> {
+        None
+    }
 }
 
 /// One run's conversation with a harness.

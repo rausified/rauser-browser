@@ -3,7 +3,7 @@
 // across every open page, and the worker's policy lease tells a page when
 // another page has saved a different revision.
 import type {
-  AdapterDocument, AdapterWarning, AgentStatus, ConfigSnapshot, HarnessOffer,
+  AdapterDocument, AdapterWarning, AgentStatus, ConfigSnapshot, HarnessFound, HarnessId,
 } from "../protocol/ts/generated.js";
 import {
   POLICY_LEASE_MS,
@@ -241,38 +241,39 @@ export class ConfigSession {
     return statusVerified && this.configIssue === null && this.adapterIssue === null;
   }
 
-  /** The harnesses the host found on its own search path. */
-  async discoverHarnesses(): Promise<HarnessOffer[]> {
+  /** Both harnesses, as the Brauser service finds them on its own PATH. */
+  async discoverHarnesses(): Promise<HarnessFound[]> {
     const reply = await this.host.call({
       type: "discover_harnesses",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
     }, "harnesses_discovered", 60_000);
-    return reply.offers;
+    return reply.harnesses;
   }
 
   /**
-   * Harness setup. The host rediscovers `harnessId` on its own search path,
-   * runs one test prompt through it, and commits the harness only when the
-   * test passes. The extension never sends a harness path or arguments.
-   * Call while holding the config mutation lock.
+   * Harness setup. The service detects `harness` on its own PATH, runs one
+   * probe prompt through its real invocation, and commits it only when the
+   * probe answers. The extension never sends a harness path or arguments.
+   * `timeoutSecs` null means the service's default. Call while holding the
+   * config mutation lock.
    */
   async setupHarness(
-    harnessId: string,
-    envNames: string[],
+    harness: HarnessId,
+    timeoutSecs: number | null,
     summariesDir: string | null,
   ): Promise<void> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
-    // Discovery plus a test prompt of up to the harness timeout.
+    // Detection plus a probe of up to 90 seconds.
     const updated = await this.host.call({
       type: "set_up_harness",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
       expected_revision: this.revision,
-      harness_id: harnessId,
-      env_names: envNames,
+      harness,
+      timeout_secs: timeoutSecs,
       summaries_dir: summariesDir,
-    }, "config_updated", 6 * 60_000);
+    }, "config_updated", 120_000);
     this.config = updated.config;
     this.setRevision(updated.revision);
     this.onChange();
