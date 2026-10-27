@@ -872,68 +872,38 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `21d06c3`)
+### Current health handoff (2026-10-27 — baseline `2f1e64c`)
 
-- Clean workspace; no quarantine failure file. The unfiltered opening gate
-  again passes 26 adapter-template tests and 447 host tests, then fails 32
-  service tests. Later Rust test binaries are not reached. All 13 extension
-  test files pass, as do protocol generation, build, fmt, both Clippy
-  configurations, npm install, typecheck, lint, extension build, current-state
-  validation and queue consistency. The repaired dialog fixture completes its
-  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
-- An independent workspace AF_UNIX bind returns errno 1 EPERM.
-  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
-  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
-  and 1 platform skip, with the win32 simulation unable to parse empty output.
-  TESTING.md documents that diagnostic and the restriction. Keep all tests
-  enabled and do not change production IPC to fit this runner.
-- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4` and `21d06c3`.
-  No commit among the last five is verified green in this runner, so no
-  history reset was attempted. Earlier quarantine recovery is retained; this
-  cycle introduces no product or test change and claims no shipped feature.
-- The driver needs to carry the baseline SHA and an unfiltered external
-  gate result into its next handoff, and provide a runner permitting local
-  IPC and synchronous child output. Another unchanged restricted cycle will
-  reproduce these failures rather than advance the assigned product work.
-- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
+- Clean workspace; no quarantine failure file or incomplete implementation.
+  The required unfiltered Cargo gate passes 26 adapter-template tests and 447
+  host tests, then fails 32 socket-dependent host tests; later test binaries
+  are not reached. The repaired dialog fixture completes all 60 exchanges,
+  but `brwr-4vb` remains blocked until the full gate passes.
+- Protocol generation, workspace build, fmt, both Clippy configurations,
+  npm install, typecheck, lint, extension build, all 13 extension test files,
+  current-state validation and queue consistency pass. The script gate fails;
+  its non-isolated diagnostic reports 8 pass, 1 fail and 1 platform skip.
+- Independent probes confirm the runner restriction: a workspace AF_UNIX
+  bind returns errno 1 EPERM; a JSON-only Node spawnSync returns status 0,
+  error EPERM and empty stdout. The first fake-service bind is at
+  `host/src/service/client.rs:436`; server fixtures time out waiting for a
+  listener. TESTING.md already documents these diagnostics. Keep the tests
+  enabled and production IPC unchanged.
+- The same restriction was observed on `728b200`, `90f88b4`, `382bf29`,
+  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4`,
+  `21d06c3`, `5231f9e` and now `2f1e64c`. Earlier raw logs remain in
+  `target/overnight-health/baseline-bdbbbb4/` and
+  `target/overnight-health/baseline-5231f9e/` (gitignored). No preceding
+  commit among the last five is verified green under this restriction;
+  resetting history would discard work without restoring the denied
+  operations, so no reset was attempted. No feature or contract shipped.
+- Before scheduling another cycle, the driver needs to report its unfiltered
+  gate result with the baseline SHA and provide a runner allowing local IPC
+  and synchronous child output. Repeated unchanged restricted runs cannot
+  advance the assigned product work. This handoff consolidates prior repeated
+  health notes; overnight-run.log retains the append-only cycle history.
+- Once health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
   selectable rules and example artifact grouping using the existing private
   pattern inputs. Resolve the Notion leading-literal contradiction
-  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
-  preview which example pages share an artifact still belongs in this review;
-  no additional diagnostic view or self-directed feature is needed first.
-
-- Baseline `bdbbbb4` was checked again without test exclusions. Raw Rust
-  output is retained locally at
-  `target/overnight-health/baseline-bdbbbb4/cargo-test.log` (gitignored).
-  The script gate and its diagnostic output are beside it as
-  `scripts-test.log` and `scripts-diagnostic.log`.
-  The first denied fixture bind is `host/src/service/client.rs:436`;
-  server fixtures subsequently time out waiting for the unavailable listener.
-  No product or test changes can grant the missing runner capability.
-  Keep the existing product proposals; adding more internal health work
-  would not unblock the assigned Capture Site implementation.
-
-- Rechecks on `21d06c3` and `5231f9e` reproduce those exact counts with no test
-  exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
-  and all 13 extension files passing. The script diagnostic still reports
-  8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
-  required build/quality checks pass. The repaired dialog fixture passes.
-  Independent socket and JSON-only child probes still return EPERM. No
-  quarantine file existed and no code repair or reset would restore these
-  denied operations. `brwr-1hj` stays in progress and `brwr-t40` stays open.
-  Before scheduling another unchanged cycle, the driver should establish
-  whether its own unfiltered gate passes and supply that result in the
-  handoff. Product priority remains selected-rule Capture Site review and
-  example artifact grouping, not another health surface.
-
-- Baseline `5231f9e` evidence is retained in
-  `target/overnight-health/baseline-5231f9e/` (gitignored), including the
-  unfiltered Cargo output and non-isolated script diagnostic. No quarantine
-  file or incomplete diff existed. No preceding commit in the last five has
-  a verified green gate in this restricted runner, so resetting history would
-  discard work without fixing the denied operations. The dialog repair is
-  retained under blocked `brwr-4vb`; no new feature or contract shipped.
-  The existing Capture Site proposals remain sufficient: resume the host
-  drafter and selected-rule preview once the driver supplies an unfiltered
-  green baseline, rather than scheduling repeated unchanged restricted runs.
+  (`brwr-gf1`) before claiming its identity cases. Existing proposals cover
+  the useful next steps; another internal health surface is unnecessary.
