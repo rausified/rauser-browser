@@ -123,6 +123,14 @@ struct IndexState {
     conflicts: BTreeMap<String, Vec<Conflict>>,
     dirty: BTreeSet<String>,
     logs: BTreeMap<PathBuf, LogCheckpoint>,
+    /// Containers whose generated files hold a roll-up of the visits within
+    /// them, as of the last regeneration pass. An adapter change can take
+    /// that roll-up away without changing what the new document derives
+    /// (`within` removed, a narrowed scope, a changed child route), so
+    /// these files are rewritten then too. Omitted when empty, so a cache
+    /// without containers stays readable by an earlier host.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    containers: BTreeSet<String>,
 }
 
 impl IndexState {
@@ -538,10 +546,15 @@ impl ArtifactIndex {
         }
         // `previous` is rendered with the current adapters too, so a
         // document change since it was published is compared separately.
+        // A rescan stamps the new fingerprint before this runs, so the load
+        // path's own check (`load_current_state`) would never see it.
         if previous.adapters != self.adapters_fingerprint() {
+            dirty.extend(previous.containers.iter().cloned());
             dirty.extend(self.adapter_dependent_files(state));
         }
         state.dirty = dirty;
+        // The files on disk are still the ones `previous` regenerated.
+        state.containers = previous.containers;
     }
 
     /// Artifacts whose generated file depends on the adapter document: a
@@ -687,8 +700,24 @@ impl ArtifactIndex {
         let dirty = state.dirty.iter().cloned().collect::<Vec<_>>();
         let mut published_at = Instant::now();
         let mut interval = checkpoint;
+        // Every container this pass derives, and any earlier one whose file
+        // is still dirty (not yet rewritten without its roll-up).
+        let containers = derived
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == "within")
+            .map(|edge| edge.target.clone())
+            .chain(
+                state
+                    .containers
+                    .iter()
+                    .filter(|id| state.dirty.contains(*id))
+                    .cloned(),
+            )
+            .collect::<BTreeSet<_>>();
         // A caught-up or rebuilt state needs publishing even if no file does.
-        let mut unpublished = publish;
+        let mut unpublished = publish || containers != state.containers;
+        state.containers = containers;
         for id in dirty {
             let Some(artifact) = derived.artifacts.get(&id) else {
                 state.dirty.remove(&id);
@@ -809,9 +838,13 @@ impl ArtifactIndex {
         state.adapters = adapters;
         // Containers follow the adapters too: their files regenerate when
         // the document changes, not only after the next visit (§8.3).
+        // (A reconcile above compares against the published cache instead,
+        // because its rescan already carries the new fingerprint.)
         if resolution_changed {
             let dependent = self.adapter_dependent_files(&state);
             state.dirty.extend(dependent);
+            let previous = std::mem::take(&mut state.containers);
+            state.dirty.extend(previous);
         }
         if republish || changed || resolution_changed {
             self.dirty_containers(&mut state);
@@ -941,6 +974,7 @@ impl ArtifactIndex {
             conflicts: BTreeMap::new(),
             dirty: BTreeSet::new(),
             logs: BTreeMap::new(),
+            containers: BTreeSet::new(),
         }
     }
 
@@ -4816,6 +4850,10 @@ print(json.dumps([tables,row]))"#;
     /// catch-all, all scoped to one owner. `within` is optional so a test
     /// can index under the document before containers existed.
     fn github_document(within: bool) -> adapter_templates::Document {
+        scoped_github_document(within, &["acme-corp"])
+    }
+
+    fn scoped_github_document(within: bool, owners: &[&str]) -> adapter_templates::Document {
         let container = serde_json::json!({
             "type": "github.repo",
             "id": "github.repo:{host}/{owner}/{repo}",
@@ -4824,7 +4862,7 @@ print(json.dumps([tables,row]))"#;
             "type": "github.pr",
             "origin": "https://github.com",
             "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}],
-            "scope": {"owner": ["acme-corp"]},
+            "scope": {"owner": owners},
             "modes": {"files": "review", "commits": "view", "checks": "view"},
             "id": "github.pr:{host}/{owner}/{repo}/{number}",
         });
@@ -4832,7 +4870,7 @@ print(json.dumps([tables,row]))"#;
             "type": "github.issue",
             "origin": "https://github.com",
             "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}],
-            "scope": {"owner": ["acme-corp"]},
+            "scope": {"owner": owners},
             "id": "github.issue:{host}/{owner}/{repo}/{number}",
         });
         if within {
@@ -4843,7 +4881,7 @@ print(json.dumps([tables,row]))"#;
             "type": "github.repo",
             "origin": "https://github.com",
             "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
-            "scope": {"owner": ["acme-corp"]},
+            "scope": {"owner": owners},
             "id": "github.repo:{host}/{owner}/{repo}",
         });
         let document: adapter_templates::Value = serde_json::from_value(serde_json::json!({
@@ -5068,6 +5106,80 @@ print(json.dumps([tables,row]))"#;
         );
         assert_eq!(rows, 2);
         assert!(text.contains(GITHUB_REPO_ID), "{text}");
+    }
+
+    /// Index a PR and a repo page under the containing document and write
+    /// both files, then reopen under `after` and regenerate. Returns the
+    /// pass and the repo's file, which must then hold only its own visit.
+    fn regenerate_after_losing_roll_ups(
+        after: &adapter_templates::Document,
+    ) -> (RegenerationReport, String) {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(true);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        let pr = github_pr(1, 7, "2026-10-15T10:00:00Z");
+        let mut blob = github_blob(2, "2026-10-15T11:00:00Z");
+        blob.title = Some("widgets/README.md at main · acme-corp/widgets".into());
+        blob.focused_seconds = 90;
+        index_and_write(&old, &[&pr, &blob]);
+        let new = index(&root, &cache).with_adapters(Some(after));
+        let report = new.regenerate_dirty().unwrap();
+        let repo = new.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!((repo.focused_seconds, repo.opens), (90, 1));
+        let file = artifact_files(root.path())
+            .into_iter()
+            .find(|path| path.to_string_lossy().contains("github-repo"))
+            .unwrap();
+        (report, fs::read_to_string(file).unwrap())
+    }
+
+    fn index_and_write(index: &ArtifactIndex, events: &[&ActivityEvent]) {
+        index
+            .record_activities(events.iter().copied(), &[])
+            .unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 2);
+        let file = artifact_files(Path::new(&index.storage.root))
+            .into_iter()
+            .find(|path| path.to_string_lossy().contains("github-repo"))
+            .unwrap();
+        let rolled = fs::read_to_string(file).unwrap();
+        assert!(rolled.contains("focused_min: 3\n"), "{rolled}");
+        assert!(rolled.contains("title: \"acme-corp/widgets\""), "{rolled}");
+    }
+
+    fn assert_direct_only(report: &RegenerationReport, file: &str, title: &str) {
+        assert_eq!((report.written, report.unchanged), (1, 0), "{report:?}");
+        assert!(file.contains("focused_min: 1\n"), "{file}");
+        assert!(file.contains("opens: 1\n"), "{file}");
+        assert!(file.contains("days_opened: 1\n"), "{file}");
+        assert!(
+            file.contains("- 2026-10-15 · focused 1 min · opened 1×\n"),
+            "{file}"
+        );
+        assert!(file.contains(&format!("title: \"{title}\"\n")), "{file}");
+    }
+
+    #[test]
+    fn removing_within_rewrites_the_container_with_only_its_direct_visits() {
+        let (report, file) = regenerate_after_losing_roll_ups(&github_document(false));
+        // No longer a container type, so its own latest title returns.
+        assert_direct_only(
+            &report,
+            &file,
+            "widgets/README.md at main · acme-corp/widgets",
+        );
+    }
+
+    #[test]
+    fn narrowing_scope_rewrites_the_container_with_only_its_direct_visits() {
+        // The repo page stays logged as the repo; the PR is now out of scope
+        // and no longer rolls up.
+        let (report, file) =
+            regenerate_after_losing_roll_ups(&scoped_github_document(true, &["other-org"]));
+        // github.repo is still a declared container type, so it keeps the
+        // container's own name; only the roll-up goes.
+        assert_direct_only(&report, &file, "acme-corp/widgets");
     }
 
     #[test]
