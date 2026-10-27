@@ -328,6 +328,28 @@ test("a key change during a tab switch loads the new tab without a second reload
   assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["mine under the old key"]);
 });
 
+test("a key change in a flush queued before a tab switch leaves the new tab to that switch", async () => {
+  const h = harness();
+  await open(h, "https://p.test/", "old key note");
+  h.type("one");
+  void h.editor.flush();
+  const first = await h.next("save");
+  h.type("one two");
+  void h.editor.flush();
+  const switched = h.editor.showPage(page("https://a.test/"));
+  first.resolve({ type: "note_saved", revision: "r1" });
+  (await h.next("save")).resolve(keyChanged);
+  (await h.next("load")).resolve(loaded("a"));
+  await switched;
+  await settle();
+  assert.deepEqual(h.calls.filter((call) => call.kind === "load").map((call) => call.url),
+    ["https://p.test/", "https://a.test/"]);
+  assert.equal(h.view.body, "a");
+  assert.equal(h.view.status, "Saved");
+  assert.equal(h.view.warning, false);
+  assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["one two"]);
+});
+
 test("a flush with nothing running sends its save before returning", async () => {
   const h = harness();
   await open(h, "https://p.test/", "p");

@@ -100,8 +100,10 @@ export class NoteEditor {
   /** Saves pending edits now, after any load or save already running. */
   flush(): Promise<void> {
     this.clearTimer();
+    // Taken now, not when the save runs, so a page change queued behind this
+    // flush is seen as newer.
+    const token = this.token;
     return this.enqueue(async () => {
-      const token = this.token;
       if (!(await this.saveNow())) return;
       // The host now maps this page to another key (§6.2). Reload it the way
       // reload() does, in this same queued step so no edit or autosave can
