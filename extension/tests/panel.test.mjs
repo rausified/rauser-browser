@@ -1309,6 +1309,26 @@ test("a summary that finishes after a tab switch leaves the new tab's line alone
   assert.match(page.el("run-area").textContent, /Tab two's own notice\./);
 });
 
+test("a worker notice for a tab the panel has not followed yet shows once that tab is followed", async () => {
+  const session = new Map();
+  const page = await summarizePanel({ session, local: new Map([[WARNING_SEEN_KEY, true]]) });
+  // Startup reads (and clears) whatever was stored before the panel loaded.
+  await until(() => page.sent("list_runs").length === 1, "startup's list_runs");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // The shortcut fired on tab 2 just after it was activated, while the panel
+  // still followed tab 1: the live notice is not for the followed tab.
+  const notice = { kind: "summarize_failed", message: "Tab two failed early.", tab_id: 2, at: Date.now() };
+  session.set(PANEL_NOTICE_KEY, notice);
+  page.notify(notice);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(page.el("run-area").textContent, /Tab two failed early/);
+  assert.ok(session.has(PANEL_NOTICE_KEY), "a notice for another tab stays stored");
+
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("run-area").textContent.includes("Tab two failed early."), "tab 2's stored notice");
+  await until(() => !session.has(PANEL_NOTICE_KEY), "the notice to be consumed");
+});
+
 test("the setup warning shows once", async () => {
   const local = new Map();
   const first = await summarizePanel({ local });

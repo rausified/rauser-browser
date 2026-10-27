@@ -322,6 +322,9 @@ export class RunCards {
   private readonly cards = new Map<string, RunCard>();
   private notice: HTMLElement | null = null;
   private disposed = false;
+  /** Dismissals write one after another, so each read sees the last write
+   * and two quick dismissals both stay remembered. */
+  private dismissWrites: Promise<void> = Promise.resolve();
 
   constructor(private readonly container: HTMLElement, private readonly deps: RunCardDeps) {}
 
@@ -394,13 +397,17 @@ export class RunCards {
     card.dispose();
     this.cards.delete(card.runId);
     this.remove(card.element);
-    const ids = (await this.dismissedIds()).filter((id) => id !== card.runId);
-    ids.push(card.runId);
-    try {
-      await this.deps.storage.set({ [DISMISSED_RUNS_KEY]: ids.slice(-MAX_DISMISSED_RUNS) });
-    } catch {
-      // The card is gone for this panel; a later panel may restore it.
-    }
+    const write = this.dismissWrites.then(async () => {
+      const ids = (await this.dismissedIds()).filter((id) => id !== card.runId);
+      ids.push(card.runId);
+      try {
+        await this.deps.storage.set({ [DISMISSED_RUNS_KEY]: ids.slice(-MAX_DISMISSED_RUNS) });
+      } catch {
+        // The card is gone for this panel; a later panel may restore it.
+      }
+    });
+    this.dismissWrites = write;
+    await write;
   }
 
   private showNotice(text: string, withSettings: boolean): void {

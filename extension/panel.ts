@@ -729,9 +729,13 @@ function clearStoredNotice(): Promise<void> {
   return (chrome.storage.session.remove?.(PANEL_NOTICE_KEY) ?? Promise.resolve()).catch(() => undefined);
 }
 
-/** A notice the worker stored before this panel loaded, such as a
- * service_unavailable from the shortcut that opened it. It is read once. */
-async function showStoredNotice(): Promise<void> {
+/** A notice the worker stored, such as a service_unavailable from the
+ * shortcut that opened this panel, or one for a tab the panel had not
+ * followed yet when the worker sent it. A notice for the followed tab is
+ * shown and consumed; a stale or malformed one is dropped. At startup
+ * (`dropOthers`) a notice for another tab is dropped too; on a later follow
+ * it stays stored for the tab it names. */
+async function showStoredNotice(dropOthers: boolean): Promise<void> {
   let stored: unknown;
   try {
     stored = (await chrome.storage.session.get(PANEL_NOTICE_KEY))[PANEL_NOTICE_KEY];
@@ -739,8 +743,10 @@ async function showStoredNotice(): Promise<void> {
     return;
   }
   if (stored === undefined) return;
+  const current = isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS ? stored : null;
+  if (current && current.tab_id !== followedTabId && !dropOthers) return;
   await clearStoredNotice();
-  if (isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS) showNotice(stored);
+  if (current) showNotice(current);
 }
 
 // --- Page area and note (§5.3, §5.7) ---------------------------------------
@@ -953,6 +959,9 @@ async function refreshActiveTab(): Promise<void> {
   }
   if (seq !== tabRefreshSeq) return; // A newer refresh has the current tab.
   followedTabId = tab?.id ?? null;
+  // The worker's notice may have come while the panel still followed the
+  // previous tab; the live message was not shown, so the stored copy is.
+  void showStoredNotice(false);
   await refreshSiteAccess(tab);
 }
 
@@ -1113,7 +1122,7 @@ void (async () => {
   // demand (spec §5), so only a set-up harness, which can have runs, asks.
   // A run the shortcut started still restores through its notice.
   if (session.config?.agent) await runCards.restore();
-  await showStoredNotice();
+  await showStoredNotice(true);
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();
 })();

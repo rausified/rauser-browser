@@ -410,6 +410,35 @@ test("restore shows in-flight runs and at most 5 recent finished, skipping dismi
   page.runCards.dispose();
 });
 
+test("dismissing two cards at once remembers both", async () => {
+  const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const runs = [1, 2].map((n) => view({
+    run_id: id(n), state: "succeeded", answer: ANSWER, finished_at: new Date(NOW - n * 60_000).toISOString(),
+  }));
+  const storage = storageArea(new Map([[DISMISSED_KEY, [id(9)]]]));
+  const page = setup({
+    storage,
+    reply: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs };
+      if (request.type === "get_run") {
+        return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false };
+      }
+      return null;
+    },
+  });
+  await page.runCards.restore();
+  await settle();
+  assert.equal(cards(page.container).length, 2);
+  // Both clicks land before either storage read completes.
+  const [first, second] = cards(page.container);
+  button(first, "Dismiss").click();
+  button(second, "Dismiss").click();
+  await settle();
+  assert.equal(cards(page.container).length, 0);
+  assert.deepEqual([...storage.entries.get(DISMISSED_KEY)].sort(), [id(1), id(2), id(9)]);
+  page.runCards.dispose();
+});
+
 test("service_unavailable shows setup instructions", async () => {
   const message = "The Brauser service did not answer.";
   const page = setup({
