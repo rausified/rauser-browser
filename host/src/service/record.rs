@@ -34,6 +34,15 @@ pub const MAX_SELECTION_CHARS: usize = 64 * 1024;
 pub const MAX_TITLE_BYTES: usize = 2048;
 /// `RunView.error` is at most this long.
 pub const MAX_ERROR_BYTES: usize = 2048;
+/// The longest harness thread or session id kept, as `RunView` allows.
+pub const MAX_SESSION_ID_BYTES: usize = 256;
+
+/// Whether a harness thread or session id may be stored. An unfit id is
+/// dropped whole, never cut: a shortened id could name, and so resume, a
+/// different conversation.
+pub fn fit_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= MAX_SESSION_ID_BYTES && !id.chars().any(char::is_control)
+}
 
 /// Refuse a `start_run` whose fields pass the schema's bounds. A url with a
 /// control character is refused too: a browser-serialized URL never has one,
@@ -589,6 +598,20 @@ mod tests {
         });
         let bytes = serde_json::to_vec(&listed).unwrap().len();
         assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
+    }
+
+    #[test]
+    fn session_ids_must_be_short_and_printable() {
+        assert!(fit_session_id("sess-1"));
+        assert!(fit_session_id(&"a".repeat(MAX_SESSION_ID_BYTES)));
+        assert!(!fit_session_id(&"a".repeat(MAX_SESSION_ID_BYTES + 1)));
+        // Measured in bytes: 128 two-byte characters fit, 129 do not.
+        assert!(fit_session_id(&"é".repeat(MAX_SESSION_ID_BYTES / 2)));
+        assert!(!fit_session_id(&"é".repeat(MAX_SESSION_ID_BYTES / 2 + 1)));
+        assert!(!fit_session_id(""));
+        assert!(!fit_session_id("sess\u{1}1"));
+        assert!(!fit_session_id("sess\n1"));
+        assert!(!fit_session_id("\u{1b}[31msess"));
     }
 
     fn created(store: &RunStore) -> Uuid {

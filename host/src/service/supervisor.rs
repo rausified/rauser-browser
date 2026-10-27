@@ -35,7 +35,8 @@ use super::harness_api::{
 use super::maintenance;
 use super::queue::{Scheduler, Submit};
 use super::record::{
-    MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, page_markdown,
+    MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, fit_session_id,
+    page_markdown,
 };
 use crate::config::ConfigStore;
 use crate::vault::Vault;
@@ -711,11 +712,23 @@ impl Inner {
                         eprintln!("brauser service: run {id} log: {error:#}");
                     }
                 }
-                HarnessEvent::Session(SessionRef::CodexThread(thread)) => {
-                    self.note(id, |status| status.thread_id = Some(thread));
-                }
-                HarnessEvent::Session(SessionRef::ClaudeSession(session)) => {
-                    self.note(id, |status| status.session_id = Some(session));
+                HarnessEvent::Session(reference) => {
+                    let (SessionRef::CodexThread(handle) | SessionRef::ClaudeSession(handle)) =
+                        &reference;
+                    if !fit_session_id(handle) {
+                        eprintln!(
+                            "brauser service: run {id} ignored an over-long or unprintable session id"
+                        );
+                        return;
+                    }
+                    match reference {
+                        SessionRef::CodexThread(thread) => {
+                            self.note(id, |status| status.thread_id = Some(thread));
+                        }
+                        SessionRef::ClaudeSession(session) => {
+                            self.note(id, |status| status.session_id = Some(session));
+                        }
+                    }
                 }
             }
         });
@@ -924,6 +937,8 @@ mod tests {
         ErrorCode, HarnessId, RecordKey, RecordKeyKind, RunErrorKind, RunState,
     };
     use uuid::Uuid;
+
+    use crate::service::record::MAX_SESSION_ID_BYTES;
 
     use crate::brand::FAKE_HARNESS_ENV;
     use crate::service::harness_api::HarnessRegistry;
@@ -1438,6 +1453,29 @@ mod tests {
         ));
         assert!(fixture.supervisor.list_runs().is_empty());
         assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn over_long_or_control_character_session_ids_are_dropped_whole() {
+        // A later unfit id neither replaces nor truncates the good one.
+        let fixture = Fixture::new(&format!(
+            "echo 'session: sess-1'\necho 'session: {}'\nprintf 'session: sess\\0012\\n'\necho '{{}}'\n",
+            "s".repeat(MAX_SESSION_ID_BYTES + 1)
+        ));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.session_id.as_deref(), Some("sess-1"));
+
+        // With only an unfit id, none is recorded.
+        let fixture = Fixture::new(&format!(
+            "echo 'session: {}'\necho '{{}}'\n",
+            "s".repeat(MAX_SESSION_ID_BYTES + 1)
+        ));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.session_id, None);
     }
 
     #[test]
