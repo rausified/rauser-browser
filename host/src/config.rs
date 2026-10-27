@@ -445,7 +445,7 @@ impl ConfigStore {
             .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
     }
 
-    fn adapter_document(&self) -> Result<&AdapterTemplates> {
+    pub fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()
             .context("adapter policy is unavailable")
