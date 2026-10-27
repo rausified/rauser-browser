@@ -110,7 +110,7 @@ function install({
   };
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
-    ["site-path", "input"], ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
+    ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
@@ -124,7 +124,6 @@ function install({
   ]) {
     elements.set(id, new FakeElement(tag));
   }
-  elements.get("site-path").value = "/";
   elements.get("adapter-editor").hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
 
