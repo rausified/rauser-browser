@@ -45,9 +45,8 @@ use super::record::{
     page_markdown,
 };
 use crate::answer::parse_answer;
-use crate::config::{ConfigStore, default_summary_vocabulary, valid_summary_vocabulary};
+use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
 use crate::open::Opener;
-use crate::vault::Vault;
 
 /// How long a run may take before its process group is killed.
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -71,8 +70,8 @@ pub trait RunFinisher: Send + Sync {
     /// The normalized answer to keep in `result.json`, or what is wrong with
     /// `final_text`; the error goes back to the agent in the repair turn.
     fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String>;
-    /// PR 2: re-reads config under `lock_current` + `refresh` and requires a
-    /// configured, openable vault. PR 4 writes the summary here.
+    /// Writes the run's outputs from its kept answer; `retry_save` calls it
+    /// again after a failure (`super::finisher::SummaryFinisher`).
     fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String>;
 }
 
@@ -87,49 +86,6 @@ pub fn accept_summary_answer(
     };
     let answer = parse_answer(final_text, Path::new(cwd))?;
     serde_json::to_value(answer).map_err(|_| "the answer could not be encoded".to_string())
-}
-
-/// The service's finisher: accepts a §6.4 answer and checks, under the
-/// config lock, that a configured notes folder can still be opened. It
-/// writes nothing; PR 4 adds the summary file and log event.
-pub struct VaultCheckFinisher {
-    config: Mutex<ConfigStore>,
-}
-
-impl VaultCheckFinisher {
-    pub fn new(config: ConfigStore) -> Self {
-        Self {
-            config: Mutex::new(config),
-        }
-    }
-}
-
-impl RunFinisher for VaultCheckFinisher {
-    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
-        accept_summary_answer(run, final_text)
-    }
-
-    fn save(&self, run: &RunStatusFile, _result: &serde_json::Value) -> Result<SavedRun, String> {
-        let mut config = lock(&self.config);
-        let _config_lock = config
-            .lock_current()
-            .map_err(|_| "The configuration could not be locked.".to_string())?;
-        if config.refresh().is_err() || config.config_issue().is_some() {
-            return Err("The configuration is unavailable or needs repair.".to_string());
-        }
-        if !config.configured() {
-            return Err("Choose and confirm a notes folder first.".to_string());
-        }
-        let Some(storage) = config.snapshot().storage.as_ref() else {
-            return Err("Choose and confirm a notes folder first.".to_string());
-        };
-        Vault::open_checked(storage, config.root_identity())
-            .map_err(|_| "The notes folder is unavailable.".to_string())?;
-        Ok(SavedRun {
-            written_key: run.start_key.clone(),
-            summary_path: None,
-        })
-    }
 }
 
 /// Builds a run's child environment (the service environment overlaid with
@@ -1178,11 +1134,12 @@ mod tests {
 
     use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
+    use crate::service::finisher::SummaryFinisher;
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::record::{RunStatusFile, RunStore};
 
+    /// Accepts a §6.4 answer and saves nothing, counting its saves.
     struct TestFinisher {
-        fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
     }
 
@@ -1201,15 +1158,6 @@ mod tests {
             _result: &serde_json::Value,
         ) -> Result<SavedRun, String> {
             self.saves.fetch_add(1, Ordering::SeqCst);
-            let failing = self
-                .fail_saves
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    left.checked_sub(1)
-                })
-                .is_ok();
-            if failing {
-                return Err("The notes folder is unavailable.".to_string());
-            }
             Ok(SavedRun {
                 written_key: run.start_key.clone(),
                 summary_path: Some("summaries/a.summary.md".to_string()),
@@ -1218,6 +1166,9 @@ mod tests {
     }
 
     type SharedEnv = Arc<Mutex<Result<Vec<(OsString, OsString)>, String>>>;
+    /// Builds a fixture's finisher from its temp directory, in place of the
+    /// default [`TestFinisher`].
+    type FinisherFactory = Box<dyn FnOnce(&Path) -> Box<dyn RunFinisher>>;
 
     /// A file in a fixture run's folder that makes the fixture's folder
     /// check fail, as if the knowledge base folder had been replaced.
@@ -1227,7 +1178,6 @@ mod tests {
     struct Fixture {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
-        fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
         /// What the run environment source returns when a run starts.
         env: SharedEnv,
@@ -1266,7 +1216,7 @@ mod tests {
             env_error: Option<&str>,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
-            Self::seeded_with_fault(body, run_timeout, env_error, None, seed)
+            Self::seeded_with_fault(body, run_timeout, env_error, None, None, seed)
         }
 
         /// As [`Fixture::seeded`], with every thread whose name `fault`
@@ -1276,7 +1226,29 @@ mod tests {
             fault: impl Fn(&str) -> bool + Send + Sync + 'static,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
-            Self::seeded_with_fault(body, DEFAULT_RUN_TIMEOUT, None, Some(Arc::new(fault)), seed)
+            Self::seeded_with_fault(
+                body,
+                DEFAULT_RUN_TIMEOUT,
+                None,
+                Some(Arc::new(fault)),
+                None,
+                seed,
+            )
+        }
+
+        /// As [`Fixture::new`], saving through `finisher` instead.
+        fn with_finisher(
+            body: &str,
+            finisher: impl FnOnce(&Path) -> Box<dyn RunFinisher> + 'static,
+        ) -> Self {
+            Self::seeded_with_fault(
+                body,
+                DEFAULT_RUN_TIMEOUT,
+                None,
+                None,
+                Some(Box::new(finisher)),
+                |_, _| {},
+            )
         }
 
         fn seeded_with_fault(
@@ -1284,6 +1256,7 @@ mod tests {
             run_timeout: Duration,
             env_error: Option<&str>,
             spawn_fault: Option<SpawnFault>,
+            finisher: Option<FinisherFactory>,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
             let dir = tempfile::tempdir().unwrap();
@@ -1297,7 +1270,7 @@ mod tests {
             let registry = HarnessRegistry::from_lookup(|name| {
                 (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
             });
-            Self::build(dir, registry, run_timeout, env_error, spawn_fault)
+            Self::build(dir, registry, run_timeout, env_error, spawn_fault, finisher)
         }
 
         fn without_runner() -> Self {
@@ -1305,6 +1278,7 @@ mod tests {
                 tempfile::tempdir().unwrap(),
                 HarnessRegistry::default(),
                 DEFAULT_RUN_TIMEOUT,
+                None,
                 None,
                 None,
             )
@@ -1316,13 +1290,15 @@ mod tests {
             run_timeout: Duration,
             env_error: Option<&str>,
             spawn_fault: Option<SpawnFault>,
+            finisher: Option<FinisherFactory>,
         ) -> Self {
             let store = RunStore::open(dir.path().join("runs")).unwrap();
-            let fail_saves = Arc::new(AtomicUsize::new(0));
             let saves = Arc::new(AtomicUsize::new(0));
-            let finisher = TestFinisher {
-                fail_saves: fail_saves.clone(),
-                saves: saves.clone(),
+            let finisher: Box<dyn RunFinisher> = match finisher {
+                Some(build) => build(dir.path()),
+                None => Box::new(TestFinisher {
+                    saves: saves.clone(),
+                }),
             };
             let env: SharedEnv = Arc::new(Mutex::new(match env_error {
                 Some(error) => Err(error.to_string()),
@@ -1344,7 +1320,6 @@ mod tests {
                 }),
                 opener: crate::open::default_opener(),
             };
-            let finisher = Box::new(finisher);
             let supervisor = match spawn_fault {
                 Some(fault) => {
                     Supervisor::with_spawn_fault(store, registry, finisher, options, fault)
@@ -1354,7 +1329,6 @@ mod tests {
             Self {
                 dir,
                 supervisor,
-                fail_saves,
                 saves,
                 env,
             }
@@ -1514,6 +1488,7 @@ mod tests {
             tempfile::tempdir().unwrap(),
             HarnessRegistry::of(vec![Box::new(runner)]),
             DEFAULT_RUN_TIMEOUT,
+            None,
             None,
             None,
         );
@@ -1960,8 +1935,7 @@ mod tests {
     #[test]
     fn accept_without_cwd_fails_invalid_output() {
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
-        let finisher = VaultCheckFinisher::new(config);
+        let finisher = SummaryFinisher::new(dir.path().join("config.toml"));
         let mut run = sample_status(Uuid::new_v4());
         assert_eq!(
             finisher.accept(&run, TEST_ANSWER).unwrap_err(),
@@ -1988,33 +1962,64 @@ mod tests {
 
     #[test]
     fn save_failure_offers_retry_save_and_retry_succeeds() {
-        let fixture = Fixture::new("echo ran >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n");
-        fixture.fail_saves.store(1, Ordering::SeqCst);
+        // The service's own finisher, on a home folder in the fixture's
+        // directory, with an unowned file where the summary goes.
+        let fixture = Fixture::with_finisher(
+            "echo ran >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n",
+            |dir: &Path| {
+                let root = dir.join("home");
+                std::fs::create_dir(&root).unwrap();
+                let config = dir.join("config.toml");
+                crate::config::fixtures::write(&config, &root, "", "", "");
+                Box::new(SummaryFinisher::new(config))
+            },
+        );
+        let page = fixture.request("a").url;
+        let key = crate::vault::url_record_key(&page).unwrap();
+        let relative = crate::vault::Vault::open(&brauser_protocol::StorageConfig {
+            root: fixture.path("home").to_string_lossy().into_owned(),
+            profile: "neutral".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
+            later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
+            summaries_dir: Some("summaries".into()),
+            knowledge_base_dir: None,
+        })
+        .unwrap()
+        .summary_relative_path(&key, &page)
+        .unwrap();
+        let summary = fixture.path("home").join(&relative);
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "my own file\n").unwrap();
+        let shown = relative.to_string_lossy().replace('\\', "/");
+
         let id = fixture.start("a");
         let view = fixture.wait_finished(id);
         assert_eq!(view.state, RunState::Failed);
         assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
         assert_eq!(
-            view.error.as_deref(),
-            Some("The notes folder is unavailable.")
+            view.error,
+            Some(format!(
+                "A file Brauser does not own is at {shown}. Move it, then Retry save."
+            ))
         );
         assert!(view.can_retry_save);
+        assert_eq!(read(&summary), "my own file\n");
 
+        std::fs::remove_file(&summary).unwrap();
         let retried = fixture.supervisor.retry_save(id).unwrap();
         assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
         assert_eq!(retried.error, None);
         assert_eq!(retried.error_kind, None);
-        assert_eq!(
-            retried.summary_path.as_deref(),
-            Some("summaries/a.summary.md")
-        );
+        assert_eq!(retried.summary_path.as_deref(), Some(shown.as_str()));
         assert!(!retried.can_retry_save);
+        assert!(read(&summary).starts_with("---\nbrauser:\n  kind: summary\n"));
         assert_eq!(
             read(&fixture.path("count")),
             "ran\n",
             "the harness ran once"
         );
-        assert_eq!(fixture.saves.load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -2240,13 +2245,14 @@ mod tests {
     }
 
     #[test]
-    fn vault_check_finisher_refuses_without_a_configured_vault() {
+    fn summary_finisher_refuses_without_a_configured_vault() {
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
-        let finisher = VaultCheckFinisher::new(config);
+        let finisher = SummaryFinisher::new(dir.path().join("config.toml"));
         let run = sample_status(Uuid::new_v4());
-        let error = finisher.save(&run, &serde_json::json!({})).unwrap_err();
-        assert!(error.contains("notes folder"), "{error}");
+        let answer: serde_json::Value = serde_json::from_str(TEST_ANSWER).unwrap();
+        let error = finisher.save(&run, &answer).unwrap_err();
+        assert_eq!(error, "Choose a notes folder in settings, then Retry save.");
+        assert!(!dir.path().join("summaries").exists());
     }
 
     #[test]

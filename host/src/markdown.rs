@@ -56,14 +56,14 @@ pub(crate) fn inline(value: &str, limit: usize) -> String {
 /// Markdown links; the obsidian preset uses wikilinks.
 // The summary writer (PR 4) is the first caller of the profile-dependent
 // helpers.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LinkStyle {
     Relative,
     Wikilink,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn link_style(profile: &str) -> LinkStyle {
     if profile == "obsidian" {
         LinkStyle::Wikilink
@@ -128,7 +128,7 @@ const MAX_WIKILINK_LABEL_CHARS: usize = 200;
 /// Obsidian would not decode them in a link target. A `~` cannot open a fence
 /// after `[[`, so it stays. When nothing of the target is left, the label is
 /// written as escaped plain text instead (`Untitled` without one).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
     fn clean(value: &str) -> String {
         value
@@ -197,7 +197,7 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 /// shows as plain text with its backticks, and a list nested four or more
 /// spaces deep, or by tabs, is flattened into its parent's text
 /// (DESIGN.md §5.2 step 6).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn neutralize_remote(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len() + text.len() / 4);

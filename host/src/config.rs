@@ -378,7 +378,7 @@ impl ConfigStore {
         result
     }
 
-    fn load_from(path: PathBuf) -> Self {
+    pub(crate) fn load_from(path: PathBuf) -> Self {
         // The folder may have moved since setup. Keep the config available for
         // repair through update_config, but never use it for vault I/O until a
         // fresh validation succeeds.

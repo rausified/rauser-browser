@@ -559,10 +559,11 @@ mod tests {
     use crate::brand::FAKE_HARNESS_ENV;
     use crate::config::fixtures;
     use crate::frame::{read_frame, write_request};
+    use crate::service::finisher::SummaryFinisher;
     use crate::service::harness_api::HarnessRegistry;
     use crate::service::paths::build_id;
     use crate::service::record::RunStore;
-    use crate::service::supervisor::{DEFAULT_RUN_TIMEOUT, VaultCheckFinisher};
+    use crate::service::supervisor::DEFAULT_RUN_TIMEOUT;
 
     /// A short `/tmp` support directory (for `sun_path`), a notes folder, and
     /// a fake harness script.
@@ -668,7 +669,7 @@ mod tests {
         ) -> JoinHandle<Result<ServeExit>> {
             let paths = self.paths.clone();
             let config = self.config();
-            let finisher_config = self.config();
+            let finisher_config = self.support.join("config.toml");
             let program = self.program.clone();
             let handle = thread::spawn(move || {
                 let options = Self::options(&paths, &config, idle_exit, run_timeout);
@@ -679,7 +680,7 @@ mod tests {
                     Ok(Supervisor::new(
                         RunStore::open(paths.runs())?,
                         registry,
-                        Box::new(VaultCheckFinisher::new(finisher_config)),
+                        Box::new(SummaryFinisher::new(finisher_config.clone())),
                         options.clone(),
                     ))
                 })

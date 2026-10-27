@@ -117,7 +117,7 @@ impl Vault {
     /// older config can still name another folder, which
     /// `checked_relative_dir` does not screen for link-breaking characters,
     /// so the whole path is checked here and a failing one is an error.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, unix)), allow(dead_code))]
     pub(crate) fn summary_relative_path(
         &self,
         key: &RecordKey,
@@ -145,7 +145,7 @@ impl Vault {
     /// path-qualified link only matches a file whose path ends in
     /// `notes/<stem>.md`, and it still resolves when the home folder is a
     /// subfolder of the vault, which a vault-root path would not.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, unix)), allow(dead_code))]
     pub(crate) fn note_link(
         &self,
         key: &RecordKey,
@@ -170,7 +170,7 @@ impl Vault {
     /// Replace the record's summary file whole (§4.4): only an absent name or
     /// a file `summary::owned_summary` accepts for `key` is written; anything
     /// else is `OwnedWrite::Conflict` and is left untouched.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, unix)), allow(dead_code))]
     pub(crate) fn write_summary(
         &self,
         key: &RecordKey,

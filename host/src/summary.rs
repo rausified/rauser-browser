@@ -203,7 +203,7 @@ pub(crate) fn web_page_artifact_id(normalized_url: &str) -> Result<String, &'sta
 /// The summary file's name: the page note's stem plus `.summary.md`, so a
 /// summary and a note for one record share a stem and never a name. A URL key
 /// must match `canonical_url`, exactly as for the note.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub fn summary_filename(key: &RecordKey, canonical_url: &str) -> Result<String> {
     let note = note_filename(key, canonical_url)?;
     let stem = note.strip_suffix(".md").unwrap_or(&note);
@@ -215,7 +215,7 @@ pub fn summary_filename(key: &RecordKey, canonical_url: &str) -> Result<String> 
 /// `artifact_id`, and not the other key. Body text is never read, so agent
 /// text cannot change a file's identity. `canonical_url` is not part of the
 /// check: an artifact's summary keeps one name across its URLs.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub fn owned_summary(bytes: &[u8], key: &RecordKey) -> bool {
     let (id, forbidden) = match key.kind {
         RecordKeyKind::Url => ("url_id", "artifact_id"),
@@ -226,7 +226,7 @@ pub fn owned_summary(bytes: &[u8], key: &RecordKey) -> bool {
 
 /// Where the run that wrote a summary can be resumed: a Codex thread
 /// (`codex://threads/<id>`) or a Claude Code session.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionLink {
     CodexThread(String),
@@ -236,7 +236,7 @@ pub enum SessionLink {
 
 /// Everything a summary file holds (spec §7.1). `note_link` is the page
 /// note link already built by `Vault::note_link` in the same link style.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub struct SummaryDocument<'a> {
     pub key: &'a RecordKey,
     pub canonical_url: &'a str,
@@ -369,7 +369,7 @@ fn portable_note(note: &str) -> String {
 /// each starting a line right after a host-written newline. The identity
 /// values (`canonical_url`, the record key) are written exactly, so
 /// `owned_summary` reads them back.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
     let answer = doc.answer;
     let id_key = match doc.key.kind {
