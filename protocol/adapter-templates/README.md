@@ -21,7 +21,7 @@ An **adapter document** is the JSON form of the `[adapters]` TOML table:
 {"format": 1, "artifacts": [{"type": "...", "origin": "...", "match": [{"path": "...", "query": {}, "absent": [], "mode": "..."}], "id": "...", ...}]}
 ```
 
-Adapter keys are `type`, `origin`, `match`, `id`, `title`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, and `fields`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
+Adapter keys are `type`, `origin`, `match`, `id`, `title`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, `fields`, and `within`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
 
 A case's `doc` field (called `existing` for `draft` cases) is either an inline adapter document or `{"$fixture": "<name>"}`, which refers to an entry in `fixtures`. `$fixture` is never a real document key.
 
@@ -92,6 +92,7 @@ The TS engine validates only what the worker needs (§12). The TS harness must s
   - `title_entry`: the index of the matching entry, or `null` for the fallback.
   - `alias_id`: the suggested tab-title alias ID, or `null`.
   - `refs`: `[{"type", "value"}]`, in scan order.
+- **Additional field when the adapter declares `within`** (§8.3): `within: {"type", "artifact_id"}`, the container's type and built ID. The key is absent when the adapter declares no `within`, and also when the container ID would exceed 512 bytes; the match stands either way.
 
 Reasons, in the order they are decided:
 
@@ -213,6 +214,7 @@ These are the complete format-1 enum. Every code appears in at least one vector.
 | Title | `title_too_long`, `title_syntax`, `title_unbounded_capture`, `title_capture_swallows`, `title_unknown_capture`, `title_type_mismatch`, `too_many_titles`, `empty_title_list` |
 | Alias | `bad_alias`, `alias_capture_not_id`, `alias_capture_not_in_title`, `alias_type_mismatch` |
 | Refs | `too_many_refs`, `bad_ref`, `bad_ref_find` |
+| Within | `within_bad_type`, `within_self`, `within_id_syntax`, `within_id_reserved_scheme`, `within_unknown_capture` |
 
 The draft codes are `draft_forbidden_key`, `draft_no_scope_source`, `draft_scope_conflict`, `draft_no_leading_literal`, `draft_rest_second`, `draft_id_needs_typed_capture`, `draft_search_capture`, `draft_matches_probe`, and `draft_overlap`.
 
@@ -231,7 +233,7 @@ The first failing check is reported.
       - An adapter that is not a table gives `wrong_type`.
       - Unknown keys give `unknown_key`.
       - A missing `type`, `origin`, `match`, or `id` gives `missing_key`.
-      - A mistyped value gives `wrong_type`.
+      - A mistyped value gives `wrong_type`. `within` must be a table with exactly the keys `type` and `id`, both strings.
    2. **`type`, `origin`, `path_case`.**
       - `type`: `bad_adapter_type`, or `reserved_adapter_type` for `web.page`.
       - `origin`: `bad_origin`. The origin must equal its own WHATWG origin serialization and use `http` or `https`, and its host must be an IP address or an ASCII hostname (SQ15).
@@ -308,6 +310,12 @@ The first failing check is reported.
        3. `bad_ref`: the shape is exactly `{type, find}`, and `type` must follow the adapter-type grammar.
        4. `bad_ref_find`: only `jira_key`, `int`, `hex`, and `uuid` are allowed, with no bounds (SQ21).
    11. **`fields`:** `wrong_type` unless it is a table of strings.
+   12. **`within`** (§8.3), typed in step 1:
+       1. `within_bad_type`: `type` breaks the adapter-type grammar or is `web.page`.
+       2. `within_self`: `type` equals the adapter's own `type`.
+       3. `within_id_syntax`: `id` breaks the §8.1 grammar.
+       4. `within_id_reserved_scheme`: the scheme is `web`.
+       5. `within_unknown_capture`, per rule: a `{name}` that is not a capture the rule binds and the adapter's `id` uses or `scope` lists, or that is `mode`. A second `{host}` is such a name (SQ-V19). Because the names come from the ID and scope, step 6's `extra_capture` is unchanged.
 
 ## Fixtures
 
@@ -393,8 +401,8 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 
 | Kind | Cases | Impls |
 |---|---|---|
-| validate | 580 | rust, ts |
-| evaluate | 375 | rust, ts |
+| validate | 602 | rust, ts |
+| evaluate | 383 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
@@ -403,7 +411,7 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 4 | rust |
-| **Total** | **1254** | |
+| **Total** | **1284** | |
 
 ## Maintenance
 

@@ -58,7 +58,10 @@ modes    = { }                 # optional (§5.4)
 scope    = { }                 # required on shared origins (§6)
 path_case = "sensitive"        # or "insensitive" (§5.1)
 fields   = { status = "<selector>" }               # Tier 1, unchanged
+# within = { type = "<container type>", id = "<container ID template>" } # optional (§8.3)
 ```
+
+`within` is optional. When present it is a table with exactly the string keys `type` and `id`: the type of the container artifact the adapter's artifacts sit within, and an ID template for it (§8.3). The Jira adapter above declares none.
 
 Each rule is a table with:
 
@@ -249,6 +252,22 @@ Because no capture type admits `/` or `:`, an `artifact_id` splits back into its
 - The `format` number versions this language. A future format may add types or segment kinds, but it never changes how an existing template in an older format builds an ID.
 - Changing the `id` template of an adapter that has recorded activity is a **migration**, not an edit. The host shows how many artifacts are affected, and on confirmation writes one `alias` event from each old ID to its new one (DESIGN.md §5.1), so no history, note, or summary is orphaned.
 - A starter adapter's ID template is frozen once it ships. Starter adapters use Brauser's own ID scheme, not another tool's (DESIGN.md §14).
+
+### 8.3 Container IDs
+
+An adapter may declare that each artifact it recognizes sits **within** a container artifact, such as a pull request within its repository:
+
+```toml
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+```
+
+- `within.type` follows the adapter-type grammar (§3). It may not be `web.page`, and it may not equal the adapter's own `type`.
+- `within.id` follows the §8.1 grammar, and the scheme `web` is reserved here too. Each `{name}` must be a capture the adapter's own `id` uses or a key of its `scope`, so every rule binds it, it is never optional, and it is never `mode`. A capture that only the container ID uses is still an extra capture (§8.1).
+- `{host}` is the adapter's own host, and parts take the same canonical values as the adapter's ID.
+- A match carries the container's type and built ID alongside its own. If the container ID would exceed 512 bytes, the match still stands but names no container.
+- Container IDs are as durable as artifact IDs (§8.2). The container's own adapter, if any, must build the same ID for the container's pages, and adding, changing, or removing `within` on an adapter with recorded activity is a contract change, confirmed like any other. A shipped starter's container ID is frozen with its own ID.
+
+Roll-up: a visit recognized as artifact A within container C counts once toward A and once toward C, never twice toward C. A visit is recognized by exactly one adapter (first match wins, §3), so C's totals are its own pages plus everything within it, each second counted once, and C's days opened are the union of its own days and its contents' days. The host derives containers and keeps these totals in its index (DESIGN.md §5).
 
 ## 9. Title templates
 

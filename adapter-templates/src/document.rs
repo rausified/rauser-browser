@@ -49,6 +49,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "unscoped",
     "path_case",
     "fields",
+    "within",
 ];
 const RULE_KEYS: &[&str] = &["path", "query", "absent", "mode"];
 const REF_TYPES: &[BaseType] = &[
@@ -256,6 +257,20 @@ pub(crate) struct RefSpec {
     pub(crate) find: BaseType,
 }
 
+/// The container an adapter's artifacts sit within (§8.3): its type and an ID
+/// template built from captures the adapter's ID or scope already uses.
+#[derive(Clone, Debug)]
+pub struct Container {
+    pub(crate) artifact_type: String,
+    pub(crate) id: IdTemplate,
+}
+
+impl Container {
+    pub fn artifact_type(&self) -> &str {
+        &self.artifact_type
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Adapter {
     pub(crate) artifact_type: String,
@@ -271,6 +286,7 @@ pub struct Adapter {
     pub(crate) modes: Vec<(String, Mode)>,
     pub(crate) scope: Option<Vec<(String, Vec<String>)>>,
     pub(crate) fields: Vec<(String, String)>,
+    pub(crate) within: Option<Container>,
 }
 
 impl Adapter {
@@ -293,6 +309,11 @@ impl Adapter {
 
     pub fn scope(&self) -> Option<&[(String, Vec<String>)]> {
         self.scope.as_deref()
+    }
+
+    /// The container this adapter's artifacts sit within, if declared.
+    pub fn within(&self) -> Option<&Container> {
+        self.within.as_ref()
     }
 
     /// The ctype of a capture the ID uses, from the first rule.
@@ -503,6 +524,19 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
     let scope_v = v
         .get("scope")
         .map(|p| p.as_table().ok_or_else(wrong))
+        .transpose()?;
+    // `within` is exactly `{type, id}`, both strings (§8.3).
+    let within_v = v
+        .get("within")
+        .map(|w| {
+            let t = w.as_table().filter(|t| t.len() == 2).ok_or_else(wrong)?;
+            let ty = w.get("type").and_then(Value::as_str);
+            let id = w.get("id").and_then(Value::as_str);
+            match (t.iter().all(|(k, _)| k == "type" || k == "id"), ty, id) {
+                (true, Some(ty), Some(id)) => Ok((ty, id)),
+                _ => Err(wrong()),
+            }
+        })
         .transpose()?;
     let modes = match modes_v {
         None => None,
@@ -736,6 +770,44 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
             .collect::<VResult<Vec<_>>>()?,
     };
 
+    // 12. Container (§8.3). Its captures are the ID's and scope's, so step 6's
+    // extra_capture is unchanged.
+    let within = match within_v {
+        None => None,
+        Some((wty, wid)) => {
+            if !is_adapter_type(wty) || wty == "web.page" {
+                return Err(at.err(ErrorCode::WithinBadType));
+            }
+            if wty == ty {
+                return Err(at.err(ErrorCode::WithinSelf));
+            }
+            let in_within = |code, p| at.err_in(code, Field::Within, Some(p));
+            let cid =
+                IdTemplate::parse(wid).map_err(|p| in_within(ErrorCode::WithinIdSyntax, p))?;
+            if cid.scheme == "web" {
+                return Err(in_within(ErrorCode::WithinIdReservedScheme, 0));
+            }
+            for (r, rule) in rules.iter().enumerate() {
+                for (name, p) in cid.names_at() {
+                    let known = name != "mode"
+                        && rule.capture(name).is_some()
+                        && (scoped(name) || id.names().any(|n| n == name));
+                    if !known {
+                        return Err(at.rule(r).err_in(
+                            ErrorCode::WithinUnknownCapture,
+                            Field::Within,
+                            Some(p),
+                        ));
+                    }
+                }
+            }
+            Some(Container {
+                artifact_type: wty.to_owned(),
+                id: cid,
+            })
+        }
+    };
+
     Ok(Adapter {
         artifact_type: ty.to_owned(),
         origin: origin.to_owned(),
@@ -749,6 +821,7 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         modes,
         scope,
         fields,
+        within,
     })
 }
 

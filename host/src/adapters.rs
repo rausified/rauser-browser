@@ -126,6 +126,12 @@ fn match_json(found: &Match) -> Json {
         "artifact_id": found.artifact_id,
         "mode": found.mode.map(|mode| mode.as_str()),
     });
+    if let (Some(within), Json::Object(fields)) = (&found.within, &mut out) {
+        fields.insert(
+            "within".into(),
+            json!({"type": within.artifact_type, "artifact_id": within.artifact_id}),
+        );
+    }
     if let (Some(title), Json::Object(fields)) = (&found.title, &mut out) {
         let refs: Vec<Json> = title
             .refs
