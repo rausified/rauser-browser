@@ -2055,6 +2055,39 @@ async function run() {
       });
     }
 
+    await step("A damaged adopted-adapter record is named in settings and forgotten with a backup", async () => {
+      const support = path.dirname(configPath);
+      const state = path.join(support, "adopted-contracts.json");
+      requireCondition(JSON.parse(await readFile(state, "utf8")).contracts.length > 0,
+        "The host recorded no adopted adapter");
+      await writeFile(state, "{");
+      await openSettingsTab();
+      await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
+      await settingsConnected();
+      await waitFor(() => onSettings(async (page) => {
+        requireCondition(await page.hidden("#adopted-state") === false, "Settings does not show the damaged record");
+        const issue = await page.text("#adopted-issue");
+        requireCondition(issue?.includes(state) && issue.includes("paused"), `Settings names the record as: ${issue}`);
+      }), { timeout: 20_000 });
+      const dialogsBefore = (await dialogLogLines()).length;
+      await inSettings(async (page) => {
+        await page.click("#forget-adopted");
+        await page.click("#forget-adopted-yes");
+      });
+      await waitFor(async () => requireCondition((await hostConfig(wrapper)).adopted_state.issue === null,
+        "The host still reports the damaged record"), { timeout: 20_000, interval: 1_000 });
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.hidden("#adopted-state") === true, "Settings still shows the record's issue")),
+      { timeout: 20_000 });
+      const backups = (await readdir(support)).filter((name) => /^adopted-contracts\.json\..+\.bak$/.test(name));
+      requireCondition(backups.length === 1, `Expected one record backup, found: ${backups.join(", ")}`);
+      requireCondition(await readFile(path.join(support, backups[0]), "utf8") === "{",
+        "The backup does not hold the damaged record");
+      requireCondition(JSON.parse(await readFile(state, "utf8")).contracts.length > 0,
+        "The fresh record lacks the current adapter");
+      requireCondition((await dialogLogLines()).length === dialogsBefore, "Forgetting showed a native dialog");
+    });
+
     await step("Site removal", async () => {
       await inSettings((page) => page.click(`button[aria-label="Remove site ${origin}"]`));
       await waitFor(async () => {

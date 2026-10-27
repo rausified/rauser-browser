@@ -75,6 +75,7 @@
         { "$ref": "#/$defs/RetrySaveRequest" },
         { "$ref": "#/$defs/OpenPathRequest" },
         { "$ref": "#/$defs/GetAgentEnvRequest" },
+        { "$ref": "#/$defs/ForgetAdoptedContractsRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
     },
@@ -300,7 +301,8 @@
         "config_issue",
         "agent_status",
         "adapter_issue",
-        "adapter_warnings"
+        "adapter_warnings",
+        "adopted_state"
       ],
       "properties": {
         "type": {
@@ -351,6 +353,73 @@
           "maxItems": 256,
           "items": {
             "$ref": "#/$defs/AdapterWarning"
+          }
+        },
+        "adopted_state": {
+          "$ref": "#/$defs/AdoptedState"
+        }
+      }
+    },
+    "ForgetAdoptedContractsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Back up the host's adopted-contract record (adopted-contracts.json) and start a fresh one. expected_revision is adopted_state.revision from config_result; a changed file is a conflict. Answered with config_result.",
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision"
+      ],
+      "properties": {
+        "type": {
+          "const": "forget_adopted_contracts"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 6
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "AdoptedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The host's record of the adapter contracts it has adopted. issue is set while the record cannot be used, which pauses notes on pages the current adapters do not recognize; warnings say recording failed, which degrades protection for adapters later removed by hand. revision identifies the file for forget_adopted_contracts.",
+      "required": [
+        "issue",
+        "revision",
+        "warnings"
+      ],
+      "properties": {
+        "issue": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string"
           }
         }
       }
@@ -1758,7 +1827,7 @@
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
-        "requested_at": { "description": "The user's local click time with its UTC offset.", "type": "string", "minLength": 1, "maxLength": 32 }
+        "requested_at": { "description": "The user's local click time with its UTC offset: RFC 3339 in whole seconds, ending in Z or +HH:MM/-HH:MM, as occurred_at is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
       }
     },
     "RunStarted": {

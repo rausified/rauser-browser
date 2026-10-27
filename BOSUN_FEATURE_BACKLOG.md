@@ -490,21 +490,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   spec above), not the old M2 step 8.2 harness path. Agent drafts are
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
-- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
-  durable.** From the PR #75 Codex review: a failed terminal status write
-  still frees the run's slot and key, so the record says running and a second
-  run for the same key can start. Use bounded retries and an in-memory end
-  state, keeping the key reserved, rather than holding the queue on a failing
-  disk.
-- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
-  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
-  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
-  whole-second forms. Make them agree.
-- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
-  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
-  the cap that `write_request` (host/src/frame.rs ~64) enforces after
-  connecting; refuse it as too large before contacting the service.
-  Re-check against open access PR 3 (#98), which reworked the service run path.
 
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
   child could exit after printing its reply before the parent wrote the framed
@@ -528,8 +513,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   warning, and offers a one-click "Stop stripping <param>" fix. Also record
   which params were stripped. P2; in progress in the Columbus session (builds
   on #85).
-- [ ] `brwr-hrr` **Give damaged adopted-contract state a visible repair path,
-  and guard ID changes against hand-retired contracts.** Follow-up to #85.
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
@@ -604,6 +587,7 @@ were folded into `brwr-q7e` above rather than given their own item.
 - [x] `brwr-smk` **The macOS headless smoke waits for state, not time (2026-10-27).** Since #98, main's required smoke had stopped three ways, each passing on rerun. `Extensions.loadUnpacked` had 15 s to cover Chrome's whole cold start. A reopened panel's restored Codex card was taken for the new Claude Code run. The capture step navigated before the worker was shown to hold the new lease. A fourth stop showed up under load: one timed-out `chrome.sidePanel.open` ended the run. `scripts/smoke-macos.mjs` now has one helper, `waitUntil(what, observe, accept)`, whose timeout reports the last state observed. It is used to wait for Chrome before loading the extension, for the worker's lease (`workerHoldsHostPolicy`, `reloadSettings`), for a new run card that the service did not already list (`summarizeFromPanel(harness)`), and to retry opening the panel safely. TESTING.md "Waiting for state, not time" documents it for later smoke steps. No product race was found, and no step asserts less. **Metrics:** before, 3 of 3 idle and 3 of 5 under full CPU load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load).
 
 - [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, #125).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
+- [x] `brwr-hrr` **Repair a damaged adopted-adapter record from settings (2026-10-27).** Hand-retired adapter contracts freeze their routes' IDs (#122), and `config_result.adopted_state` (additive protocol v6) now names a damaged `adopted-contracts.json`, why it cannot be used, and that notes on unrecognized pages are paused; settings' **Forget recorded adapters** confirms in the page, sends `forget_adopted_contracts` with the shown revision, and the host backs the file up as `adopted-contracts.json.<timestamp>.bak` and records afresh under the config lock. A full or unwritable record is a non-blocking settings warning. Covered by host, wire, settings and headless smoke tests.
 
 - **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
 

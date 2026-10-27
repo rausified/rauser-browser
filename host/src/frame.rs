@@ -67,6 +67,25 @@ pub fn write_request<W: Write>(output: &mut W, request: &Request) -> Result<()> 
     write_body(output, &body)
 }
 
+/// Whether `write_request` would accept `request`, measured without
+/// buffering it, so a caller can refuse an oversize request before it
+/// connects to the service. A request that cannot be serialized counts as
+/// fitting: `write_request` reports that failure itself.
+pub fn request_fits(request: &Request) -> bool {
+    struct Count(usize);
+    impl Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, request).map_or(true, |()| count.0 <= MAX_INBOUND_BYTES)
+}
+
 fn write_body<W: Write>(output: &mut W, body: &[u8]) -> Result<()> {
     let size = u32::try_from(body.len()).context("native message length overflow")?;
     output.write_all(&size.to_ne_bytes())?;
@@ -150,6 +169,33 @@ mod tests {
         let mut wire = Vec::new();
         assert!(write_request(&mut wire, &request).is_err());
         assert!(wire.is_empty());
+    }
+
+    /// request_fits agrees with write_request on both sides of the cap.
+    #[test]
+    fn request_fits_matches_write_request_at_the_cap() {
+        let sized = |len: usize| {
+            let mut value = HelloRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: String::new(),
+            };
+            let base = serde_json::to_vec(&Request::Hello(value.clone()))
+                .unwrap()
+                .len();
+            value.request_id = "r".repeat(len - base);
+            Request::Hello(value)
+        };
+        let at_cap = sized(MAX_INBOUND_BYTES);
+        assert_eq!(
+            serde_json::to_vec(&at_cap).unwrap().len(),
+            MAX_INBOUND_BYTES
+        );
+        assert!(request_fits(&at_cap));
+        assert!(write_request(&mut Vec::new(), &at_cap).is_ok());
+        let over = sized(MAX_INBOUND_BYTES + 1);
+        assert!(!request_fits(&over));
+        assert!(write_request(&mut Vec::new(), &over).is_err());
+        assert!(request_fits(&hello()));
     }
 
     #[test]

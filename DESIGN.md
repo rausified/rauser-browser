@@ -703,25 +703,32 @@ there, never twice. Several hosts share the file; each rereads it under the
 lock, adds what it lacks, and replaces it atomically (temporary file, fsync,
 rename), so none drops another's entries. It holds at most 1,024 contracts
 and 1 MiB; a write past either bound, or any other write failure, is skipped
-with a warning and retried on later refreshes, and until it succeeds a hand
-removal of an unrecorded contract leaves its pages on URL keys as before. A
+and retried on later refreshes, and until it succeeds a hand
+removal of an unrecorded contract leaves its pages on URL keys as before.
+Settings shows that as a non-blocking warning (`config_result.adopted_state.warnings`,
+from the reporting host's own last attempt under the lock; `get_config`
+refreshes under the lock so the attempt is current). A
 file the host cannot use (unreadable, not a regular file, over a bound,
 malformed, or from a newer host) is never rewritten, and every URL the current
 policy does not recognize has unavailable identity: loads and saves refuse,
-because any origin's deciding contract may be in it. The refusal names the
-file's path and says that moving it aside restores those notes. For the same
+because any origin's deciding contract may be in it. Settings names the file,
+why it cannot be used, and what is paused (`adopted_state.issue`), and the
+note refusal names its path and points at the repair. For the same
 reason a settings save that adds or reshapes an adapter is refused while the
 file is unusable, since the addition cannot be checked against what it held;
 removals and other edits still save. A damaged entry with a
 readable HTTP(S) origin makes only that origin unavailable, and refuses
 additions only there, as a damaged
 history entry does; one with no such origin counts as an unusable file.
-Moving the file aside forgets its contracts, like a config repair, so notes
-from adapters removed by hand may need **Use as artifact note** again. A
-settings repair ("Forget recorded adapters", backing the file up under the
-config lock) and warnings for a failed or capped state write need new
-`config_result` fields; they follow `brwr-sr3` as an additive protocol
-change (`brwr-hrr`).
+The repair is settings' **Forget recorded adapters** (`brwr-hrr`), confirmed
+in the page with no native dialog: `forget_adopted_contracts` carries the
+`adopted_state.revision` the user was shown, and under the config lock the
+host refuses a changed file as `conflict`, otherwise renames it aside to
+`adopted-contracts.json.<UTC timestamp>.bak` (never replacing an earlier
+backup) and records the current contracts afresh. Forgetting drops the
+contracts the file held, like a config repair, so notes from adapters
+removed by hand may need **Use as artifact note** again; fixing or moving
+the file by hand does the same.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 

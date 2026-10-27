@@ -64,6 +64,24 @@ pub struct ConfigResult {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub adapter_issue: Option<String>,
     pub adapter_warnings: Vec<AdapterWarning>,
+    pub adopted_state: AdoptedState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForgetAdoptedContractsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdoptedState {
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub issue: Option<String>,
+    pub revision: String,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -909,6 +927,7 @@ pub enum Request {
     RetrySave(RetrySaveRequest),
     OpenPath(OpenPathRequest),
     GetAgentEnv(GetAgentEnvRequest),
+    ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
     ServiceHello(ServiceHelloRequest),
 }
 
@@ -940,6 +959,7 @@ impl Request {
             Self::RetrySave(value) => value.protocol_version,
             Self::OpenPath(value) => value.protocol_version,
             Self::GetAgentEnv(value) => value.protocol_version,
+            Self::ForgetAdoptedContracts(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
     }
@@ -971,6 +991,7 @@ impl Request {
             Self::RetrySave(value) => &value.request_id,
             Self::OpenPath(value) => &value.request_id,
             Self::GetAgentEnv(value) => &value.request_id,
+            Self::ForgetAdoptedContracts(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
     }

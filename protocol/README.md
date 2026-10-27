@@ -92,6 +92,20 @@ version 5, adapter additions or changes required a native confirmation through
 every-account-in-this-Chrome-profile warning to it; version 6 removes that
 confirmation, and an unscoped adapter still needs its `unscoped` acknowledgment.
 
+`config_result.adopted_state` (added to version 6, 2026-10-27; the extension
+and host ship together) reports the host's record of adopted adapter
+contracts, `adopted-contracts.json` beside config.toml (DESIGN.md §6.2).
+`issue` is non-null while the record cannot be used, which pauses note loads
+and saves on pages the current adapters do not recognize and refuses adapter
+additions; it names the file and why. `warnings` (at most 8) says recording
+failed or the record is full, which leaves later hand removals unprotected
+and blocks nothing. `revision` is `missing`, `unreadable`, `not-a-file`, or
+the `sha256:` revision of the file's bytes. `forget_adopted_contracts`
+carries that revision as `expected_revision`: a changed record is a
+`conflict`; otherwise the host renames the record aside to
+`adopted-contracts.json.<UTC timestamp>.bak`, records the current contracts
+afresh, and answers with `config_result`.
+
 Version 6 is the current protocol. The host refuses version 5 and earlier
 requests with `unsupported_protocol_version`. It goes with standing HTTP(S)
 access: the extension requests `http://*/*` and `https://*/*` at install, so
@@ -156,8 +170,10 @@ the same length-prefixed framing and generated types:
   naming another is refused as `not_configured`), `record_key`, and `requested_at`. The extension always sends
   `record_key` as `null`: the host resolves it exactly as `load_note` does and
   refuses a request that names one. `requested_at` is the user's local click
-  time as an RFC 3339 timestamp with its UTC offset, checked against the same
-  window as capture timestamps. The answer is `run_started` with the `run`
+  time as an RFC 3339 timestamp in whole seconds with its UTC offset (`Z` or
+  `+HH:MM`/`-HH:MM`, so `new Date().toISOString()`'s fractional seconds are
+  refused), the same form as capture's `occurred_at` and checked against the
+  same window. The answer is `run_started` with the `run`
   and `existing`, which is `true` when the page's record key already had a
   queued or running run; that run is returned instead of a new one.
 - `get_run` names a `run_id` and `since_offset`, the stream byte offset the
