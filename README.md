@@ -78,6 +78,17 @@ The host binds the chosen folder to its filesystem identity. If that folder is m
 
 Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Automatic capture still checks the original URL against the host's adapters before normalizing or logging it, but notes work on any HTTP(S) page whether or not an adapter covers it. See [protocol/README.md](protocol/README.md) for the message contract.
 
+Unsaved note edits also have a local recovery copy in this browser profile,
+written as you type so closing the panel during a save does not lose newer
+typing. Reopening shows the current saved note and a separate recovery box:
+use **Copy** to recover the text yourself, or **Discard recovery copies** to
+remove the displayed copies. Recovery never overwrites a note automatically.
+Confirmed saves clear their own draft; conflicted copies stay until discarded.
+These copies include note text and page addresses, stay outside the home folder,
+and are not synced by Brauser. If browser storage is blocked or full, the panel
+warns you to keep it open until the native save succeeds. Clearing extension
+data or uninstalling also removes the recovery copies.
+
 Removing a site or changing its capture rules keeps one shared note per
 artifact on every route the removed or earlier rules recognized, because
 config.toml keeps those rules for note keys (never for capture). A page those

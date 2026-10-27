@@ -19,6 +19,29 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Page-note recovery coverage
+
+`extension/tests/note-editor.test.mjs` drives the real recovery store with
+in-memory synchronous storage. It covers pending debounce, newer input during
+an in-flight save, failed saves, conflicts, empty deletions, exact acknowledged
+snapshot cleanup, independent panels, stale discard, quota errors, blocked
+storage, partial write/cleanup failures, malformed/unrelated entries and
+artifact-key changes. Reopened editors load the current host note and never
+replay recovery text automatically.
+
+`extension/tests/panel.test.mjs` runs the built panel module and shipped HTML
+with the real native client and mocked DOM/Chrome/storage. Its close/reopen
+tests exercise debounce and in-flight-save teardown, a late host completion,
+separate current and recovered text, Copy/Discard, persistent conflicts
+(including empty deletions), subsequent successful edits and visible quota
+errors while native autosave continues. Clipboard calls are captured in memory;
+no test touches the user's clipboard or a real browser profile.
+
+These prove the composed client flow; Chrome storage durability, layout and
+real panel teardown still need the macOS browser gates. The headless macOS
+runner refuses Linux, and no real-browser pass is claimed on this VM. No
+smoke step, real dialog or protocol changed for recovery.
+
 ## Capture Site coverage
 
 `npm run test:extension` builds on the extension build from the development
