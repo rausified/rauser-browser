@@ -55,11 +55,13 @@ pub fn serve_with_context<R: Read, W: Write>(
     context: &SetupContext<'_>,
 ) -> Result<()> {
     let mut consent = ConsentAuthority::new();
+    // Whether this is the panel's connection (`panel_request`).
+    let mut interactive = false;
     loop {
         let body = match read_frame(&mut input) {
             Ok(Some(body)) => body,
             Ok(None) => {
-                regenerate_artifacts(&mut config);
+                regenerate_artifacts(&mut config, interactive);
                 return Ok(());
             }
             Err(FrameError::TooLarge) => {
@@ -86,9 +88,38 @@ pub fn serve_with_context<R: Read, W: Write>(
             }
             Err(FrameError::Io(error)) => return Err(error).context("reading native message"),
         };
+        interactive = interactive || panel_request(&body);
         let response = dispatch_json(&body, &mut config, &mut consent, context);
         write_frame(&mut output, &response)?;
     }
+}
+
+/// The requests only the side panel sends: its page note, artifact card,
+/// context, Recent, and worklog. Closing a connection that sent one runs the
+/// artifact pass (§6.7). The worker's background sync (lease and delivery)
+/// and the settings page (which has its own "Update artifact files now"
+/// action) only get the first pass of each local day.
+fn panel_request(body: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Kind<'a> {
+        #[serde(rename = "type", borrow)]
+        kind: Option<std::borrow::Cow<'a, str>>,
+    }
+    serde_json::from_slice::<Kind<'_>>(body).is_ok_and(|value| {
+        matches!(
+            value.kind.as_deref(),
+            Some(
+                "load_note"
+                    | "save_note"
+                    | "use_artifact_note"
+                    | "view_older_note"
+                    | "get_artifact"
+                    | "record_why"
+                    | "list_artifacts"
+                    | "worklog"
+            )
+        )
+    })
 }
 
 /// Read the common envelope before the version-specific request. A newer
@@ -1034,7 +1065,10 @@ fn reconcile_index_from_logs(config: &ConfigStore) {
     }
 }
 
-fn regenerate_artifacts(config: &mut ConfigStore) {
+/// The connection-boundary pass (§6.7): when the panel's connection closes,
+/// and on the first connection of each local day. Delivery alone only marks
+/// artifacts dirty, so a background sync does not rewrite their files.
+fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
     let Ok(_lock) = config.lock_current() else {
         return;
     };
@@ -1047,7 +1081,17 @@ fn regenerate_artifacts(config: &mut ConfigStore) {
     let Ok(cache_dir) = config.cache_dir() else {
         return;
     };
-    match open_index(config, storage, &cache_dir).and_then(|index| index.regenerate_dirty()) {
+    let index = match open_index(config, storage, &cache_dir) {
+        Ok(index) => index,
+        Err(error) => {
+            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+            return;
+        }
+    };
+    if !interactive && !index.daily_pass_due(time::OffsetDateTime::now_utc()) {
+        return;
+    }
+    match index.regenerate_dirty() {
         Ok(report) => {
             if let Some(failure) = report.first_failure {
                 eprintln!(
@@ -5622,7 +5666,7 @@ id = "work:{host}/{id}"
             "Work item"
         );
         assert!(!root.join("artifacts").exists());
-        regenerate_artifacts(&mut config);
+        regenerate_artifacts(&mut config, true);
         assert!(root.join("artifacts").is_dir());
         match invoke(&mut config, event("work:work.example/8", Vec::new())) {
             Response::ActivityRecorded(recorded) => {
@@ -6225,5 +6269,138 @@ id = "work:{host}/{id}"
             );
             assert_eq!(session.status().state, AgentState::Ready);
         }
+    }
+
+    /// DESIGN.md §6.7: delivery marks artifacts dirty and does not touch their
+    /// files. Only the panel's connection close, the first connection of each
+    /// local day, and the settings action regenerate them; closing settings
+    /// does not.
+    #[test]
+    fn delivery_only_connections_leave_artifact_files_to_later_passes() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_minute(0)
+            .unwrap()
+            .replace_second(0)
+            .unwrap()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let connect = |requests: Vec<Request>| {
+            let json = requests
+                .iter()
+                .map(|request| serde_json::to_string(request).unwrap())
+                .collect::<Vec<_>>();
+            served(&json, loaded(&path))
+        };
+        let delivery = |focused_seconds| {
+            vec![
+                Request::GetConfig(GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "lease".into(),
+                }),
+                Request::RecordActivity(RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "deliver".into(),
+                    event: ActivityEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        artifact_id: "work:work.example/7".into(),
+                        artifact_type: "work.item".into(),
+                        url: "https://work.example/items/7".into(),
+                        title: Some("Work item".into()),
+                        occurred_at: occurred_at.clone(),
+                        incognito: false,
+                        opens: 1,
+                        focused_seconds,
+                        background_seconds: 0,
+                        modes: Vec::new(),
+                        trails: Vec::new(),
+                        refs: Vec::new(),
+                    },
+                }),
+            ]
+        };
+        let artifact_file = || {
+            let mut files = Vec::new();
+            for entry in walk(&root.join("artifacts")) {
+                files.push(std::fs::read_to_string(entry).unwrap());
+            }
+            files
+        };
+        fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    found.extend(walk(&path));
+                } else {
+                    found.push(path);
+                }
+            }
+            found
+        }
+
+        // The first connection of the day runs the pass, even for delivery.
+        connect(delivery(60));
+        let first = artifact_file();
+        assert_eq!(first.len(), 1, "the daily pass writes the artifact file");
+
+        // Later deliveries the same day leave the file for a later pass.
+        connect(delivery(120));
+        connect(delivery(180));
+        assert_eq!(
+            artifact_file(),
+            first,
+            "delivery must not rewrite artifact files"
+        );
+        // Nor does closing the settings page, which has its own action.
+        connect(vec![
+            Request::Hello(HelloRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "settings".into(),
+            }),
+            Request::GetConfig(GetConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "settings-config".into(),
+            }),
+        ]);
+        assert_eq!(
+            artifact_file(),
+            first,
+            "settings must not rewrite artifact files"
+        );
+
+        // The panel's connection close regenerates what delivery dirtied.
+        connect(vec![Request::GetArtifact(
+            brauser_protocol::GetArtifactRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "card".into(),
+                url: "https://work.example/items/7".into(),
+                title: Some("Work item".into()),
+            },
+        )]);
+        let refreshed = artifact_file();
+        assert_eq!(refreshed.len(), 1);
+        assert_ne!(
+            refreshed, first,
+            "the panel's close regenerates dirty files"
+        );
     }
 }

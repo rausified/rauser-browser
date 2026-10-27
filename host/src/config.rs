@@ -25,6 +25,7 @@ thread_local! {
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
+use crate::index::ArtifactIndex;
 use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
@@ -295,6 +296,13 @@ impl ConfigStore {
             .and_then(|vault| vault.sweep_stale_temporaries())
         {
             eprintln!("{NAMESPACE}: warning: could not sweep page-note temporaries: {error:#}");
+        }
+        // A host killed during an artifact pass leaves its temporaries.
+        if let Err(error) = self.cache_dir().and_then(|cache_dir| {
+            ArtifactIndex::open_in(storage, self.root_identity(), &cache_dir)?
+                .sweep_stale_temporaries()
+        }) {
+            eprintln!("{NAMESPACE}: warning: could not sweep artifact temporaries: {error:#}");
         }
     }
 
