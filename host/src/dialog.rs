@@ -537,8 +537,18 @@ mod tests {
     #[test]
     fn a_dialog_that_answers_in_time_keeps_its_reply() {
         let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg("printf canceled");
-        let reply = run_dialog_process(command, "Title", Duration::from_secs(10)).unwrap();
+        // Match the real child: consume the decimal byte length and the
+        // whole body before replying. Exiting early races the parent's
+        // write into EPIPE; character counts also truncate non-ASCII text.
+        command.arg("-c").arg(
+            r#"IFS= read -r length || exit 1; head -c "$length" >/dev/null || exit 1; printf canceled"#,
+        );
+        let reply = run_dialog_process(
+            command,
+            &format!("Title\n{}", "é\nBody".repeat(16384)),
+            Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(reply, "canceled");
     }
 

@@ -146,6 +146,11 @@ fn child_closes_its_dialog_when_the_parent_goes_away() {
 }
 
 #[test]
+// This host-level fixture isolates ConfigStore::load through HOME. Windows
+// Known Folders ignore that override, so keep it Unix-only until the test
+// host has an injected config path. Direct child lifecycle tests above run
+// on Windows too and do not load any user configuration.
+#[cfg(unix)]
 fn killing_the_host_closes_its_open_dialog() {
     let home = tempfile::tempdir().unwrap();
     let directory = private_tempdir();

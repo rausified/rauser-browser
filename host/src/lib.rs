@@ -17,4 +17,6 @@ pub mod native;
 pub mod note;
 mod presentation;
 pub mod privacy;
+#[cfg(test)]
+mod test_support;
 pub mod vault;
