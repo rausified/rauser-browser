@@ -832,7 +832,11 @@ impl ConfigStore {
         write_result?;
         fs::rename(&temporary, &self.path)
             .with_context(|| format!("replacing {}", self.path.display()))?;
-        let revision = revision_for(serialized.as_bytes());
+        let revision = if keep_artifacts_dir_proposed {
+            proposal_revision(revision_for(serialized.as_bytes()), &next)
+        } else {
+            revision_for(serialized.as_bytes())
+        };
         self.config = next;
         self.revision = revision.clone();
         self.issue = None;
@@ -1252,6 +1256,11 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     Err(_) => folder_changed = true,
                 }
             }
+            let revision = if artifacts_dir_proposed {
+                proposal_revision(revision, &config)
+            } else {
+                revision
+            };
             Ok(DiskState {
                 config,
                 revision,
@@ -1351,6 +1360,20 @@ fn revision_for(contents: &[u8]) -> String {
     let mut hasher = RevisionHasher::new();
     hasher.update(contents);
     hasher.finish(contents.len() as u64)
+}
+
+/// A proposed artifact folder follows the notes folder's contents, so it can
+/// change while the file does not. Its revision binds the proposal too, so a
+/// save built on an older one conflicts instead of naming that folder.
+fn proposal_revision(file_revision: String, config: &ConfigSnapshot) -> String {
+    let Some(storage) = config.storage.as_ref() else {
+        return file_revision;
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(file_revision.as_bytes());
+    hasher.update(b"\0artifacts_dir\0");
+    hasher.update(storage.artifacts_dir.as_bytes());
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 /// The one definition of a config revision: the SHA-256 of at most
@@ -2370,6 +2393,28 @@ mod tests {
         );
         assert!(!store.artifacts_dir_proposed());
         assert!(store.snapshot().storage.is_none());
+    }
+
+    #[test]
+    fn a_changed_artifact_proposal_is_a_new_revision() {
+        // The proposal follows the notes folder, not just the file. A save
+        // built on an older proposal is stale, so it must conflict rather
+        // than look like the user picked that folder.
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
+        let mut store = loaded(&path);
+        let stale = store.snapshot().clone();
+        let revision = store.revision().to_owned();
+        assert_eq!(loaded(&path).revision(), revision);
+        fs::create_dir(folder.path().join("artifacts")).unwrap();
+        assert_ne!(loaded(&path).revision(), revision);
+        assert!(store.update(stale, &revision).unwrap().is_none());
+        assert_eq!(
+            store.snapshot().storage.as_ref().unwrap().artifacts_dir,
+            "brauser-artifacts"
+        );
+        assert!(!fs::read_to_string(&path).unwrap().contains("artifacts_dir"));
     }
 
     #[test]
