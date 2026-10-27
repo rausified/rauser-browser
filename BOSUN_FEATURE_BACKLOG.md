@@ -150,10 +150,10 @@ Their line numbers predate step 6.6, so re-check them.
   sanitizer. Fixed with a shared bounded presentation sanitizer for both
   delivery paths, YAML artifact titles, Markdown context, and plain worklogs;
   exact encoded payloads and source logs survive regeneration unchanged.
-- [ ] `brwr-992` **Activity checks are duplicated across delivery paths.**
-  `record_activity` (native.rs ~640–717) re-implements `check_activity_policy`
-  (~977–1020); unify so single and batch delivery can't drift. Take after the
-  two above.
+- [x] `brwr-992` **Activity checks are duplicated across delivery paths.**
+  Confirmed duplication and made single delivery reuse `check_activity_policy`.
+  No current behavioral divergence reproduced: 13-scenario parity passes both
+  before and after consolidation, with explicit policy outcomes and real writes.
 - [ ] `brwr-ee5` **Recover missing index ingestion from durable logs.** A valid
   but incomplete ingestion cache must catch up after append/index interruption
   on the next delivery or query without requiring event replay or explicit
@@ -364,11 +364,13 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## In Progress / This Iteration
 
-- None. Next take `brwr-992`, the first remaining ready deploy blocker,
-  following `bd ready`. `brwr-3cc` is a P3 follow-up, not a new plan blocker.
+- None. Next take `brwr-ee5`, the first remaining ready deploy blocker,
+  following `bd ready`, then `brwr-ezb`. Capture Site remains the next major
+  product step after those blockers; the P3 proposals stay behind plan work.
 
 ## Shipped
 
+- **Category:** Reliability. **Share activity authorization across single and batch delivery (2026-10-27).** Single activity delivery now calls the same host policy checker as batches under the existing configuration lock, removing duplicate identity, mode, trail, reference, and shape checks. A 13-scenario parity test verifies explicit outcomes and reasons, refusal before log/index writes, and exact decoded durable payloads for valid activity through both paths. The baseline already agreed, so no existing behavioral bypass is claimed. **Metrics:** 322 Rust tests and 8 extension test files passing; 1 new test covering 26 deliveries; full required build/quality gate and both Clippy configurations green.
 - **Category:** Security & Privacy. **Keep invisible formatting out of generated work history (2026-10-27).** A shared host sanitizer now replaces Unicode format and control characters with spaces in daily row titles/context, regenerated artifact titles/context, and plain worklogs, and escapes Obsidian comments, highlights, and tags in generated Markdown. Both single and batch delivery use it while canonical encoded event payloads stay exact; reindex regenerates safe owned files without changing source logs. The review recorded legacy interrupted-entry recovery across renderer upgrades separately as `brwr-3cc`. **Metrics:** 319 Rust tests (+4) and 8 extension suites passing; two failing-first regressions, all 170 Unicode 17 format scalars verified locally, and full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, and extension build/tests green.
 - **Category:** Security & Privacy. **Reject invented navigation trails while preserving older activity (2026-10-27).** The native host now restricts new trail transitions to Chrome's known values plus the worker's existing back/forward encoding, returning terminal `rejected` before log or index writes through both single and batch delivery. Older bounded log and cache payloads retain their measurements and exact replay identity, while unknown transition kinds cannot become derived edges; reindex keeps the original shape limits and leaves source logs untouched. **Metrics:** 314 Rust tests (+3) and 8 extension suites passing; full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue consistency green.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
@@ -394,6 +396,20 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Notes / Ideas for Later
 
+- `brwr-992` is preventive consolidation, not a reproduced behavioral fix:
+  the complete parity matrix passed before and after. Keep explicit expected
+  outcomes in cross-path tests so two permissive paths cannot pass by agreement.
+  `brwr-o1l` still owns the broader authorize/open deduplication; do not widen
+  this cycle into that refactor. The next deploy blocker is `brwr-ee5`.
+- Product direction remains Capture Site (`brwr-1hj`): the confirmation should
+  use concrete matched pages and plain exclusions so someone can start useful
+  capture without understanding adapter JSON. Existing Recent/worklog and the
+  incoming-trail proposal should explain remembered work, not add another
+  internal status surface. No new duplicate proposal is needed this cycle.
+- The queue database lacked the committed independent-review note on
+  `brwr-3cc`. Restored it through `bd update` before export so the known
+  sanitizer-upgrade repair is not lost; that P3 task stays open for future
+  renderer-independent intent storage.
 - The shared presentation sanitizer belongs at the output boundary: raw
   canonical events must remain usable for replay and rebuilding, while YAML,
   Markdown, and copyable worklogs need the appropriate plain or escaped

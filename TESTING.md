@@ -115,6 +115,15 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: The single/batch activity parity test covers 13 scenarios through
+  both native handlers with separate stores, explicit expected outcomes and
+  reasons, correlated event IDs, no log/index writes on refusal, and decoded
+  durable payloads for accepted activity (including mode, trail and title-ref
+  evidence). It passes before and after consolidating authorization: duplication
+  was confirmed, but no existing behavioral divergence was reproduced. Initial
+  test-only failures assumed markers contained plain event IDs or struct field
+  order; decoding their hex JSON checks the actual contract. No macOS run is
+  claimed; the scripted-dialog count stays 14.
 - 2026-10-27: Independent review reproduced a sanitizer-upgrade recovery failure with a pre-upgrade v1 intent and a log torn inside a Unicode format character. Exact-hash compatibility now resumes that original entry through both single and batch delivery, preserves unrelated bytes, refuses changed payloads and edited tails, and deduplicates a complete marker. A second regression covers activity and context payloads. Future renderer-independent single-entry intent storage remains tracked as `brwr-3cc`; no macOS execution is claimed.
 - 2026-10-27: Unicode-spoofing regressions first failed in daily rows and
   generated artifact files, then passed with the shared host presentation
