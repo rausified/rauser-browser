@@ -306,7 +306,7 @@ mod tests {
     /// and a fake runner script with `body`.
     fn setup(body: &str) -> Setup {
         let fake = Fake::new();
-        fake.install("codex", "codex-cli 0.144.4", "", "exit 1");
+        fake.install("codex", "codex-cli 0.144.4", "exit 1");
         fake.claude("exit 1");
         let notes = fake.path("notes");
         fs::create_dir(&notes).unwrap();
@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(listed[1].harness, HarnessId::Claude);
 
         // A version that cannot be read is a problem, not a missing harness.
-        setup.fake.install("claude", "Claude Code", "", "exit 1");
+        setup.fake.install("claude", "Claude Code", "exit 1");
         let listed = discover(&HarnessEnv::from_run_env(&env), &env);
         assert_eq!(listed[1].version, None);
         assert_eq!(
@@ -415,9 +415,7 @@ mod tests {
     #[test]
     fn unreviewed_codex_version_is_not_refused() {
         let setup = setup("echo OK");
-        setup
-            .fake
-            .install("codex", "codex-cli 0.130.0", "", "exit 1");
+        setup.fake.install("codex", "codex-cli 0.130.0", "exit 1");
         let env = setup.run_env();
         let codex = &discover(&HarnessEnv::from_run_env(&env), &env)[0];
         assert_eq!(codex.version.as_deref(), Some("0.130.0"));
@@ -501,7 +499,7 @@ mod tests {
                 "Codex was not found on the service's PATH".to_owned()
             )
         );
-        setup.fake.install("claude", "unknown", "", "exit 1");
+        setup.fake.install("claude", "unknown", "exit 1");
         assert_eq!(
             setup.run(HarnessId::Claude).unwrap_err(),
             (

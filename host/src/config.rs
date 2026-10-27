@@ -46,7 +46,6 @@ pub(crate) const SUMMARY_TIMEOUT_SECS: std::ops::RangeInclusive<u32> = 60..=3600
 /// The summaries folder harness setup uses when none is chosen.
 #[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) const DEFAULT_SUMMARIES_DIR: &str = "summaries";
-pub(crate) const PROMPT_PLACEHOLDER: &str = "{prompt}";
 const MISSING_REVISION: &str = "missing";
 /// Never a real revision, so no update can be based on an unreadable file.
 const UNREADABLE_REVISION: &str = "unreadable";
