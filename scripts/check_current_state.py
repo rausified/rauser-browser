@@ -63,11 +63,15 @@ def main() -> int:
         "DESIGN.md panel": "record keys, artifact-facing views, and live-tool certification are next",
     }
     # Retired by protocol v6 (open access): the AI privacy list, the harness
-    # token, and the per-tab grant wall ("can't see this tab").
+    # token, and the per-tab grant wall ("can't see this tab"). Retired by the
+    # service runners (open access PR 3): the harness lockdown's reviewed argv
+    # and cleared environment.
     for label, claim in {
         "privacy list": "AI privacy list",
         "harness token": "harness token",
         "grant wall": "can't see this tab",
+        "reviewed argv": "reviewed argv",
+        "cleared environment": "cleared environment",
     }.items():
         for doc in ("AGENTS.md", "README.md", "DESIGN.md"):
             stale_claims[f"{doc} {label}"] = claim

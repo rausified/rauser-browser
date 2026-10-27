@@ -69,6 +69,7 @@ function configWith(adapters, captureEnabled) {
     capture_enabled: captureEnabled ?? adapters.length > 0,
     strip_params: [],
     agent: null,
+    summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
   };
 }
@@ -106,9 +107,12 @@ function install({
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
-    ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
+    ["harness-warning", "p"], ["harness-state", "p"], ["detect-harnesses", "button"], ["harness-list", "ul"],
+    ["harness-timeout", "input"], ["test-harness", "button"], ["remove-harness", "button"],
     ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
-    ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"], ["build-id", "span"], ["host-build", "span"],
+    ["agent-env-names", "p"], ["reveal-agent-env", "button"],
+    ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
+    ["build-id", "span"], ["host-build", "span"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
@@ -136,6 +140,8 @@ function install({
         state.configIssue = null;
         state.revision += 1;
         return { type: "config_updated", revision: String(state.revision), config: state.config };
+      case "get_agent_env":
+        return { type: "agent_env_listed", names: [], problem: null };
       case "refresh_artifacts":
         return { type: "artifacts_refreshed", written: 2, unchanged: 3, conflicts: 1, conflict_paths: ["artifacts/work/item.md"] };
       default:
@@ -245,11 +251,62 @@ const lastUpdate = () => env.requests.findLast((request) => request.type === "up
 // Each site row is its origin followed by a Remove site button.
 const siteRows = () => env.elements.get("sites-list").children.map((item) => item.children[0]?.textContent ?? item.textContent);
 
+test("settings inspect and clear local page patterns without saving configuration", async () => {
+  const origin = "https://patterns.example";
+  let rows = [{ shape: "/items/{num}", count: 3, last_seen: Date.now() }];
+  install({ adapters: [artifactFor(origin)], worker: {
+    get_site_patterns: (request) => { assert.equal(request.origin, origin); return rows; },
+    clear_site_patterns: (request) => { assert.equal(request.origin, origin); rows = []; return rows; },
+  } });
+  await openSettings();
+  const site = env.elements.get("sites-list").children[0];
+  const details = site.children.find((child) => child.tagName === "DETAILS");
+  assert.ok(details);
+  const [show, clear] = details.querySelectorAll("button");
+  assert.equal(show.textContent, "Show patterns");
+  assert.equal(clear.textContent, "Clear patterns");
+  assert.equal(env.workerRequests.some((request) => request.kind === "get_site_patterns"), false, "samples load only on request");
+  const requestsBefore = env.requests.length;
+  show.click();
+  await until(() => !show.disabled, "patterns to load");
+  assert.match(details.querySelectorAll("li")[0].textContent, /\/items\/\{num\} · 3 navigations/);
+  clear.click();
+  await until(() => !clear.disabled, "patterns to clear");
+  assert.equal(details.querySelectorAll("li").length, 0);
+  assert.ok(details.children.some((child) => child.textContent.startsWith("Patterns cleared.")));
+  assert.equal(env.requests.length, requestsBefore, "no native request for reading or clearing samples");
+  assert.equal(env.config.capture_enabled, true);
+  assert.deepEqual(env.permissionCalls, []);
+});
+
+test("pattern controls report worker failures and remain usable during host repair", async () => {
+  const origin = "https://pattern-repair.example";
+  install({ adapters: [artifactFor(origin)], worker: {
+    get_site_patterns: () => { throw new Error("Pattern storage unavailable"); },
+    clear_site_patterns: () => [],
+  } });
+  env.configIssue = "Repair the host configuration";
+  await openSettings();
+  const details = env.elements.get("sites-list").children[0].children.find((child) => child.tagName === "DETAILS");
+  const [show, clear] = details.querySelectorAll("button");
+  assert.equal(show.disabled, false);
+  assert.equal(clear.disabled, false);
+  show.click();
+  await until(() => !show.disabled, "the failed pattern read");
+  assert.ok(details.children.some((child) => child.textContent.includes("Pattern storage unavailable")));
+  clear.click();
+  await until(() => !clear.disabled, "local clearing during repair");
+  assert.ok(details.children.some((child) => child.textContent.startsWith("Patterns cleared.")));
+  assert.equal(env.requests.some((request) => request.type === "update_config"), false);
+});
+
 async function openSettings({ connected = true } = {}) {
   loads += 1;
   await import(`../dist/options.js?load=${loads}`);
   await until(() => (idle() || !connected) && !statusText().startsWith("Connecting"),
     "the settings page to load");
+  // A connected page then reads the agent.env names without holding the page busy.
+  if (connected) await until(() => env.elements.get("agent-env-names").textContent !== "", "the agent.env names");
 }
 
 function typeSite(url) {
@@ -258,7 +315,7 @@ function typeSite(url) {
 }
 
 async function removeListedSite(index = 0) {
-  const remove = env.elements.get("sites-list").querySelectorAll("button")[index];
+  const remove = env.elements.get("sites-list").querySelectorAll("button").filter((button) => button.textContent === "Remove site")[index];
   remove.click();
   await until(() => statusText().startsWith("Removed ") && idle(), "the removal to finish");
 }
@@ -1048,52 +1105,186 @@ test("a home folder change keeps the chosen knowledge base folder", async () => 
   assert.equal(lastUpdate().picker_token, "notes");
 });
 
-const CLAUDE_OFFER = {
-  adapter: "claude_code", harness_id: "claude-code",
-  binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-  args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
-  env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
-};
+const CODEX_FOUND = { harness: "codex", binary: "/opt/homebrew/bin/codex", version: "0.144.4", problem: null };
+const CLAUDE_FOUND = { harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.310", problem: null };
+const SERVICE_DOWN = "The Brauser service is not installed. Reinstall Brauser, or for a development build run scripts/register-dev-host.mjs.";
 
-test("harness setup sends set_up_harness and no confirmation", async () => {
-  const agent = {
-    harness_id: "claude-code", adapter: "claude_code", binary: CLAUDE_OFFER.binary,
-    args: CLAUDE_OFFER.args, env_allow: ["HOME", "PATH", "ANTHROPIC_API_KEY"], timeout_secs: 120,
+// The fake host answers get_config at revision "r<n>", as the real host's
+// revisions are opaque strings.
+function opaqueRevision(state) {
+  return {
+    type: "config_result", revision: `r${state.revision}`, config: state.config,
+    config_issue: null, agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
   };
+}
+
+test("detect lists both harnesses with versions and Test sends set_up_harness", async () => {
   const state = install({
     host: {
-      discover_harnesses: () => ({ type: "harnesses_discovered", offers: [CLAUDE_OFFER] }),
+      get_config: (_request, current) => opaqueRevision(current),
+      discover_harnesses: () => ({ type: "harnesses_discovered", harnesses: [CODEX_FOUND, CLAUDE_FOUND] }),
       set_up_harness: (request, current) => {
         current.config = {
-          ...current.config, agent,
+          ...current.config,
+          agent: {
+            harness: request.harness, binary: CODEX_FOUND.binary, version: CODEX_FOUND.version,
+            timeout_secs: request.timeout_secs, probed_at: "2026-10-27T10:00:00Z",
+          },
           storage: { ...current.config.storage, summaries_dir: request.summaries_dir },
         };
         current.revision += 1;
-        return { type: "config_updated", revision: String(current.revision), config: current.config };
+        return { type: "config_updated", revision: `r${current.revision}`, config: current.config };
       },
     },
   });
   await openSettings();
+  assert.equal(env.elements.get("harness-timeout").value, "10");
+  assert.equal(env.elements.get("test-harness").disabled, true, "Test needs a detected harness");
   state.requests.length = 0;
   env.elements.get("detect-harnesses").click();
-  await until(() => !env.elements.get("setup-harness").disabled, "Set up to become available");
-  assert.doesNotMatch(statusText(), /Review it below/);
-  env.elements.get("setup-harness").click();
-  await until(() => statusText().startsWith("Claude Code is set up") && idle(), "setup to finish");
-  const hostTypes = () => state.requests.map((request) => request.type);
-  assert.ok(hostTypes().includes("set_up_harness"));
-  assert.ok(!hostTypes().includes("confirm_harness_setup"));
-  assert.ok(!hostTypes().includes("update_config"));
+  await until(() => !env.elements.get("test-harness").disabled, "Test and use to become available");
+  const listed = nodeText(env.elements.get("harness-list"));
+  assert.match(listed, /Codex 0\.144\.4/);
+  assert.match(listed, /Claude Code 2\.1\.310/);
+  const radios = env.elements.get("harness-list").querySelectorAll("input");
+  assert.deepEqual(radios.map((radio) => [radio.type, radio.value]), [["radio", "codex"], ["radio", "claude"]]);
+  assert.equal(radios[0].checked, true, "the first usable harness is chosen");
+  env.elements.get("test-harness").click();
+  await until(() => statusText().startsWith("Codex is set up") && idle(), "setup to finish");
+  const hostTypes = state.requests.map((request) => request.type);
+  assert.ok(!hostTypes.includes("update_config"));
   assert.ok(state.requests.every((request) => !("harness_token" in request)));
   const discover = state.requests.find((request) => request.type === "discover_harnesses");
   assert.equal("expected_revision" in discover, false);
   const setUp = state.requests.find((request) => request.type === "set_up_harness");
-  assert.equal(setUp.harness_id, "claude-code");
-  assert.equal(setUp.expected_revision, "1");
-  assert.deepEqual(setUp.env_names, ["ANTHROPIC_API_KEY"]);
+  const { type: _type, protocol_version: _version, request_id: _id, ...lastSetUp } = setUp;
   // The host keeps summaries in the fixed summaries/ folder.
-  assert.equal(setUp.summaries_dir, null);
-  assert.equal(state.config.agent.harness_id, "claude-code");
+  assert.deepEqual(lastSetUp, {
+    harness: "codex", timeout_secs: 600, summaries_dir: null, expected_revision: "r1",
+  });
+  // The page reloads the host config after setup.
+  assert.ok(hostTypes.lastIndexOf("get_config") > hostTypes.indexOf("set_up_harness"));
+  assert.equal(state.config.agent.harness, "codex");
+});
+
+test("a run time limit outside 1 to 60 minutes is not sent", async () => {
+  const state = install({
+    host: { discover_harnesses: () => ({ type: "harnesses_discovered", harnesses: [CODEX_FOUND, CLAUDE_FOUND] }) },
+  });
+  await openSettings();
+  env.elements.get("detect-harnesses").click();
+  await until(() => !env.elements.get("test-harness").disabled, "Test and use to become available");
+  for (const minutes of ["0", "61", "2.5", ""]) {
+    env.elements.get("harness-timeout").value = minutes;
+    env.elements.get("harness-timeout").dispatch("input");
+    env.elements.get("test-harness").click();
+    await until(() => /whole number of minutes/.test(statusText()) && idle(), `refusal of ${minutes}`);
+  }
+  assert.ok(!state.requests.some((request) => request.type === "set_up_harness"));
+});
+
+test("agent.env names are shown and values never requested", async () => {
+  const state = install({
+    host: {
+      get_agent_env: () => ({
+        type: "agent_env_listed", names: ["AWS_PROFILE", "CLAUDE_CODE_USE_BEDROCK"], problem: null,
+      }),
+    },
+  });
+  await openSettings();
+  await until(() => /AWS_PROFILE/.test(env.elements.get("agent-env-names").textContent), "agent.env names");
+  const shown = env.elements.get("agent-env-names").textContent;
+  assert.match(shown, /AWS_PROFILE, CLAUDE_CODE_USE_BEDROCK/);
+  const listing = state.requests.filter((request) => request.type === "get_agent_env");
+  assert.equal(listing.length, 1);
+  const { type: _type, protocol_version: _version, request_id: _id, ...fields } = listing[0];
+  assert.deepEqual(fields, {}, "the listing asks for nothing but names");
+  assert.ok(!JSON.stringify(state.requests).includes("value"), "no request names a value");
+});
+
+test("an agent.env problem is shown in place of names", async () => {
+  install({
+    host: {
+      get_agent_env: () => ({
+        type: "agent_env_listed", names: [], problem: "agent.env must have mode 0600, not 0644",
+      }),
+    },
+  });
+  await openSettings();
+  await until(() => /0600/.test(env.elements.get("agent-env-names").textContent), "agent.env problem");
+  assert.match(env.elements.get("agent-env-names").textContent, /^agent\.env cannot be used: /);
+});
+
+test("reveal agent.env sends open_path agent_env", async () => {
+  const state = install({
+    host: { open_path: () => ({ type: "path_opened" }) },
+  });
+  await openSettings();
+  await until(() => !env.elements.get("reveal-agent-env").disabled, "Reveal to become available");
+  state.requests.length = 0;
+  env.elements.get("reveal-agent-env").click();
+  await until(() => statusText().startsWith("Showed agent.env in Finder") && idle(), "the reveal");
+  const opened = state.requests.filter((request) => request.type === "open_path");
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].target, "agent_env");
+  assert.equal(opened[0].run_id, null);
+  // A reveal creates a missing file, so the names are read again after it.
+  assert.ok(state.requests.findIndex((request) => request.type === "get_agent_env") >
+    state.requests.findIndex((request) => request.type === "open_path"));
+});
+
+test("vocabulary edits save through update_config", async () => {
+  const state = install();
+  await openSettings();
+  assert.equal(env.elements.get("vocab-types").value, "report");
+  assert.equal(env.elements.get("vocab-categories").value, "news");
+  env.elements.get("vocab-types").value = " report \n\nmemo\nReport\n  minutes  ";
+  env.elements.get("vocab-types").dispatch("input");
+  env.elements.get("vocab-categories").value = "news\nresearch paper\n";
+  env.elements.get("vocab-categories").dispatch("input");
+  const before = state.revision;
+  env.elements.get("save-vocabulary").click();
+  await until(() => state.revision > before && idle(), "the vocabulary save");
+  const update = lastUpdate();
+  assert.deepEqual(update.config.summary_vocabulary, {
+    document_types: ["report", "memo", "minutes"],
+    categories: ["news", "research paper"],
+  });
+  assert.equal(update.picker_token, null);
+  assert.deepEqual({ ...update.config, summary_vocabulary: null },
+    { ...configWith([]), summary_vocabulary: null }, "nothing else changes");
+  assert.match(statusText(), /vocabulary saved/i);
+  assert.equal(env.elements.get("vocab-types").value, "report\nmemo\nminutes");
+});
+
+test("an empty vocabulary list is not sent", async () => {
+  const state = install();
+  await openSettings();
+  env.elements.get("vocab-categories").value = " \n \n";
+  env.elements.get("vocab-categories").dispatch("input");
+  env.elements.get("save-vocabulary").click();
+  await until(() => /at least one category/.test(statusText()) && idle(), "the refusal");
+  assert.ok(!state.requests.some((request) => request.type === "update_config"));
+});
+
+test("service_unavailable shows setup instructions", async () => {
+  const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
+  const down = () => ({ type: "error", code: "service_unavailable", message: SERVICE_DOWN });
+  install({ host: { get_agent_env: down, discover_harnesses: down } });
+  await openSettings();
+  const harnessState = () => env.elements.get("harness-state").textContent;
+  await until(() => harnessState().includes(SERVICE_DOWN), "the listing's setup instructions");
+  assert.ok(harnessState().startsWith(SERVICE_SETUP_INSTRUCTIONS));
+  assert.ok(harnessState().endsWith(SERVICE_DOWN), "the host's message follows the instructions");
+  env.elements.get("detect-harnesses").click();
+  await until(() => idle() && /Could not detect harnesses/.test(statusText()), "detect to fail");
+  assert.ok(harnessState().startsWith(SERVICE_SETUP_INSTRUCTIONS));
+  // Other errors are not service setup problems.
+  install({ host: { discover_harnesses: () => ({ type: "error", code: "internal", message: "boom" }) } });
+  await openSettings();
+  env.elements.get("detect-harnesses").click();
+  await until(() => idle() && /Could not detect harnesses: boom/.test(statusText()), "detect to fail");
+  assert.ok(!env.elements.get("harness-state").textContent.includes(SERVICE_SETUP_INSTRUCTIONS));
 });
 
 test("settings shows the exact setup warning", async () => {
@@ -1103,8 +1294,12 @@ test("settings shows the exact setup warning", async () => {
   assert.equal(env.elements.get("harness-warning").textContent, SETUP_WARNING);
   const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
   assert.ok(html.includes(`<p id="harness-warning">${SETUP_WARNING}</p>`));
-  assert.ok(html.includes(">Set up harness</button>"));
-  assert.ok(!html.includes("Set up harness…"));
+  assert.ok(html.includes(">Test and use</button>"));
+  assert.ok(html.includes(">Reveal agent.env in Finder</button>"));
+  assert.ok(!html.includes("Set up harness"));
+  for (const id of ["harness-offers", "harness-env", "setup-harness"]) {
+    assert.ok(!html.includes(`id="${id}"`), id);
+  }
 });
 
 test("manual artifact refresh reports unowned path conflicts", async () => {

@@ -67,7 +67,13 @@ export interface ConfigSnapshot {
   capture_enabled: boolean;
   strip_params: string[];
   agent: AgentConfig | null;
+  summary_vocabulary: SummaryVocabulary;
   adapters: AdapterDocument;
+}
+
+export interface SummaryVocabulary {
+  document_types: string[];
+  categories: string[];
 }
 
 export interface AdapterDocument {
@@ -94,15 +100,12 @@ export interface StorageConfig {
 }
 
 export interface AgentConfig {
-  harness_id: string;
-  adapter: HarnessAdapter;
+  harness: HarnessId;
   binary: string;
-  args: string[];
-  env_allow: string[];
+  version: string | null;
   timeout_secs: number;
+  probed_at: string;
 }
-
-export type HarnessAdapter = "claude_code" | "codex";
 
 export interface AgentStatus {
   state: AgentState;
@@ -213,12 +216,6 @@ export interface WorklogRequest {
 
 export interface RefreshArtifactsRequest {
   type: "refresh_artifacts";
-  protocol_version: 6;
-  request_id: string;
-}
-
-export interface CheckAgentRequest {
-  type: "check_agent";
   protocol_version: 6;
   request_id: string;
 }
@@ -383,14 +380,6 @@ export interface ArtifactsRefreshed {
   conflict_paths: string[];
 }
 
-export interface AgentChecked {
-  type: "agent_checked";
-  protocol_version: 6;
-  request_id: string;
-  harness_id: string;
-  harness_version: string;
-}
-
 export interface VisitEvent {
   event_id: string;
   url: string;
@@ -476,8 +465,8 @@ export interface SetUpHarnessRequest {
   protocol_version: 6;
   request_id: string;
   expected_revision: string;
-  harness_id: string;
-  env_names: string[];
+  harness: HarnessId;
+  timeout_secs: number | null;
   summaries_dir: string | null;
 }
 
@@ -485,24 +474,14 @@ export interface HarnessesDiscovered {
   type: "harnesses_discovered";
   protocol_version: 6;
   request_id: string;
-  offers: HarnessOffer[];
+  harnesses: HarnessFound[];
 }
 
-export interface HarnessOffer {
-  adapter: HarnessAdapter;
-  harness_id: string;
-  binary: string;
-  real_path: string | null;
+export interface HarnessFound {
+  harness: HarnessId;
+  binary: string | null;
   version: string | null;
-  args: string[];
-  env_required: string[];
-  env_optional: EnvName[];
-  refusal: string | null;
-}
-
-export interface EnvName {
-  name: string;
-  present: boolean;
+  problem: string | null;
 }
 
 export type HarnessId = "codex" | "claude";
@@ -510,6 +489,15 @@ export type HarnessId = "codex" | "claude";
 export type RunState = "queued" | "running" | "succeeded" | "failed" | "canceled";
 
 export type RunErrorKind = "harness_failed" | "timed_out" | "canceled" | "service_restarted" | "invalid_output" | "save_failed";
+
+export type ImportanceLevel = "high" | "medium" | "low";
+
+export interface RunAnswer {
+  document_type: string;
+  category: string;
+  importance: ImportanceLevel;
+  importance_reason: string;
+}
 
 export interface RunView {
   run_id: string;
@@ -530,6 +518,7 @@ export interface RunView {
   summary_path: string | null;
   stream_bytes: number;
   can_retry_save: boolean;
+  answer: RunAnswer | null;
 }
 
 export interface StartRunRequest {
@@ -605,6 +594,36 @@ export interface RunUpdated {
   run: RunView;
 }
 
+export type OpenTarget = "codex_thread" | "agent_env";
+
+export interface OpenPathRequest {
+  type: "open_path";
+  protocol_version: 6;
+  request_id: string;
+  target: OpenTarget;
+  run_id: string | null;
+}
+
+export interface PathOpened {
+  type: "path_opened";
+  protocol_version: 6;
+  request_id: string;
+}
+
+export interface GetAgentEnvRequest {
+  type: "get_agent_env";
+  protocol_version: 6;
+  request_id: string;
+}
+
+export interface AgentEnvListed {
+  type: "agent_env_listed";
+  protocol_version: 6;
+  request_id: string;
+  names: string[];
+  problem: string | null;
+}
+
 export interface ServiceHelloRequest {
   type: "service_hello";
   protocol_version: 6;
@@ -618,6 +637,6 @@ export interface ServiceReady {
   build_id: string;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | GetAgentEnvRequest | ServiceHelloRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | ServiceReady | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | AgentEnvListed | ServiceReady | ErrorResponse;

@@ -91,20 +91,21 @@
       </section>
 
       <section aria-labelledby="agent-heading">
-        <h2 id="agent-heading">AI harness (optional)</h2>
+        <h2 id="agent-heading">Summary harness</h2>
+        <p id="harness-warning">Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.</p>
         <p id="agent-no-ai">No AI runs until you set up a harness here. Capture and page notes work without one.</p>
-        <p id="agent-state" role="status">AI harness status is unavailable.</p>
+        <p id="harness-state" role="status">Summary harness status is unavailable.</p>
 
         <div class="field">
           <button id="detect-harnesses" type="button" class="secondary" disabled>Detect harnesses</button>
-          <small>{{APP_NAME}} looks for Claude Code and Codex on the native host's PATH and runs only their version and help checks (for Codex, also its feature list).</small>
-          <ul id="harness-offers" class="plain-list offer-list"><li>Not detected yet.</li></ul>
+          <small>The {{APP_NAME}} service looks for Codex and Claude Code on its own PATH and reads their versions. Choose one, then Test and use runs one short test prompt through it.</small>
+          <ul id="harness-list" class="plain-list offer-list"><li>Not detected yet.</li></ul>
         </div>
 
         <div class="field">
-          <h3>Environment variables passed to the harness</h3>
-          <small>Names only; {{APP_NAME}} never shows or stores their values.</small>
-          <ul id="harness-env" class="plain-list offer-list"><li>Detect a harness first.</li></ul>
+          <label for="harness-timeout">Run time limit (minutes)</label>
+          <input id="harness-timeout" type="number" min="1" max="60" step="1" value="10" inputmode="numeric" />
+          <small>A summary run that takes longer is stopped. From 1 to 60 minutes.</small>
         </div>
 
         <div class="field">
@@ -115,9 +116,25 @@
           <small>The folder a summary agent reads to judge how a page fits what you already know. {{APP_NAME}} never writes there.</small>
         </div>
 
-        <p id="harness-warning">Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.</p>
-        <button id="setup-harness" type="button" disabled>Set up harness</button>
+        <button id="test-harness" type="button" disabled>Test and use</button>
         <button id="remove-harness" type="button" class="secondary" disabled>Remove harness</button>
+
+        <div class="field">
+          <h3>agent.env</h3>
+          <small>Optional KEY=VALUE lines, mode 0600, that every agent run gets on top of the {{APP_NAME}} service's environment, for example a Claude Code on Bedrock login. Names only; {{APP_NAME}} never shows their values.</small>
+          <p id="agent-env-names">Not read yet.</p>
+          <button id="reveal-agent-env" type="button" class="secondary" disabled>Reveal agent.env in Finder</button>
+        </div>
+
+        <div class="field">
+          <h3>Summary vocabulary</h3>
+          <small>One entry per line. The agent picks one of each, and proposes a new value only if none fits.</small>
+          <label for="vocab-types">Document types</label>
+          <textarea id="vocab-types" rows="6" spellcheck="false"></textarea>
+          <label for="vocab-categories">Categories</label>
+          <textarea id="vocab-categories" rows="7" spellcheck="false"></textarea>
+          <button id="save-vocabulary" type="button" class="secondary" disabled>Save vocabulary</button>
+        </div>
       </section>
 
       <footer>

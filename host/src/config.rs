@@ -12,7 +12,7 @@ use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterV
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
-    ErrorCode, HarnessAdapter, StorageConfig,
+    HarnessId, StorageConfig, SummaryVocabulary,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,6 @@ thread_local! {
 }
 
 use crate::brand::{APP_NAME, NAMESPACE};
-use crate::harness::{self, BinaryIdentity};
 use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::vault::{
@@ -39,16 +38,19 @@ const MAX_LOCATION_PATH_BYTES: usize = 512;
 const MAX_PATH_COMPONENT_BYTES: usize = 255;
 const MAX_STRIP_PARAMS: usize = 64;
 const MAX_RULE_BYTES: usize = 64;
-const MAX_AGENT_ARGS: usize = 64;
-const MAX_AGENT_ARG_BYTES: usize = 256;
-const MAX_ENV_ALLOW: usize = 32;
-const MAX_ENV_NAME_BYTES: usize = 64;
-const MAX_TIMEOUT_SECS: u32 = 600;
+const MAX_VERSION_BYTES: usize = 256;
+const MAX_PROBED_AT_BYTES: usize = 64;
 const MAX_ADAPTER_WARNINGS: usize = 256;
-pub(crate) const DEFAULT_TIMEOUT_SECS: u32 = 120;
+const MAX_VOCABULARY_ENTRIES: usize = 64;
+const MAX_VOCABULARY_CHARS: usize = 64;
+/// A summary run's time limit when setup is given none, and its bounds.
+// Only the service, which is Unix-only, sets a harness up.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) const DEFAULT_SUMMARY_TIMEOUT_SECS: u32 = 600;
+pub(crate) const SUMMARY_TIMEOUT_SECS: std::ops::RangeInclusive<u32> = 60..=3600;
 /// The summaries folder harness setup uses when none is chosen.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) const DEFAULT_SUMMARIES_DIR: &str = "summaries";
-pub(crate) const PROMPT_PLACEHOLDER: &str = "{prompt}";
 const MISSING_REVISION: &str = "missing";
 /// Never a real revision, so no update can be based on an unreadable file.
 const UNREADABLE_REVISION: &str = "unreadable";
@@ -76,6 +78,33 @@ pub(crate) fn adopted_contracts_path(config_dir: &Path) -> PathBuf {
 
 pub(crate) fn default_strip_params() -> Vec<String> {
     vec!["utm_*".into(), "fbclid".into(), "gclid".into()]
+}
+
+/// The document types the summary prompt offers until the user edits them.
+pub const DEFAULT_DOCUMENT_TYPES: [&str; 6] = [
+    "report",
+    "announcement",
+    "ticket",
+    "specification",
+    "email",
+    "article",
+];
+/// The categories the summary prompt offers until the user edits them.
+pub const DEFAULT_CATEGORIES: [&str; 7] = [
+    "technical specification",
+    "product plan",
+    "administrative",
+    "project plan",
+    "marketing material",
+    "research paper",
+    "news",
+];
+
+pub(crate) fn default_summary_vocabulary() -> SummaryVocabulary {
+    SummaryVocabulary {
+        document_types: DEFAULT_DOCUMENT_TYPES.map(String::from).to_vec(),
+        categories: DEFAULT_CATEGORIES.map(String::from).to_vec(),
+    }
 }
 
 pub struct ConfigStore {
@@ -130,134 +159,113 @@ struct DiskState {
     retired_adapter_contracts: Vec<serde_json::Value>,
 }
 
-/// The raw `[agent]` table and harness record as last read from disk, and
-/// what they parse to. They are parsed apart from the rest of the file, so a
-/// bad harness entry disables only AI commands and capture keeps working
-/// (§7.1). An update without a harness grant carries the raw tables forward.
+/// The raw `[summarizer]` table as last read from disk, and what it parses
+/// to. It is parsed apart from the rest of the file, so a bad entry disables
+/// only summaries and capture keeps working. An update without a harness
+/// commit carries the raw table forward.
 #[derive(Clone, Default)]
 struct AgentView {
     table: Option<toml::Value>,
-    record_table: Option<toml::Value>,
-    agent: Option<AgentConfig>,
-    record: Option<HarnessRecord>,
+    summarizer: Option<StoredSummarizer>,
     issue: Option<String>,
 }
 
 const AGENT_ENTRY_INVALID: &str = concat!(
-    "The AI harness entry in config.toml is invalid. Set up the harness again in ",
+    "The summary harness entry in config.toml is invalid. Set up the harness again in ",
     crate::app_name!(),
     " settings."
 );
-const SET_UP_HARNESS: &str = concat!("Set up an AI harness in ", crate::app_name!(), " settings.");
+const SET_UP_HARNESS: &str = concat!(
+    "Set up a summary harness in ",
+    crate::app_name!(),
+    " settings."
+);
 const LAYOUT_PENDING: &str = concat!(
     crate::app_name!(),
     " is moving its folders to the fixed layout in your home folder. Reload this page to finish."
 );
-const AI_UNAVAILABLE_HERE: &str = "AI commands are not available on this platform yet.";
-const HARNESS_CHANGED: &str = concat!(
-    "The AI harness changed on disk; run setup again in ",
-    crate::app_name!(),
-    " settings."
-);
 
 impl AgentView {
-    fn parse(table: Option<toml::Value>, record_table: Option<toml::Value>) -> Self {
-        let (agent, mut issue) = match table.clone().map(parse_agent_table).transpose() {
-            Ok(agent) => (agent.flatten(), None),
-            Err(_) => (None, Some(AGENT_ENTRY_INVALID.to_owned())),
-        };
-        let record = match record_table
-            .clone()
-            .map(toml::Value::try_into::<HarnessRecord>)
-        {
-            Some(Ok(record)) => Some(record),
-            Some(Err(_)) => {
-                issue.get_or_insert_with(|| AGENT_ENTRY_INVALID.to_owned());
-                None
-            }
-            None => None,
+    fn parse(table: Option<toml::Value>) -> Self {
+        let parsed = table.clone().map(|value| {
+            let summarizer: StoredSummarizer = value.try_into()?;
+            validate_summarizer(&summarizer.agent())?;
+            anyhow::Ok(summarizer)
+        });
+        let (summarizer, issue) = match parsed {
+            Some(Ok(summarizer)) => (Some(summarizer), None),
+            Some(Err(_)) => (None, Some(AGENT_ENTRY_INVALID.to_owned())),
+            None => (None, None),
         };
         Self {
             table,
-            record_table,
-            agent,
-            record,
+            summarizer,
             issue,
         }
     }
 
     fn committed(commit: &HarnessCommit) -> Result<Self> {
-        let table = StoredAgent {
-            default: Some(commit.agent.harness_id.clone()),
-            harnesses: BTreeMap::from([(
-                commit.agent.harness_id.clone(),
-                StoredHarness {
-                    binary: commit.agent.binary.clone(),
-                    args: commit.agent.args.clone(),
-                    env_allow: commit.agent.env_allow.clone(),
-                    timeout_secs: commit.agent.timeout_secs,
-                },
-            )]),
-        };
-        let view = Self::parse(
-            Some(toml::Value::try_from(table).context("serializing the AI harness entry")?),
-            Some(toml::Value::try_from(&commit.record).context("serializing the harness record")?),
-        );
-        if view.agent.as_ref() != Some(&commit.agent)
-            || view.record.as_ref() != Some(&commit.record)
-        {
-            bail!("the AI harness entry does not round-trip through config.toml");
+        let table = toml::Value::try_from(&commit.summarizer)
+            .context("serializing the summary harness entry")?;
+        let view = Self::parse(Some(table));
+        if view.summarizer.as_ref() != Some(&commit.summarizer) {
+            bail!("the summary harness entry does not round-trip through config.toml");
         }
         Ok(view)
     }
+
+    fn agent(&self) -> Option<AgentConfig> {
+        self.summarizer.as_ref().map(StoredSummarizer::agent)
+    }
 }
 
-/// Host-only facts from harness setup (§7.1). Like the home folder identity,
-/// this never crosses the messaging boundary.
+/// `[summarizer]`: the harness the service set up after its probe passed
+/// (spec §6.1). The wire calls it `ConfigSnapshot.agent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HarnessRecord {
-    pub harness_id: String,
-    pub real_path: String,
-    pub size: u64,
-    pub mtime_ns: String,
+pub struct StoredSummarizer {
+    pub harness: HarnessId,
+    pub binary: String,
     #[serde(default)]
-    pub file_id: Option<String>,
-    pub version: String,
-    pub help_sha256: String,
-    pub confirmed_flags: Vec<String>,
-    pub probe_passed_at: String,
+    pub version: Option<String>,
+    pub timeout_secs: u32,
+    pub probed_at: String,
 }
 
-impl HarnessRecord {
-    pub(crate) fn identity(&self) -> BinaryIdentity {
-        BinaryIdentity {
-            real_path: self.real_path.clone(),
-            size: self.size,
-            mtime_ns: self.mtime_ns.clone(),
-            file_id: self.file_id.clone(),
+impl StoredSummarizer {
+    pub fn agent(&self) -> AgentConfig {
+        AgentConfig {
+            harness: self.harness,
+            binary: self.binary.clone(),
+            version: self.version.clone(),
+            timeout_secs: self.timeout_secs,
+            probed_at: self.probed_at.clone(),
         }
     }
 }
 
-/// What harness setup commits in one write: the harness entry and its
-/// checked record. Host-internal: only `harness_setup::set_up` builds one,
-/// after its probe passes, and passes it to `update_with_grants`. Nothing
-/// on the wire can carry or authorize one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HarnessCommit {
-    pub agent: AgentConfig,
-    pub record: HarnessRecord,
+impl From<&AgentConfig> for StoredSummarizer {
+    fn from(agent: &AgentConfig) -> Self {
+        Self {
+            harness: agent.harness,
+            binary: agent.binary.clone(),
+            version: agent.version.clone(),
+            timeout_secs: agent.timeout_secs,
+            probed_at: agent.probed_at.clone(),
+        }
+    }
 }
 
-pub struct AgentReadiness {
-    pub harness_id: String,
-    pub harness_version: String,
+/// What harness setup commits. Host-internal: only the service's
+/// `setup::set_up` builds one, after its probe passes, and passes it to
+/// `update_with_grants`. Nothing on the wire can carry or authorize one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessCommit {
+    pub summarizer: StoredSummarizer,
 }
 
 struct AgentRefusal {
     state: AgentState,
-    code: ErrorCode,
     message: String,
 }
 
@@ -422,15 +430,6 @@ impl ConfigStore {
             && let Err(error) = sweep_config_temporaries(parent)
         {
             eprintln!("{NAMESPACE}: warning: could not sweep config temporaries: {error:#}");
-        }
-        // A host killed during a harness run leaves its work directory.
-        if let Some(parent) = self.path.parent()
-            && let Err(error) = harness::sweep_stale_work_dirs(
-                &parent.join(harness::WORK_ROOT_NAME),
-                STALE_TEMPORARY_AGE,
-            )
-        {
-            eprintln!("{NAMESPACE}: warning: could not sweep harness work directories: {error:#}");
         }
         if !self.configured() {
             return;
@@ -786,105 +785,51 @@ impl ConfigStore {
             && validate_persisted(&self.config).is_ok()
     }
 
-    /// Whether AI commands may run. Call under `lock_current` right after
-    /// `refresh`. A harness committed by native harness setup is enough;
-    /// there is no separate privacy confirmation.
-    pub fn agent_readiness(&self) -> Result<AgentReadiness, (ErrorCode, String)> {
-        self.agent_gate()
-            .map_err(|refusal| (refusal.code, refusal.message))
-    }
-
-    /// The settings page's view of the same gate.
+    /// The settings page's view of whether summaries may run: a committed
+    /// summary harness and a summaries folder. The service checks the rest
+    /// (the knowledge base folder, `agent.env`) when a run starts.
     pub fn agent_status(&self) -> AgentStatus {
-        match self.agent_gate() {
-            Ok(ready) => AgentStatus {
+        let harness_version = self
+            .agent
+            .summarizer
+            .as_ref()
+            .and_then(|summarizer| summarizer.version.clone());
+        match self.agent_refusal() {
+            None => AgentStatus {
                 state: AgentState::Ready,
-                harness_version: Some(ready.harness_version),
+                harness_version,
                 message: None,
             },
-            Err(refusal) => AgentStatus {
+            Some(refusal) => AgentStatus {
                 state: refusal.state,
-                harness_version: self
-                    .agent
-                    .record
-                    .as_ref()
-                    .map(|record| record.version.clone()),
+                harness_version,
                 message: Some(refusal.message),
             },
         }
     }
 
-    fn agent_gate(&self) -> Result<AgentReadiness, AgentRefusal> {
-        let refuse = |state, code, message: &str| AgentRefusal {
-            state,
-            code,
-            message: message.to_owned(),
+    fn agent_refusal(&self) -> Option<AgentRefusal> {
+        let refuse = |state, message: &str| {
+            Some(AgentRefusal {
+                state,
+                message: message.to_owned(),
+            })
         };
         if self.issue.is_some() {
-            return Err(refuse(
+            return refuse(
                 AgentState::NotSetUp,
-                ErrorCode::InvalidConfig,
                 "configuration is unavailable or needs repair",
-            ));
+            );
         }
-        let Some(agent) = &self.config.agent else {
-            return Err(match &self.agent.issue {
-                Some(issue) => refuse(AgentState::HarnessProblem, ErrorCode::NotConfigured, issue),
-                None => refuse(
-                    AgentState::NotSetUp,
-                    ErrorCode::NotConfigured,
-                    SET_UP_HARNESS,
-                ),
-            });
-        };
-        let Some(record) = self
-            .agent
-            .record
-            .as_ref()
-            .filter(|record| record.harness_id == agent.harness_id)
-        else {
-            return Err(refuse(
-                AgentState::HarnessProblem,
-                ErrorCode::NotConfigured,
-                SET_UP_HARNESS,
-            ));
-        };
-        if agent.adapter == HarnessAdapter::Codex {
-            // Codex runs only with the extra disables reviewed for the
-            // version setup recorded, never another reviewed version's.
-            if !harness::template_matches(
-                harness::Adapter::Codex,
-                &agent.args,
-                Some(&record.version),
-            ) {
-                return Err(refuse(
-                    AgentState::HarnessProblem,
-                    ErrorCode::NotConfigured,
-                    AGENT_ENTRY_INVALID,
-                ));
-            }
+        if self.config.agent.is_none() {
+            return match &self.agent.issue {
+                Some(issue) => refuse(AgentState::HarnessProblem, issue),
+                None => refuse(AgentState::NotSetUp, SET_UP_HARNESS),
+            };
         }
-        if !cfg!(unix) {
-            return Err(refuse(
-                AgentState::HarnessProblem,
-                ErrorCode::NotConfigured,
-                AI_UNAVAILABLE_HERE,
-            ));
-        }
-        // Fail closed until step 5.2 adds the automatic re-check (§7.1).
-        let unchanged = harness::identity(Path::new(&agent.binary))
-            .is_ok_and(|identity| identity == record.identity());
-        if !unchanged {
-            return Err(refuse(
-                AgentState::HarnessProblem,
-                ErrorCode::NotConfigured,
-                HARNESS_CHANGED,
-            ));
-        }
-        Ok(AgentReadiness {
-            harness_id: agent.harness_id.clone(),
-            harness_version: record.version.clone(),
-        })
+        // The summaries folder is fixed (DESIGN.md §6.1): a layout that
+        // lacks it is pending a move, which `issue` already refuses.
+        None
     }
 
     /// Replace config only when the caller's revision still matches the file.
@@ -909,7 +854,8 @@ impl ConfigStore {
     }
 
     /// Native dispatch calls this only after `ConsentAuthority` has checked
-    /// the folder grant; `harness_commit` comes only from `harness_setup`.
+    /// the folder grant; `harness_commit` comes only from the service's
+    /// harness setup.
     /// The agent checks below repeat that decision against the file itself,
     /// under the lock, as defense in depth.
     pub(crate) fn update_with_grants(
@@ -929,8 +875,7 @@ impl ConfigStore {
         // to use the invalid-adapter repair exception.
         validate_base(&next)?;
         if let Some(commit) = &harness_commit
-            && (next.agent.as_ref() != Some(&commit.agent)
-                || commit.record.harness_id != commit.agent.harness_id)
+            && next.agent.as_ref() != Some(&commit.summarizer.agent())
         {
             bail!("harness setup does not match this configuration");
         }
@@ -993,20 +938,15 @@ impl ConfigStore {
         };
 
         let agent = match &harness_commit {
-            Some(commit) => {
-                if harness::identity(Path::new(&commit.agent.binary))? != commit.record.identity() {
-                    bail!("{HARNESS_CHANGED}");
-                }
-                AgentView::committed(commit)?
-            }
+            Some(commit) => AgentView::committed(commit)?,
             None => {
-                // Only native harness setup sets a harness.
+                // Only the service's harness setup sets a harness.
                 match (&next.agent, &current.config.agent) {
                     (None, Some(_)) => AgentView::default(),
                     // Keep an entry this host cannot parse for the user to fix.
                     (None, None) => current.agent.clone(),
                     (Some(next_agent), Some(old)) if next_agent == old => current.agent.clone(),
-                    _ => bail!("the AI harness can only be set by native harness setup"),
+                    _ => bail!("the summary harness can only be set by harness setup"),
                 }
             }
         };
@@ -1133,6 +1073,13 @@ impl ConfigStore {
         Ok(Some(revision))
     }
 
+    /// A second store for the same file, loaded now. The service gives
+    /// harness setup its own, so a long probe never holds the shared one.
+    #[cfg(unix)]
+    pub(crate) fn reopen(&self) -> Self {
+        Self::load_from(self.path.clone())
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(path: PathBuf) -> Self {
         Self::for_path(path)
@@ -1160,6 +1107,9 @@ struct StoredConfig {
     _sites: Option<toml::Value>,
     #[serde(default = "default_strip_params")]
     strip_params: Vec<String>,
+    // Absent before protocol v6: the default lists.
+    #[serde(default = "default_summary_vocabulary")]
+    summary_vocabulary: SummaryVocabulary,
     // Accept and ignore the retired M1 key. New config writes omit it.
     #[serde(default, skip_serializing, rename = "near_repeat_secs")]
     _near_repeat_secs: Option<u32>,
@@ -1170,10 +1120,15 @@ struct StoredConfig {
     _agent_denylist_confirmed: Option<toml::Value>,
     #[serde(default, skip_serializing, rename = "log_incognito")]
     _log_incognito: Option<toml::Value>,
+    /// The summary harness the service set up, parsed apart; see `AgentView`.
     #[serde(default)]
-    agent: Option<toml::Value>,
-    #[serde(default)]
-    harness_record: Option<toml::Value>,
+    summarizer: Option<toml::Value>,
+    // Accept and ignore the retired v5 harness entry and its checked record:
+    // a v5 file loads as not set up. New config writes omit them.
+    #[serde(default, skip_serializing, rename = "agent")]
+    _agent: Option<toml::Value>,
+    #[serde(default, skip_serializing, rename = "harness_record")]
+    _harness_record: Option<toml::Value>,
     #[serde(default)]
     adapters: StoredAdapters,
     #[serde(default)]
@@ -1291,57 +1246,6 @@ fn unused_artifacts_dir(occupied: &[&Path]) -> String {
     unreachable!("a finite set of content paths cannot occupy every generated name")
 }
 
-/// `[agent]` as §7.1 shows it: the chosen harness and its entry.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredAgent {
-    #[serde(default)]
-    default: Option<String>,
-    #[serde(default)]
-    harnesses: BTreeMap<String, StoredHarness>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredHarness {
-    binary: String,
-    args: Vec<String>,
-    // A missing allowlist means an empty environment (§7.1).
-    #[serde(default)]
-    env_allow: Vec<String>,
-    #[serde(default = "default_timeout_secs")]
-    timeout_secs: u32,
-}
-
-const fn default_timeout_secs() -> u32 {
-    DEFAULT_TIMEOUT_SECS
-}
-
-fn parse_agent_table(value: toml::Value) -> Result<Option<AgentConfig>> {
-    let stored: StoredAgent = value.try_into().context("parsing [agent]")?;
-    let mut harnesses = stored.harnesses;
-    let Some(harness_id) = stored.default else {
-        return Ok(None);
-    };
-    if harnesses.len() > 1 {
-        bail!("only one AI harness can be configured");
-    }
-    let adapter = adapter_for(&harness_id).context("unknown AI harness")?;
-    let harness = harnesses
-        .remove(&harness_id)
-        .context("the default AI harness has no entry")?;
-    let agent = AgentConfig {
-        harness_id,
-        adapter,
-        binary: harness.binary,
-        args: harness.args,
-        env_allow: harness.env_allow,
-        timeout_secs: harness.timeout_secs,
-    };
-    validate_agent(&agent)?;
-    Ok(Some(agent))
-}
-
 impl StoredConfig {
     fn from_snapshot(
         value: &ConfigSnapshot,
@@ -1361,14 +1265,16 @@ impl StoredConfig {
             capture_enabled: value.capture_enabled,
             _sites: None,
             strip_params: value.strip_params.clone(),
+            summary_vocabulary: value.summary_vocabulary.clone(),
             _near_repeat_secs: None,
             _agent_denylist: None,
             _agent_denylist_confirmed: None,
             _log_incognito: None,
-            // The harness entry and record come from the host's own view,
-            // never from the extension's snapshot.
-            agent: agent.table.clone(),
-            harness_record: agent.record_table.clone(),
+            // The harness entry comes from the host's own view, never from
+            // the extension's snapshot.
+            summarizer: agent.table.clone(),
+            _agent: None,
+            _harness_record: None,
             adapters: StoredAdapters {
                 format: value.adapters.format,
                 extensions: adapter_extensions,
@@ -1386,6 +1292,7 @@ impl From<StoredConfig> for ConfigSnapshot {
             capture_enabled: value.capture_enabled,
             strip_params: value.strip_params,
             agent: None,
+            summary_vocabulary: value.summary_vocabulary,
             adapters: AdapterDocument {
                 format: value.adapters.format,
                 artifacts: value.artifacts,
@@ -1470,9 +1377,9 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
             let root_unconfirmed = stored.storage.is_some()
                 && (!stored.root_picker_confirmed || root_identity.is_none());
-            let agent = AgentView::parse(stored.agent.take(), stored.harness_record.take());
+            let agent = AgentView::parse(stored.summarizer.take());
             let mut config: ConfigSnapshot = stored.into();
-            config.agent = agent.agent.clone();
+            config.agent = agent.agent();
             if root_unconfirmed || validate_base(&config).is_err() {
                 let retired_adapter_contracts = repairable_history(retired_adapter_contracts);
                 let issue = if root_unconfirmed {
@@ -1737,6 +1644,7 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
         capture_enabled: false,
         strip_params: default_strip_params(),
         agent: None,
+        summary_vocabulary: default_summary_vocabulary(),
         adapters: AdapterDocument {
             format: 1,
             artifacts: Vec::new(),
@@ -1792,14 +1700,43 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
             bail!("tracking parameters must be simple names or prefix patterns ending in *");
         }
     }
+    validate_vocabulary("document type", &config.summary_vocabulary.document_types)?;
+    validate_vocabulary("category", &config.summary_vocabulary.categories)?;
     if config.capture_enabled && config.storage.is_none() {
         bail!("capture requires a selected home folder");
     }
     if let Some(agent) = &config.agent {
-        validate_agent(agent)?;
+        validate_summarizer(agent)?;
     }
     if let Some(storage) = &config.storage {
         validate_storage(storage)?;
+    }
+    Ok(())
+}
+
+/// Whether both lists of `vocabulary` pass the checks a saved
+/// configuration's `[summary_vocabulary]` must.
+#[cfg(unix)] // Only the Unix-only service uses this.
+pub(crate) fn valid_summary_vocabulary(vocabulary: &SummaryVocabulary) -> bool {
+    validate_vocabulary("document type", &vocabulary.document_types).is_ok()
+        && validate_vocabulary("category", &vocabulary.categories).is_ok()
+}
+
+/// One summary vocabulary list: 1-64 distinct entries (ignoring case) of
+/// 1-64 characters, none of them control characters.
+fn validate_vocabulary(name: &str, values: &[String]) -> Result<()> {
+    if values.is_empty() || values.len() > MAX_VOCABULARY_ENTRIES {
+        bail!("the summary {name} list must have 1 to 64 entries");
+    }
+    let mut seen = HashSet::new();
+    for value in values {
+        let chars = value.chars().count();
+        if chars == 0 || chars > MAX_VOCABULARY_CHARS || value.chars().any(char::is_control) {
+            bail!("each summary {name} must be 1 to 64 characters with no control characters");
+        }
+        if !seen.insert(value.to_lowercase()) {
+            bail!("the summary {name} list repeats {value:?}");
+        }
     }
     Ok(())
 }
@@ -2539,74 +2476,33 @@ pub(crate) fn has_unsafe_display_chars(value: &str) -> bool {
     })
 }
 
-pub(crate) fn adapter_for(harness_id: &str) -> Option<HarnessAdapter> {
-    match harness_id {
-        "claude-code" => Some(HarnessAdapter::ClaudeCode),
-        "codex" => Some(HarnessAdapter::Codex),
-        _ => None,
-    }
-}
-
-/// The shape every harness entry needs, including the adapter's exact
-/// argument template. Harness setup also checks the binary's `--help`.
-fn validate_agent(agent: &AgentConfig) -> Result<()> {
-    if adapter_for(&agent.harness_id) != Some(agent.adapter) {
-        bail!("the AI harness must be Claude Code or Codex");
-    }
+/// The shape a summary harness entry needs. Setup also found the binary on
+/// the service's `PATH` and probed it.
+fn validate_summarizer(agent: &AgentConfig) -> Result<()> {
     if agent.binary.len() > MAX_ROOT_PATH_BYTES
         || has_unsafe_display_chars(&agent.binary)
         || !Path::new(&agent.binary).is_absolute()
     {
-        bail!("the AI harness binary must be an absolute path");
+        bail!("the summary harness binary must be an absolute path");
     }
-    if agent.args.len() > MAX_AGENT_ARGS
-        || agent.args.iter().any(|arg| {
-            arg.len() > MAX_AGENT_ARG_BYTES
-                || has_unsafe_display_chars(arg)
-                || (arg != PROMPT_PLACEHOLDER && arg.contains(PROMPT_PLACEHOLDER))
-        })
-        || agent
-            .args
-            .iter()
-            .filter(|arg| *arg == PROMPT_PLACEHOLDER)
-            .count()
-            != 1
+    if agent.version.as_deref().is_some_and(|version| {
+        version.len() > MAX_VERSION_BYTES || has_unsafe_display_chars(version)
+    }) {
+        bail!("the summary harness version is not valid");
+    }
+    if !SUMMARY_TIMEOUT_SECS.contains(&agent.timeout_secs) {
+        bail!("the summary harness timeout must be 60 to 3600 seconds");
+    }
+    if agent.probed_at.len() > MAX_PROBED_AT_BYTES
+        || time::OffsetDateTime::parse(
+            &agent.probed_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .is_err()
     {
-        bail!(
-            "AI harness arguments must contain {PROMPT_PLACEHOLDER} exactly once, as its own argument"
-        );
-    }
-    // Codex's recorded version is checked at the agent gate.
-    if !harness::template_matches(agent.adapter.into(), &agent.args, None) {
-        bail!("AI harness arguments must be exactly the adapter's template");
-    }
-    if agent.env_allow.len() > MAX_ENV_ALLOW {
-        bail!("the AI harness environment allowlist exceeds the 32-name limit");
-    }
-    let mut seen = HashSet::new();
-    for name in &agent.env_allow {
-        if !valid_env_name(name) || !seen.insert(name.as_str()) {
-            bail!(
-                "AI harness environment names must be distinct uppercase names, not DYLD_ or LD_ variables"
-            );
-        }
-    }
-    if agent.timeout_secs == 0 || agent.timeout_secs > MAX_TIMEOUT_SECS {
-        bail!("the AI harness timeout must be 1 to 600 seconds");
+        bail!("the summary harness probe time must be an RFC 3339 timestamp");
     }
     Ok(())
-}
-
-fn valid_env_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= MAX_ENV_NAME_BYTES
-        && (bytes[0].is_ascii_uppercase() || bytes[0] == b'_')
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
-        && !name.starts_with("DYLD_")
-        && !name.starts_with("LD_")
 }
 
 /// Path components in canonical caseless form, NFD(fold(NFD(name))), so two
@@ -2662,7 +2558,6 @@ pub(crate) mod fixtures {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use crate::harness;
     use crate::vault::selected_root_identity;
 
     fn quoted(value: &str) -> String {
@@ -2712,20 +2607,20 @@ pub(crate) mod fixtures {
         );
     }
 
-    /// A home folder, fake harness, and config.toml that pass the agent gate.
-    pub(crate) fn ready(folder: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    /// A home folder and a config.toml with a summary harness set up.
+    /// Returns the config path and the home folder.
+    pub(crate) fn ready(folder: &Path) -> (PathBuf, PathBuf) {
         let root = folder.join("notes");
         fs::create_dir(&root).unwrap();
-        let binary = fake_harness(folder);
         let path = folder.join("config.toml");
         write(
             &path,
             &root,
             "summaries_dir = \"summaries\"",
             "",
-            &format!("{}{}", agent_table(&binary), record_table(&binary)),
+            &agent_table(Path::new(&absent_binary("claude"))),
         );
-        (path, root, binary)
+        (path, root)
     }
 
     /// An absolute harness path on this platform for tests that never read
@@ -2738,49 +2633,20 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// A fake harness file. It is never executed; only its identity matters.
-    pub(crate) fn fake_harness(folder: &Path) -> std::path::PathBuf {
-        let path = folder.join("claude");
-        fs::write(&path, "#!/bin/sh\nexit 1\n").unwrap();
-        path
-    }
-
+    /// A Claude Code `[summarizer]` table with the default time limit.
     pub(crate) fn agent_table(binary: &Path) -> String {
-        harness_table(
-            "claude-code",
-            binary,
-            &harness::template_args(harness::Adapter::ClaudeCode),
-        )
+        summarizer_table("claude", binary, 600)
     }
 
-    pub(crate) fn harness_table(harness_id: &str, binary: &Path, args: &[String]) -> String {
+    pub(crate) fn summarizer_table(harness: &str, binary: &Path, timeout_secs: u32) -> String {
         format!(
-            "[agent]\ndefault = \"{harness_id}\"\n[agent.harnesses.{harness_id}]\nbinary = {}\nargs = {}\nenv_allow = [\"HOME\"]\n",
+            "[summarizer]\nharness = \"{harness}\"\nbinary = {}\nversion = \"2.1.284\"\ntimeout_secs = {timeout_secs}\nprobed_at = \"2026-10-27T10:00:00Z\"\n",
             quoted(&binary.to_string_lossy()),
-            toml::Value::try_from(args).unwrap(),
         )
     }
 
-    pub(crate) fn record_table(binary: &Path) -> String {
-        record_table_for("claude-code", "2.1.284", binary)
-    }
-
-    pub(crate) fn record_table_for(harness_id: &str, version: &str, binary: &Path) -> String {
-        let identity = harness::identity(binary).unwrap();
-        format!(
-            "[harness_record]\nharness_id = \"{harness_id}\"\nreal_path = {}\nsize = {}\nmtime_ns = {}\n{}version = \"{version}\"\nhelp_sha256 = \"00\"\nconfirmed_flags = [\"-p\"]\nprobe_passed_at = \"2026-09-28T00:00:00Z\"\n",
-            quoted(&identity.real_path),
-            identity.size,
-            quoted(&identity.mtime_ns),
-            // Only unix identities carry a file id; an empty string would
-            // not match the `None` a Windows identity has.
-            identity
-                .file_id
-                .as_deref()
-                .map(|file_id| format!("file_id = {}\n", quoted(file_id)))
-                .unwrap_or_default(),
-        )
-    }
+    /// The v5 harness entry and checked record a native setup wrote.
+    pub(crate) const V5_HARNESS_TABLES: &str = "[agent]\ndefault = \"claude-code\"\n[agent.harnesses.claude-code]\nbinary = \"/usr/local/bin/claude\"\nargs = [\"-p\", \"{prompt}\"]\nenv_allow = [\"HOME\", \"PATH\"]\ntimeout_secs = 120\n\n[harness_record]\nharness_id = \"claude-code\"\nreal_path = \"/usr/local/bin/claude\"\nsize = 1\nmtime_ns = \"1\"\nversion = \"2.1.284\"\nhelp_sha256 = \"00\"\nconfirmed_flags = [\"-p\"]\nprobe_passed_at = \"2026-09-28T00:00:00Z\"\n";
 }
 
 #[cfg(test)]
@@ -3485,29 +3351,14 @@ mod tests {
         }
     }
 
-    fn refusal(store: &ConfigStore) -> (ErrorCode, String) {
-        store
-            .agent_readiness()
-            .err()
-            .expect("agent should be refused")
-    }
-
-    /// The gate passes a config setup would write. Other platforms refuse
-    /// AI commands for now (DESIGN.md), before any identity check, so the
-    /// same config gets that refusal there.
-    fn assert_ready_here(store: &ConfigStore, harness_id: &str, version: &str) {
-        if cfg!(unix) {
-            let ready = store.agent_readiness().expect("agent should be ready");
-            assert_eq!(ready.harness_id, harness_id);
-            assert_eq!(ready.harness_version, version);
-            assert_eq!(store.agent_status().state, AgentState::Ready);
-        } else {
-            assert_eq!(
-                refusal(store),
-                (ErrorCode::NotConfigured, AI_UNAVAILABLE_HERE.into())
-            );
-            assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
-        }
+    /// The settings page's refusal: its state and message.
+    fn refusal(store: &ConfigStore) -> (AgentState, String) {
+        let status = store.agent_status();
+        assert_ne!(status.state, AgentState::Ready, "{status:?}");
+        (
+            status.state,
+            status.message.expect("a refusal has a message"),
+        )
     }
 
     #[test]
@@ -3530,6 +3381,81 @@ mod tests {
         );
         assert_eq!(store.knowledge_base_dir().unwrap(), root);
         assert_eq!(store.knowledge_base_identity(), store.root_identity());
+    }
+
+    #[test]
+    fn v5_config_without_vocabulary_loads_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        let vocabulary = &store.snapshot().summary_vocabulary;
+        assert_eq!(vocabulary.document_types, DEFAULT_DOCUMENT_TYPES);
+        assert_eq!(vocabulary.categories, DEFAULT_CATEGORIES);
+        assert_eq!(empty_config().summary_vocabulary, *vocabulary);
+        // A plain update saves an edited vocabulary.
+        let mut next = store.snapshot().clone();
+        next.summary_vocabulary.document_types = vec!["memo".into(), "report".into()];
+        next.summary_vocabulary.categories.push("legal".into());
+        let revision = store.revision().to_owned();
+        store.update(next.clone(), &revision).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[summary_vocabulary]"), "{text}");
+        let reloaded = loaded(&path);
+        assert_eq!(reloaded.config_issue(), None);
+        assert_eq!(
+            reloaded.snapshot().summary_vocabulary,
+            next.summary_vocabulary
+        );
+    }
+
+    #[test]
+    fn duplicate_vocabulary_entry_is_invalid_config() {
+        let valid = empty_config();
+        validate_base(&valid).unwrap();
+        let invalid = |edit: &dyn Fn(&mut SummaryVocabulary)| {
+            let mut config = empty_config();
+            edit(&mut config.summary_vocabulary);
+            validate_base(&config).is_err()
+        };
+        assert!(invalid(&|v| v.document_types.push("Report".into())));
+        assert!(invalid(&|v| v.categories.push("NEWS".into())));
+        assert!(invalid(&|v| v.document_types.clear()));
+        assert!(invalid(&|v| v.categories.clear()));
+        assert!(invalid(&|v| v.document_types.push(String::new())));
+        assert!(invalid(&|v| v.categories.push("tab\there".into())));
+        assert!(invalid(&|v| v.categories.push("x".repeat(65))));
+        assert!(invalid(&|v| {
+            v.document_types = (0..65).map(|n| format!("type {n}")).collect();
+        }));
+        // The limits are inclusive, and a value may be in both lists.
+        assert!(!invalid(&|v| {
+            v.document_types = (0..64).map(|n| format!("type {n}")).collect();
+            v.categories.push("é".repeat(64));
+            v.categories.push("report".into());
+        }));
+
+        // A config.toml with a duplicate loads as needing repair.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "",
+            "[summary_vocabulary]\ndocument_types = [\"report\", \"REPORT\"]\ncategories = [\"news\"]\n",
+        );
+        let store = loaded(&path);
+        assert!(store.config_issue().is_some());
+        assert_eq!(
+            store.snapshot().summary_vocabulary,
+            valid.summary_vocabulary
+        );
     }
 
     #[test]
@@ -3686,9 +3612,8 @@ mod tests {
         assert_eq!(store.adapter_issue(), None);
         assert_eq!(
             refusal(&store),
-            (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
+            (AgentState::NotSetUp, SET_UP_HARNESS.into())
         );
-        assert_eq!(store.agent_status().state, AgentState::NotSetUp);
     }
 
     #[test]
@@ -4466,7 +4391,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_agent_table_disables_ai_but_keeps_capture() {
+    fn invalid_summarizer_table_disables_ai_but_keeps_capture() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         fixtures::write(
@@ -4474,7 +4399,7 @@ mod tests {
             folder.path(),
             "summaries_dir = \"summaries\"",
             "",
-            "[agent]\ndefault = \"claude-code\"\n[agent.harnesses.claude-code]\nbinary = \"claude\"\nargs = [\"{prompt}\"]\n",
+            "[summarizer]\nharness = \"claude\"\nbinary = \"claude\"\ntimeout_secs = 600\nprobed_at = \"2026-10-27T10:00:00Z\"\n",
         );
         let mut store = loaded(&path);
         assert_eq!(store.config_issue(), None);
@@ -4563,253 +4488,110 @@ mod tests {
         validate_storage(&storage).unwrap();
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn agent_readiness_is_ready_with_committed_and_unchanged_harness() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, binary) = fixtures::ready(folder.path());
-        let store = loaded(&path);
-        let ready = store.agent_readiness().expect("agent should be ready");
-        assert_eq!(ready.harness_id, "claude-code");
-        assert_eq!(ready.harness_version, "2.1.284");
-        assert_eq!(store.agent_status().state, AgentState::Ready);
-
-        // An in-place update changes the identity and fails closed.
-        fs::write(&binary, "#!/bin/sh\nexit 2 # updated\n").unwrap();
-        assert_eq!(
-            refusal(&loaded(&path)),
-            (ErrorCode::NotConfigured, HARNESS_CHANGED.into())
-        );
-    }
-
-    #[test]
-    fn update_without_commit_carries_agent_state_forward_from_disk() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = fixtures::ready(folder.path());
-        let mut store = loaded(&path);
-        let next = store.snapshot().clone();
-        let revision = store.revision().to_owned();
-        store.update(next, &revision).unwrap().unwrap();
-        assert_ready_here(&store, "claude-code", "2.1.284");
-        let reloaded = loaded(&path);
-        assert!(reloaded.snapshot().agent.is_some());
-        assert_ready_here(&reloaded, "claude-code", "2.1.284");
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("[harness_record]")
-        );
-    }
-
-    #[test]
-    fn update_without_commit_cannot_set_a_harness() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, root, _) = fixtures::ready(folder.path());
-        let agent = loaded(&path).snapshot().agent.clone().unwrap();
-        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
-        let mut store = loaded(&path);
-        let revision = store.revision().to_owned();
-        let before = fs::read(&path).unwrap();
-        let next = ConfigSnapshot {
-            agent: Some(agent),
-            ..store.snapshot().clone()
-        };
-        assert!(store.update(next, &revision).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn removing_harness_leaves_ai_not_set_up() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = fixtures::ready(folder.path());
-        let mut store = loaded(&path);
-        let next = ConfigSnapshot {
-            agent: None,
-            ..store.snapshot().clone()
-        };
-        let revision = store.revision().to_owned();
-        store.update(next, &revision).unwrap().unwrap();
-        let contents = fs::read_to_string(&path).unwrap();
-        assert!(!contents.contains("[agent"));
-        assert!(!contents.contains("[harness_record]"));
-        let store = loaded(&path);
-        assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
-        );
-        assert_eq!(store.agent_status().state, AgentState::NotSetUp);
-    }
-
-    fn claude(binary: &Path) -> AgentConfig {
+    fn claude(binary: &str) -> AgentConfig {
         AgentConfig {
-            harness_id: "claude-code".into(),
-            adapter: HarnessAdapter::ClaudeCode,
-            binary: binary.to_string_lossy().into_owned(),
-            args: harness::template_args(harness::Adapter::ClaudeCode),
-            env_allow: vec!["HOME".into()],
-            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            harness: HarnessId::Claude,
+            binary: binary.to_owned(),
+            version: Some("2.1.284".into()),
+            timeout_secs: DEFAULT_SUMMARY_TIMEOUT_SECS,
+            probed_at: "2026-10-27T10:00:00Z".into(),
         }
     }
 
-    #[test]
-    fn agent_entry_rejects_dyld_env_name() {
-        let agent = claude(Path::new(&fixtures::absent_binary("claude")));
-        validate_agent(&agent).unwrap();
-        for name in [
-            "DYLD_INSERT_LIBRARIES",
-            "LD_PRELOAD",
-            "home",
-            "1HOME",
-            "HOME=x",
-            "",
-        ] {
-            let bad = AgentConfig {
-                env_allow: vec![name.into()],
-                ..agent.clone()
-            };
-            assert!(validate_agent(&bad).is_err(), "{name:?} was accepted");
-        }
-        let duplicate = AgentConfig {
-            env_allow: vec!["HOME".into(), "HOME".into()],
-            ..agent.clone()
-        };
-        assert!(validate_agent(&duplicate).is_err());
+    fn absent_claude() -> AgentConfig {
+        claude(&fixtures::absent_binary("claude"))
+    }
+
+    fn assert_ready(store: &ConfigStore, version: Option<&str>) {
+        let status = store.agent_status();
+        assert_eq!(status.state, AgentState::Ready, "{status:?}");
+        assert_eq!(status.harness_version.as_deref(), version);
+        assert_eq!(status.message, None);
     }
 
     #[test]
-    fn agent_entry_args_must_be_the_adapter_template() {
-        let agent = claude(Path::new(&fixtures::absent_binary("claude")));
-        let mut loosened = agent.args.clone();
-        loosened.retain(|arg| arg != "--strict-mcp-config");
-        let mut extra = agent.args.clone();
-        extra.push("--safe-mode".into());
-        for args in [
-            loosened,
-            extra,
-            vec!["-p".into(), PROMPT_PLACEHOLDER.into()],
-        ] {
-            let bad = AgentConfig {
-                args: args.clone(),
-                ..agent.clone()
-            };
-            assert!(validate_agent(&bad).is_err(), "{args:?} was accepted");
-        }
-        let codex = AgentConfig {
-            harness_id: "codex".into(),
-            adapter: HarnessAdapter::Codex,
-            args: harness::codex_args("0.144.4").unwrap(),
-            ..agent.clone()
-        };
-        validate_agent(&codex).unwrap();
-        let unreviewed = AgentConfig {
-            args: harness::template_args(harness::Adapter::Codex),
-            ..codex
-        };
-        assert!(validate_agent(&unreviewed).is_err());
-    }
-
-    #[test]
-    fn agent_gate_needs_codex_args_reviewed_for_the_recorded_version() {
+    fn v5_agent_and_harness_record_tables_load_as_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
         let root = folder.path().join("notes");
         fs::create_dir(&root).unwrap();
-        let binary = folder.path().join("codex");
-        fs::write(&binary, "#!/bin/sh\nexit 1\n").unwrap();
-        let path = folder.path().join("config.toml");
         fixtures::write(
             &path,
             &root,
             "summaries_dir = \"summaries\"",
             "",
-            &format!(
-                "{}{}",
-                fixtures::harness_table("codex", &binary, &harness::codex_args("0.144.4").unwrap()),
-                fixtures::record_table_for("codex", "0.144.4", &binary)
-            ),
+            fixtures::V5_HARNESS_TABLES,
         );
-        let store = loaded(&path);
-        assert!(store.snapshot().agent.is_some());
-        assert_ready_here(&store, "codex", "0.144.4");
-
-        // Setup recorded a version whose reviewed args differ (none here).
-        fixtures::write(
-            &path,
-            &root,
-            "summaries_dir = \"summaries\"",
-            "",
-            &format!(
-                "{}{}",
-                fixtures::harness_table("codex", &binary, &harness::codex_args("0.144.4").unwrap()),
-                fixtures::record_table_for("codex", "0.145.0", &binary)
-            ),
-        );
-        let store = loaded(&path);
+        let mut store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert!(store.configured());
+        assert_eq!(store.snapshot().agent, None);
         assert_eq!(
             refusal(&store),
-            (ErrorCode::NotConfigured, AGENT_ENTRY_INVALID.into())
+            (AgentState::NotSetUp, SET_UP_HARNESS.into())
         );
-        assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
+        assert_eq!(backup_count(folder.path()), 0);
+
+        let revision = store.revision().to_owned();
+        store
+            .update(store.snapshot().clone(), &revision)
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("[agent"), "{text}");
+        assert!(!text.contains("harness_record"), "{text}");
+        assert!(!text.contains("[summarizer"), "{text}");
+        assert_eq!(backup_count(folder.path()), 0);
+        assert_eq!(loaded(&path).agent_status().state, AgentState::NotSetUp);
     }
 
     #[test]
-    fn agent_entry_needs_one_standalone_prompt_and_absolute_binary() {
-        let agent = claude(Path::new(&fixtures::absent_binary("claude")));
-        for args in [
-            vec!["-p".to_owned()],
-            vec!["{prompt}".to_owned(), "{prompt}".to_owned()],
-            vec!["--prompt={prompt}".to_owned()],
-        ] {
-            let bad = AgentConfig {
-                args: args.clone(),
-                ..agent.clone()
-            };
-            assert!(validate_agent(&bad).is_err(), "{args:?} was accepted");
-        }
-        for bad in [
-            AgentConfig {
-                binary: "claude".into(),
-                ..agent.clone()
-            },
-            AgentConfig {
-                adapter: HarnessAdapter::Codex,
-                ..agent.clone()
-            },
-            AgentConfig {
-                timeout_secs: 0,
-                ..agent.clone()
-            },
-            AgentConfig {
-                timeout_secs: MAX_TIMEOUT_SECS + 1,
-                ..agent.clone()
-            },
-        ] {
-            assert!(validate_agent(&bad).is_err());
-        }
-    }
-
-    #[test]
-    fn v5_unconfirmed_denylist_key_no_longer_blocks_a_committed_harness() {
+    fn summarizer_table_round_trips_as_wire_agent() {
         let folder = tempfile::tempdir().unwrap();
-        let (path, root, binary) = fixtures::ready(folder.path());
-        fixtures::write(
-            &path,
-            &root,
-            "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = false",
-            &format!(
-                "{}{}",
-                fixtures::agent_table(&binary),
-                fixtures::record_table(&binary)
-            ),
-        );
-        let store = loaded(&path);
+        let (path, _) = fixtures::ready(folder.path());
+        let mut store = loaded(&path);
         assert_eq!(store.config_issue(), None);
-        assert!(store.snapshot().agent.is_some());
-        assert_ready_here(&store, "claude-code", "2.1.284");
+        assert_eq!(store.snapshot().agent, Some(absent_claude()));
+        assert_ready(&store, Some("2.1.284"));
+
+        // An unrelated save carries the table forward unchanged.
+        let mut next = store.snapshot().clone();
+        next.strip_params.push("campaign".into());
+        let revision = store.revision().to_owned();
+        store.update(next, &revision).unwrap().unwrap();
+        let reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot().agent, Some(absent_claude()));
+        assert_ready(&reloaded, Some("2.1.284"));
+
+        // A version setup could not read is stored as absent.
+        let commit = HarnessCommit {
+            summarizer: StoredSummarizer::from(&AgentConfig {
+                version: None,
+                harness: HarnessId::Codex,
+                ..absent_claude()
+            }),
+        };
+        let mut store = reloaded;
+        let next = ConfigSnapshot {
+            agent: Some(commit.summarizer.agent()),
+            ..store.snapshot().clone()
+        };
+        let revision = store.revision().to_owned();
+        store
+            .update_with_grants(next, &revision, None, None, Some(commit.clone()))
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[summarizer]"), "{text}");
+        assert!(text.contains("harness = \"codex\""), "{text}");
+        assert!(!text.contains("version"), "{text}");
+        let reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot().agent, Some(commit.summarizer.agent()));
+        assert_ready(&reloaded, None);
     }
 
     #[test]
-    fn agent_readiness_refuses_without_harness() {
+    fn harness_commit_must_match_the_snapshot() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         fixtures::write(
@@ -4819,31 +4601,149 @@ mod tests {
             "",
             "",
         );
-        let store = loaded(&path);
-        assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let before = fs::read(&path).unwrap();
+        let next = ConfigSnapshot {
+            agent: Some(absent_claude()),
+            ..store.snapshot().clone()
+        };
+        let other = HarnessCommit {
+            summarizer: StoredSummarizer::from(&AgentConfig {
+                timeout_secs: 900,
+                ..absent_claude()
+            }),
+        };
+        assert!(
+            store
+                .update_with_grants(next, &revision, None, None, Some(other))
+                .is_err()
         );
-        assert_eq!(store.agent_status().state, AgentState::NotSetUp);
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]
-    fn agent_readiness_refuses_without_record_or_summaries_folder() {
+    fn update_without_commit_cannot_set_a_harness() {
         let folder = tempfile::tempdir().unwrap();
-        let (path, root, binary) = fixtures::ready(folder.path());
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "summaries_dir = \"summaries\"",
+            "",
+            "",
+        );
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let before = fs::read(&path).unwrap();
+        let next = ConfigSnapshot {
+            agent: Some(absent_claude()),
+            ..store.snapshot().clone()
+        };
+        assert!(store.update(next, &revision).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        // Nor change the one setup committed.
+        let ready = folder.path().join("ready");
+        fs::create_dir(&ready).unwrap();
+        let (path, _) = fixtures::ready(&ready);
+        let mut store = loaded(&path);
+        let revision = store.revision().to_owned();
+        let next = ConfigSnapshot {
+            agent: Some(AgentConfig {
+                timeout_secs: 900,
+                ..absent_claude()
+            }),
+            ..store.snapshot().clone()
+        };
+        assert!(store.update(next, &revision).is_err());
+    }
+
+    #[test]
+    fn removing_harness_leaves_ai_not_set_up() {
+        let folder = tempfile::tempdir().unwrap();
+        let (path, _) = fixtures::ready(folder.path());
+        let mut store = loaded(&path);
+        let next = ConfigSnapshot {
+            agent: None,
+            ..store.snapshot().clone()
+        };
+        let revision = store.revision().to_owned();
+        store.update(next, &revision).unwrap().unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("[summarizer"));
+        assert_eq!(
+            refusal(&loaded(&path)),
+            (AgentState::NotSetUp, SET_UP_HARNESS.into())
+        );
+    }
+
+    #[test]
+    fn summarizer_entry_needs_an_absolute_binary_bounded_timeout_and_probe_time() {
+        validate_summarizer(&absent_claude()).unwrap();
+        for bad in [
+            AgentConfig {
+                binary: "claude".into(),
+                ..absent_claude()
+            },
+            AgentConfig {
+                binary: format!("{}\u{202e}", fixtures::absent_binary("claude")),
+                ..absent_claude()
+            },
+            AgentConfig {
+                version: Some("2.1\n284".into()),
+                ..absent_claude()
+            },
+            AgentConfig {
+                timeout_secs: 59,
+                ..absent_claude()
+            },
+            AgentConfig {
+                timeout_secs: 3601,
+                ..absent_claude()
+            },
+            AgentConfig {
+                probed_at: "yesterday".into(),
+                ..absent_claude()
+            },
+        ] {
+            assert!(validate_summarizer(&bad).is_err(), "{bad:?} was accepted");
+        }
+        for timeout_secs in [60, 3600] {
+            validate_summarizer(&AgentConfig {
+                timeout_secs,
+                ..absent_claude()
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn v5_unconfirmed_denylist_key_no_longer_blocks_a_committed_harness() {
+        let folder = tempfile::tempdir().unwrap();
+        let (path, root) = fixtures::ready(folder.path());
         fixtures::write(
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "",
-            &fixtures::agent_table(&binary),
+            "agent_denylist_confirmed = false",
+            &fixtures::agent_table(Path::new(&fixtures::absent_binary("claude"))),
         );
         let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert!(store.snapshot().agent.is_some());
+        assert_ready(&store, Some("2.1.284"));
+    }
+
+    #[test]
+    fn agent_status_refuses_without_harness_or_before_the_layout_moves() {
+        let folder = tempfile::tempdir().unwrap();
+        let (path, root) = fixtures::ready(folder.path());
+        fixtures::write(&path, &root, "", "", "");
         assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
+            refusal(&loaded(&path)),
+            (AgentState::NotSetUp, SET_UP_HARNESS.into())
         );
-        assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
 
         // An M1 file has no summaries folder. That is an older layout, which
         // is never used until it has been moved to the fixed one.
@@ -4852,11 +4752,7 @@ mod tests {
             &root,
             "summaries_dir = \"my-summaries\"",
             "",
-            &format!(
-                "{}{}",
-                fixtures::agent_table(&binary),
-                fixtures::record_table(&binary)
-            ),
+            &fixtures::agent_table(Path::new(&fixtures::absent_binary("claude"))),
         );
         fs::write(
             &path,
@@ -4870,167 +4766,15 @@ mod tests {
             store.snapshot().storage.as_ref().unwrap().summaries_dir,
             None
         );
-        assert_eq!(refusal(&store).0, ErrorCode::InvalidConfig);
+        assert_eq!(
+            refusal(&store),
+            (
+                AgentState::NotSetUp,
+                "configuration is unavailable or needs repair".into()
+            )
+        );
         store.migrate_layout().unwrap();
-        assert_ready_here(&store, "claude-code", "2.1.284");
-    }
-
-    #[test]
-    fn harness_commit_writes_entry_and_record_in_one_write() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, root, binary) = fixtures::ready(folder.path());
-        let record: HarnessRecord = loaded(&path).agent.record.clone().unwrap();
-        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
-        let mut store = loaded(&path);
-        let revision = store.revision().to_owned();
-        let next = ConfigSnapshot {
-            agent: Some(claude(&binary)),
-            ..store.snapshot().clone()
-        };
-
-        // A record for a different binary never commits.
-        let stale = HarnessCommit {
-            agent: claude(&binary),
-            record: HarnessRecord {
-                size: record.size + 1,
-                ..record.clone()
-            },
-        };
-        let before = fs::read(&path).unwrap();
-        assert!(
-            store
-                .update_with_grants(next.clone(), &revision, None, None, Some(stale))
-                .is_err()
-        );
-        assert_eq!(fs::read(&path).unwrap(), before);
-
-        let commit = HarnessCommit {
-            agent: claude(&binary),
-            record,
-        };
-        store
-            .update_with_grants(next, &revision, None, None, Some(commit))
-            .unwrap()
-            .unwrap();
-        let store = loaded(&path);
-        assert_eq!(store.snapshot().agent, Some(claude(&binary)));
-        assert_ready_here(&store, "claude-code", "2.1.284");
-    }
-
-    /// A config with a home folder and no harness, then one harness commit.
-    /// Returns the config path, the fake binary, and the committed revision.
-    fn committed(folder: &Path) -> (PathBuf, PathBuf, String) {
-        let (path, root, binary) = fixtures::ready(folder);
-        let record: HarnessRecord = loaded(&path).agent.record.clone().unwrap();
-        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
-        let mut store = loaded(&path);
-        assert_eq!(store.agent_status().state, AgentState::NotSetUp);
-        let next = ConfigSnapshot {
-            agent: Some(claude(&binary)),
-            ..store.snapshot().clone()
-        };
-        let commit = HarnessCommit {
-            agent: claude(&binary),
-            record,
-        };
-        let revision = store.revision().to_owned();
-        let revision = store
-            .update_with_grants(next, &revision, None, None, Some(commit))
-            .unwrap()
-            .unwrap();
-        (path, binary, revision)
-    }
-
-    #[test]
-    fn harness_commit_writes_entry_and_record_in_one_revision() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, binary, revision) = committed(folder.path());
-        let text = fs::read_to_string(&path).unwrap();
-        // One serialization carries both; the revision is of that file.
-        assert_eq!(revision_for(text.as_bytes()), revision);
-        assert!(!text.contains("agent_denylist"), "{text}");
-        assert!(text.contains("[agent"), "{text}");
-        assert!(text.contains("[harness_record]"), "{text}");
-        assert!(text.contains("probe_passed_at"), "{text}");
-        let store = loaded(&path);
-        assert_eq!(store.revision(), revision);
-        assert_eq!(store.snapshot().agent, Some(claude(&binary)));
-        assert_eq!(
-            store
-                .agent
-                .record
-                .as_ref()
-                .map(|record| record.version.as_str()),
-            Some("2.1.284")
-        );
-    }
-
-    #[test]
-    fn harness_record_survives_unrelated_updates() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, revision) = committed(folder.path());
-        let mut store = loaded(&path);
-        let record = store.agent.record.clone();
-        let mut next = store.snapshot().clone();
-        next.strip_params.push("campaign".into());
-        let updated = store.update(next, &revision).unwrap().unwrap();
-        assert_ne!(updated, revision);
-        let store = loaded(&path);
-        assert!(
-            store
-                .snapshot()
-                .strip_params
-                .iter()
-                .any(|value| value == "campaign")
-        );
-        assert_eq!(store.agent.record, record);
-        assert_ready_here(&store, "claude-code", "2.1.284");
-    }
-
-    #[test]
-    fn agent_readiness_ready_after_commit() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = committed(folder.path());
-        assert_ready_here(&loaded(&path), "claude-code", "2.1.284");
-    }
-
-    /// Step 1 refuses AI commands off unix even for a harness whose identity
-    /// is unchanged since setup.
-    #[cfg(not(unix))]
-    #[test]
-    fn agent_readiness_refuses_on_this_platform() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, binary) = fixtures::ready(folder.path());
-        let store = loaded(&path);
-        assert_eq!(
-            store.agent.record.as_ref().map(HarnessRecord::identity),
-            Some(harness::identity(&binary).unwrap())
-        );
-        assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, AI_UNAVAILABLE_HERE.into())
-        );
-        assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn agent_readiness_refuses_changed_identity() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, binary, _) = committed(folder.path());
-        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
-        File::options()
-            .write(true)
-            .open(&binary)
-            .unwrap()
-            .set_modified(later)
-            .unwrap();
-        let store = loaded(&path);
-        assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, HARNESS_CHANGED.into())
-        );
-        assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
+        assert_ready(&store, Some("2.1.284"));
     }
 
     #[test]

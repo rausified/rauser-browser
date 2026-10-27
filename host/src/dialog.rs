@@ -408,10 +408,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_dialog_that_answers_in_time_keeps_its_reply() {
-        let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg("printf canceled");
-        let reply = run_dialog_process(command, "Title", Duration::from_secs(10)).unwrap();
-        assert_eq!(reply, "canceled");
+        // Like the real dialog, consume the complete framed request before
+        // replying. An immediate printf can close stdin during the parent's
+        // write, turning a successful-reply test into a Broken pipe race.
+        // A full-size UTF-8 request exercises pipe-buffer pressure and checks
+        // that the fixture uses bytes rather than characters. It cannot wait for EOF:
+        // the parent holds stdin open until the child exits.
+        let mut large = "é\n".repeat(MAX_CHILD_INPUT_BYTES as usize / 3);
+        large.push('x');
+        for input in ["", "Title", large.as_str()].into_iter().cycle().take(60) {
+            let mut command = Command::new("/bin/sh");
+            command.arg("-c").arg(
+                r#"IFS= read -r size || exit 1
+bytes=$(head -c "$size" | wc -c)
+[ "$bytes" -eq "$size" ] || exit 1
+printf canceled"#,
+            );
+            let reply = run_dialog_process(command, input, Duration::from_secs(10)).unwrap();
+            assert_eq!(reply, "canceled");
+        }
     }
 
     #[cfg(feature = "scripted-dialogs")]
