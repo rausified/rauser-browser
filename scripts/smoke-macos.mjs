@@ -1040,7 +1040,7 @@ async function run() {
 
     console.log(`\nSmoke artifacts: ${runDir}`);
     console.log(`Fixture: ${origin}${options.defaultPort ? " (port 80, entered as " + siteInput + ")" : ""}`);
-    console.log(`Notes folder: ${notes}`);
+    console.log(`Home folder: ${notes}`);
     console.log(`Extension folder: ${dist}`);
     console.log(`Loading the unpacked extension into the isolated ${options.headless ? "headless " : ""}Chrome profile.`);
     chrome = spawn(options.chrome, [
@@ -1082,7 +1082,7 @@ async function run() {
       await waitFor(() => onPanel(async (page) => {
         requireCondition(await page.hidden("#setup-warning") === false, "Setup warning is hidden");
         const reason = await page.text("#setup-reason");
-        requireCondition(reason === "No notes folder is chosen.", `Setup warning says: ${reason}`);
+        requireCondition(reason === "No home folder is chosen.", `Setup warning says: ${reason}`);
       }));
       const reply = await hostConfig(wrapper);
       requireCondition(reply.config.storage === null && !reply.config.capture_enabled,
@@ -1120,7 +1120,7 @@ async function run() {
         async () => {
           const reply = await hostConfig(wrapper);
           const saved = reply.config.storage?.root;
-          requireCondition(saved, "The host has no notes folder yet");
+          requireCondition(saved, "The host has no home folder yet");
           const chosen = await realpath(saved);
           const entries = (await readdir(chosen)).filter((name) => name !== ".DS_Store");
           if (notesRoot === null && entries.length) {
@@ -1129,10 +1129,24 @@ async function run() {
           notesRoot = chosen;
           requireCondition(!reply.config.capture_enabled && reply.config.adapters.artifacts.length === 0,
             "Saving the folder changed adapters or the capture switch");
+          const { root: _root, knowledge_base_dir: _kb, ...layout } = reply.config.storage;
+          requireCondition(JSON.stringify(layout) === JSON.stringify({
+            profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
+            artifacts_dir: "artifacts", summaries_dir: "summaries",
+          }), `The host saved the layout ${JSON.stringify(layout)}`);
           const status = await settingsStatus();
           requireCondition(status?.startsWith("No site has an adapter yet."), `Settings page says: ${status}`);
         }, () => pickFolder(notes));
-      console.log(`  Using notes folder ${notesRoot}`);
+      console.log(`  Using home folder ${notesRoot}`);
+      // Settings shows the fixed layout and offers no folder names to edit.
+      await onSettings(async (page) => {
+        const shown = await page.text("#home-layout");
+        for (const folder of ["notes/", "logs/", "artifacts/", "summaries/", "later/"]) {
+          requireCondition(shown?.includes(folder), `Settings shows the layout as: ${shown}`);
+        }
+        requireCondition(await page.evaluate('document.getElementById("summaries-dir") === null'),
+          "Settings still offers a summaries folder name");
+      });
       // Having no adapters is a choice, not a setup problem.
       await waitFor(() => onPanel(async (page) =>
         requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")));
@@ -1152,7 +1166,7 @@ async function run() {
           const saved = reply.config.storage?.knowledge_base_dir;
           requireCondition(saved, "The host has no knowledge base folder yet");
           requireCondition(await realpath(saved) === expected, `The host saved ${saved} as the knowledge base`);
-          requireCondition(await sameFolder(reply.config.storage.root), "Choosing the knowledge base changed the notes folder");
+          requireCondition(await sameFolder(reply.config.storage.root), "Choosing the knowledge base changed the home folder");
           const status = await settingsStatus();
           requireCondition(status?.startsWith("Knowledge base folder saved."), `Settings page says: ${status}`);
           const shown = await onSettings((page) => page.text("#kb-path"));
@@ -1180,7 +1194,7 @@ async function run() {
         requireCondition(await page.hidden("#note-editor") === false, "The note editor is hidden");
         requireCondition(await page.enabled("#note-body"), "The note editor is disabled");
       }), { timeout: 20_000 });
-      const pages = await markdownFiles(path.join(notesRoot, "pages"));
+      const pages = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(pages.length === 0, "Showing a page's note editor wrote a note");
     });
 
@@ -1273,14 +1287,14 @@ async function run() {
     });
 
     const logRows = async () => {
-      const files = await markdownFiles(path.join(notesRoot, "log"));
+      const files = await markdownFiles(path.join(notesRoot, "logs"));
       return { files, rows: files.flatMap((file) => file.text.split("\n").filter((line) => line.startsWith("- "))) };
     };
 
     // An activity entry is a "- " row naming the URL, followed by its
     // `<!-- brauser:visit ... kind=activity data=... -->` marker line.
     const activityRows = (rows, url) => rows.filter((line) => line.includes(`<${url}>`));
-    const logs = async () => (await markdownFiles(path.join(notesRoot, "log"))).map((file) => file.text);
+    const logs = async () => (await markdownFiles(path.join(notesRoot, "logs"))).map((file) => file.text);
     const activityMarkers = async () => (await logs()).join("\n").split("\n")
       .filter((line) => line.startsWith("<!-- brauser:visit ") && line.includes(" kind=activity ")).length;
 
@@ -1364,7 +1378,7 @@ async function run() {
       // Autosave debounces ~1s after typing stops (§5.3); 20s covers that plus
       // the native round trip with room to spare.
       await waitForNoteStatus("Saved");
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1, "Expected exactly one page note");
       requireCondition(files[0].text.includes(title) && files[0].text.includes(firstBody) &&
         files[0].text.includes(allowed), "Page note content does not match the fixture page");
@@ -1381,7 +1395,7 @@ async function run() {
       await waitForNoteStatus("Saved");
       const shown = await fieldValue("note-body");
       requireCondition(shown === appended, `Note editor shows: ${shown}`);
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1 && files[0].text.includes(appended),
         "Navigating away and back did not preserve the saved note");
     });
@@ -1408,7 +1422,7 @@ async function run() {
       const [unsaved, shown] = await Promise.all([fieldValue("note-unsaved"), fieldValue("note-body")]);
       requireCondition(unsaved === unsavedLocalEdit, `Unsaved copy-out shows: ${unsaved}`);
       requireCondition(shown === externalBody, `Note editor shows: ${shown}`);
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1 && files[0].text.includes(externalBody) &&
         !files[0].text.includes(unsavedLocalEdit), "The refused save must not have changed the note file");
     });
@@ -1417,7 +1431,7 @@ async function run() {
       const recovered = `${externalBody} plus the recovered edit ${caseId}`;
       await typeNote(recovered);
       await waitForNoteStatus("Saved");
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1 && files[0].text.includes(recovered),
         "The recovered edit was not saved after the conflict");
     });
@@ -1801,6 +1815,15 @@ async function run() {
       await openSettingsTab();
       requireCondition(!(await activityTotals()).some((total) => total.url === afterRemoval),
         "Activity was measured after site removal");
+    });
+
+    await step("The home folder holds only the fixed folders", async () => {
+      const fixed = new Set(["notes", "logs", "artifacts", "summaries", "later"]);
+      const entries = (await readdir(notesRoot)).filter((name) => name !== ".DS_Store");
+      requireCondition(entries.every((name) => fixed.has(name)),
+        `The home folder holds ${entries.join(", ")}`);
+      requireCondition(entries.includes("notes") && entries.includes("logs"),
+        `The run's notes and logs are not in the home folder: ${entries.join(", ")}`);
     });
 
     if (options.headless) {

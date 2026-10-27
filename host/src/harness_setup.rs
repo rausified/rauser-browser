@@ -133,7 +133,7 @@ pub(crate) fn set_up(
     let Some(storage) = &current.storage else {
         return Err(SetupError::new(
             ErrorCode::NotConfigured,
-            "Choose a notes folder first",
+            "Choose a home folder first",
         ));
     };
     let Some(candidate) = harness::rediscover(env, &request.harness_id) else {

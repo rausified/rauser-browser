@@ -1,7 +1,7 @@
 import type {
   AdapterDocument, FolderPurpose, HarnessAdapter, HarnessOffer, StorageConfig,
 } from "../protocol/ts/generated.js";
-import { isHttpUrl, type WorkerStatus } from "./model.js";
+import { HOME_LAYOUT, isHttpUrl, type WorkerStatus } from "./model.js";
 import {
   ConfigSession,
   capturePaused,
@@ -65,7 +65,6 @@ const agentState = element<HTMLParagraphElement>("agent-state");
 const detectButton = element<HTMLButtonElement>("detect-harnesses");
 const offersList = element<HTMLUListElement>("harness-offers");
 const envList = element<HTMLUListElement>("harness-env");
-const summariesInput = element<HTMLInputElement>("summaries-dir");
 const knowledgeBasePath = element<HTMLOutputElement>("kb-path");
 const chooseKnowledgeBaseButton = element<HTMLButtonElement>("choose-kb");
 const knowledgeBaseUseNotesButton = element<HTMLButtonElement>("kb-use-notes");
@@ -81,7 +80,6 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 let offers: HarnessOffer[] = [];
 let selectedHarnessId: string | null = null;
 const envChoices = new Map<string, boolean>();
-let summariesEdited = false;
 type AdapterEdit =
   | { kind: "new" }
   | { kind: "existing"; identity: string; snapshot: string };
@@ -155,7 +153,7 @@ function updateControls(): void {
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
-  // The host refuses capture without a notes folder, and capture has nothing
+  // The host refuses capture without a home folder, and capture has nothing
   // to record until some site has an adapter.
   resumeButton.disabled = !connected || busy || repairing || repairingAdapters ||
     session.config?.capture_enabled !== false || !session.config.storage ||
@@ -182,7 +180,7 @@ function updateControls(): void {
   detectButton.disabled = !idle || session.configIssue !== null;
   setupButton.disabled = !idle || !session.config?.storage || selectedOffer() === null;
   removeHarnessButton.disabled = !idle || !session.config?.agent;
-  // The knowledge base is stored with the notes folder, so it needs one.
+  // The knowledge base is stored with the home folder, so it needs one.
   const folderReady = idle && !repairing && !!session.config?.storage;
   chooseKnowledgeBaseButton.disabled = !folderReady;
   knowledgeBaseUseNotesButton.disabled = !folderReady || !session.config?.storage?.knowledge_base_dir;
@@ -221,10 +219,9 @@ function renderAgent(): void {
   if (config?.agent) state.push(`Harness: ${config.agent.binary}.`);
   if (config?.storage?.summaries_dir) state.push(`Summaries folder: ${config.storage.summaries_dir}.`);
   agentState.textContent = state.join(" ");
-  if (!summariesEdited) summariesInput.value = config?.storage?.summaries_dir ?? "summaries";
   const storage = config?.storage ?? null;
   knowledgeBasePath.textContent = storage?.knowledge_base_dir ??
-    (storage ? `Same as the notes folder (${storage.root})` : "Same as the notes folder");
+    (storage ? `Same as the home folder (${storage.root})` : "Same as the home folder");
 
   offersList.replaceChildren();
   if (!offers.length) {
@@ -627,7 +624,7 @@ function closeAdapterEditor(): void {
 
 /**
  * Save a new adapter document. A site is on while it has an adapter, so the
- * host derives the sites from the document, and the first adapter saved with a notes folder
+ * host derives the sites from the document, and the first adapter saved with a home folder
  * turns capture on unless a pause is still pending. A folder selection the
  * host has not saved yet is saved with it.
  */
@@ -790,16 +787,13 @@ function scheduleReload(): void {
   }, 250);
 }
 
-/** The storage settings for a folder chosen through the native picker. */
+/** The storage settings for a home folder chosen through the native picker.
+ * Its folders always have the fixed names; only the knowledge base carries over. */
 function storageFor(root: string, current: StorageConfig | null): StorageConfig {
   return {
     root,
     profile: "neutral",
-    log_dir: current?.log_dir ?? "log",
-    pages_dir: current?.pages_dir ?? "pages",
-    later_dir: current?.later_dir ?? "later",
-    artifacts_dir: current?.artifacts_dir ?? "artifacts",
-    summaries_dir: current?.summaries_dir ?? null,
+    ...HOME_LAYOUT,
     knowledge_base_dir: current?.knowledge_base_dir ?? null,
   };
 }
@@ -864,7 +858,7 @@ async function chooseKnowledgeBase(): Promise<void> {
   }
 }
 
-/** Let the knowledge base follow the notes folder again. */
+/** Let the knowledge base follow the home folder again. */
 async function useNotesFolderAsKnowledgeBase(): Promise<void> {
   if (busy || !session.config?.storage?.knowledge_base_dir || session.configIssue) return;
   busy = true;
@@ -874,7 +868,7 @@ async function useNotesFolderAsKnowledgeBase(): Promise<void> {
       ...session.config!,
       storage: { ...session.config!.storage!, knowledge_base_dir: null },
     }, null));
-    show("Summary agents will read the notes folder as the knowledge base.");
+    show("Summary agents will read the home folder as the knowledge base.");
   } catch (error) {
     show(`Could not change the knowledge base folder: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
@@ -983,12 +977,7 @@ async function setupHarness(): Promise<void> {
   const offer = selectedOffer();
   if (busy || !offer) return;
   if (!session.config?.storage) {
-    show("Choose a notes folder first.", true);
-    return;
-  }
-  const summaries = summariesInput.value.trim();
-  if (!summaries) {
-    show("Enter a summaries folder name.", true);
+    show("Choose a home folder first.", true);
     return;
   }
   const envNames = offer.env_optional.filter((env) => envChoices.get(env.name)).map((env) => env.name);
@@ -996,8 +985,7 @@ async function setupHarness(): Promise<void> {
   updateControls();
   try {
     await withConfigMutationLock(() =>
-      session.setupHarness(offer.harness_id, envNames, summaries));
-    summariesEdited = false;
+      session.setupHarness(offer.harness_id, envNames, null));
     show(`${harnessName(offer.adapter)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
     show(`Harness setup did not finish: ${describe(error)}`, true);
@@ -1035,7 +1023,6 @@ adapterPreviewUrl.addEventListener("input", refreshAdapterEditor);
 adapterPreviewTitle.addEventListener("input", refreshAdapterEditor);
 setupButton.addEventListener("click", () => void setupHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
-summariesInput.addEventListener("input", () => { summariesEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
 chooseKnowledgeBaseButton.addEventListener("click", () => void chooseKnowledgeBase());
 knowledgeBaseUseNotesButton.addEventListener("click", () => void useNotesFolderAsKnowledgeBase());

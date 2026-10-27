@@ -276,7 +276,7 @@ fn clamped_title(title: &str) -> &str {
 
 fn too_large_on_disk() -> NoteRequestError {
     NoteRequestError::TooLarge(
-        "this page's note is too large to open here; edit it in your notes folder".into(),
+        "this page's note is too large to open here; edit it in the notes folder of your home folder".into(),
     )
 }
 
@@ -576,7 +576,7 @@ pub fn use_as_artifact_note(
         &parsed.created,
         &now,
     )?;
-    vault.move_note_no_clobber(
+    let moved = vault.move_note_no_clobber(
         &source_key,
         source_url,
         artifact_key,
@@ -584,6 +584,14 @@ pub fn use_as_artifact_note(
         &source,
         &markdown,
     )?;
+    // The response has no outcome field; the move itself succeeded.
+    for warning in &moved.warnings {
+        let crate::vault::PostPublishWarning::DirectorySync(error) = warning;
+        eprintln!(
+            "{}: warning: the note was moved, but syncing its folder failed: {error}",
+            crate::brand::NAMESPACE
+        );
+    }
     load_keyed_note(vault, destination_url, artifact_key, &[])
 }
 

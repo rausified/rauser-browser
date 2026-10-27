@@ -26,7 +26,10 @@ thread_local! {
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
 use crate::index::ArtifactIndex;
-use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
+use crate::layout;
+use crate::vault::{
+    STALE_TEMPORARY_AGE, Vault, is_generated_temporary, open_selected_root, selected_root_identity,
+};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_ROOT_PATH_BYTES: usize = 4 * 1024;
@@ -104,10 +107,9 @@ const AGENT_ENTRY_INVALID: &str = concat!(
     " settings."
 );
 const SET_UP_HARNESS: &str = concat!("Set up an AI harness in ", crate::app_name!(), " settings.");
-const CHOOSE_SUMMARIES: &str = concat!(
-    "Choose a summaries folder in ",
+const LAYOUT_PENDING: &str = concat!(
     crate::app_name!(),
-    " settings."
+    " is moving its folders to the fixed layout in your home folder. Reload this page to finish."
 );
 const AI_UNAVAILABLE_HERE: &str = "AI commands are not available on this platform yet.";
 const HARNESS_CHANGED: &str = concat!(
@@ -168,7 +170,7 @@ impl AgentView {
     }
 }
 
-/// Host-only facts from harness setup (§7.1). Like the notes folder identity,
+/// Host-only facts from harness setup (§7.1). Like the home folder identity,
 /// this never crosses the messaging boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -224,8 +226,109 @@ impl ConfigStore {
         Ok(dirs.config_dir().join("config.toml"))
     }
 
+    /// Load config.toml, first moving an older folder layout to the fixed one
+    /// (`migrate_layout`). Every native-messaging connection starts a host
+    /// process, so this runs on each connection until it succeeds.
     pub fn load() -> Result<Self> {
-        Ok(Self::load_from(Self::default_path()?))
+        let mut store = Self::load_from(Self::default_path()?);
+        store.migrate_layout_or_warn();
+        Ok(store)
+    }
+
+    /// Migrate only when the last read found an older layout, so the usual
+    /// path never waits for a lock another host holds for a long write.
+    pub(crate) fn migrate_layout_or_warn(&mut self) {
+        let older = self
+            .config
+            .storage
+            .as_ref()
+            .is_some_and(|storage| !layout::is_fixed(storage));
+        if !older {
+            return;
+        }
+        if let Err(error) = self.migrate_layout() {
+            eprintln!(
+                "{NAMESPACE}: warning: could not move folders to the fixed layout: {error:#}"
+            );
+        }
+    }
+
+    /// Rename an older layout's folders (for example `pages/` and `log/`)
+    /// to the fixed names inside the same home folder, then record the fixed
+    /// layout in config.toml. Runs under the config lock and the capture
+    /// lock, which every vault writer in every host process holds, so no
+    /// capture, note save, or regeneration runs meanwhile. Nothing is ever
+    /// replaced or merged: if a fixed name already exists beside its older
+    /// folder, nothing changes and `config_issue` says what to move. A crash
+    /// after a rename and before the config write resumes on the next call,
+    /// because a renamed folder leaves no older folder to move.
+    pub(crate) fn migrate_layout(&mut self) -> Result<()> {
+        let parent = self.dir()?.to_path_buf();
+        let _config_lock = self.lock_current()?;
+        let current = read_disk_state(&self.path)?;
+        let Some(storage) = current
+            .config
+            .storage
+            .clone()
+            .filter(|storage| !layout::is_fixed(storage))
+        else {
+            self.adopt(current);
+            return Ok(());
+        };
+        // An invalid, unconfirmed, or unavailable folder already has its own
+        // issue and repair; never rename inside a folder that is not the one
+        // the user chose.
+        let Some(identity) = current
+            .root_identity
+            .clone()
+            .filter(|_| !current.needs_backup)
+        else {
+            self.adopt(current);
+            return Ok(());
+        };
+        let Ok((root, _)) = open_selected_root(Path::new(&storage.root), Some(&identity)) else {
+            self.adopt(current);
+            return Ok(());
+        };
+        let _capture_lock = crate::capture::lock_capture(&parent)?;
+        let moves = match layout::plan(&root, &storage) {
+            Ok(moves) => moves,
+            // read_disk_state reported the same refusal as the issue.
+            Err(_) => {
+                self.adopt(current);
+                return Ok(());
+            }
+        };
+        let result = move_folders(&parent, &root, &identity, &moves).and_then(|()| {
+            let mut next = current.config.clone();
+            next.storage = Some(layout::fixed(&storage));
+            let serialized = toml::to_string_pretty(&StoredConfig::from_snapshot(
+                &next,
+                current.root_identity.clone(),
+                current.knowledge_base_identity.clone(),
+                &current.agent,
+                current.retired_adapter_contracts.clone(),
+                current.adapter_extensions.clone(),
+            ))
+            .context("serializing config TOML")?;
+            // A local editor might ignore our lock. Leave its bytes alone;
+            // the next call finds the folders already renamed.
+            if read_disk_state(&self.path)?.revision != current.revision {
+                bail!("config.toml changed while folders were being renamed");
+            }
+            publish_config(&parent, &self.path, &serialized).map(|_| ())
+        });
+        let refusal = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<layout::Refusal>())
+            .cloned();
+        self.adopt(read_disk_state(&self.path)?);
+        if let Some(refusal) = refusal {
+            self.issue = Some(refusal.0);
+            return Ok(());
+        }
+        result
     }
 
     fn load_from(path: PathBuf) -> Self {
@@ -371,7 +474,7 @@ impl ConfigStore {
     }
 
     /// The folder the summary agent reads: the chosen knowledge base folder,
-    /// or the notes folder while none is chosen. The host never writes here.
+    /// or the home folder while none is chosen. The host never writes here.
     pub fn knowledge_base_dir(&self) -> Option<PathBuf> {
         let storage = self.config.storage.as_ref()?;
         Some(PathBuf::from(
@@ -649,19 +752,6 @@ impl ConfigStore {
                 ));
             }
         }
-        if self
-            .config
-            .storage
-            .as_ref()
-            .and_then(|storage| storage.summaries_dir.as_ref())
-            .is_none()
-        {
-            return Err(refuse(
-                AgentState::NotSetUp,
-                ErrorCode::NotConfigured,
-                CHOOSE_SUMMARIES,
-            ));
-        }
         if !cfg!(unix) {
             return Err(refuse(
                 AgentState::HarnessProblem,
@@ -818,7 +908,7 @@ impl ConfigStore {
                     .context("a fresh native folder selection is required")?;
                 let actual = selected_root_identity(Path::new(&storage.root))?;
                 if actual != expected {
-                    bail!("selected notes folder changed; choose it again");
+                    bail!("selected home folder changed; choose it again");
                 }
                 Some(actual)
             }
@@ -875,6 +965,24 @@ impl ConfigStore {
             bail!("configuration exceeds the 64 KiB size limit");
         }
 
+        // Saving the fixed layout for the same home folder (for example
+        // after reconnecting it) first moves its older folders, exactly as
+        // `migrate_layout` does. A different home folder starts fresh and
+        // leaves the old one untouched.
+        let _capture_lock = match (current.config.storage.as_ref(), next.storage.as_ref()) {
+            (Some(old), Some(new)) if old.root == new.root && !layout::is_fixed(old) => {
+                let identity = next_identity
+                    .as_deref()
+                    .context("a fresh native folder selection is required")?;
+                let capture_lock = crate::capture::lock_capture(&parent)?;
+                let (root, _) = open_selected_root(Path::new(&new.root), Some(identity))?;
+                let moves = layout::plan(&root, old)?;
+                move_folders(&parent, &root, identity, &moves)?;
+                Some(capture_lock)
+            }
+            _ => None,
+        };
+
         // Repair must preserve the exact unreadable file. A no-clobber,
         // durable backup is created before the replacement can be published.
         if current.needs_backup {
@@ -888,20 +996,7 @@ impl ConfigStore {
             }
         }
 
-        let temporary = parent.join(format!(".config-{}.tmp", Uuid::new_v4()));
-        let (mut file, _cleanup) = create_temporary(&temporary)?;
-        let write_result = (|| -> Result<()> {
-            file.write_all(serialized.as_bytes())?;
-            file.sync_all()?;
-            Ok(())
-        })();
-        // Close the handle before the cleanup guard runs on error. Windows may
-        // refuse to remove a still-open temporary file.
-        drop(file);
-        write_result?;
-        fs::rename(&temporary, &self.path)
-            .with_context(|| format!("replacing {}", self.path.display()))?;
-        let revision = revision_for(serialized.as_bytes());
+        let revision = publish_config(&parent, &self.path, &serialized)?;
         self.config = next;
         self.revision = revision.clone();
         self.issue = None;
@@ -911,11 +1006,6 @@ impl ConfigStore {
         self.adapter_extensions = adapter_extensions;
         self.retired_adapter_contracts = retired_adapter_contracts;
         self.set_adapter_policy(true);
-        if let Err(error) = sync_parent(&parent) {
-            eprintln!(
-                "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
-            );
-        }
         Ok(Some(revision))
     }
 
@@ -1236,7 +1326,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         return Ok(DiskState {
             config: empty_config(),
             revision,
-            issue: Some("Configuration exceeds 64 KiB. Choose a notes folder and save a replacement; the original will be backed up.".into()),
+            issue: Some("Configuration exceeds 64 KiB. Choose a home folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
             knowledge_base_identity: None,
@@ -1261,9 +1351,9 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             config.agent = agent.agent.clone();
             if root_unconfirmed || validate_base(&config).is_err() {
                 let issue = if root_unconfirmed {
-                    "This notes folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."
+                    "This home folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."
                 } else {
-                    "Configuration settings are invalid. Choose a notes folder and save a repair; the original config will be backed up."
+                    "Configuration settings are invalid. Choose a home folder and save a repair; the original config will be backed up."
                 };
                 return Ok(DiskState {
                     config: empty_config(),
@@ -1289,10 +1379,15 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     Err(_) => true,
                 }
             });
+            let issue = if folder_changed {
+                Some("The selected home folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned())
+            } else {
+                config.storage.as_ref().and_then(layout_issue)
+            };
             Ok(DiskState {
                 config,
                 revision,
-                issue: folder_changed.then(|| "The selected notes folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned()),
+                issue,
                 needs_backup: false,
                 root_identity,
                 knowledge_base_identity,
@@ -1304,7 +1399,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         Err(_) => Ok(DiskState {
             config: empty_config(),
             revision,
-            issue: Some("Configuration is invalid or from a newer version. Choose a notes folder and save a replacement; the original will be backed up.".into()),
+            issue: Some("Configuration is invalid or from a newer version. Choose a home folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
             knowledge_base_identity: None,
@@ -1313,6 +1408,57 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             retired_adapter_contracts: Vec::new(),
         }),
     }
+}
+
+/// Atomically replace config.toml with `serialized` and return its revision.
+/// Callers hold the config lock and have checked the current revision.
+fn publish_config(parent: &Path, path: &Path, serialized: &str) -> Result<String> {
+    let temporary = parent.join(format!(".config-{}.tmp", Uuid::new_v4()));
+    let (mut file, _cleanup) = create_temporary(&temporary)?;
+    let write_result = (|| -> Result<()> {
+        file.write_all(serialized.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    // Close the handle before the cleanup guard runs on error. Windows may
+    // refuse to remove a still-open temporary file.
+    drop(file);
+    write_result?;
+    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+    if let Err(error) = sync_parent(parent) {
+        eprintln!("{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}");
+    }
+    Ok(revision_for(serialized.as_bytes()))
+}
+
+/// Rename the planned folders. Before the log folder moves, record where
+/// its logs went, so visit and batch intents that name the old path still
+/// find their logs. Callers hold the config and capture locks.
+fn move_folders(
+    state_dir: &Path,
+    root: &cap_std::fs::Dir,
+    root_identity: &str,
+    moves: &[layout::Move],
+) -> Result<()> {
+    if let Some(logs) = moves.iter().find(|step| step.to == layout::LOGS_DIR) {
+        crate::capture::record_log_relocation(state_dir, root_identity, &logs.from, logs.to)?;
+    }
+    layout::apply(root, moves)
+}
+
+/// An older folder layout is never used for vault I/O. It is moved by
+/// `migrate_layout`; until then this says why it has not been.
+fn layout_issue(storage: &StorageConfig) -> Option<String> {
+    if layout::is_fixed(storage) {
+        return None;
+    }
+    let refusal = open_selected_root(Path::new(&storage.root), None)
+        .map_err(|_| layout::Refusal(LAYOUT_PENDING.to_owned()))
+        .and_then(|(root, _)| layout::plan(&root, storage));
+    Some(match refusal {
+        Ok(_) => LAYOUT_PENDING.to_owned(),
+        Err(refusal) => refusal.0,
+    })
 }
 
 fn backup_invalid(parent: &Path, source_path: &Path, expected_revision: &str) -> Result<()> {
@@ -1468,6 +1614,9 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
 /// authoritative adapter validation.
 pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     validate_base(next)?;
+    if let Some(storage) = &next.storage {
+        layout::require_fixed(storage)?;
+    }
     let preserving_inert_adapters = current.adapters == next.adapters
         && compile_validated_adapters(current).is_err()
         && compile_validated_adapters(next).is_err();
@@ -1495,7 +1644,7 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
         }
     }
     if config.capture_enabled && config.storage.is_none() {
-        bail!("capture requires a selected notes folder");
+        bail!("capture requires a selected home folder");
     }
     if let Some(agent) = &config.agent {
         validate_agent(agent)?;
@@ -1921,7 +2070,7 @@ fn adapter_identity(value: &serde_json::Value) -> Option<(&str, &str)> {
 fn validate_persisted(config: &ConfigSnapshot) -> Result<()> {
     validate_base(config)?;
     if let Some(storage) = &config.storage {
-        Vault::open(storage).context("notes folder is unavailable")?;
+        Vault::open(storage).context("home folder is unavailable")?;
     }
     Ok(())
 }
@@ -1931,14 +2080,14 @@ fn validate_storage(storage: &StorageConfig) -> Result<()> {
         bail!("storage.root exceeds the 4096-byte path limit");
     }
     if has_unsafe_display_chars(&storage.root) {
-        bail!("notes folder path contains control or bidirectional formatting characters");
+        bail!("home folder path contains control or bidirectional formatting characters");
     }
     let root = Path::new(&storage.root);
     if !root.is_absolute() {
         bail!("storage.root must be an existing absolute folder selected by the user");
     }
     // The knowledge base is its own user-selected folder, read only by the
-    // summary agent. It may hold or sit inside the notes folder.
+    // summary agent. It may hold or sit inside the home folder.
     if let Some(knowledge_base) = &storage.knowledge_base_dir {
         if knowledge_base.len() > MAX_ROOT_PATH_BYTES {
             bail!("storage.knowledge_base_dir exceeds the 4096-byte path limit");
@@ -2076,7 +2225,7 @@ fn valid_env_name(name: &str) -> bool {
 /// Path components in canonical caseless form, NFD(fold(NFD(name))), so two
 /// names a case-insensitive APFS volume treats as one folder compare equal.
 /// `to_lowercase` is not enough: it keeps final sigma distinct from sigma.
-fn lower_components(path: &Path) -> Vec<String> {
+pub(crate) fn lower_components(path: &Path) -> Vec<String> {
     let fold = icu_casemap::CaseMapper::new();
     let nfd = icu_normalizer::DecomposingNormalizer::new_nfd();
     path.components()
@@ -2135,17 +2284,48 @@ pub(crate) mod fixtures {
 
     /// A config with storage under `root`. `keys` go at the top level and
     /// `tables` after `[storage]`.
+    /// The storage keys default to the fixed layout; `storage_extra` may set
+    /// any of them instead, as an older build's file would.
     pub(crate) fn write(path: &Path, root: &Path, storage_extra: &str, keys: &str, tables: &str) {
         let identity = selected_root_identity(root).unwrap();
+        let mut layout = String::new();
+        for (key, value) in [
+            ("log_dir", "logs"),
+            ("pages_dir", "notes"),
+            ("later_dir", "later"),
+            ("artifacts_dir", "artifacts"),
+            ("summaries_dir", "summaries"),
+        ] {
+            if !storage_extra
+                .lines()
+                .any(|line| line.split('=').next().map(str::trim) == Some(key))
+            {
+                layout.push_str(&format!("{key} = \"{value}\"\n"));
+            }
+        }
         let body = format!(
-            "root_picker_confirmed = true\nroot_identity = {}\n{keys}\n[storage]\nroot = {}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n{storage_extra}\n{tables}",
+            "root_picker_confirmed = true\nroot_identity = {}\n{keys}\n[storage]\nroot = {}\nprofile = \"neutral\"\n{layout}{storage_extra}\n{tables}",
             quoted(&identity),
             quoted(&root.to_string_lossy()),
         );
         fs::write(path, body).unwrap();
     }
 
-    /// A notes folder, fake harness, and config.toml that pass the agent gate.
+    /// The storage table an older build wrote: `log/`, `pages/`, and
+    /// `later/`, with `storage_extra` adding the keys later versions added.
+    pub(crate) fn write_legacy(path: &Path, root: &Path, storage_extra: &str) {
+        write(
+            path,
+            root,
+            &format!(
+                "log_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n{storage_extra}"
+            ),
+            "",
+            "",
+        );
+    }
+
+    /// A home folder, fake harness, and config.toml that pass the agent gate.
     pub(crate) fn ready(folder: &Path) -> (PathBuf, PathBuf, PathBuf) {
         let root = folder.join("notes");
         fs::create_dir(&root).unwrap();
@@ -2381,11 +2561,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: dir.path().to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: Some("kb".into()),
             }),
             ..empty_config()
@@ -2398,7 +2578,7 @@ mod tests {
         storage.knowledge_base_dir = Some("/kb\u{202e}".into());
         assert!(validate_base(&config).is_err());
         let storage = config.storage.as_mut().unwrap();
-        // The knowledge base may be, hold, or sit inside the notes folder.
+        // The knowledge base may be, hold, or sit inside the home folder.
         storage.knowledge_base_dir = Some(storage.root.clone());
         validate_base(&config).unwrap();
     }
@@ -2417,7 +2597,7 @@ mod tests {
         next.storage.as_mut().unwrap().knowledge_base_dir =
             Some(knowledge_base.to_string_lossy().into_owned());
         let revision = store.revision().to_owned();
-        // The notes folder's identity does not vouch for another folder.
+        // The home folder's identity does not vouch for another folder.
         let root_identity = store.root_identity().unwrap().to_owned();
         assert!(
             store
@@ -2445,7 +2625,7 @@ mod tests {
         reloaded.update(unrelated, &revision).unwrap().unwrap();
         assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
 
-        // Following the notes folder again drops the host-only identity.
+        // Following the home folder again drops the host-only identity.
         let mut follow = reloaded.snapshot().clone();
         follow.storage.as_mut().unwrap().knowledge_base_dir = None;
         let revision = reloaded.revision().to_owned();
@@ -2500,17 +2680,28 @@ mod tests {
     fn m1_config_without_new_keys_loads_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        // An M1 file: storage without summaries_dir and no agent keys.
-        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
-        let store = loaded(&path);
+        // An M1 file: storage without artifacts_dir or summaries_dir, and
+        // no agent keys. It loads as an older layout, then moves to the
+        // fixed one; with no folders created yet there is nothing to rename.
+        fixtures::write_legacy(&path, folder.path(), "");
+        let body = fs::read_to_string(&path).unwrap();
+        let body = body
+            .lines()
+            .filter(|line| !line.starts_with("artifacts_dir") && !line.starts_with("summaries_dir"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, format!("capture_enabled = false\n{body}")).unwrap();
+        let mut store = loaded(&path);
+        let storage = store.snapshot().storage.clone().unwrap();
+        assert_eq!(storage.summaries_dir, None);
+        assert_eq!(storage.artifacts_dir, "artifacts");
+        assert_eq!(store.config_issue(), Some(LAYOUT_PENDING));
+        assert!(!store.configured());
+        store.migrate_layout().unwrap();
         assert_eq!(store.config_issue(), None);
         assert!(store.configured());
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.storage.as_ref().unwrap().summaries_dir, None);
-        assert_eq!(
-            snapshot.storage.as_ref().unwrap().artifacts_dir,
-            "artifacts"
-        );
+        assert!(layout::is_fixed(snapshot.storage.as_ref().unwrap()));
         assert_eq!(snapshot.agent, None);
         assert_eq!(snapshot.adapters.format, 1);
         assert!(snapshot.adapters.artifacts.is_empty());
@@ -2526,14 +2717,15 @@ mod tests {
     fn old_config_gets_a_non_overlapping_artifact_directory() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        fixtures::write_legacy(&path, folder.path(), "");
         let body = fs::read_to_string(&path)
             .unwrap()
-            .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"");
+            .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"")
+            .replace("artifacts_dir = \"artifacts\"\n", "");
         fs::write(&path, body).unwrap();
 
         let store = loaded(&path);
-        assert_eq!(store.config_issue(), None);
+        assert_eq!(store.config_issue(), Some(LAYOUT_PENDING));
         let storage = store.snapshot().storage.as_ref().unwrap();
         assert_eq!(storage.pages_dir, "artifacts");
         assert_eq!(storage.artifacts_dir, "brauser-artifacts");
@@ -2548,7 +2740,13 @@ mod tests {
             std::thread::spawn(move || {
                 let folder = tempfile::tempdir().unwrap();
                 let path = folder.path().join("config.toml");
-                fixtures::write(&path, folder.path(), storage_extra, "", "");
+                fixtures::write_legacy(&path, folder.path(), storage_extra);
+                if !storage_extra.contains("artifacts_dir") {
+                    let body = fs::read_to_string(&path)
+                        .unwrap()
+                        .replace("artifacts_dir = \"artifacts\"\n", "");
+                    fs::write(&path, body).unwrap();
+                }
                 let (field, _) = line.split_once(" = ").unwrap();
                 let body = fs::read_to_string(&path)
                     .unwrap()
@@ -3153,11 +3351,11 @@ mod tests {
         config.storage = Some(StorageConfig {
             root: root.to_string_lossy().into_owned(),
             profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
-            summaries_dir: None,
+            summaries_dir: Some("summaries".into()),
             knowledge_base_dir: None,
         });
         let identity = selected_root_identity(&root).unwrap();
@@ -3233,11 +3431,11 @@ mod tests {
         let storage = StorageConfig {
             root: dir.path().to_string_lossy().into_owned(),
             profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
-            summaries_dir: None,
+            summaries_dir: Some("summaries".into()),
             knowledge_base_dir: None,
         };
         let enabled = ConfigSnapshot {
@@ -3252,7 +3450,7 @@ mod tests {
             ..empty_config()
         };
         let error = validate_base(&no_folder).unwrap_err().to_string();
-        assert!(error.contains("notes folder"), "{error}");
+        assert!(error.contains("home folder"), "{error}");
     }
 
     #[test]
@@ -3669,10 +3867,12 @@ mod tests {
         );
         assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
 
+        // An M1 file has no summaries folder. That is an older layout, which
+        // is never used until it has been moved to the fixed one.
         fixtures::write(
             &path,
             &root,
-            "",
+            "summaries_dir = \"my-summaries\"",
             "",
             &format!(
                 "{}{}",
@@ -3680,10 +3880,21 @@ mod tests {
                 fixtures::record_table(&binary)
             ),
         );
+        fs::write(
+            &path,
+            fs::read_to_string(&path)
+                .unwrap()
+                .replace("summaries_dir = \"my-summaries\"\n", ""),
+        )
+        .unwrap();
+        let mut store = loaded(&path);
         assert_eq!(
-            refusal(&loaded(&path)),
-            (ErrorCode::NotConfigured, CHOOSE_SUMMARIES.into())
+            store.snapshot().storage.as_ref().unwrap().summaries_dir,
+            None
         );
+        assert_eq!(refusal(&store).0, ErrorCode::InvalidConfig);
+        store.migrate_layout().unwrap();
+        assert_ready_here(&store, "claude-code", "2.1.284");
     }
 
     #[test]
@@ -3728,7 +3939,7 @@ mod tests {
         assert_ready_here(&store, "claude-code", "2.1.284");
     }
 
-    /// A config with a notes folder and no harness, then one harness commit.
+    /// A config with a home folder and no harness, then one harness commit.
     /// Returns the config path, the fake binary, and the committed revision.
     fn committed(folder: &Path) -> (PathBuf, PathBuf, String) {
         let (path, root, binary) = fixtures::ready(folder);
@@ -3928,11 +4139,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: folder.path().to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,
@@ -3957,11 +4168,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: folder.path().to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             ..empty_config()
@@ -4008,11 +4219,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             ..empty_config()
@@ -4059,11 +4270,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: true,
@@ -4180,11 +4391,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: "x".repeat(MAX_CONFIG_BYTES),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,

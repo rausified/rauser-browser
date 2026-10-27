@@ -97,7 +97,7 @@ still unbuilt, so these tests do not certify any machine-drafted rule.
 
 ### Native dialogs (the folder picker)
 
-Brauser's only native dialog is the folder picker, used for the notes folder and the knowledge base folder. There is no native Yes/No confirmation any more. If a future change adds a native dialog, give it the same seam. Add a **test-only seam at the process boundary**:
+Brauser's only native dialog is the folder picker, used for the home folder and the knowledge base folder. There is no native Yes/No confirmation any more. If a future change adds a native dialog, give it the same seam. Add a **test-only seam at the process boundary**:
 
 - Replace only the code that draws the dialog. Keep the code that decides what the answer authorizes (tokens, grants, validation) real, so a scripted answer has exactly the authority of a person's click.
 - Gate the seam at compile time (a cargo feature or build flag) and make it **impossible in release builds** (for example, `compile_error!` when the feature is on without `debug_assertions`). Build it into a separate output directory so the everyday dev binary never contains it.
@@ -193,9 +193,12 @@ This standard is meant to improve with use. When you change it:
   only logged, so re-enabling the origin revived its rows. Every purge now
   runs after the narrower policy commits (never blocking it), falls back to
   deleting all samples, and reports only if deletion fails too; maintenance
-  also expires samples when pause or removal state is unreadable. A same-origin skipped page whose tab read failed also left the
-  previous artifact mapped, since sampling moved the tab read ahead of the
-  artifact match; that path now ends the entry too.
+  also expires samples when pause or removal state is unreadable. A
+  same-origin skipped page whose tab read failed also left the previous
+  artifact mapped, since sampling moved the tab read ahead of the
+  artifact match; that path now ends the entry too. A lease that expired
+  while the tab and samples were read could still gain a sample; the worker
+  now rechecks the lease before retaining one.
 - 2026-10-27: Independent review reproduced an oversized same-origin
   navigation leaving the previous artifact mapped for attention measurement.
   The worker regression starts on a recognized artifact, navigates to a
@@ -203,6 +206,21 @@ This standard is meant to improve with use. When you change it:
   excluded and no pattern is retained. Oversized navigations now end the
   previous mapping through the normal unrecognized-page path. No browser or
   native dialog is involved.
+- 2026-10-27: Branch `feat/brauser-home-folder`. The one-time move of an
+  older folder layout to the fixed home layout is tested natively against a
+  checked-in copy of a real pre-home install (`host/tests/fixtures/pre-home-layout`:
+  the real config shape with `pages_dir = "pages"`, `log_dir = "log"`, and only
+  `pages/` on disk), copied to a temporary folder per test. The tests cover
+  the move through `hello`, refusal when `notes/` already exists (config.toml
+  and both folders byte-exact, notes and saves refused, retried after the user
+  moves the folder), a crash after a rename and before the config write,
+  three hosts migrating at once while another holds the config lock or the
+  capture lock, intent replay and torn-batch recovery after `log/` is renamed,
+  and an index rescan after the rename. Removing the capture lock from the
+  migration, or skipping the migration, makes those tests fail. The headless
+  smoke run now checks the host saves the fixed layout, settings shows it with
+  no folder-name field, and the home holds only the fixed folders at the end.
+  The real folder picker was not exercised.
 - 2026-10-27: Review reproduced the same stripped-URL collision through the
   fallback for an origin config.toml no longer covers: after the adapter and
   `[[adapter_id_history]]` were gone, the bare Jira board and another issue's

@@ -33,7 +33,15 @@ or newer TOML file yields an inert empty snapshot, its raw-file revision, and a
 backs up those exact bytes before replacing the file.
 
 `ConfigSnapshot.storage` must be present: use `null` only to explicitly clear
-the selected notes folder. `strip_params` is
+the selected home folder. `storage.root` is the home folder; the content
+locations inside it are fixed (DESIGN.md §6.1). Without a protocol change,
+`log_dir`, `pages_dir`, `later_dir`, `artifacts_dir`, and `summaries_dir`
+always carry `logs`, `notes`, `later`, `artifacts`, and `summaries` in a
+config the host uses, and `update_config` refuses any other values as
+`invalid_config`. A config.toml from before the fixed layout is reported with
+its own names and a `config_issue` until the host has moved its folders; a
+save of the fixed names for the same home folder moves them first, and a
+refusal (a fixed folder already exists) is `invalid_config` naming the folder. `strip_params` is
 also required. The generated Rust deserializer rejects omitted nullable fields,
 matching the JSON Schema requirement. Existing M0 TOML defaults to an empty
 site list, `utm_*`/`fbclid`/`gclid` stripping, and a 300-second repeat window.
@@ -108,7 +116,7 @@ Added in version 6:
   set a harness entry.
 - `StorageConfig.knowledge_base_dir`, required and nullable: the absolute
   folder a summary agent reads as its knowledge base, with `null` meaning the
-  notes folder. `choose_folder` now names a `purpose` (`notes_folder` or
+  home folder. `choose_folder` now names a `purpose` (`notes_folder` or
   `knowledge_base`), and `update_config` has a required-nullable
   `knowledge_base_token`. A new or changed `knowledge_base_dir` needs a picker
   token minted for the `knowledge_base` purpose, and a notes-folder token
@@ -162,7 +170,7 @@ settings never depend on the service.
 
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while
-`adapter_issue` is set. Turning capture on needs only a notes folder.
+`adapter_issue` is set. Turning capture on needs only a home folder.
 
 A version 5 `config.toml` loads unchanged. A file that still has `sites`,
 `agent_denylist`, `agent_denylist_confirmed`, or `log_incognito` keeps working,
@@ -186,8 +194,8 @@ returns `harnesses_discovered` with at most eight offers. Each offer has its
 argument template, the environment names it requires, and optional names with
 a `present` flag; values are never sent. A refused offer (an unsafe path, for
 example) carries a `refusal`. `set_up_harness` names one `harness_id`, the
-optional environment names to pass through, and `summaries_dir` (`null` keeps
-the current folder or uses `summaries`). The host rediscovers that harness,
+optional environment names to pass through, and `summaries_dir` (`null` or
+`summaries`, the fixed folder; any other name is `invalid_config`). The host rediscovers that harness,
 re-checks the binary's identity, runs one short test prompt, and only when it
 passes commits the harness entry at `expected_revision`. The extension never
 supplies a binary path.

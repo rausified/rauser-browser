@@ -1587,7 +1587,7 @@ test("a post-save folder issue suspends policy instead of installing a lease", a
     port.reply(configResult(request, origin, {
       revision: "r2",
       config: saved,
-      config_issue: "The selected notes folder is unavailable or changed.",
+      config_issue: "The selected home folder is unavailable or changed.",
     }));
     await saving;
 
@@ -1633,7 +1633,7 @@ test("unaddressed host errors and version mismatches reach the caller", async ()
 test("host config shape requires every v6 agent and adapter key and no retired privacy key", () => {
   const config = {
     storage: {
-      root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+      root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: null, knowledge_base_dir: null,
     },
     capture_enabled: false, strip_params: [],
@@ -1745,7 +1745,7 @@ function configResult(request, origin, overrides = {}) {
     revision: `host-revision:${origin}`,
     config: {
       storage: {
-        root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+        root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
         summaries_dir: null, knowledge_base_dir: null,
       },
       capture_enabled: true, strip_params: [],

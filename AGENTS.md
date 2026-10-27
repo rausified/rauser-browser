@@ -29,14 +29,29 @@ reconciliation, the sync caution, and the harness setup dialog and its token.
 Settings saves config with the revision check only. A site is on exactly when
 it has an adapter: `ConfigSnapshot.sites` is gone, and the host derives capture
 origins from the exact origins of a valid adapter document (none while
-`adapter_issue` is set). Turning capture on needs only a notes folder.
+`adapter_issue` is set). Turning capture on needs only a home folder.
 Path-prefix narrowing is dropped. A version 5 `config.toml` loads unchanged and
 drops `sites`, `agent_denylist`, `agent_denylist_confirmed`, and `log_incognito`
 on its next save. `StorageConfig.knowledge_base_dir` (null means the notes
 folder) is the folder a later summary agent reads; it is chosen with the same
 native picker, whose token names its `FolderPurpose` (`notes_folder` or
 `knowledge_base`) so one selection cannot authorize the other, and the host
-records the folder's identity as it does for the notes root.
+records the folder's identity as it does for the home folder.
+
+The home folder (2026-10-27, `brwr-hme`): `storage.root` is the one folder
+the user picks, and the content folders inside it are fixed
+(`host/src/layout.rs`: `notes/`, `logs/`, `artifacts/`, `summaries/`,
+`later/`). The wire `StorageConfig` keeps its `*_dir` fields with those
+values, and `config::validate_update` refuses any others, so settings has no
+per-folder fields and harness setup no summaries name. An older config.toml
+is moved once by `ConfigStore::migrate_layout` (host start, `hello`,
+`get_config`, and a same-folder save in `update_with_grants`): under the
+config and capture locks it renames each existing older folder no-clobber,
+records a `log/` rename in `visit-ids/log-relocations.json` for intent
+replay (`CaptureStore::open_original_day_dir`), then writes the fixed names.
+A fixed name already present, or a nested, symlinked, or case-variant older
+folder, refuses with a `config_issue` and changes nothing; until the move
+succeeds the older layout is never used for vault I/O.
 
 Harness setup (M2 step 1, revised in v6) lives in `host/src/harness.rs` and
 `host/src/harness_setup.rs`: discovery on an injected search path, bounded runs
@@ -49,8 +64,7 @@ and no token. `update_config` cannot set a harness entry; the extension may only
 echo it or remove it. Codex setup runs with the user's own `HOME` and
 `CODEX_HOME`, so the settings page says the user's Codex instructions and skills
 can shape its output (§14). The settings page ("AI harness (optional)") also
-shows the full-access warning, the summaries folder, and the knowledge base
-folder. No AI command exists yet, so nothing runs a harness beyond setup's own
+shows the full-access warning and the knowledge base folder. No AI command exists yet, so nothing runs a harness beyond setup's own
 checks and probe; the argv templates and cleared environment remain until the
 service runners replace them (PR 3). The headless smoke run covers setup with
 fake harnesses on a pinned `PATH` and a cleared host environment.
@@ -202,7 +216,7 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - Treat all extension messages and page-derived content as untrusted.
 - Keep vault paths rooted in a user-selected directory; never accept a raw file path from a page or extension request.
 - Preserve existing user files. Page notes and generated artifact files are the two implemented file kinds the host replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`). An unrelated or unowned file at either path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
-- Keep capture off until a notes folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose notes folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The summary agent must re-check that identity before it reads the folder (PR 3).
+- Keep capture off until a home folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The summary agent must re-check that identity before it reads the folder (PR 3).
 - The host re-checks every delivered event against its own adapters with the Rust engine before any vault I/O; a worker can only narrow what is recorded, never widen it. Never let a Chrome permission, a worker claim, or extension state substitute for that check.
 - Carry pending site removals across upgrades. Origins an earlier build removed or saw revoked are migrated into the worker's one pending-removal list (`migratePendingRemovals` in extension/worker.ts), their adapters stay out of every capture lease, and the list clears only when a lease the host actually sent holds no adapter on those origins. An unreadable list pauses capture (fail closed).
 - Only native harness setup (`set_up_harness`, host/src/harness_setup.rs) may set the harness entry; it names a detected `harness_id`, never a path or arguments, and the host rediscovers and probes that harness before committing. `update_config` may only echo the harness entry unchanged or remove it (host/src/consent.rs `check_agent_fields`).
