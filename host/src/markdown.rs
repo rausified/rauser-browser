@@ -84,8 +84,14 @@ fn percent_encode(segment: &str) -> String {
     out
 }
 
+/// The longest label written as plain text in place of a target-less
+/// wikilink.
+const MAX_WIKILINK_LABEL_CHARS: usize = 200;
+
 /// An Obsidian wikilink that cannot close early, alias, or point at a
-/// heading or block: `[ ] | # ^` and control characters are removed.
+/// heading or block: `[ ] | # ^` and control characters are removed. When
+/// nothing of the target is left, the label is written as escaped plain
+/// text instead (`Untitled` without one).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
     fn clean(value: &str) -> String {
@@ -97,6 +103,10 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
             .to_owned()
     }
     let target = clean(target);
+    if target.is_empty() {
+        // An empty target would render as a broken or self link.
+        return inline(label.unwrap_or(""), MAX_WIKILINK_LABEL_CHARS);
+    }
     match label.map(clean).filter(|label| !label.is_empty()) {
         Some(label) => format!("[[{target}|{label}]]"),
         None => format!("[[{target}]]"),
@@ -104,7 +114,8 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 }
 
 /// Agent Markdown with every remote-resource construct made inert: images
-/// (`![..](..)`, `![..][..]`, `![..]`), link reference definitions, and raw
+/// (`![..](..)`, `![..][..]`, `![..]`), link reference definitions (with a
+/// destination on the next line, both lines), and raw
 /// HTML (`<` followed by a letter, `/`, `!` or `?`) become code spans, so the
 /// URL stays visible but nothing is fetched. URI autolinks fetch nothing and
 /// stay links. Column-0 fenced code blocks and inline code spans that close
@@ -128,6 +139,7 @@ pub(crate) fn neutralize_remote(text: &str) -> String {
         fence: None,
         trust_fences: true,
         escape_paragraph: false,
+        definition_pending: false,
     };
     for (line, ending) in lines(text) {
         scan.line(line);
@@ -180,10 +192,20 @@ struct Scan {
     /// A link destination or title is still open: escape until the
     /// paragraph ends.
     escape_paragraph: bool,
+    /// The previous line was `[label]:` with nothing after it, so this line
+    /// may hold its destination and is wrapped whole.
+    definition_pending: bool,
 }
 
 impl Scan {
     fn line(&mut self, line: &str) {
+        if std::mem::take(&mut self.definition_pending) && !line.trim().is_empty() {
+            // The destination of the definition above, plus any title.
+            let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+            self.out.push_str(&line[..indent]);
+            push_code(&mut self.out, &code_span(&line[indent..]));
+            return;
+        }
         if let Some(open) = self.fence {
             if closes_fence(line, open) {
                 self.fence = None;
@@ -220,9 +242,12 @@ impl Scan {
             self.out.push_str(line);
         } else if self.escape_paragraph {
             escape_text(line, &mut self.out);
-        } else if let Some(indent) = reference_definition(line) {
+        } else if let Some((indent, pending)) = reference_definition(line) {
             self.out.push_str(&line[..indent]);
             push_code(&mut self.out, &code_span(&line[indent..]));
+            // Inside an indented fence the line is code to the viewer, and
+            // the next line may be the closer, which must stay intact.
+            self.definition_pending = pending && self.fence.is_none();
         } else {
             neutralize_line(line, &mut self.out, &mut self.escape_paragraph);
         }
@@ -267,9 +292,10 @@ fn closes_fence(line: &str, open: Fence) -> bool {
 }
 
 /// The indentation of a link reference definition line (`[label]: dest`,
-/// whitespace optional),
-/// or `None`. Footnote definitions (`[^1]:`) are not link references.
-fn reference_definition(line: &str) -> Option<usize> {
+/// whitespace optional), and whether its destination is still to come on
+/// the next line (`[label]:` alone), or `None`. Footnote definitions
+/// (`[^1]:`) are not link references.
+fn reference_definition(line: &str) -> Option<(usize, bool)> {
     let (indent, rest) = block_start(line)?;
     let label = rest.strip_prefix('[')?;
     if label.starts_with('^') {
@@ -280,9 +306,10 @@ fn reference_definition(line: &str) -> Option<usize> {
         return None;
     }
     // CommonMark allows no whitespace before the destination, so any
-    // non-blank text after the colon counts.
+    // non-blank text after the colon counts. With none, the destination may
+    // follow on the next line.
     let after = label[close + 1..].strip_prefix(':')?;
-    (!after.trim().is_empty()).then_some(indent)
+    Some((indent, after.trim().is_empty()))
 }
 
 /// The byte offset of the `]` closing a label that starts just after `[`,
@@ -395,13 +422,16 @@ fn opens_tag(ch: char) -> bool {
 /// inside it.
 fn autolink_length(text: &str) -> Option<usize> {
     let body = text.strip_prefix('<')?;
-    let colon = body.find(':')?;
+    // A scheme is at most 32 characters, so the colon search stops at the
+    // first non-scheme character or the 33rd byte: a line of many tags
+    // stays linear.
+    let colon = body
+        .bytes()
+        .take(33)
+        .position(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-')))
+        .filter(|at| body.as_bytes()[*at] == b':')?;
     let scheme = &body[..colon];
-    if !(2..=32).contains(&scheme.len())
-        || !scheme.starts_with(|ch: char| ch.is_ascii_alphabetic())
-        || !scheme
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '.' | '-'))
+    if !(2..=32).contains(&scheme.len()) || !scheme.starts_with(|ch: char| ch.is_ascii_alphabetic())
     {
         return None;
     }
@@ -798,6 +828,22 @@ mod tests {
         assert_eq!(neutralize_remote("\\![x](u) \\<img>"), "\\![x](u) \\<img>");
     }
 
+    #[test]
+    fn a_definition_whose_destination_is_on_the_next_line_is_wrapped_whole() {
+        assert_eq!(
+            neutralize_remote("[r]:\n  https://e.example/b.png \"t\"\n\n![x][r]"),
+            "`[r]:`\n  `https://e.example/b.png \"t\"`\n\n`![x][r]`"
+        );
+        // A blank line ends the definition, so the next paragraph is
+        // untouched.
+        assert_eq!(neutralize_remote("[r]:\n\nplain"), "`[r]:`\n\nplain");
+        // Inside an indented fence the closer after it stays a closer.
+        assert_eq!(
+            neutralize_remote("- a\n  ```\n  [r]:\n  ```\n![x](u)"),
+            "- a\n  ```\n  `[r]:`\n  ```\n`![x](u)`"
+        );
+    }
+
     /// Panics if a raw-HTML or image opener survives outside a code span.
     /// Code spans are matched over whole paragraphs, as CommonMark does, so
     /// a span the neutralizer meant to close on one line but that a viewer
@@ -953,6 +999,8 @@ mod tests {
             format!("{}]", "![".repeat(65_536)),
             "![a](".repeat(32_768),
             (1..400).map(|length| "`".repeat(length) + "x").collect(),
+            "<a>".repeat(262_144),
+            format!("[a](u \"\n{}", "<a>".repeat(262_144)),
         ] {
             assert_inert(&neutralize_remote(&input));
         }
@@ -962,5 +1010,14 @@ mod tests {
     #[test]
     fn wikilinks_cannot_break_out() {
         assert_eq!(wikilink("a]]|b#^", None), "[[ab]]");
+        assert_eq!(wikilink("a", Some("b]]|c")), "[[a|bc]]");
+        assert_eq!(wikilink("a", Some("[]")), "[[a]]");
+    }
+
+    #[test]
+    fn a_wikilink_with_no_target_left_is_plain_text() {
+        assert_eq!(wikilink("", Some("x")), "x");
+        assert_eq!(wikilink("[]|#^", Some("<img> *x*")), "\\<img\\> \\*x\\*");
+        assert_eq!(wikilink("]]", None), "Untitled");
     }
 }

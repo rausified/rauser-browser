@@ -56,6 +56,8 @@ const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SCAN_FILES: usize = 100_000;
 const MAX_WORKLOG_BYTES: usize = 96 * 1024;
 const SQLITE_PAGE_SIZE: usize = 65_536;
+/// The longest agent or page field rendered on one line of an artifact file.
+const MAX_RENDERED_FIELD_CHARS: usize = 2048;
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
 const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 
@@ -2200,14 +2202,17 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     }
     out.push_str("---\n\n");
     if let Some(why) = &artifact.why {
-        out.push_str(&format!("Why: {}\n\n", markdown::inline(why, 2048)));
+        out.push_str(&format!(
+            "Why: {}\n\n",
+            markdown::inline(why, MAX_RENDERED_FIELD_CHARS)
+        ));
     }
     if let Some(summary) = artifact.summaries.last() {
         let link = relative_artifact_link(artifacts_dir, artifact, &summary.summary_path);
         out.push_str(&format!(
             "Summary: [{}, {} importance](<{link}>)\n\n",
-            markdown::inline(&summary.document_type, 2048),
-            markdown::inline(&summary.importance, 2048),
+            markdown::inline(&summary.document_type, MAX_RENDERED_FIELD_CHARS),
+            markdown::inline(&summary.importance, MAX_RENDERED_FIELD_CHARS),
         ));
     }
     out.push_str("## Timeline\n\n");
@@ -2218,7 +2223,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
         out.push_str(&format!(
             "- {} · Summarized: {}\n",
             summary.occurred_at,
-            markdown::inline(&summary.title, 2048)
+            markdown::inline(&summary.title, MAX_RENDERED_FIELD_CHARS)
         ));
     }
     if total_summaries > shown_summaries {
