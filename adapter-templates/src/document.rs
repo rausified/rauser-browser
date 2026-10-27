@@ -200,6 +200,12 @@ impl IdTemplate {
         })
     }
 
+    /// Whether two templates build the same ID from the same captures: equal
+    /// scheme and parts, ignoring where each part sat in its text.
+    pub(crate) fn same_template(&self, other: &IdTemplate) -> bool {
+        self.scheme == other.scheme && self.parts == other.parts
+    }
+
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.names_at().map(|(n, _)| n)
     }

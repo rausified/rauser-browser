@@ -1725,10 +1725,11 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
     let artifact = match index.artifact(&matched.artifact_id) {
         Ok(Some(artifact)) => artifact,
         Ok(None) => {
-            let container = config
-                .adapter_document()
-                .ok()
-                .and_then(|document| crate::index::unvisited_container(document, &matched));
+            let document = config.adapter_document().ok();
+            let container =
+                document.and_then(|document| crate::index::unvisited_container(document, &matched));
+            let within =
+                document.and_then(|document| crate::index::unvisited_within(document, &matched));
             let (title, url) = container.unwrap_or_else(|| {
                 let title = matched
                     .title
@@ -1755,7 +1756,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                 days_opened: 0,
                 last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
                 linked_count: 0,
-                within: None,
+                within,
                 contained: Vec::new(),
             }
         }
@@ -5733,6 +5734,17 @@ id = "github.repo:{host}/{owner}/{repo}"
         let pull = get(&mut config, "https://github.com/acme-corp/widgets/pull/7");
         assert_eq!(pull.title, "widgets/README.md at main · acme-corp/widgets");
         assert_eq!(pull.url, "https://github.com/acme-corp/widgets/pull/7");
+        // Unvisited, it still names the repository it sits within.
+        assert_eq!(
+            pull.within,
+            Some(brauser_protocol::ArtifactRefView {
+                artifact_id: "github.repo:github.com/acme-corp/widgets".into(),
+                artifact_type: "github.repo".into(),
+                title: "acme-corp/widgets".into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+            })
+        );
+        assert!(pull.contained.is_empty());
     }
 
     #[test]

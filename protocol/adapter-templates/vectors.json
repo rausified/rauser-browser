@@ -24464,6 +24464,22 @@
       "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
     },
     {
+      "id": "overlap_report.container_id_mismatch",
+      "kind": "overlap_report",
+      "why": "§10.3, §8.3: a within declaration whose ID template differs from the container adapter's is not its catch-all, so the overlap is reported",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{repo}/{owner}"}}, {"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}]},
+      "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
+    },
+    {
+      "id": "overlap_report.container_same_id_template",
+      "kind": "overlap_report",
+      "why": "§10.3, §8.3: the container adapter's ID template matches the within declaration part by part, so the fall-through is intended and not reported",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}, {"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}]},
+      "expect": {"pairs": []}
+    },
+    {
       "id": "overlap_report.container_undeclared",
       "kind": "overlap_report",
       "why": "§10.3: without a within declaration, a PR rule ahead of a repository catch-all is an ordinary overlap",

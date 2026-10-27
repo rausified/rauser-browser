@@ -157,9 +157,10 @@ impl Document {
     /// The overlap warnings (§10.3): every pair of rules from different
     /// adapters on one origin that may overlap, ordered by `first` and then
     /// `second`, except a declared fall-through. When the earlier adapter
-    /// declares `within` the later adapter's type (§8.3), the later one is its
-    /// container's catch-all and the overlap is intended, so it is not
-    /// reported. The reverse order, where the container would win, still is.
+    /// declares `within` the later adapter's type with the later adapter's own
+    /// ID template (§8.3), the later one is its container's catch-all and the
+    /// overlap is intended, so it is not reported. A `within` whose ID differs
+    /// from the container adapter's is reported like any other overlap. The reverse order, where the container would win, still is.
     pub fn overlap_report(&self) -> Vec<OverlapPair> {
         self.pairs(true)
     }
@@ -195,11 +196,14 @@ impl Document {
     }
 }
 
-/// Whether `contained` declares `within` the type of `container` on its origin.
+/// Whether `contained` declares `within` exactly `container` on its origin:
+/// the same type and an ID template that builds the same ID, scheme and part
+/// by part. A declaration whose ID differs from the container adapter's would
+/// split one container in two, so its overlap is still reported.
 fn sits_within(contained: &Adapter, container: &Adapter) -> bool {
     contained.origin == container.origin
-        && contained
-            .within
-            .as_ref()
-            .is_some_and(|within| within.artifact_type == container.artifact_type)
+        && contained.within.as_ref().is_some_and(|within| {
+            within.artifact_type == container.artifact_type
+                && within.id.same_template(&container.id)
+        })
 }

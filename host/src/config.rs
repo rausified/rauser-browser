@@ -2130,6 +2130,13 @@ fn validate_adapter_transition_with_history(
         individually_valid_adapter_contracts(current)
     };
     let next_contracts = adapter_contracts(next);
+    validate_within_transition(
+        current_contracts
+            .iter()
+            .chain(retired)
+            .chain(&by_hand.contracts),
+        &next_contracts,
+    )?;
     // Every contract this save adds or reshapes. The delta pairs a
     // recognition edit that keeps its identity with the contract it replaces,
     // so it is in neither list, yet widening its match can claim a retired
@@ -2185,6 +2192,45 @@ fn validate_adapter_transition_with_history(
             {
                 bail!(
                     "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An established `within` is frozen like an ID (DESIGN §6.2): the index
+/// re-derives container roll-ups from the current adapters, so changing or
+/// dropping the container an adapter's history already rolls up into would
+/// silently move or remove that history. `established` is every contract
+/// already adopted: live, retired into `[[adapter_id_history]]`, or removed
+/// from config.toml by hand. Adding `within` to an adapter that never had one
+/// stays allowed, so existing setups can link their rules to a container.
+fn validate_within_transition<'a>(
+    established: impl Iterator<Item = &'a serde_json::Value> + Clone,
+    next: &[serde_json::Value],
+) -> Result<()> {
+    for candidate in next {
+        let (Some(identity), Some(artifact_type)) = (
+            adapter_contract_identity(candidate),
+            adapter_contract_type(candidate),
+        ) else {
+            continue;
+        };
+        let declared = declared_container(candidate);
+        for previous in established.clone() {
+            if adapter_contract_identity(previous) != Some(identity)
+                || adapter_contract_type(previous) != Some(artifact_type)
+            {
+                continue;
+            }
+            let Some((container_type, container_id)) = declared_container(previous) else {
+                continue;
+            };
+            if declared != Some((container_type, container_id)) {
+                let origin = identity.0;
+                bail!(
+                    "adapter {artifact_type:?} on {origin:?} already rolls its history up into {container_type:?} {container_id:?}, so its within cannot change until artifact migrations are available; keep within = {{ type = {container_type:?}, id = {container_id:?} }} on this adapter"
                 );
             }
         }
@@ -4169,6 +4215,91 @@ mod tests {
             github_repo_adapter(&["a"]),
         ]);
         validate_adapter_transition(&current, &next).unwrap();
+    }
+
+    fn assert_within_bail(error: anyhow::Error) {
+        let error = error.to_string();
+        assert!(
+            error.contains("within") && error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    /// An established `within` is part of the recognition contract (DESIGN
+    /// §6.2): the index re-derives roll-ups from the current adapter, so
+    /// dropping or changing it would silently move recorded history.
+    #[test]
+    fn removing_an_established_within_is_refused() {
+        let current = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_repo_adapter(&["a"]),
+        ]);
+        let next = adapter_config(vec![github_pr_adapter(&["a"]), github_repo_adapter(&["a"])]);
+        assert_within_bail(validate_adapter_transition(&current, &next).unwrap_err());
+    }
+
+    #[test]
+    fn changing_an_established_within_is_refused() {
+        let current = adapter_config(vec![within_github_repo(github_pr_adapter(&["a"]))]);
+        let mut changed = within_github_repo(github_pr_adapter(&["a"]));
+        changed["within"]["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        assert_within_bail(
+            validate_adapter_transition(&current, &adapter_config(vec![changed])).unwrap_err(),
+        );
+        // A scope edit that keeps the declaration is an ordinary edit.
+        let widened = adapter_config(vec![within_github_repo(github_pr_adapter(&["a", "b"]))]);
+        validate_adapter_transition(&current, &widened).unwrap();
+    }
+
+    /// Removing the adapter retires its `within`; it cannot come back
+    /// without it, or the retired history would leave its container.
+    #[test]
+    fn re_adding_an_adapter_without_its_retired_within_is_refused() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let revision = store
+            .update(
+                adapter_config(vec![within_github_repo(github_pr_adapter(&["a"]))]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+        assert_within_bail(
+            store
+                .update(adapter_config(vec![github_pr_adapter(&["a"])]), &revision)
+                .unwrap_err(),
+        );
+        store
+            .update(
+                adapter_config(vec![within_github_repo(github_pr_adapter(&["a"]))]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+    }
+
+    /// A `within` removed from config.toml by hand is remembered in the
+    /// adopted-contracts record, so the next adapter save names it rather
+    /// than silently accepting the rewritten roll-ups.
+    #[test]
+    fn a_within_removed_by_hand_is_named_at_the_next_adapter_save() {
+        let by_hand = RetiredByHand {
+            contracts: vec![
+                adapter_contract(&within_github_repo(github_pr_adapter(&["a"]))).unwrap(),
+            ],
+            ..RetiredByHand::default()
+        };
+        let current = adapter_config(vec![github_pr_adapter(&["a"])]);
+        let next = adapter_config(vec![github_pr_adapter(&["a", "b"])]);
+        assert_within_bail(
+            validate_adapter_transition_with_history(&current, &next, &[], &by_hand, None)
+                .unwrap_err(),
+        );
     }
 
     /// Ruling 2: `previous` also counts as declaring container C when the

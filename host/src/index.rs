@@ -1928,6 +1928,26 @@ pub(crate) fn unvisited_container(
     ))
 }
 
+/// The container an artifact with no record yet sits within, as its match
+/// declares it, named the way `roll_up` names a container row: from its ID,
+/// under the matching adapter's origin.
+pub(crate) fn unvisited_within(
+    document: &Document,
+    found: &adapter_templates::Match,
+) -> Option<ArtifactRefView> {
+    let within = found.within.as_ref()?;
+    if within.artifact_id == found.artifact_id {
+        return None;
+    }
+    let origin = document.adapters().get(found.adapter)?.origin();
+    Some(ArtifactRefView {
+        artifact_id: within.artifact_id.clone(),
+        artifact_type: within.artifact_type.clone(),
+        title: container_title(&within.artifact_id),
+        url: container_url(origin, &within.artifact_id),
+    })
+}
+
 /// A container's (type, ID, adapter origin), as `container_for` finds it.
 type ContainerRef = (String, String, String);
 
