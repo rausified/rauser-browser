@@ -80,7 +80,7 @@ interface ChromeApi {
         ) => boolean | void,
       ): void;
     };
-    onInstalled: { addListener(listener: () => void): void };
+    onInstalled: { addListener(listener: (details: { reason: string }) => void): void };
     onStartup: { addListener(listener: () => void): void };
   };
   alarms: {
@@ -96,11 +96,6 @@ interface ChromeApi {
     setBadgeText(details: { text: string }): Promise<void>;
     setBadgeBackgroundColor(details: { color: string }): Promise<void>;
   };
-  commands: {
-    onCommand: {
-      addListener(listener: (command: string, tab?: ChromeTab) => void): void;
-    };
-  };
   contextMenus: {
     create(
       properties: { id: string; title: string; contexts: string[] },
@@ -113,8 +108,6 @@ interface ChromeApi {
   };
   permissions: {
     contains(permissions: ChromePermissionSet): Promise<boolean>;
-    request(permissions: ChromePermissionSet): Promise<boolean>;
-    remove(permissions: ChromePermissionSet): Promise<boolean>;
     onRemoved: { addListener(listener: (permissions: ChromePermissionSet) => void): void };
     onAdded: { addListener(listener: (permissions: ChromePermissionSet) => void): void };
   };
@@ -136,6 +129,7 @@ interface ChromeApi {
   tabs: {
     get(tabId: number): Promise<ChromeTab>;
     query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<ChromeTab[]>;
+    create(properties: { url: string }): Promise<ChromeTab>;
     onUpdated: {
       addListener(
         listener: (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => void,
@@ -147,7 +141,7 @@ interface ChromeApi {
     onRemoved?: { addListener(listener: (tabId: number) => void): void };
     onReplaced?: { addListener(listener: (addedTabId: number, removedTabId: number) => void): void };
   };
-  webNavigation?: {
+  webNavigation: {
     onCommitted: { addListener(listener: (details: ChromeNavigationDetails) => void): void };
     onHistoryStateUpdated: { addListener(listener: (details: ChromeNavigationDetails) => void): void };
     onCreatedNavigationTarget?: {

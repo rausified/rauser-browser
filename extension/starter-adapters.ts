@@ -1,4 +1,3 @@
-import type { SiteConfig } from "../protocol/ts/generated.js";
 import type { AdapterObject } from "./adapter-review.js";
 
 export type StarterKind = "jira" | "sharepoint" | "github";
@@ -102,40 +101,38 @@ function githubIssue(organizations: string[]): AdapterObject {
   };
 }
 
-export function starterOffers(site: SiteConfig, githubOrganizations: string[] | null): StarterOffer[] {
-  // Starters cover several top-level routes. A narrower site policy is a
-  // deliberate custom boundary and must not be silently widened or presented
-  // as if the whole starter would work inside it.
-  if (site.path_prefix !== "/") return [];
-  const kind = starterKind(site.origin);
+/** The starter drafts for one site origin. GitHub starters stay without an
+ * adapter until `githubOrganizations` names at least one organization. */
+export function starterOffers(origin: string, githubOrganizations: string[]): StarterOffer[] {
+  const kind = starterKind(origin);
   if (kind === "jira") {
     return [{
-      key: `jira:${site.origin}`,
+      key: `jira:${origin}`,
       kind,
       artifact_type: "jira.issue",
       label: "Jira issues",
       description: "Issue pages and board modals become one artifact per Jira key.",
-      origin: site.origin,
+      origin,
       needs_scope: false,
-      adapter: jira(site.origin),
+      adapter: jira(origin),
     }];
   }
   if (kind === "sharepoint") {
     return [{
-      key: `sharepoint:${site.origin}`,
+      key: `sharepoint:${origin}`,
       kind,
       artifact_type: "sharepoint.doc",
-      label: site.origin.includes("-my.sharepoint.com")
+      label: origin.includes("-my.sharepoint.com")
         ? "OneDrive for work documents"
         : "SharePoint documents",
       description: "Office document links resolve to the stable sourcedoc GUID, across common sharing routes.",
-      origin: site.origin,
+      origin,
       needs_scope: false,
-      adapter: sharepoint(site.origin),
+      adapter: sharepoint(origin),
     }];
   }
   if (kind === "github") {
-    const scope = githubOrganizations;
+    const scope = githubOrganizations.length ? githubOrganizations : null;
     return [
       {
         key: "github.pr",
@@ -143,7 +140,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
         artifact_type: "github.pr",
         label: "GitHub pull requests",
         description: "Pull request routes share one artifact; files use review mode, while commits and checks use view mode.",
-        origin: site.origin,
+        origin,
         needs_scope: true,
         adapter: scope ? githubPullRequest(scope) : null,
       },
@@ -153,7 +150,7 @@ export function starterOffers(site: SiteConfig, githubOrganizations: string[] | 
         artifact_type: "github.issue",
         label: "GitHub issues",
         description: "Issue pages are captured only for the organizations you name.",
-        origin: site.origin,
+        origin,
         needs_scope: true,
         adapter: scope ? githubIssue(scope) : null,
       },

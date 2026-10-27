@@ -1,16 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
-const { storageKey } = await import("../dist/brand.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 
 // Run after build:extension. Each test loads a fresh copy of the settings page
-// against a fake DOM, a scripted native host, a stub worker, and a Chrome
-// permission store that fires onAdded/onRemoved as Chrome does.
-const NOTE_ORIGINS_KEY = storageKey("note_origins_v1");
+// against a fake DOM, a scripted native host, a stub worker, and a
+// Chrome permissions API that fails any use.
 const SITE = { origin: "https://a.com", path_prefix: "/" };
-const PATTERN = "https://a.com:443/*";
 const AGENT_STATUS = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
 
 class FakeElement {
@@ -56,61 +54,52 @@ let loads = 0;
 function statusFor(overrides = {}) {
   return {
     queued: 0, next_retry_at: null, overflow_count: 0, rejected_count: 0, last_error: null,
-    retry_error: null, policy_expires_at: null, revoked_origins: [], pause_pending: false,
-    pause_token: null, navigation_ready: true, locally_removed_sites: [], ...overrides,
+    retry_error: null, policy_expires_at: null, pause_pending: false,
+    pause_token: null, pending_removals: [], ...overrides,
   };
 }
 
-function configWith(sites) {
+// A site is on while it has an adapter, so capture defaults to on with one.
+function configWith(adapters, captureEnabled) {
   return {
     storage: {
       root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-      summaries_dir: null,
+      summaries_dir: null, knowledge_base_dir: null,
     },
-    capture_enabled: sites.length > 0,
-    sites,
+    capture_enabled: captureEnabled ?? adapters.length > 0,
     strip_params: [],
-    agent_denylist: [],
-    agent_denylist_confirmed: false,
-    log_incognito: false,
     agent: null,
     adapters: { format: 1, artifacts: [] },
   };
 }
 
-function fire(listeners, permissions) {
-  setTimeout(() => { for (const listener of listeners) listener(permissions); }, 0);
-}
-
 function install({
-  sites = [SITE], adapters = [], grants = [], storage = {}, host = {}, worker = {}, workerStatus = {},
+  adapters = [], captureEnabled, storage = {}, host = {}, worker = {}, workerStatus = {},
 } = {}) {
   const elements = new Map();
   const state = {
-    grants: new Set(grants),
     storage: new Map(Object.entries(storage)),
-    config: { ...configWith(sites), adapters: { format: 1, artifacts: adapters } },
+    config: { ...configWith(adapters, captureEnabled), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
-    added: [],
-    removed: [],
     storageChanged: [],
     requests: [],
     workerRequests: [],
+    permissionCalls: [],
     elements,
   };
   state.firePolicyChange = () => {
     for (const listener of state.storageChanged) {
       listener({ [POLICY_STORAGE_KEY]: { newValue: {
         revision: String(state.revision), expires_at: Date.now() + 60_000,
-        capture_enabled: state.config.capture_enabled, sites: state.config.sites,
+        capture_enabled: state.config.capture_enabled,
         adapters: state.config.adapters,
       } } }, "local");
     }
   };
   for (const [id, tag] of [
-    ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
-    ["enable-site", "button"], ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
+    ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-origin", "input"],
+    ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
@@ -118,9 +107,8 @@ function install({
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
-    ["summaries-dir", "input"], ["denylist-input", "input"], ["denylist-preview", "output"],
-    ["denylist-add", "button"], ["denylist-suggestions", "div"], ["denylist-list", "ul"],
-    ["setup-harness", "button"], ["remove-harness", "button"],
+    ["summaries-dir", "input"], ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
+    ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
@@ -142,8 +130,6 @@ function install({
         };
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
-      case "confirm_config":
-        return { type: "config_confirmed", consent_token: "consent", summary: "summary" };
       case "update_config":
         state.config = request.config;
         state.configIssue = null;
@@ -155,9 +141,6 @@ function install({
         throw new Error(`Unexpected host request ${request.type}`);
     }
   }
-
-  const has = ({ permissions = [], origins = [] }) =>
-    [...permissions, ...origins].every((entry) => state.grants.has(entry));
 
   env = state;
   globalThis.document = {
@@ -193,9 +176,6 @@ function install({
         state.workerRequests.push(request);
         const custom = worker[request.kind]?.(request, state);
         if (custom !== undefined) return { ok: true, value: custom };
-        if (request.kind === "remove_site") {
-          return { ok: true, value: statusFor({ ...workerStatus, locally_removed_sites: [request.site] }) };
-        }
         return { ok: true, value: statusFor(workerStatus) };
       },
     },
@@ -218,20 +198,22 @@ function install({
       onChanged: { addListener(listener) { state.storageChanged.push(listener); } },
     },
     permissions: {
-      async contains(permissions) { return has(permissions); },
-      async request({ permissions = [], origins = [] }) {
-        const entries = [...permissions, ...origins].filter((entry) => !state.grants.has(entry));
-        for (const entry of entries) state.grants.add(entry);
-        if (entries.length) fire(state.added, { permissions, origins });
-        return true;
+      // Brauser's site access is granted at install, so the settings page
+      // never asks Chrome about, for, or to give back a permission.
+      async contains() {
+        state.permissionCalls.push("contains");
+        throw new Error("chrome.permissions.contains must not be called");
       },
-      async remove({ permissions = [], origins = [] }) {
-        for (const entry of [...permissions, ...origins]) state.grants.delete(entry);
-        fire(state.removed, { permissions, origins });
-        return true;
+      async request() {
+        state.permissionCalls.push("request");
+        throw new Error("chrome.permissions.request must not be called");
       },
-      onAdded: { addListener(listener) { state.added.push(listener); } },
-      onRemoved: { addListener(listener) { state.removed.push(listener); } },
+      async remove() {
+        state.permissionCalls.push("remove");
+        throw new Error("chrome.permissions.remove must not be called");
+      },
+      onAdded: { addListener() { state.permissionCalls.push("onAdded"); } },
+      onRemoved: { addListener() { state.permissionCalls.push("onRemoved"); } },
     },
   };
   return state;
@@ -251,6 +233,17 @@ const statusText = () => env.elements.get("status").textContent;
 const idle = () => !env.elements.get("choose-folder").disabled;
 const nodeText = (node) => [node.textContent, ...(node.children ?? []).map(nodeText)].join(" ");
 
+function artifactFor(origin, type = "work.item", path = "/items/{id:int}") {
+  return {
+    type, origin,
+    match: [{ path }], id: `${type}:{host}/{id}`,
+  };
+}
+
+const lastUpdate = () => env.requests.findLast((request) => request.type === "update_config");
+// Each site row is its origin followed by a Remove site button.
+const siteRows = () => env.elements.get("sites-list").children.map((item) => item.children[0]?.textContent ?? item.textContent);
+
 async function openSettings({ connected = true } = {}) {
   loads += 1;
   await import(`../dist/options.js?load=${loads}`);
@@ -258,229 +251,164 @@ async function openSettings({ connected = true } = {}) {
     "the settings page to load");
 }
 
-async function typeSite(url) {
-  env.elements.get("site-url").value = url;
-  env.elements.get("site-url").dispatch("input");
-  await until(() => !env.elements.get("enable-site").disabled, "Enable to become available");
+function typeSite(url) {
+  env.elements.get("site-origin").value = url;
+  env.elements.get("site-origin").dispatch("input");
 }
 
-async function removeListedSite() {
-  const [remove] = env.elements.get("sites-list").querySelectorAll("button");
+async function removeListedSite(index = 0) {
+  const remove = env.elements.get("sites-list").querySelectorAll("button")[index];
   remove.click();
   await until(() => statusText().startsWith("Removed ") && idle(), "the removal to finish");
 }
 
-test("a canceled re-enable after removing a site rolls back Chrome grants", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    host: {
-      confirm_config: (_request, current) => current.cancelNext
-        ? { type: "error", code: "cancelled", message: "The user canceled" }
-        : null,
-    },
-  });
+async function saveOpenAdapter(what) {
+  const before = env.revision;
+  env.elements.get("save-adapter").click();
+  await until(() => env.revision > before && idle(), what);
+}
+
+test("the site list is the distinct adapter origins", async () => {
+  install({ adapters: [
+    artifactFor("https://b.example", "work.doc"),
+    artifactFor("https://a.example"),
+    artifactFor("https://a.example", "work.issue", "/issues/{id:int}"),
+  ] });
   await openSettings();
-  await typeSite("https://a.com");
-
-  await removeListedSite();
-  assert.equal(state.grants.has(PATTERN), false);
-  assert.equal(state.grants.has("webNavigation"), false);
-
-  // The preflight taken before removal said both grants were already held.
-  await until(() => !env.elements.get("enable-site").disabled, "Enable after removal");
-  state.cancelNext = true;
-  env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Setup failed") && idle(), "the canceled setup");
-  await until(() => !state.grants.has(PATTERN) && !state.grants.has("webNavigation"),
-    "the new Chrome grants to be rolled back");
+  assert.deepEqual(siteRows(), ["https://a.example", "https://b.example"]);
+  const { siteOrigins } = await import("../dist/settings.js");
+  assert.deepEqual(siteOrigins({ format: 1, artifacts: env.config.adapters.artifacts }),
+    ["https://a.example", "https://b.example"]);
 });
 
-test("removing a logging site keeps an origin grant the side panel made for notes", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] },
-  });
+test("saving the first adapter turns its site and capture on, with no permission request", async () => {
+  const state = install({ adapters: [] });
   await openSettings();
-  await removeListedSite();
-  assert.equal(state.grants.has(PATTERN), true);
-  assert.equal(state.grants.has("webNavigation"), false);
-  assert.deepEqual(state.storage.get(NOTE_ORIGINS_KEY), [SITE.origin]);
-  assert.match(statusText(), /kept for its page notes/);
+  assert.equal(state.config.capture_enabled, false);
+  typeSite("https://acme.atlassian.net");
+  const [review] = env.elements.get("starter-gallery").querySelectorAll("button");
+  review.click();
+  await saveOpenAdapter("the first adapter save");
+  assert.equal(lastUpdate().config.capture_enabled, true);
+  assert.equal("sites" in lastUpdate().config, false);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts.map((adapter) => adapter.origin),
+    ["https://acme.atlassian.net"]);
+  assert.deepEqual(siteRows(), ["https://acme.atlassian.net"]);
+  assert.deepEqual(state.permissionCalls, []);
+  assert.match(statusText(), /jira\.issue adapter added/);
 });
 
-test("removing an origin's final site removes its adapters in the same host update", async () => {
-  const adapter = {
-    type: "work.item", origin: SITE.origin,
-    match: [{ path: "/items/{id:int}" }], id: "work.item:{host}/{id}",
-  };
-  const state = install({ grants: ["webNavigation", PATTERN], adapters: [adapter] });
+test("saving an adapter while capture is paused keeps capture paused", async () => {
+  install({ adapters: [artifactFor(SITE.origin)], captureEnabled: false });
+  await openSettings();
+  typeSite("https://b.com");
+  env.elements.get("new-adapter").click();
+  await saveOpenAdapter("the second adapter save");
+  assert.equal(lastUpdate().config.capture_enabled, false);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts.map((adapter) => adapter.origin),
+    [SITE.origin, "https://b.com"]);
+});
+
+test("removing a site removes all its adapters", async () => {
+  const other = artifactFor("https://b.com");
+  const state = install({ adapters: [
+    artifactFor(SITE.origin), other, artifactFor(SITE.origin, "work.issue", "/issues/{id:int}"),
+  ] });
+  await openSettings();
+  assert.deepEqual(siteRows(), [SITE.origin, "https://b.com"]);
+  await removeListedSite(0);
+  const update = lastUpdate();
+  assert.equal(update.config.adapters.artifacts.some((adapter) => adapter.origin === SITE.origin), false);
+  assert.deepEqual(update.config.adapters.artifacts, [other]);
+  assert.equal(update.config.capture_enabled, true);
+  assert.equal(state.requests.filter((request) => request.type === "update_config").length, 1);
+  assert.match(statusText(), /Removed https:\/\/a\.com and its 2 adapters/);
+  assert.deepEqual(siteRows(), ["https://b.com"]);
+});
+
+test("removing the last site turns capture off and never removes a Chrome permission", async () => {
+  const state = install({ adapters: [artifactFor(SITE.origin)] });
   await openSettings();
   await removeListedSite();
   assert.deepEqual(state.config.adapters.artifacts, []);
-  assert.match(statusText(), /Also removed 1 adapter for that origin/);
+  assert.equal(state.config.capture_enabled, false);
+  assert.deepEqual(state.permissionCalls, []);
+  assert.deepEqual(siteRows(), ["None"]);
 });
 
-test("paused capture resumes for the listed sites behind the native confirmation", async () => {
-  const state = install({ grants: ["webNavigation", PATTERN] });
-  state.config.capture_enabled = false;
+test("resume capture saves capture_enabled true", async () => {
+  const state = install({ adapters: [artifactFor(SITE.origin)], captureEnabled: false });
   await openSettings();
-  const resume = env.elements.get("resume-capture");
-  assert.equal(resume.hidden, false);
-  assert.equal(resume.disabled, false);
   assert.match(statusText(), /^Capture is paused\./);
-
-  resume.click();
-  await until(() => statusText().startsWith("Capture resumed") && idle(), "capture to resume");
-  assert.equal(state.config.capture_enabled, true);
-  assert.deepEqual(state.config.sites, [SITE]);
-  const confirm = state.requests.find((request) => request.type === "confirm_config");
-  assert.equal(confirm.config.capture_enabled, true);
-  assert.deepEqual(confirm.config.sites, [SITE]);
-  assert.ok(state.workerRequests.some((request) =>
-    request.kind === "ack_reenabled_origin" && request.origin === SITE.origin));
-  assert.equal(resume.hidden, true);
+  assert.equal(env.elements.get("pause-capture").disabled, true);
+  assert.equal(env.elements.get("resume-capture").disabled, false);
+  env.elements.get("resume-capture").click();
+  await until(() => state.config.capture_enabled === true && idle(), "capture to resume");
+  assert.equal(lastUpdate().config.capture_enabled, true);
+  assert.deepEqual(lastUpdate().config.adapters, state.config.adapters);
+  assert.match(statusText(), /Capturing on sites with adapters\./);
+  assert.equal(env.elements.get("resume-capture").disabled, true);
 });
 
-test("a canceled resume leaves capture paused", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    host: { confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }) },
-  });
-  state.config.capture_enabled = false;
+test("Resume capture is shown only while a finished setup is paused", async () => {
+  install({ adapters: [artifactFor(SITE.origin)], captureEnabled: false });
   await openSettings();
-  env.elements.get("resume-capture").click();
-  await until(() => statusText().startsWith("Could not resume capture") && idle(), "the canceled resume");
-  assert.equal(state.config.capture_enabled, false);
-  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
   assert.equal(env.elements.get("resume-capture").hidden, false);
-  // The sites still need these grants once capture resumes.
-  assert.equal(state.grants.has(PATTERN), true);
-});
+  assert.match(statusText(), /Click Resume capture to turn it back on\./);
 
-test("a canceled resume removes the Chrome access it added", async () => {
-  const state = install({
-    grants: [PATTERN],
-    host: { confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }) },
-  });
-  state.config.capture_enabled = false;
+  install({ adapters: [artifactFor(SITE.origin)], captureEnabled: true });
   await openSettings();
-  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
-  env.elements.get("resume-capture").click();
-  await until(() => statusText().startsWith("Could not resume capture") && idle(), "the canceled resume");
-  await until(() => !state.grants.has("webNavigation"), "the added webNavigation grant to be removed");
-  assert.equal(state.grants.has(PATTERN), true);
-  assert.equal(state.config.capture_enabled, false);
-});
-
-test("a failed resume keeps grants that another page's commit now needs", async () => {
-  const state = install({
-    grants: [PATTERN],
-    host: {
-      // Another settings page turns capture on while this one confirms.
-      confirm_config: (_request, current) => {
-        current.config = { ...current.config, capture_enabled: true };
-        current.revision += 1;
-        return { type: "error", code: "conflict", message: "The configuration changed" };
-      },
-    },
-  });
-  state.config.capture_enabled = false;
-  await openSettings();
-  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
-  env.elements.get("resume-capture").click();
-  // The conflict reloads settings, which then report the other page's commit.
-  await until(() => statusText().startsWith("Capture is enabled") && idle(), "the conflicted resume");
-  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
-  assert.equal(state.config.capture_enabled, true);
-  assert.equal(state.grants.has("webNavigation"), true);
-  assert.equal(state.grants.has(PATTERN), true);
-});
-
-test("Resume capture waits for a pending local site removal", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    workerStatus: { locally_removed_sites: [SITE] },
-  });
-  state.config.capture_enabled = false;
-  await openSettings();
-  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
-  env.elements.get("resume-capture").click();
-  await until(() => /Finish removing https:\/\/a\.com/.test(statusText()), "the pending-removal refusal");
-  assert.equal(state.requests.some((request) => request.type === "confirm_config"), false);
-  assert.equal(state.config.capture_enabled, false);
-});
-
-test("a canceled resume does not keep a grant behind a stale notes entry", async () => {
-  // The side panel's notes list still names the origin, but Chrome no longer
-  // grants it, so the entry is stale and must not protect the resume's grant.
-  const state = install({
-    grants: ["webNavigation"],
-    storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] },
-    host: { confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }) },
-  });
-  state.config.capture_enabled = false;
-  await openSettings();
-  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
-  env.elements.get("resume-capture").click();
-  await until(() => statusText().startsWith("Could not resume capture") && idle(), "the canceled resume");
-  await until(() => !state.grants.has(PATTERN), "the added origin grant to be removed");
-  assert.equal(state.grants.has("webNavigation"), true);
+  assert.equal(env.elements.get("resume-capture").hidden, true);
 });
 
 test("Resume capture waits for an invalid adapter policy to be repaired", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
+  install({
+    captureEnabled: false,
     host: {
       get_config: (_request, current) => ({
-        type: "config_result", revision: "1", config: current.config, config_issue: null,
+        type: "config_result", revision: String(current.revision), config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
       }),
     },
   });
-  state.config.capture_enabled = false;
   await openSettings();
   assert.equal(env.elements.get("resume-capture").hidden, true);
   assert.match(statusText(), /unsupported adapter format 2/);
 });
 
-test("Resume capture is hidden while capture is on or nothing is set up", async () => {
-  install({ grants: ["webNavigation", PATTERN] });
-  await openSettings();
-  assert.equal(env.elements.get("resume-capture").hidden, true);
-
-  const empty = install({ sites: [] });
-  empty.config.capture_enabled = false;
-  await openSettings();
-  assert.equal(env.elements.get("resume-capture").hidden, true);
-});
-
 test("capturePaused tells a paused setup apart from an unfinished one", async () => {
-  install();
-  const { capturePaused, setupProblem } = await import("../dist/settings.js");
-  const paused = { ...configWith([SITE]), capture_enabled: false };
+  const { capturePaused } = await import("../dist/settings.js");
+  const paused = configWith([artifactFor(SITE.origin)], false);
   assert.equal(capturePaused(paused, null), true);
-  assert.equal(capturePaused(configWith([SITE]), null), false);
-  assert.equal(capturePaused({ ...configWith([]), capture_enabled: false }, null), false);
+  assert.equal(capturePaused({ ...paused, capture_enabled: true }, null), false);
   assert.equal(capturePaused({ ...paused, storage: null }, null), false);
   assert.equal(capturePaused(paused, "config.toml is unreadable"), false);
-  assert.equal(setupProblem(paused, null), "Capture is paused.");
+  assert.equal(capturePaused(null, null), false);
 });
 
-test("a notes grant Chrome no longer holds does not protect a later logging grant", async () => {
-  const state = install({ sites: [], storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] } });
+test("setupProblem ignores sites and pause", async () => {
+  const { setupProblem, captureStateText } = await import("../dist/settings.js");
+  const configured = configWith([artifactFor(SITE.origin)]);
+  assert.equal(setupProblem({ ...configured, capture_enabled: false, adapters: { format: 1, artifacts: [] } }, null), null);
+  assert.equal(setupProblem({ ...configured, storage: null }, null), "No notes folder is chosen.");
+  assert.equal(setupProblem(configured, "bad file"), "The host configuration needs repair: bad file");
+  assert.equal(captureStateText({ ...configured, capture_enabled: false }), "Capture is paused.");
+  assert.equal(captureStateText(configured), "Capturing on sites with adapters.");
+});
+
+test("Add adapter needs no site and starts from the typed site address", async () => {
+  install({ adapters: [] });
   await openSettings();
-  await typeSite("https://a.com");
-  env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Capture enabled") && idle(), "setup to finish");
-  await removeListedSite();
-  assert.equal(state.grants.has(PATTERN), false);
-  assert.deepEqual(state.storage.get(NOTE_ORIGINS_KEY) ?? [], []);
+  assert.equal(env.elements.get("new-adapter").disabled, false);
+  typeSite("https://c.example:8443");
+  env.elements.get("new-adapter").click();
+  assert.equal(JSON.parse(env.elements.get("adapter-json").value).origin, "https://c.example:8443");
 });
 
 test("a settings load failure after hello is not reported as a missing host", async () => {
   install({
-    workerStatus: { revoked_origins: ["https://b.com"] },
+    workerStatus: { pending_removals: ["https://b.com"] },
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "config.json is unreadable",
@@ -493,10 +421,43 @@ test("a settings load failure after hello is not reported as a missing host", as
   assert.match(statusText(), /config\.json is unreadable/);
 });
 
-test("a Chrome revocation narrows host sites while adapter policy needs repair", async () => {
+// The worker reports pending removals until clear_pending_removals arrives.
+function pendingWorker(origins) {
+  return {
+    get_status: (_request, current) =>
+      statusFor({ pending_removals: current.pendingCleared ? [] : origins }),
+    clear_pending_removals: (_request, current) => {
+      current.pendingCleared = true;
+      return statusFor();
+    },
+  };
+}
+
+test("settings applies pending removals with one update_config", async () => {
+  const other = { origin: "https://b.com" };
+  const state = install({
+    adapters: [artifactFor(SITE.origin), artifactFor(other.origin)],
+    worker: pendingWorker([SITE.origin]),
+  });
+
+  await openSettings();
+  await until(() => state.pendingCleared, "pending removals to clear");
+
+  const updates = state.requests.filter((request) => request.type === "update_config");
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].config.adapters.artifacts.map((adapter) => adapter.origin), [other.origin]);
+  assert.equal(updates[0].config.capture_enabled, true);
+  const kinds = state.workerRequests.map((request) => request.kind);
+  assert.ok(kinds.lastIndexOf("install_policy") < kinds.lastIndexOf("clear_pending_removals"),
+    "the worker sees the narrowed lease before it is asked to clear");
+  assert.equal(kinds.includes("remove_site"), false);
+});
+
+test("pending removals leave an adapter document that needs repair as it is", async () => {
   const futureAdapters = { format: 2, artifacts: [{ future: true }] };
   const state = install({
-    workerStatus: { revoked_origins: [SITE.origin] },
+    captureEnabled: true,
+    worker: pendingWorker([SITE.origin]),
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: String(current.revision),
@@ -508,72 +469,27 @@ test("a Chrome revocation narrows host sites while adapter policy needs repair",
   });
 
   await openSettings();
+  await until(() => state.pendingCleared, "pending removals to clear");
 
-  assert.deepEqual(state.config.sites, []);
-  assert.equal(state.config.capture_enabled, false);
-  assert.deepEqual(state.config.adapters, futureAdapters);
-  assert.ok(state.requests.some((request) => request.type === "update_config"));
-});
-
-test("a stale Chrome revocation cannot reinstall an invalid adapter policy", async () => {
-  const state = install({
-    workerStatus: { revoked_origins: ["https://already-removed.example"] },
-    host: {
-      get_config: (_request, current) => ({
-        type: "config_result", revision: String(current.revision),
-        config: { ...current.config, adapters: { format: 2, artifacts: [{ future: true }] } },
-        config_issue: null, agent_status: AGENT_STATUS,
-        adapter_issue: "unsupported adapter format 2", adapter_warnings: [],
-      }),
-    },
-  });
-
-  await openSettings();
-
+  // The invalid document can only be echoed unchanged, so there is nothing to
+  // write; the worker keeps its block until a later fix drops the adapters.
   assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+  assert.equal(state.config.capture_enabled, true);
   assert.equal(state.workerRequests.some((request) => request.kind === "install_policy"), false);
-  assert.ok(state.workerRequests.some((request) => request.kind === "suspend_policy"));
-  assert.ok(state.workerRequests.some((request) => request.kind === "ack_revocations"));
 });
 
-test("revocation reconciliation does not remove an origin re-enabled while it waits", async () => {
-  const futureAdapters = { format: 2, artifacts: [{ future: true }] };
-  const state = install({
-    sites: [],
-    host: {
-      get_config: (_request, current) => ({
-        type: "config_result", revision: String(current.revision),
-        config: { ...current.config, adapters: futureAdapters }, config_issue: null,
-        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
-        adapter_warnings: [],
-      }),
-    },
-    worker: {
-      get_status: (_request, current) => {
-        if (current.revocationObserved) return statusFor();
-        current.revocationObserved = true;
-        // Another settings page acquired the configuration lock first,
-        // re-enabled the origin, installed its revision, and acknowledged the
-        // old revocation before this page entered the lock.
-        current.config = {
-          ...configWith([SITE]),
-          adapters: futureAdapters,
-        };
-        current.revision += 1;
-        return statusFor({ revoked_origins: [SITE.origin] });
-      },
-    },
-  });
+test("a pending removal already absent from the host sends no update", async () => {
+  const state = install({ worker: pendingWorker(["https://already-removed.example"]) });
 
   await openSettings();
+  await until(() => state.pendingCleared, "pending removals to clear");
 
-  assert.deepEqual(state.config.sites, [SITE]);
-  assert.equal(state.config.capture_enabled, true);
   assert.equal(state.requests.some((request) => request.type === "update_config"), false);
 });
 
 test("adapter policy problems and overlap warnings are visible in settings", async () => {
   install({
+    adapters: [artifactFor(SITE.origin)],
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: null,
@@ -587,6 +503,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
   assert.equal(env.elements.get("pause-capture").disabled, false);
 
   install({
+    adapters: [artifactFor(SITE.origin)],
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: null,
@@ -601,6 +518,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
 
 test("an unsupported adapter document can be removed without blocking unrelated controls", async () => {
   const state = install({
+    captureEnabled: true,
     host: {
       get_config: (_request, current) => ({
         type: "config_result", revision: String(current.revision),
@@ -620,9 +538,6 @@ test("an unsupported adapter document can be removed without blocking unrelated 
   assert.equal(env.elements.get("pause-capture").disabled, false);
   assert.equal(env.elements.get("choose-folder").disabled, false);
   assert.equal(env.elements.get("detect-harnesses").disabled, false);
-  env.elements.get("denylist-input").value = "internal.example";
-  env.elements.get("denylist-input").dispatch("input");
-  assert.equal(env.elements.get("denylist-add").disabled, false);
   assert.equal(env.elements.get("reset-adapters").disabled, false);
 
   env.elements.get("pause-capture").click();
@@ -637,7 +552,64 @@ test("an unsupported adapter document can be removed without blocking unrelated 
   assert.match(statusText(), /adapter rules removed/);
 });
 
-test("adapter workspace previews and saves a new adapter through native confirmation", async () => {
+test("resetting a host-only adapter key on an empty document clears the key before reporting success", async () => {
+  // Models the host: an unknown [adapters] key never reaches the wire, and a
+  // remove-all reset of an already empty document clears it only when the
+  // update is an exact no-op.
+  let hostOnlyKey = true;
+  const issue = () => hostOnlyKey ? "unsupported adapter-table key future_mode" : null;
+  const state = install({
+    captureEnabled: true,
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision), config: current.config,
+        config_issue: null, agent_status: AGENT_STATUS, adapter_issue: issue(),
+        adapter_warnings: [],
+      }),
+      update_config: (request, current) => {
+        const empty = request.config.adapters.format === 1 && request.config.adapters.artifacts.length === 0;
+        const adaptersChanged = JSON.stringify(request.config.adapters) !== JSON.stringify(current.config.adapters);
+        const noOp = JSON.stringify(request.config) === JSON.stringify(current.config);
+        if (hostOnlyKey && empty && (adaptersChanged || noOp)) hostOnlyKey = false;
+        current.config = request.config;
+        current.revision += 1;
+        return { type: "config_updated", revision: String(current.revision), config: current.config };
+      },
+    },
+  });
+  await openSettings();
+  assert.equal(state.config.capture_enabled, true);
+  assert.equal(env.elements.get("reset-adapters").disabled, false);
+
+  env.elements.get("reset-adapters").click();
+  await until(() => idle() && state.requests.some((request) => request.type === "update_config"),
+    "the adapter reset");
+
+  assert.equal(hostOnlyKey, false, "the reset actually clears the host-only key");
+  assert.equal(state.config.capture_enabled, false);
+  assert.deepEqual(state.config.adapters, { format: 1, artifacts: [] });
+  assert.match(statusText(), /adapter rules removed/);
+});
+
+test("an adapter reset that leaves the issue in place does not report success", async () => {
+  const state = install({
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision), config: current.config,
+        config_issue: null, agent_status: AGENT_STATUS,
+        adapter_issue: "unsupported adapter-table key future_mode", adapter_warnings: [],
+      }),
+    },
+  });
+  await openSettings();
+  env.elements.get("reset-adapters").click();
+  await until(() => idle() && state.requests.some((request) => request.type === "update_config"),
+    "the adapter reset");
+  assert.doesNotMatch(statusText(), /adapter rules removed/);
+  assert.match(statusText(), /future_mode/);
+});
+
+test("adapter workspace previews and saves a new adapter with one update", async () => {
   const saves = [];
   const state = install({
     host: { update_config: (request) => { saves.push(request); return null; } },
@@ -645,6 +617,7 @@ test("adapter workspace previews and saves a new adapter through native confirma
   await openSettings();
   assert.equal(env.elements.get("new-adapter").disabled, false);
 
+  typeSite("https://a.com");
   env.elements.get("new-adapter").click();
   assert.equal(env.elements.get("adapter-editor").hidden, false);
   assert.match(env.elements.get("adapter-json").value, /"origin": "https:\/\/a\.com"/);
@@ -655,15 +628,17 @@ test("adapter workspace previews and saves a new adapter through native confirma
   env.elements.get("save-adapter").click();
   await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the adapter save");
   assert.equal(saves.length, 1);
-  assert.equal(saves[0].consent_token, "consent");
+  assert.equal("consent_token" in saves[0], false);
   assert.equal(state.config.adapters.artifacts[0].type, "work.item");
   assert.match(statusText(), /adapter added/);
 });
 
-test("a Jira starter resolves the enabled origin and enters preview before save", async () => {
+test("a Jira starter resolves the typed site address and enters preview before save", async () => {
   const site = { origin: "https://acme.atlassian.net", path_prefix: "/" };
-  const state = install({ sites: [site] });
+  const state = install();
   await openSettings();
+  assert.doesNotMatch(nodeText(env.elements.get("starter-gallery")), /Jira issues/);
+  typeSite(site.origin);
   assert.match(nodeText(env.elements.get("starter-gallery")), /Jira issues/);
 
   const [review] = env.elements.get("starter-gallery").querySelectorAll("button");
@@ -681,9 +656,9 @@ test("a Jira starter resolves the enabled origin and enters preview before save"
 });
 
 test("GitHub starters stay disabled until an explicit valid organization scope", async () => {
-  const site = { origin: "https://github.com", path_prefix: "/" };
-  install({ sites: [site] });
+  install();
   await openSettings();
+  typeSite("https://github.com");
   const gallery = env.elements.get("starter-gallery");
   assert.match(nodeText(gallery), /GitHub pull requests/);
   const [scope] = gallery.querySelectorAll("input");
@@ -702,9 +677,9 @@ test("GitHub starters stay disabled until an explicit valid organization scope",
 });
 
 test("a missing starter offer cannot become available when scope changes", async () => {
-  const site = { origin: "https://github.com", path_prefix: "/" };
-  install({ sites: [site] });
+  install();
   await openSettings();
+  typeSite("https://github.com");
   const gallery = env.elements.get("starter-gallery");
   const [scope] = gallery.querySelectorAll("input");
   const [pullRequest] = gallery.querySelectorAll("button");
@@ -852,43 +827,46 @@ test("a failed hello reports the host as unavailable", async () => {
   assert.match(statusText(), /^Native host unavailable: host broke\./);
 });
 
-test("the panel's recorded notes origins survive until Chrome drops the grant", async () => {
-  const state = install({ grants: [PATTERN] });
-  const { noteOrigins, pruneNoteOrigins, recordNoteOrigin } = await import("../dist/grants.js");
-  await recordNoteOrigin(SITE.origin);
-  await recordNoteOrigin(SITE.origin);
-  await recordNoteOrigin("https://b.com");
-  assert.deepEqual(state.storage.get(NOTE_ORIGINS_KEY), [SITE.origin, "https://b.com"]);
-  await pruneNoteOrigins();
-  assert.deepEqual([...await noteOrigins()], [SITE.origin]);
-});
-
 const FOLDER_ISSUE = "The selected notes folder is unavailable or changed. Choose it again.";
 
 test("a kept config with a folder issue needs a new folder pick, which repairs it", async () => {
-  const state = install({ grants: ["webNavigation", PATTERN] });
+  const state = install({ adapters: [artifactFor(SITE.origin)] });
   state.configIssue = FOLDER_ISSUE;
   await openSettings();
   assert.match(statusText(), /needs repair/);
   const [remove] = env.elements.get("sites-list").querySelectorAll("button");
   assert.equal(remove.disabled, true);
   assert.equal(env.elements.get("pause-capture").disabled, true);
-  env.elements.get("site-url").value = "https://b.com";
-  env.elements.get("site-url").dispatch("input");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(env.elements.get("enable-site").disabled, true);
+  assert.equal(env.elements.get("resume-capture").disabled, true);
+  typeSite("https://b.com");
+  assert.equal(env.elements.get("new-adapter").disabled, true);
 
   env.elements.get("choose-folder").click();
   await until(() => state.config.storage?.root === "/vault" && idle(), "the repair to be saved");
-  assert.match(statusText(), /^Capture is enabled for the listed sites/);
-  assert.deepEqual(state.config.sites, [SITE]);
-  await until(() => !env.elements.get("enable-site").disabled, "Enable after the repair");
+  assert.match(statusText(), /^Capturing on sites with adapters\./);
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.origin), [SITE.origin]);
+  assert.equal(env.elements.get("new-adapter").disabled, false);
 });
 
-test("choosing a folder saves it at once, leaving sites and capture as they were", async () => {
+test("saving settings sends one update_config and never confirm_config", async () => {
+  const state = install();
+  state.config = { ...state.config, storage: null };
+  await openSettings();
+  state.requests.length = 0;
+  // The host has no confirm_config handler, so any call throws "Unexpected host request".
+  env.elements.get("choose-folder").click();
+  await until(() => state.config.storage?.root === "/vault" && idle(), "the folder to be saved");
+  const hostTypes = () => state.requests.map((request) => request.type)
+    .filter((type) => type !== "choose_folder" && type !== "hello");
+  assert.deepEqual([...new Set(hostTypes())].sort(), ["get_config", "update_config"]);
+  assert.equal(hostTypes().filter((type) => type === "update_config").length, 1);
+  const lastUpdate = state.requests.findLast((request) => request.type === "update_config");
+  assert.equal("consent_token" in lastUpdate, false);
+});
+
+test("choosing a folder saves it at once, leaving adapters and capture as they were", async () => {
   const saves = [];
   const state = install({
-    sites: [],
     host: { update_config: (request) => { saves.push(request); return null; } },
   });
   state.config = { ...state.config, storage: null };
@@ -897,87 +875,182 @@ test("choosing a folder saves it at once, leaving sites and capture as they were
   await until(() => state.config.storage?.root === "/vault" && idle(), "the folder to be saved");
   assert.equal(saves.length, 1);
   assert.equal(saves[0].picker_token, "picker-1");
-  assert.equal(saves[0].consent_token, "consent");
+  assert.equal(saves[0].knowledge_base_token, null);
+  assert.equal(env.requests.find((request) => request.type === "choose_folder").purpose, "notes_folder");
+  assert.equal("consent_token" in saves[0], false);
   assert.equal(state.config.capture_enabled, false);
-  assert.deepEqual(state.config.sites, []);
+  assert.deepEqual(state.config.adapters.artifacts, []);
   assert.equal(env.elements.get("folder-path").textContent, "/vault");
-  assert.match(statusText(), /^No sites are enabled for capture\. Enable a site to begin\./);
-});
-
-test("a canceled repair still rolls back the Chrome grants it added", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    host: {
-      confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }),
-    },
-  });
-  state.configIssue = FOLDER_ISSUE;
-  await openSettings();
-  env.elements.get("choose-folder").click();
-  // The declined repair keeps the selection for the site's own confirmation.
-  await until(() => statusText().startsWith("Canceled. /vault was not saved") && idle(), "the folder pick");
-  await typeSite("https://b.com");
-  env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Setup failed") && idle(), "the canceled setup");
-  await until(() => !state.grants.has("https://b.com:443/*"), "the new origin grant to be rolled back");
-  assert.equal(state.grants.has("webNavigation"), true);
-  assert.equal(state.grants.has(PATTERN), true);
+  assert.match(statusText(), /^No site has an adapter yet\./);
 });
 
 test("a host restart drops a folder selection only the old host knew", async () => {
   const state = install({
-    sites: [],
     host: {
-      // The first folder save is declined, so the selection stays on the page.
-      confirm_config: (_request, current) => current.connects === 1
-        ? { type: "error", code: "cancelled", message: "The user canceled" }
-        : null,
-      update_config: (request, current) =>
-        request.picker_token !== null && request.picker_token !== `picker-${current.connects}`
-        ? { type: "error", code: "unauthorized", message: "folder selection token is unknown" }
-        : null,
+      // The first folder save fails, so the selection stays on the page.
+      update_config: (request, current) => {
+        if (current.connects === 1) return { type: "error", code: "internal", message: "could not save configuration" };
+        return request.picker_token !== null && request.picker_token !== `picker-${current.connects}`
+          ? { type: "error", code: "unauthorized", message: "folder selection token is unknown" }
+          : null;
+      },
     },
   });
   state.config = { ...state.config, storage: null };
   await openSettings();
   env.elements.get("choose-folder").click();
-  await until(() => statusText().startsWith("Canceled. /vault was not saved") && idle(), "the folder pick");
-  await typeSite("https://a.com");
+  await until(() => statusText() === "could not save configuration" && idle(), "the folder pick");
+  assert.equal(env.elements.get("folder-path").textContent, "/vault");
 
   state.exitHost();
   assert.match(statusText(), /Choose the folder again/);
   assert.equal(env.elements.get("folder-path").textContent, "None selected");
-  assert.equal(env.elements.get("enable-site").disabled, true);
 
   env.elements.get("choose-folder").click();
   await until(() => state.config.storage?.root === "/vault" && idle(), "the second folder pick to be saved");
-  await until(() => !env.elements.get("enable-site").disabled, "Enable after the second pick");
-  env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Capture enabled") && idle(), "setup to finish");
+  typeSite("https://a.com");
+  env.elements.get("new-adapter").click();
+  await saveOpenAdapter("the adapter save");
+  assert.match(statusText(), /adapter added/);
+  assert.equal(state.config.capture_enabled, true);
 });
 
-test("a host restart drops harness offers only the old host knew", async () => {
-  const offer = {
-    offer_id: "offer-1", adapter: "claude_code", harness_id: "claude-code",
-    binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-    args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"], env_optional: [], refusal: null,
-  };
+test("a folder selection the host did not save is saved with the next adapter", async () => {
   const state = install({
     host: {
-      discover_harnesses: (_request, current) =>
-        ({ type: "harnesses_discovered", offers: [{ ...offer, offer_id: `offer-${current.connects}` }] }),
+      update_config: (request, current) => current.failedOnce ? null
+        : (current.failedOnce = true, { type: "error", code: "internal", message: "could not save configuration" }),
+    },
+  });
+  state.config = { ...state.config, storage: null };
+  await openSettings();
+  env.elements.get("choose-folder").click();
+  await until(() => statusText() === "could not save configuration" && idle(), "the folder pick");
+  typeSite("https://a.com");
+  env.elements.get("new-adapter").click();
+  await saveOpenAdapter("the adapter save");
+  assert.equal(lastUpdate().picker_token, "picker-1");
+  assert.equal(state.config.storage?.root, "/vault");
+  assert.equal(state.config.capture_enabled, true);
+});
+
+test("choosing a knowledge base folder saves it with its own token", async () => {
+  const state = install({
+    host: {
+      choose_folder: (request) => request.purpose === "knowledge_base"
+        ? { type: "folder_chosen", path: "/kb", picker_token: "t" }
+        : null,
     },
   });
   await openSettings();
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder (/vault)");
+  assert.equal(env.elements.get("kb-use-notes").disabled, true);
+  env.elements.get("choose-kb").click();
+  await until(() => state.config.storage?.knowledge_base_dir === "/kb" && idle(), "the knowledge base to be saved");
+  const lastChoose = env.requests.findLast((request) => request.type === "choose_folder");
+  assert.equal(lastChoose.purpose, "knowledge_base");
+  assert.equal(lastUpdate().config.storage.knowledge_base_dir, "/kb");
+  assert.equal(lastUpdate().config.storage.root, "/vault");
+  assert.equal(lastUpdate().knowledge_base_token, "t");
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(env.elements.get("kb-path").textContent, "/kb");
+  assert.match(statusText(), /^Knowledge base folder saved\./);
+});
+
+test("Use notes folder clears the knowledge base folder without a token", async () => {
+  const state = install();
+  state.config.storage.knowledge_base_dir = "/kb";
+  await openSettings();
+  assert.equal(env.elements.get("kb-path").textContent, "/kb");
+  const button = env.elements.get("kb-use-notes");
+  assert.equal(button.disabled, false);
+  button.click();
+  await until(() => state.config.storage?.knowledge_base_dir === null && idle(), "the knowledge base to follow the notes folder");
+  assert.equal(lastUpdate().knowledge_base_token, null);
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(env.requests.some((request) => request.type === "choose_folder"), false);
+});
+
+test("a knowledge base folder needs a notes folder first", async () => {
+  const state = install();
+  state.config = { ...state.config, storage: null };
+  await openSettings();
+  assert.equal(env.elements.get("choose-kb").disabled, true);
+  assert.equal(env.elements.get("kb-use-notes").disabled, true);
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder");
+});
+
+test("a notes folder change keeps the chosen knowledge base folder", async () => {
+  const state = install({
+    host: {
+      choose_folder: () => ({ type: "folder_chosen", path: "/other", picker_token: "notes" }),
+    },
+  });
+  state.config.storage.knowledge_base_dir = "/kb";
+  await openSettings();
+  env.elements.get("choose-folder").click();
+  await until(() => state.config.storage?.root === "/other" && idle(), "the notes folder to be saved");
+  assert.equal(lastUpdate().config.storage.knowledge_base_dir, "/kb");
+  assert.equal(lastUpdate().knowledge_base_token, null);
+  assert.equal(lastUpdate().picker_token, "notes");
+});
+
+const CLAUDE_OFFER = {
+  adapter: "claude_code", harness_id: "claude-code",
+  binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
+  args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
+  env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
+};
+
+test("harness setup sends set_up_harness and no confirmation", async () => {
+  const agent = {
+    harness_id: "claude-code", adapter: "claude_code", binary: CLAUDE_OFFER.binary,
+    args: CLAUDE_OFFER.args, env_allow: ["HOME", "PATH", "ANTHROPIC_API_KEY"], timeout_secs: 120,
+  };
+  const state = install({
+    host: {
+      discover_harnesses: () => ({ type: "harnesses_discovered", offers: [CLAUDE_OFFER] }),
+      set_up_harness: (request, current) => {
+        current.config = {
+          ...current.config, agent,
+          storage: { ...current.config.storage, summaries_dir: request.summaries_dir },
+        };
+        current.revision += 1;
+        return { type: "config_updated", revision: String(current.revision), config: current.config };
+      },
+    },
+  });
+  await openSettings();
+  state.requests.length = 0;
   env.elements.get("detect-harnesses").click();
   await until(() => !env.elements.get("setup-harness").disabled, "Set up to become available");
+  assert.doesNotMatch(statusText(), /Review it below/);
+  env.elements.get("setup-harness").click();
+  await until(() => statusText().startsWith("Claude Code is set up") && idle(), "setup to finish");
+  const hostTypes = () => state.requests.map((request) => request.type);
+  assert.ok(hostTypes().includes("set_up_harness"));
+  assert.ok(!hostTypes().includes("confirm_harness_setup"));
+  assert.ok(!hostTypes().includes("update_config"));
+  assert.ok(state.requests.every((request) => !("harness_token" in request)));
+  const discover = state.requests.find((request) => request.type === "discover_harnesses");
+  assert.equal("expected_revision" in discover, false);
+  const setUp = state.requests.find((request) => request.type === "set_up_harness");
+  assert.equal(setUp.harness_id, "claude-code");
+  assert.equal(setUp.expected_revision, "1");
+  assert.deepEqual(setUp.env_names, ["ANTHROPIC_API_KEY"]);
+  assert.equal(setUp.summaries_dir, "summaries");
+  assert.equal(state.config.agent.harness_id, "claude-code");
+});
 
-  state.exitHost();
-  assert.match(statusText(), /detected harnesses were lost\. Detect harnesses again/);
-  assert.equal(env.elements.get("setup-harness").disabled, true);
-
-  env.elements.get("detect-harnesses").click();
-  await until(() => !env.elements.get("setup-harness").disabled, "Set up after detecting again");
+test("settings shows the exact setup warning", async () => {
+  install();
+  await openSettings();
+  const { SETUP_WARNING } = await import("../dist/agent.js");
+  assert.equal(env.elements.get("harness-warning").textContent, SETUP_WARNING);
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  assert.ok(html.includes(`<p id="harness-warning">${SETUP_WARNING}</p>`));
+  assert.ok(html.includes(">Set up harness</button>"));
+  assert.ok(!html.includes("Set up harness…"));
 });
 
 test("manual artifact refresh reports unowned path conflicts", async () => {

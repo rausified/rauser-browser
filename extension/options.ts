@@ -1,31 +1,25 @@
 import type {
-  AdapterDocument, ConfigSnapshot, HarnessAdapter, HarnessOffer, SiteConfig, StorageConfig,
+  AdapterDocument, FolderPurpose, HarnessAdapter, HarnessOffer, StorageConfig,
 } from "../protocol/ts/generated.js";
-import { exactOriginPattern, isHttpUrl, type WorkerStatus } from "./model.js";
+import { isHttpUrl, type WorkerStatus } from "./model.js";
 import {
-  adaptersForSites,
-  capturePaused,
   ConfigSession,
+  capturePaused,
+  captureStateText,
   describe,
   element,
-  sameSite,
   setupProblem,
+  siteOrigins,
   withConfigMutationLock,
   worker,
 } from "./settings.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
-import { APP_NAME } from "./brand.js";
 import {
-  SUGGESTED_EXCLUSIONS,
-  addDenylistEntry,
+  SETUP_WARNING,
   agentStateText,
-  denylistEditsLive,
   harnessFoundText,
   harnessOfferNote,
-  previewDenylistEntry,
-  removeDenylistEntry,
 } from "./agent.js";
-import { forgetNoteOrigin, noteOrigins, pruneNoteOrigins } from "./grants.js";
 import {
   adapterLabel,
   adapterOrigin,
@@ -47,8 +41,7 @@ import {
 const status = element<HTMLDivElement>("status");
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
-const siteUrl = element<HTMLInputElement>("site-url");
-const enableButton = element<HTMLButtonElement>("enable-site");
+const siteOrigin = element<HTMLInputElement>("site-origin");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
 const resumeButton = element<HTMLButtonElement>("resume-capture");
 const sitesList = element<HTMLUListElement>("sites-list");
@@ -72,35 +65,21 @@ const detectButton = element<HTMLButtonElement>("detect-harnesses");
 const offersList = element<HTMLUListElement>("harness-offers");
 const envList = element<HTMLUListElement>("harness-env");
 const summariesInput = element<HTMLInputElement>("summaries-dir");
-const denylistInput = element<HTMLInputElement>("denylist-input");
-const denylistPreview = element<HTMLOutputElement>("denylist-preview");
-const denylistAddButton = element<HTMLButtonElement>("denylist-add");
-const denylistSuggestions = element<HTMLDivElement>("denylist-suggestions");
-const denylistList = element<HTMLUListElement>("denylist-list");
+const knowledgeBasePath = element<HTMLOutputElement>("kb-path");
+const chooseKnowledgeBaseButton = element<HTMLButtonElement>("choose-kb");
+const knowledgeBaseUseNotesButton = element<HTMLButtonElement>("kb-use-notes");
 const setupButton = element<HTMLButtonElement>("setup-harness");
+const harnessWarning = element<HTMLParagraphElement>("harness-warning");
 const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
 
 let picker: { path: string; token: string } | null = null;
 let busy = false;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-let preflightVersion = 0;
-let preflight: {
-  origin: string;
-  pattern: string;
-  apiGranted: boolean;
-  originGranted: boolean;
-} | null = null;
-// The grants Resume capture would request, as last read. Resume must request
-// them in the click, so its rollback compares against this read.
-let resumeGrantsVersion = 0;
-let resumeGrants: { entries: string[]; held: Set<string> } | null = null;
-// Harness offers are single-use and bound to the revision they were found at.
+// What Detect harnesses last found. Setup names one by harness_id, and the
+// host detects and checks it again before running anything.
 let offers: HarnessOffer[] = [];
-let selectedOfferId: string | null = null;
+let selectedHarnessId: string | null = null;
 const envChoices = new Map<string, boolean>();
-// Until setup confirms the list, exclusion edits stay on this page and are
-// sent with the setup request, which shows them in the native confirmation.
-let pendingDenylist: string[] | null = null;
 let summariesEdited = false;
 type AdapterEdit =
   | { kind: "new" }
@@ -109,30 +88,23 @@ type AdapterEdit =
 let adapterEdit: AdapterEdit | null = null;
 let githubScopeText = "";
 
-// The host binds a folder selection and each harness offer to the revision it
-// was made at, so any save, from this page or another, makes them unusable.
+// The host binds a folder selection to the revision it was made at, so any
+// save, from this page or another, makes it unusable.
 const session = new ConfigSession(renderConfig, () => {
   picker = null;
-  clearOffers();
 });
 
-// A folder selection's token and harness offers live only in the host process
-// that issued them. After that process exits, the next call starts a new one
-// that would refuse them, so the folder must be chosen, or harnesses
-// detected, again.
+// A folder selection's token lives only in the host process that issued it.
+// After that process exits, the next call starts a new one that would refuse
+// it, so the folder must be chosen again.
 session.host.onHostExit(() => {
-  const hadPicker = picker !== null;
-  const hadOffers = offers.length > 0;
-  if (!hadPicker && !hadOffers) return;
+  if (picker === null) return;
   picker = null;
-  clearOffers();
   renderConfig();
-  const lost = [
-    ...(hadPicker ? ["the folder selection was lost. Choose the folder again."] : []),
-    ...(hadOffers ? ["the detected harnesses were lost. Detect harnesses again."] : []),
-  ];
-  show(`The native host restarted, so ${lost.join(" Also, ")}`, true);
+  show("The native host restarted, so the folder selection was lost. Choose the folder again.", true);
 });
+
+harnessWarning.textContent = SETUP_WARNING;
 
 function show(message: string, warning = false): void {
   status.textContent = message;
@@ -140,30 +112,37 @@ function show(message: string, warning = false): void {
 }
 
 function showConfigState(): void {
+  const config = session.config;
   const policyIssue = session.configIssue ?? session.adapterIssue;
-  const problem = setupProblem(session.config, policyIssue);
+  const problem = setupProblem(config, policyIssue);
   if (policyIssue) show(problem!, true);
-  else if (capturePaused(session.config, null)) show("Capture is paused. Click Resume capture to turn it back on.");
-  else if (problem) {
-    show(`${problem} ${session.config?.storage ? "Enable" : "Choose a folder and enable"} a site to begin.`);
+  else if (problem) show(`${problem} Choose a folder, then add an adapter for each site you want logged.`);
+  else if (!config) return;
+  else if (!siteOrigins(config.adapters).length) {
+    show("No site has an adapter yet. Enter a site address, then save a starter or add an adapter to start capturing.");
   }
   else if (session.adapterWarnings.length) {
     const count = session.adapterWarnings.length;
     show(
-      `Capture is enabled, but ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
+      `${captureStateText(config)} ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
       true,
     );
   }
-  else show("Capture is enabled for the listed sites.");
+  else if (capturePaused(config, null)) show("Capture is paused. Click Resume capture to turn it back on.");
+  else show(captureStateText(config));
 }
 
-/**
- * Whether a save must carry a fresh folder selection. The host keeps the
- * settings of a config whose folder is missing or changed, but it accepts no
- * save based on that folder until it is chosen again through the picker.
- */
-function needsFolderPick(): boolean {
-  return !session.config?.storage || session.configIssue !== null;
+/** The origin the Site address box names, or null until it parses as an
+ * HTTP(S) address without credentials. A pasted page URL names its origin. */
+function typedOrigin(): string | null {
+  const value = siteOrigin.value.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return isHttpUrl(url) && !url.username && !url.password ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 function updateControls(): void {
@@ -174,16 +153,18 @@ function updateControls(): void {
   const repairing = session.configIssue !== null;
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
-  enableButton.disabled = !connected || busy || preflight === null ||
-    (!picker && needsFolderPick());
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
-  const paused = capturePaused(session.config, session.configIssue ?? session.adapterIssue);
-  resumeButton.hidden = !paused;
-  resumeButton.disabled = !connected || busy || !paused || resumeGrants === null;
+  // The host refuses capture without a notes folder, and capture has nothing
+  // to record until some site has an adapter.
+  resumeButton.disabled = !connected || busy || repairing || repairingAdapters ||
+    session.config?.capture_enabled !== false || !session.config.storage ||
+    !siteOrigins(session.config.adapters).length;
+  // Resume is offered only while a finished setup is paused.
+  resumeButton.hidden = !capturePaused(session.config, session.configIssue ?? session.adapterIssue);
   for (const button of sitesList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters;
   }
-  newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters || !session.config?.sites.length;
+  newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters;
   resetAdaptersButton.disabled = !connected || busy || repairing || !repairingAdapters;
   refreshArtifactsButton.disabled = !connected || busy || repairing || !session.config?.storage;
   for (const button of adapterList.querySelectorAll("button")) {
@@ -199,8 +180,10 @@ function updateControls(): void {
   detectButton.disabled = !idle || session.configIssue !== null;
   setupButton.disabled = !idle || !session.config?.storage || selectedOffer() === null;
   removeHarnessButton.disabled = !idle || !session.config?.agent;
-  denylistAddButton.disabled = !idle || !addDenylistEntry(shownDenylist(), denylistInput.value).ok;
-  for (const control of denylistList.querySelectorAll("button")) control.disabled = !idle;
+  // The knowledge base is stored with the notes folder, so it needs one.
+  const folderReady = idle && !repairing && !!session.config?.storage;
+  chooseKnowledgeBaseButton.disabled = !folderReady;
+  knowledgeBaseUseNotesButton.disabled = !folderReady || !session.config?.storage?.knowledge_base_dir;
   for (const input of offersList.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
@@ -215,29 +198,19 @@ function harnessName(adapter: HarnessAdapter): string {
 
 function clearOffers(): void {
   offers = [];
-  selectedOfferId = null;
+  selectedHarnessId = null;
   envChoices.clear();
 }
 
 function selectedOffer(): HarnessOffer | null {
-  return offers.find((offer) => offer.offer_id !== null && offer.refusal === null &&
-    offer.offer_id === selectedOfferId) ?? null;
+  return offers.find((offer) => offer.refusal === null && offer.harness_id === selectedHarnessId) ?? null;
 }
 
-function selectOffer(offerId: string | null): void {
-  selectedOfferId = offerId;
+function selectOffer(harnessId: string | null): void {
+  selectedHarnessId = harnessId;
   envChoices.clear();
   // Credentials the host has are proposed; the user can untick any of them.
   for (const env of selectedOffer()?.env_optional ?? []) envChoices.set(env.name, env.present);
-}
-
-function denylistLive(): boolean {
-  return denylistEditsLive(session.config);
-}
-
-function shownDenylist(): string[] {
-  if (denylistLive()) return session.config!.agent_denylist;
-  return pendingDenylist ?? session.config?.agent_denylist ?? [];
 }
 
 function renderAgent(): void {
@@ -247,6 +220,9 @@ function renderAgent(): void {
   if (config?.storage?.summaries_dir) state.push(`Summaries folder: ${config.storage.summaries_dir}.`);
   agentState.textContent = state.join(" ");
   if (!summariesEdited) summariesInput.value = config?.storage?.summaries_dir ?? "summaries";
+  const storage = config?.storage ?? null;
+  knowledgeBasePath.textContent = storage?.knowledge_base_dir ??
+    (storage ? `Same as the notes folder (${storage.root})` : "Same as the notes folder");
 
   offersList.replaceChildren();
   if (!offers.length) {
@@ -255,7 +231,7 @@ function renderAgent(): void {
     offersList.append(item);
   }
   for (const [index, offer] of offers.entries()) {
-    const ready = offer.offer_id !== null && offer.refusal === null;
+    const ready = offer.refusal === null;
     const item = document.createElement("li");
     item.dataset.adapter = offer.adapter;
     item.dataset.ready = String(ready);
@@ -265,11 +241,11 @@ function renderAgent(): void {
     radio.type = "radio";
     radio.name = "harness-offer";
     radio.id = `harness-offer-${index}`;
-    radio.value = offer.offer_id ?? "";
+    radio.value = offer.harness_id;
     radio.dataset.ready = String(ready);
-    radio.checked = ready && offer.offer_id === selectedOfferId;
+    radio.checked = ready && offer.harness_id === selectedHarnessId;
     radio.addEventListener("change", () => {
-      selectOffer(offer.offer_id);
+      selectOffer(offer.harness_id);
       renderConfig();
     });
     const version = offer.version ? ` ${offer.version}` : "";
@@ -312,33 +288,6 @@ function renderAgent(): void {
       item.append(label);
       envList.append(item);
     }
-  }
-
-  denylistList.replaceChildren();
-  const list = shownDenylist();
-  if (!list.length) {
-    const item = document.createElement("li");
-    item.textContent = "No domains excluded.";
-    denylistList.append(item);
-  }
-  for (const entry of list) {
-    const item = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = entry;
-    item.append(label);
-    if (!denylistLive() && !(config?.agent_denylist.includes(entry) ?? false)) {
-      const pending = document.createElement("small");
-      pending.textContent = " Saved when you set up a harness.";
-      item.append(pending);
-    }
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "secondary";
-    remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove ${entry}`);
-    remove.addEventListener("click", () => void removeExclusion(entry));
-    item.append(remove);
-    denylistList.append(item);
   }
 }
 
@@ -403,13 +352,16 @@ function offerConfigured(offer: StarterOffer): boolean {
   return hasAdapter(session.config?.adapters.artifacts ?? [], offer);
 }
 
-function currentStarterOffer(site: SiteConfig, key: string): StarterOffer | null {
-  const scope = parseGitHubOrganizations(githubScopeText);
-  return starterOffers(site, scope).find((offer) => offer.key === key) ?? null;
+function githubScope(): string[] {
+  return parseGitHubOrganizations(githubScopeText) ?? [];
 }
 
-function setStarterButtonState(button: HTMLButtonElement, site: SiteConfig, key: string): void {
-  const offer = currentStarterOffer(site, key);
+function currentStarterOffer(origin: string, key: string): StarterOffer | null {
+  return starterOffers(origin, githubScope()).find((offer) => offer.key === key) ?? null;
+}
+
+function setStarterButtonState(button: HTMLButtonElement, origin: string, key: string): void {
+  const offer = currentStarterOffer(origin, key);
   const configured = offer ? offerConfigured(offer) : false;
   button.dataset.available = String(Boolean(offer?.adapter) && !configured);
   button.textContent = configured ? "Already configured" : "Review starter…";
@@ -419,15 +371,20 @@ function setStarterButtonState(button: HTMLButtonElement, site: SiteConfig, key:
 
 function renderStarterGallery(): void {
   starterGallery.replaceChildren();
-  const sites = session.config?.sites ?? [];
-  const compatible = sites.flatMap((site) => starterOffers(site, parseGitHubOrganizations(githubScopeText))
-    .map((offer) => ({ site, offer })));
+  // The typed site address first, then the sites that already have adapters.
+  const typed = typedOrigin();
+  const origins = [...new Set([
+    ...(typed ? [typed] : []),
+    ...(session.config ? siteOrigins(session.config.adapters) : []),
+  ])];
+  const compatible = origins.flatMap((origin) => starterOffers(origin, githubScope())
+    .map((offer) => ({ origin, offer })));
   if (!compatible.length) {
-    addText(starterGallery, "p", "Enable a root-scoped Jira Cloud, SharePoint/OneDrive, or GitHub site to see starter drafts. Narrow path policies stay custom.");
+    addText(starterGallery, "p", "Enter a Jira Cloud, SharePoint/OneDrive, or GitHub site address above to see starter drafts.");
     return;
   }
   let githubScopeRendered = false;
-  for (const { site, offer } of compatible) {
+  for (const { origin, offer } of compatible) {
     const card = document.createElement("article");
     card.className = "starter-card";
     addText(card, "h3", offer.label);
@@ -452,19 +409,19 @@ function renderStarterGallery(): void {
         const valid = parseGitHubOrganizations(githubScopeText) !== null;
         guidance.className = valid ? "" : "warning";
         for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
-          if (scoped.dataset.siteOrigin === site.origin) {
-            setStarterButtonState(scoped, site, scoped.dataset.starterKey ?? "");
+          if (scoped.dataset.siteOrigin === origin) {
+            setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
           }
         }
       });
     }
     const review = document.createElement("button");
     review.type = "button";
-    review.dataset.siteOrigin = site.origin;
+    review.dataset.siteOrigin = origin;
     review.dataset.starterKey = offer.key;
-    setStarterButtonState(review, site, offer.key);
+    setStarterButtonState(review, origin, offer.key);
     review.addEventListener("click", () => {
-      const selected = currentStarterOffer(site, offer.key);
+      const selected = currentStarterOffer(origin, offer.key);
       if (!selected?.adapter || offerConfigured(selected)) return;
       beginAdapterDraft(selected.adapter, selected.label);
     });
@@ -481,7 +438,9 @@ function renderAdapters(): void {
   }
 
   adapterList.replaceChildren();
-  if (!adapters.length) addText(adapterList, "p", "No adapters configured. Add one after enabling its site above.");
+  if (!adapters.length) {
+    addText(adapterList, "p", "No adapters configured. Enter a site address above, then save a starter or add an adapter.");
+  }
   adapters.forEach((adapter, index) => {
     const card = document.createElement("article");
     card.className = "adapter-card";
@@ -557,10 +516,6 @@ function readAdapterCandidate(): CandidateResult {
   }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
-  const origin = adapterOrigin(parsed.adapter);
-  if (!origin || !session.config.sites.some((site) => site.origin === origin)) {
-    return { ok: false, message: "Enable this adapter's exact origin in Private capture setup first." };
-  }
   const artifacts = [...session.config.adapters.artifacts];
   if (adapterEdit.kind === "new") artifacts.push(parsed.adapter);
   else {
@@ -648,7 +603,7 @@ function beginAdapterDraft(adapter: AdapterObject, label: string): void {
 function beginAdapterEdit(index: number | "new"): void {
   if (!session.config || busy) return;
   const adapter = index === "new"
-    ? newAdapter(session.config.sites[0]?.origin ?? "https://example.com")
+    ? newAdapter(typedOrigin() ?? "https://example.com")
     : session.config.adapters.artifacts[index];
   if (!adapter) return;
   const edit: AdapterEdit = index === "new"
@@ -668,12 +623,33 @@ function closeAdapterEditor(): void {
   updateControls();
 }
 
+/**
+ * Save a new adapter document. A site is on while it has an adapter, so the
+ * host derives the sites from the document, and the first adapter saved with a notes folder
+ * turns capture on unless a pause is still pending. A folder selection the
+ * host has not saved yet is saved with it.
+ */
 async function saveAdapterDocument(document: AdapterDocument, success: string): Promise<void> {
   if (!session.config || busy) return;
   busy = true;
   updateControls();
+  const selection = picker;
   try {
-    await withConfigMutationLock(() => session.saveConfig({ ...session.config!, adapters: document }, null));
+    await withConfigMutationLock(async () => {
+      const config = session.config!;
+      const storage = selection ? storageFor(selection.path, config.storage) : config.storage;
+      const hasSites = siteOrigins(document).length > 0;
+      const state = await worker<WorkerStatus>({ kind: "get_status" });
+      const first = config.adapters.artifacts.length === 0 && document.artifacts.length > 0 &&
+        storage !== null && !state.pause_pending;
+      await session.saveConfig({
+        ...config,
+        storage,
+        adapters: document,
+        capture_enabled: hasSites && (first || config.capture_enabled),
+      }, selection?.token ?? null);
+    });
+    if (selection && picker === selection) picker = null;
     closeAdapterEditor();
     show(success);
   } catch (error) {
@@ -685,10 +661,45 @@ async function saveAdapterDocument(document: AdapterDocument, success: string): 
   }
 }
 
+/**
+ * Remove an adapter document that needs repair. The host drops unsupported
+ * `[adapters]` keys only on a real adapter change or, for a document already
+ * empty on the wire, an exact no-op update. So the repair changes nothing
+ * else; capture turns off in a second update, and success is reported only
+ * once the host no longer reports the issue.
+ */
+async function resetAdapters(): Promise<void> {
+  if (!session.config || busy) return;
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(async () => {
+      await session.saveConfig({ ...session.config!, adapters: { format: 1, artifacts: [] } }, null);
+      if (session.adapterIssue !== null) throw new Error(session.adapterIssue);
+      if (session.config!.capture_enabled) {
+        await session.saveConfig({ ...session.config!, capture_enabled: false }, null);
+      }
+    });
+    closeAdapterEditor();
+    show("Invalid adapter rules removed; automatic capture remains off until new rules are added.");
+  } catch (error) {
+    show(`Could not remove the artifact adapters: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
 async function saveAdapter(): Promise<void> {
   const candidate = readAdapterCandidate();
   if (!candidate.ok) {
     refreshAdapterEditor();
+    return;
+  }
+  const origin = adapterOrigin(candidate.adapter);
+  if (origin && session.status?.pending_removals.includes(origin)) {
+    show("Finish removing this site from the host before adding it again. Reload this page to retry.", true);
     return;
   }
   const action = adapterEdit?.kind === "new" ? "added" : "updated";
@@ -720,46 +731,35 @@ function renderConfig(): void {
   resetAdaptersButton.hidden = session.adapterIssue === null;
   folderPath.textContent = picker?.path ?? config?.storage?.root ?? "None selected";
   sitesList.replaceChildren();
-  if (!config?.sites.length) {
+  const origins = config ? siteOrigins(config.adapters) : [];
+  if (!origins.length) {
     const item = document.createElement("li");
     item.textContent = "None";
     sitesList.append(item);
-  } else {
-    for (const site of config.sites) {
-      const item = document.createElement("li");
-      const label = document.createElement("span");
-      label.textContent = `${site.origin}${site.path_prefix}`;
-      item.append(label);
-      if (session.status?.locally_removed_sites.some((entry) => sameSite(entry, site))) {
-        const local = document.createElement("small");
-        local.textContent = " Locally off; host update pending.";
-        item.append(local);
-      }
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "secondary";
-      remove.textContent = "Remove";
-      remove.setAttribute("aria-label", `Remove ${site.origin}${site.path_prefix}`);
-      remove.addEventListener("click", () => void removeSite(site));
-      item.append(remove);
-      sitesList.append(item);
-    }
+  }
+  for (const origin of origins) {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = origin;
+    item.append(label);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary compact";
+    remove.textContent = "Remove site";
+    remove.setAttribute("aria-label", `Remove site ${origin}`);
+    remove.addEventListener("click", () => void removeSite(origin));
+    item.append(remove);
+    sitesList.append(item);
   }
   renderStarterGallery();
   renderAdapters();
   renderAgent();
-  // A save can change the listed sites without a reload.
-  if (config?.sites.length && resumeGrants?.entries.join("\n") !== resumeGrantEntries(config).join("\n")) {
-    void refreshResumeGrants();
-  }
   if (adapterEdit === null) updateControls();
   else refreshAdapterEditor();
 }
 
 async function reloadConfig(): Promise<void> {
   await session.reload();
-  void refreshPreflight();
-  void refreshResumeGrants();
   showConfigState();
   if (session.status?.pause_pending && session.config?.capture_enabled && !session.configIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
@@ -787,67 +787,6 @@ function scheduleReload(): void {
   }, 250);
 }
 
-function parseSite(): { site: SiteConfig; pattern: string } {
-  const url = new URL(siteUrl.value.trim());
-  if (!isHttpUrl(url) || url.username || url.password) {
-    throw new Error("Enter an HTTP(S) site URL without credentials");
-  }
-  if (url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Enter only the site origin here; adapters decide which pages are recorded");
-  }
-  const site = { origin: url.origin, path_prefix: "/" };
-  return { site, pattern: exactOriginPattern(site.origin) };
-}
-
-function resumeGrantEntries(config: ConfigSnapshot): string[] {
-  return ["webNavigation", ...config.sites.map((site) => exactOriginPattern(site.origin))];
-}
-
-async function refreshResumeGrants(): Promise<void> {
-  const version = ++resumeGrantsVersion;
-  resumeGrants = null;
-  updateControls();
-  if (!session.config?.sites.length) return;
-  const entries = resumeGrantEntries(session.config);
-  try {
-    const held = await Promise.all(entries.map((entry) => chrome.permissions.contains(
-      entry === "webNavigation" ? { permissions: [entry] } : { origins: [entry] })));
-    if (version !== resumeGrantsVersion) return;
-    resumeGrants = { entries, held: new Set(entries.filter((_, index) => held[index])) };
-    updateControls();
-  } catch (error) {
-    if (version === resumeGrantsVersion) show(`Cannot inspect Chrome permissions: ${describe(error)}`, true);
-  }
-}
-
-async function refreshPreflight(): Promise<void> {
-  const version = ++preflightVersion;
-  preflight = null;
-  updateControls();
-  let parsed: ReturnType<typeof parseSite>;
-  try {
-    parsed = parseSite();
-  } catch {
-    return;
-  }
-  try {
-    const [apiGranted, originGranted] = await Promise.all([
-      chrome.permissions.contains({ permissions: ["webNavigation"] }),
-      chrome.permissions.contains({ origins: [parsed.pattern] }),
-    ]);
-    if (version !== preflightVersion) return;
-    preflight = {
-      origin: parsed.site.origin,
-      pattern: parsed.pattern,
-      apiGranted,
-      originGranted,
-    };
-    updateControls();
-  } catch (error) {
-    if (version === preflightVersion) show(`Cannot inspect Chrome permissions: ${describe(error)}`, true);
-  }
-}
-
 /** The storage settings for a folder chosen through the native picker. */
 function storageFor(root: string, current: StorageConfig | null): StorageConfig {
   return {
@@ -858,19 +797,23 @@ function storageFor(root: string, current: StorageConfig | null): StorageConfig 
     later_dir: current?.later_dir ?? "later",
     artifacts_dir: current?.artifacts_dir ?? "artifacts",
     summaries_dir: current?.summaries_dir ?? null,
+    knowledge_base_dir: current?.knowledge_base_dir ?? null,
   };
+}
+
+/** Ask the host to show its native folder picker for one setting. */
+function pickFolder(purpose: FolderPurpose) {
+  return session.host.call({
+    type: "choose_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), purpose,
+  }, "folder_chosen", 5 * 60_000);
 }
 
 async function chooseFolder(): Promise<void> {
   busy = true;
   updateControls();
-  let selection: typeof picker = null;
   try {
-    const response = await session.host.call({
-      type: "choose_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-    }, "folder_chosen", 5 * 60_000);
-    selection = { path: response.path, token: response.picker_token };
-    picker = selection;
+    const response = await pickFolder("notes_folder");
+    picker = { path: response.path, token: response.picker_token };
     folderPath.textContent = response.path;
     updateControls();
     // Save the folder now, so setup is not lost with this page and the side
@@ -881,16 +824,12 @@ async function chooseFolder(): Promise<void> {
     picker = null;
     showConfigState();
   } catch (error) {
-    if (selection && picker === selection && error instanceof HostError && error.code === "cancelled") {
-      // A declined confirmation leaves the selection usable: the first site
-      // enabled on this page saves it, behind that site's own confirmation.
-      show(`Canceled. ${selection.path} was not saved; enabling a site saves it too.`);
-    } else {
-      show(describe(error), true);
-      if (error instanceof HostError && error.code === "conflict") {
-        picker = null;
-        await reloadConfig().catch(() => undefined);
-      }
+    // A canceled picker changed nothing. A failed save keeps the selection
+    // usable: the next adapter saved on this page saves it too.
+    show(describe(error), true);
+    if (error instanceof HostError && error.code === "conflict") {
+      picker = null;
+      await reloadConfig().catch(() => undefined);
     }
   } finally {
     busy = false;
@@ -898,251 +837,70 @@ async function chooseFolder(): Promise<void> {
   }
 }
 
-async function rollbackNewPermissions(grant: {
-  origin: string; pattern: string; apiGranted: boolean; originGranted: boolean;
-}): Promise<void> {
-  if (grant.originGranted && grant.apiGranted) return;
-  // Each grant removed here was absent before this click, so nothing saved
-  // before it relied on it. That holds while the host configuration needs
-  // repair too: a kept config lists its sites, and an unusable one has none
-  // that capture could use.
-  const latest = await session.readHostConfig();
-  const removals: Promise<boolean>[] = [];
-  if (!grant.originGranted && !latest.config.sites.some((site) => site.origin === grant.origin) &&
-      !(await noteOrigins()).has(grant.origin)) {
-    removals.push(chrome.permissions.remove({ origins: [grant.pattern] }));
-  }
-  if (!grant.apiGranted && latest.config.sites.length === 0) {
-    removals.push(chrome.permissions.remove({ permissions: ["webNavigation"] }));
-  }
-  await Promise.all(removals);
-}
-
 /**
- * After a commit that turned capture on, finish any pause another page started
- * meanwhile, restart the extension if Chrome needs that for a new navigation
- * grant, and otherwise report success.
+ * Choose the folder the summary agent reads, with its own native picker and
+ * token, and save it at once. Only the knowledge base setting changes.
  */
-async function reportCaptureOn(success: string): Promise<void> {
-  const workerState = await session.refreshStatus();
-  if (workerState.pause_pending) {
-    try {
-      await withConfigMutationLock(async () => {
-        // Another page may already have finished pausing while we
-        // waited. Only finish a pause that is still pending.
-        const latestState = await worker<WorkerStatus>({ kind: "get_status" });
-        if (latestState.pause_pending) await session.completePausedHostConfig();
-        await session.applyHostConfig(await session.readHostConfig());
-      });
-      show(session.config?.capture_enabled
-        ? "Capture settings changed on another page. Review the current sites."
-        : "Capture was paused on another page. Pending capture records were cleared.",
-      session.config?.capture_enabled === true);
-    } catch (error) {
-      show(`Capture is paused locally; the host pause needs attention: ${describe(error)}`, true);
-    }
-    return;
-  }
-  if (!workerState.navigation_ready) {
-    show(`Chrome is restarting the extension to activate the new navigation permission. Reopen ${APP_NAME} settings and the side panel.`, true);
-    setTimeout(() => chrome.runtime.reload(), 1_000);
-    return;
-  }
-  show(success);
-}
-
-function enableSite(): void {
-  const currentConfig = session.config;
-  if (busy || !currentConfig || !session.revision || !preflight) return;
-  let parsed: ReturnType<typeof parseSite>;
+async function chooseKnowledgeBase(): Promise<void> {
+  if (busy || !session.config?.storage || session.configIssue) return;
+  busy = true;
+  updateControls();
   try {
-    parsed = parseSite();
+    const response = await pickFolder("knowledge_base");
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      storage: { ...session.config!.storage!, knowledge_base_dir: response.path },
+    }, null, response.picker_token));
+    show(`Knowledge base folder saved. Summary agents will read ${response.path}.`);
   } catch (error) {
-    show(describe(error), true);
-    return;
+    show(`Could not set the knowledge base folder: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
   }
-  if (parsed.site.origin !== preflight.origin || parsed.pattern !== preflight.pattern) return;
-  if (session.status?.locally_removed_sites.some((site) => sameSite(site, parsed.site))) {
-    show("Finish removing this site from the host before enabling it again.", true);
-    return;
-  }
-  if (!picker && needsFolderPick()) {
-    show(session.configIssue
-      ? "Choose the notes folder again to repair the host configuration."
-      : "Choose a notes folder first.", true);
-    return;
-  }
-  if (!navigator.locks?.request) {
-    show("This Chrome build cannot coordinate configuration changes. Capture remains off.", true);
-    return;
-  }
-
-  const initialPauseToken = session.status?.pause_token ?? null;
-
-  // This call must run in the click stack. An await before it loses Chrome's
-  // user gesture, which prevents the optional permission prompt.
-  const granted = chrome.permissions.request({
-    permissions: ["webNavigation"], origins: [parsed.pattern],
-  });
-  const previous = preflight;
-  const selection = picker;
-  busy = true;
-  updateControls();
-  void (async () => {
-    let committed = false;
-    let permissionGranted = false;
-    try {
-      permissionGranted = await granted;
-      if (!permissionGranted) {
-        show("Chrome access was declined. Capture remains off.", true);
-        return;
-      }
-      // Chrome held no grant for this origin before the click, so any notes
-      // entry for it is stale. The new grant belongs to logging.
-      if (!previous.originGranted) await forgetNoteOrigin(parsed.site.origin);
-      await withConfigMutationLock(async () => {
-        // The permission request ran in the click gesture, before the lock.
-        // Another page may have removed it while we waited for this lock.
-        const stillGranted = await chrome.permissions.contains({
-          permissions: ["webNavigation"], origins: [parsed.pattern],
-        });
-        if (!stillGranted) throw new Error("Chrome access changed during setup; click Enable again");
-        const config = session.config!;
-        const storage: StorageConfig = selection
-          ? storageFor(selection.path, config.storage)
-          : { ...config.storage!, profile: "neutral" };
-        const sites = config.sites.filter((site) => !sameSite(site, parsed.site));
-        sites.push(parsed.site);
-        const next: ConfigSnapshot = { ...config, storage, sites, capture_enabled: true };
-        await session.saveConfig(next, selection?.token ?? null, () => { committed = true; },
-          true, initialPauseToken);
-        if (session.revision) {
-          await worker<WorkerStatus>({
-            kind: "ack_reenabled_origin", origin: parsed.site.origin, revision: session.revision,
-          });
-        }
-      });
-      await reportCaptureOn(`Capture enabled for ${parsed.site.origin}${parsed.site.path_prefix}. The side panel sends buffered activity.`);
-    } catch (error) {
-      show(`Setup failed: ${describe(error)}`, true);
-      if (error instanceof HostError && error.code === "conflict") {
-        picker = null;
-        await reloadConfig().catch(() => undefined);
-      }
-    } finally {
-      if (!committed && permissionGranted) {
-        try {
-          await withConfigMutationLock(() => rollbackNewPermissions(previous));
-        } catch (error) {
-          show(`Could not remove new Chrome access: ${describe(error)}`, true);
-        }
-      }
-      busy = false;
-      await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
-      updateControls();
-      void refreshPreflight();
-    }
-  })();
 }
 
-/**
- * Turn capture back on for the sites already listed. Like Enable, it asks
- * Chrome for the sites' grants in the click and needs the host's native
- * confirmation; a grant it added is removed again unless the host commits.
- */
-function resumeCapture(): void {
-  const config = session.config;
-  if (busy || !config || !session.revision ||
-      !capturePaused(config, session.configIssue ?? session.adapterIssue)) return;
-  const before = resumeGrants;
-  const entries = resumeGrantEntries(config);
-  if (!before || before.entries.join("\n") !== entries.join("\n")) return;
-  const removing = config.sites.find((site) =>
-    session.status?.locally_removed_sites.some((removed) => sameSite(removed, site)));
-  if (removing) {
-    show(`Finish removing ${removing.origin} from the host before resuming capture.`, true);
-    return;
-  }
-  if (!navigator.locks?.request) {
-    show("This Chrome build cannot coordinate configuration changes. Capture remains off.", true);
-    return;
-  }
-  const initialPauseToken = session.status?.pause_token ?? null;
-  // This call must run in the click stack, as in enableSite.
-  const granted = chrome.permissions.request({
-    permissions: ["webNavigation"], origins: entries.slice(1),
-  });
+/** Let the knowledge base follow the notes folder again. */
+async function useNotesFolderAsKnowledgeBase(): Promise<void> {
+  if (busy || !session.config?.storage?.knowledge_base_dir || session.configIssue) return;
   busy = true;
   updateControls();
-  void (async () => {
-    let committed = false;
-    let permissionGranted = false;
-    try {
-      permissionGranted = await granted;
-      if (!permissionGranted) {
-        show("Chrome access was declined. Capture remains off.", true);
-        return;
-      }
-      // As in enableSite: Chrome held no grant for these origins before the
-      // click, so any notes entry for them is stale. The new grant belongs to logging.
-      for (const site of config.sites) {
-        if (!before.held.has(exactOriginPattern(site.origin))) await forgetNoteOrigin(site.origin);
-      }
-      await withConfigMutationLock(async () => {
-        const latest = session.config!;
-        const stillGranted = await chrome.permissions.contains({
-          permissions: ["webNavigation"],
-          origins: latest.sites.map((site) => exactOriginPattern(site.origin)),
-        });
-        if (!stillGranted) throw new Error("Chrome access changed; click Resume capture again");
-        await session.saveConfig({ ...latest, capture_enabled: true }, null, () => { committed = true; },
-          true, initialPauseToken);
-        const revision = session.revision;
-        if (revision) {
-          for (const site of latest.sites) {
-            await worker<WorkerStatus>({ kind: "ack_reenabled_origin", origin: site.origin, revision });
-          }
-        }
-      });
-      await reportCaptureOn("Capture resumed for the listed sites. The side panel sends buffered activity.");
-    } catch (error) {
-      show(`Could not resume capture: ${describe(error)}`, true);
-      if (error instanceof HostError && error.code === "conflict") {
-        await reloadConfig().catch(() => undefined);
-      }
-    } finally {
-      if (!committed && permissionGranted) {
-        try {
-          await withConfigMutationLock(() => rollbackResumeGrants(config.sites, before));
-        } catch (error) {
-          show(`Could not remove new Chrome access: ${describe(error)}`, true);
-        }
-      }
-      busy = false;
-      await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
-      updateControls();
-      void refreshResumeGrants();
-    }
-  })();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      storage: { ...session.config!.storage!, knowledge_base_dir: null },
+    }, null));
+    show("Summary agents will read the notes folder as the knowledge base.");
+  } catch (error) {
+    show(`Could not change the knowledge base folder: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
 }
 
-/**
- * Remove the grants a failed resume added. Another page may have turned
- * capture on meanwhile, so grants the current host policy needs stay, as do
- * any the side panel uses for notes.
- */
-async function rollbackResumeGrants(
-  sites: SiteConfig[], before: { held: Set<string> },
-): Promise<void> {
-  const latest = (await session.readHostConfig()).config;
-  const needed = latest.capture_enabled ? latest.sites : [];
-  const notes = await noteOrigins();
-  const origins = sites
-    .filter((site) => !needed.some((other) => other.origin === site.origin) && !notes.has(site.origin))
-    .map((site) => exactOriginPattern(site.origin))
-    .filter((pattern) => !before.held.has(pattern));
-  const permissions = before.held.has("webNavigation") || needed.length ? [] : ["webNavigation"];
-  if (origins.length || permissions.length) await chrome.permissions.remove({ permissions, origins });
+async function resumeCapture(): Promise<void> {
+  if (busy || !session.config || session.configIssue) return;
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(async () => {
+      // An explicit resume also clears a local pause, unless another page
+      // paused again after this status was read.
+      const state = await worker<WorkerStatus>({ kind: "get_status" });
+      await session.saveConfig({ ...session.config!, capture_enabled: true }, null, null, undefined, true, state.pause_token);
+    });
+    showConfigState();
+  } catch (error) {
+    show(`Could not resume capture: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
+    renderConfig();
+  }
 }
 
 async function pauseCapture(): Promise<void> {
@@ -1183,116 +941,15 @@ async function refreshArtifactFiles(): Promise<void> {
   }
 }
 
-async function removeSite(site: SiteConfig): Promise<void> {
-  const baseConfig = session.config;
-  if (busy || !baseConfig || !session.revision || session.configIssue || session.adapterIssue ||
-      !baseConfig.sites.some((entry) => sameSite(entry, site))) return;
-  busy = true;
-  updateControls();
-  let locallyRemoved = false;
-  let hostCommitted = false;
-  let committedRevision: string | null = null;
-  let hostFailure: string | null = null;
-  let permissionFailure: string | null = null;
-  let permissionRetained: string | null = null;
-  let keptForNotes = false;
-  let removedAdapters = 0;
-  let refreshAfter = false;
-  try {
-    // The worker serializes this with navigation capture and persists a local
-    // block before the host update. A failed update stays blocked on reload.
-    session.status = await worker<WorkerStatus>({ kind: "remove_site", site });
-    locallyRemoved = true;
-    renderConfig();
-    await withConfigMutationLock(async () => {
-      const sites = baseConfig.sites.filter((entry) => !sameSite(entry, site));
-      const adapters = adaptersForSites(baseConfig, sites);
-      removedAdapters = baseConfig.adapters.artifacts.length - adapters.artifacts.length;
-      try {
-        await session.saveConfig({
-          ...baseConfig,
-          sites,
-          adapters,
-          capture_enabled: baseConfig.capture_enabled && sites.length > 0,
-        }, null, () => {
-          hostCommitted = true;
-          committedRevision = session.revision;
-        });
-      } catch (error) {
-        hostFailure = hostCommitted
-          ? `The host saved removal, but the extension policy refresh failed: ${describe(error)}`
-          : `Host update failed: ${describe(error)}`;
-        if (error instanceof HostError && error.code === "conflict") {
-          refreshAfter = true;
-        }
-      }
-      if (hostCommitted && committedRevision !== null) {
-        try {
-          // Chrome permissions are shared by every path rule for an origin. A
-          // second page may have committed another rule while this page was
-          // refreshing its worker lease, so inspect the host again before
-          // removing the shared grant.
-          const latest = await session.readHostConfig();
-          if (latest.config_issue || latest.adapter_issue) {
-            await worker<WorkerStatus>({ kind: "suspend_policy" });
-            session.config = latest.config;
-            session.revision = latest.revision;
-            session.configIssue = latest.config_issue;
-            session.adapterIssue = latest.adapter_issue;
-            session.adapterWarnings = latest.adapter_warnings;
-            renderConfig();
-            permissionRetained = "Chrome access was retained while the host configuration needs repair.";
-          } else if (latest.revision !== committedRevision) {
-            permissionRetained = "Chrome access was retained because the host configuration changed on another page. Review the current sites before removing it.";
-            refreshAfter = true;
-          } else if (!latest.config.sites.some((entry) => entry.origin === site.origin)) {
-            // The side panel's notes rely on an origin grant it asked for.
-            if ((await noteOrigins()).has(site.origin)) {
-              keptForNotes = true;
-            } else {
-              await chrome.permissions.remove({ origins: [exactOriginPattern(site.origin)] });
-            }
-            if (latest.config.sites.length === 0) {
-              await chrome.permissions.remove({ permissions: ["webNavigation"] });
-            }
-          }
-        } catch (error) {
-          permissionFailure = `Could not remove Chrome access: ${describe(error)}`;
-        }
-      }
-    });
-    if (refreshAfter) {
-      await reloadConfig().catch((error: unknown) => {
-        permissionRetained = `${permissionRetained ?? "Host policy refresh failed."} ${describe(error)}`;
-      });
-    }
-    if (hostFailure || permissionFailure || permissionRetained) {
-      const next = !hostFailure ? "" : hostCommitted
-        ? " The host removal is saved. Reload this page to refresh its policy."
-        : " The site remains locally off; use Remove again to finish the host update.";
-      const grant = permissionFailure
-        ? " Remove this origin from Chrome extension settings if it remains granted."
-        : "";
-      show(`${[hostFailure, permissionFailure, permissionRetained].filter(Boolean).join(" ")}${next}${grant}`, true);
-    } else if (hostCommitted) {
-      show(`Removed ${site.origin}${site.path_prefix}.${removedAdapters
-        ? ` Also removed ${removedAdapters} adapter${removedAdapters === 1 ? "" : "s"} for that origin.`
-        : ""}${keptForNotes
-        ? " Chrome access for this site is kept for its page notes."
-        : ""}`);
-    } else {
-      show("The site is locally off; reload this page to confirm the host update.", true);
-    }
-  } catch (error) {
-    show(locallyRemoved
-      ? `The site is locally off, but removal needs attention: ${describe(error)}`
-      : `Could not stop this site locally: ${describe(error)}`, true);
-  } finally {
-    busy = false;
-    await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
-    updateControls();
-    void refreshPreflight();
-  }
+/** Turn a site off by removing every adapter on its origin, in one update. */
+async function removeSite(origin: string): Promise<void> {
+  const config = session.config;
+  if (busy || !config || session.configIssue || session.adapterIssue) return;
+  const artifacts = config.adapters.artifacts.filter((adapter) => adapter.origin !== origin);
+  const removed = config.adapters.artifacts.length - artifacts.length;
+  if (!removed) return;
+  await saveAdapterDocument({ format: 1, artifacts },
+    `Removed ${origin} and its ${removed} adapter${removed === 1 ? "" : "s"}; its pages are no longer captured.`);
 }
 
 async function detectHarnesses(): Promise<void> {
@@ -1301,8 +958,8 @@ async function detectHarnesses(): Promise<void> {
   updateControls();
   try {
     offers = await session.discoverHarnesses();
-    const ready = offers.find((offer) => offer.offer_id !== null && offer.refusal === null);
-    selectOffer(ready?.offer_id ?? null);
+    const ready = offers.find((offer) => offer.refusal === null);
+    selectOffer(ready?.harness_id ?? null);
     if (ready) {
       show(harnessFoundText(harnessName(ready.adapter), ready.version, !!session.config?.storage));
     } else {
@@ -1313,7 +970,6 @@ async function detectHarnesses(): Promise<void> {
   } catch (error) {
     clearOffers();
     show(`Could not detect harnesses: ${describe(error)}`, true);
-    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
     busy = false;
     renderConfig();
@@ -1322,7 +978,7 @@ async function detectHarnesses(): Promise<void> {
 
 async function setupHarness(): Promise<void> {
   const offer = selectedOffer();
-  if (busy || !offer?.offer_id) return;
+  if (busy || !offer) return;
   if (!session.config?.storage) {
     show("Choose a notes folder first.", true);
     return;
@@ -1333,21 +989,17 @@ async function setupHarness(): Promise<void> {
     return;
   }
   const envNames = offer.env_optional.filter((env) => envChoices.get(env.name)).map((env) => env.name);
-  const denylist = [...shownDenylist()];
   busy = true;
   updateControls();
   try {
     await withConfigMutationLock(() =>
-      session.setupHarness(offer.offer_id!, envNames, denylist, summaries));
-    pendingDenylist = null;
+      session.setupHarness(offer.harness_id, envNames, summaries));
     summariesEdited = false;
     show(`${harnessName(offer.adapter)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
     show(`Harness setup did not finish: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
-    // The host spends an offer on every attempt, including a cancel.
-    clearOffers();
     busy = false;
     renderConfig();
   }
@@ -1369,88 +1021,9 @@ async function removeHarness(): Promise<void> {
   }
 }
 
-/** The host decides whether a change needs its dialog: none to add an
- * exclusion, one to remove it. */
-async function saveDenylist(list: string[], done: string): Promise<void> {
-  busy = true;
-  updateControls();
-  try {
-    await withConfigMutationLock(() =>
-      session.saveConfig({ ...session.config!, agent_denylist: list }, null));
-    show(done);
-  } catch (error) {
-    show(`Could not change AI privacy exclusions: ${describe(error)}`, true);
-    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
-  } finally {
-    busy = false;
-    renderConfig();
-  }
-}
-
-async function addExclusion(): Promise<void> {
-  if (busy || !session.connected) return;
-  const edit = addDenylistEntry(shownDenylist(), denylistInput.value);
-  if (!edit.ok) {
-    show(edit.error, true);
-    return;
-  }
-  const entry = edit.list[edit.list.length - 1]!;
-  denylistInput.value = "";
-  denylistPreview.textContent = "";
-  if (denylistLive()) {
-    await saveDenylist(edit.list, `AI commands now exclude ${entry} and its subdomains.`);
-  } else {
-    pendingDenylist = edit.list;
-    show(`${entry} will be excluded; harness setup asks you to confirm the list.`);
-    renderConfig();
-  }
-}
-
-async function removeExclusion(entry: string): Promise<void> {
-  if (busy || !session.connected) return;
-  const list = removeDenylistEntry(shownDenylist(), entry);
-  if (denylistLive()) {
-    await saveDenylist(list, `AI commands may now read pages on ${entry}.`);
-  } else {
-    pendingDenylist = list;
-    show(`${entry} removed from the list harness setup will confirm.`);
-    renderConfig();
-  }
-}
-
-function refreshDenylistPreview(): void {
-  const raw = denylistInput.value;
-  if (!raw.trim()) {
-    denylistPreview.textContent = "";
-  } else {
-    const preview = previewDenylistEntry(raw);
-    denylistPreview.textContent = preview.ok
-      ? `Excludes ${preview.normalized} and its subdomains.`
-      : preview.error;
-  }
-  updateControls();
-}
-
-for (const suggestion of SUGGESTED_EXCLUSIONS) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "secondary";
-  button.textContent = `${suggestion.label}, e.g. ${suggestion.example}`;
-  // Only fills the box; the user edits it and chooses Add.
-  button.addEventListener("click", () => {
-    denylistInput.value = suggestion.example;
-    refreshDenylistPreview();
-    denylistInput.focus();
-  });
-  denylistSuggestions.append(button);
-}
-
 detectButton.addEventListener("click", () => void detectHarnesses());
 newAdapterButton.addEventListener("click", () => beginAdapterEdit("new"));
-resetAdaptersButton.addEventListener("click", () => void saveAdapterDocument(
-  { format: 1, artifacts: [] },
-  "Invalid adapter rules removed; automatic capture remains off until new rules are added.",
-));
+resetAdaptersButton.addEventListener("click", () => void resetAdapters());
 refreshArtifactsButton.addEventListener("click", () => void refreshArtifactFiles());
 saveAdapterButton.addEventListener("click", () => void saveAdapter());
 cancelAdapterButton.addEventListener("click", closeAdapterEditor);
@@ -1459,27 +1032,15 @@ adapterPreviewUrl.addEventListener("input", refreshAdapterEditor);
 adapterPreviewTitle.addEventListener("input", refreshAdapterEditor);
 setupButton.addEventListener("click", () => void setupHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
-denylistAddButton.addEventListener("click", () => void addExclusion());
-denylistInput.addEventListener("input", refreshDenylistPreview);
-denylistInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") void addExclusion();
-});
 summariesInput.addEventListener("input", () => { summariesEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
-enableButton.addEventListener("click", enableSite);
-resumeButton.addEventListener("click", resumeCapture);
+chooseKnowledgeBaseButton.addEventListener("click", () => void chooseKnowledgeBase());
+knowledgeBaseUseNotesButton.addEventListener("click", () => void useNotesFolderAsKnowledgeBase());
 pauseButton.addEventListener("click", () => void pauseCapture());
-siteUrl.addEventListener("input", () => void refreshPreflight());
-// Enable's rollback compares against this page's last permission read, so
-// every grant change, from this page or elsewhere, refreshes it.
-chrome.permissions.onAdded.addListener(() => {
-  void refreshPreflight();
-  void refreshResumeGrants();
-});
-chrome.permissions.onRemoved.addListener(() => {
-  void refreshPreflight();
-  void refreshResumeGrants();
-  void pruneNoteOrigins().catch(() => undefined);
+resumeButton.addEventListener("click", () => void resumeCapture());
+siteOrigin.addEventListener("input", () => {
+  renderStarterGallery();
+  updateControls();
 });
 session.watchPolicy(scheduleReload);
 window.addEventListener("pagehide", () => {
@@ -1491,7 +1052,6 @@ void (async () => {
   busy = true;
   updateControls();
   try {
-    await pruneNoteOrigins().catch(() => undefined);
     let hello: Awaited<ReturnType<ConfigSession["hello"]>>;
     try {
       hello = await session.hello();
@@ -1502,6 +1062,11 @@ void (async () => {
     try {
       await reloadConfig();
       if (hello.config_issue) show(hello.config_issue, true);
+      if (session.config && session.revision && !session.configIssue &&
+          await session.applyPendingRemovals(session.config, session.revision)) {
+        renderConfig();
+        show("Finished removing sites that an earlier version turned off.");
+      }
     } catch (error) {
       // The host answered, so this is a settings problem, not a missing host.
       if (session.configIssue) showConfigState();

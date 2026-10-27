@@ -10,12 +10,11 @@ use adapter_templates::{Document as AdapterTemplates, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
-    ErrorCode, HarnessAdapter, SiteConfig, StorageConfig,
+    ErrorCode, HarnessAdapter, StorageConfig,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use url::Url;
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -27,14 +26,12 @@ thread_local! {
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
 use crate::index::ArtifactIndex;
-use crate::privacy;
 use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_ROOT_PATH_BYTES: usize = 4 * 1024;
 const MAX_LOCATION_PATH_BYTES: usize = 512;
 const MAX_PATH_COMPONENT_BYTES: usize = 255;
-const MAX_SITES: usize = 128;
 const MAX_STRIP_PARAMS: usize = 64;
 const MAX_RULE_BYTES: usize = 64;
 const MAX_AGENT_ARGS: usize = 64;
@@ -44,6 +41,8 @@ const MAX_ENV_NAME_BYTES: usize = 64;
 const MAX_TIMEOUT_SECS: u32 = 600;
 const MAX_ADAPTER_WARNINGS: usize = 256;
 pub(crate) const DEFAULT_TIMEOUT_SECS: u32 = 120;
+/// The summaries folder harness setup uses when none is chosen.
+pub(crate) const DEFAULT_SUMMARIES_DIR: &str = "summaries";
 pub(crate) const PROMPT_PLACEHOLDER: &str = "{prompt}";
 const MISSING_REVISION: &str = "missing";
 /// Never a real revision, so no update can be based on an unreadable file.
@@ -62,6 +61,7 @@ pub struct ConfigStore {
     revision: String,
     issue: Option<String>,
     root_identity: Option<String>,
+    knowledge_base_identity: Option<String>,
     agent: AgentView,
     adapter_extensions: BTreeMap<String, toml::Value>,
     adapter_issue: Option<String>,
@@ -75,6 +75,7 @@ struct DiskState {
     issue: Option<String>,
     needs_backup: bool,
     root_identity: Option<String>,
+    knowledge_base_identity: Option<String>,
     agent: AgentView,
     adapter_extensions: BTreeMap<String, toml::Value>,
     retired_adapter_contracts: Vec<serde_json::Value>,
@@ -97,16 +98,6 @@ const AGENT_ENTRY_INVALID: &str = concat!(
     "The AI harness entry in config.toml is invalid. Set up the harness again in ",
     crate::app_name!(),
     " settings."
-);
-const SET_UP_AGENT: &str = concat!(
-    "Set up an AI harness and confirm AI privacy exclusions in ",
-    crate::app_name!(),
-    " settings."
-);
-const CONFIRM_DENYLIST: &str = concat!(
-    "Confirm AI privacy exclusions in ",
-    crate::app_name!(),
-    " settings before using AI commands."
 );
 const SET_UP_HARNESS: &str = concat!("Set up an AI harness in ", crate::app_name!(), " settings.");
 const CHOOSE_SUMMARIES: &str = concat!(
@@ -201,8 +192,10 @@ impl HarnessRecord {
     }
 }
 
-/// What native harness setup commits in one write (§7.3): the harness entry,
-/// its checked record, and `agent_denylist_confirmed = true`.
+/// What harness setup commits in one write: the harness entry and its
+/// checked record. Host-internal: only `harness_setup::set_up` builds one,
+/// after its probe passes, and passes it to `update_with_grants`. Nothing
+/// on the wire can carry or authorize one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommit {
     pub agent: AgentConfig,
@@ -261,6 +254,7 @@ impl ConfigStore {
         self.revision = UNREADABLE_REVISION.into();
         self.issue = Some("The configuration file cannot be read or is not a regular file. Fix or remove it, then reload this page.".into());
         self.root_identity = None;
+        self.knowledge_base_identity = None;
         self.agent = AgentView::default();
         self.adapter_extensions.clear();
         self.adapter_issue = None;
@@ -313,6 +307,7 @@ impl ConfigStore {
             revision: MISSING_REVISION.into(),
             issue: None,
             root_identity: None,
+            knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
             adapter_issue: None,
@@ -327,6 +322,7 @@ impl ConfigStore {
         self.revision = state.revision;
         self.issue = state.issue;
         self.root_identity = state.root_identity;
+        self.knowledge_base_identity = state.knowledge_base_identity;
         self.agent = state.agent;
         self.adapter_extensions = state.adapter_extensions;
         if revision_changed {
@@ -365,6 +361,28 @@ impl ConfigStore {
         self.root_identity.as_deref()
     }
 
+    /// The folder the summary agent reads: the chosen knowledge base folder,
+    /// or the notes folder while none is chosen. The host never writes here.
+    pub fn knowledge_base_dir(&self) -> Option<PathBuf> {
+        let storage = self.config.storage.as_ref()?;
+        Some(PathBuf::from(
+            storage
+                .knowledge_base_dir
+                .as_deref()
+                .unwrap_or(&storage.root),
+        ))
+    }
+
+    /// The picker-confirmed identity of `knowledge_base_dir()`.
+    pub fn knowledge_base_identity(&self) -> Option<&str> {
+        let storage = self.config.storage.as_ref()?;
+        if storage.knowledge_base_dir.is_some() {
+            self.knowledge_base_identity.as_deref()
+        } else {
+            self.root_identity()
+        }
+    }
+
     /// Hold this lock from the policy refresh through a privileged write.
     /// ConfigStore::update takes the same lock before replacing config.toml.
     pub fn lock_current(&self) -> Result<File> {
@@ -392,6 +410,18 @@ impl ConfigStore {
     /// not depend on adapter recognition and remain usable.
     pub fn adapter_issue(&self) -> Option<&str> {
         self.adapter_issue.as_deref()
+    }
+
+    /// The origins automatic capture may record, from the adapter document
+    /// compiled for the current revision. Empty while `adapter_issue` is set.
+    pub fn capture_origins(&self) -> Vec<String> {
+        if self.adapter_issue.is_some() {
+            return Vec::new();
+        }
+        self.adapter_document
+            .as_ref()
+            .map(document_origins)
+            .unwrap_or_default()
     }
 
     pub fn adapter_warnings(&mut self) -> &[AdapterWarning] {
@@ -485,8 +515,8 @@ impl ConfigStore {
     }
 
     /// Whether AI commands may run. Call under `lock_current` right after
-    /// `refresh`. The host refuses every agent request until the user has
-    /// confirmed the denylist once through native harness setup (§7.3).
+    /// `refresh`. A harness committed by native harness setup is enough;
+    /// there is no separate privacy confirmation.
     pub fn agent_readiness(&self) -> Result<AgentReadiness, (ErrorCode, String)> {
         self.agent_gate()
             .map_err(|refusal| (refusal.code, refusal.message))
@@ -524,17 +554,6 @@ impl ConfigStore {
                 ErrorCode::InvalidConfig,
                 "configuration is unavailable or needs repair",
             ));
-        }
-        if !self.config.agent_denylist_confirmed {
-            return Err(if self.config.agent.is_some() {
-                refuse(
-                    AgentState::DenylistUnconfirmed,
-                    ErrorCode::NotConfigured,
-                    CONFIRM_DENYLIST,
-                )
-            } else {
-                refuse(AgentState::NotSetUp, ErrorCode::NotConfigured, SET_UP_AGENT)
-            });
         }
         let Some(agent) = &self.config.agent else {
             return Err(match &self.agent.issue {
@@ -617,7 +636,7 @@ impl ConfigStore {
         next: ConfigSnapshot,
         expected_revision: &str,
     ) -> Result<Option<String>> {
-        self.update_with_grants(next, expected_revision, None, None)
+        self.update_with_grants(next, expected_revision, None, None, None)
     }
 
     #[cfg(test)]
@@ -627,17 +646,19 @@ impl ConfigStore {
         expected_revision: &str,
         selected_identity: Option<&str>,
     ) -> Result<Option<String>> {
-        self.update_with_grants(next, expected_revision, selected_identity, None)
+        self.update_with_grants(next, expected_revision, selected_identity, None, None)
     }
 
     /// Native dispatch calls this only after `ConsentAuthority` has checked
-    /// every grant. The agent checks below repeat that decision against the
-    /// file itself, under the lock, as defense in depth.
+    /// the folder grant; `harness_commit` comes only from `harness_setup`.
+    /// The agent checks below repeat that decision against the file itself,
+    /// under the lock, as defense in depth.
     pub(crate) fn update_with_grants(
         &mut self,
         next: ConfigSnapshot,
         expected_revision: &str,
         selected_identity: Option<&str>,
+        knowledge_base_identity: Option<&str>,
         harness_commit: Option<HarnessCommit>,
     ) -> Result<Option<String>> {
         let json = serde_json::to_vec(&next).context("serializing config JSON")?;
@@ -650,7 +671,6 @@ impl ConfigStore {
         validate_base(&next)?;
         if let Some(commit) = &harness_commit
             && (next.agent.as_ref() != Some(&commit.agent)
-                || !next.agent_denylist_confirmed
                 || commit.record.harness_id != commit.agent.harness_id)
         {
             bail!("harness setup does not match this configuration");
@@ -713,12 +733,7 @@ impl ConfigStore {
                 AgentView::committed(commit)?
             }
             None => {
-                // Only native harness setup turns the confirmation on or sets
-                // a harness. Removing the harness keeps the confirmation.
-                let confirmed = current.issue.is_none() && current.config.agent_denylist_confirmed;
-                if next.agent_denylist_confirmed != confirmed {
-                    bail!("agent_denylist_confirmed can only be set by native harness setup");
-                }
+                // Only native harness setup sets a harness.
                 match (&next.agent, &current.config.agent) {
                     (None, Some(_)) => AgentView::default(),
                     // Keep an entry this host cannot parse for the user to fix.
@@ -751,9 +766,49 @@ impl ConfigStore {
                 Some(actual)
             }
         };
+        let next_knowledge_base_identity = match next
+            .storage
+            .as_ref()
+            .and_then(|storage| storage.knowledge_base_dir.as_deref())
+        {
+            None => None,
+            Some(knowledge_base) => {
+                let unchanged = current
+                    .config
+                    .storage
+                    .as_ref()
+                    .and_then(|old| old.knowledge_base_dir.as_deref())
+                    == Some(knowledge_base);
+                match knowledge_base_identity {
+                    // A fresh picker selection: the folder must still be the
+                    // one the user chose.
+                    Some(expected) => {
+                        let actual = selected_root_identity(Path::new(knowledge_base))?;
+                        if actual != expected {
+                            bail!("selected knowledge base folder changed; choose it again");
+                        }
+                        Some(actual)
+                    }
+                    // Unchanged: carry the recorded identity without touching
+                    // the filesystem. Only the summary agent reads this
+                    // folder, and it re-checks the identity before use, so a
+                    // missing or replaced folder must not block unrelated
+                    // saves such as pausing capture.
+                    None => Some(
+                        unchanged
+                            .then(|| current.knowledge_base_identity.clone())
+                            .flatten()
+                            .context(
+                                "a fresh native selection of the knowledge base folder is required",
+                            )?,
+                    ),
+                }
+            }
+        };
         let serialized = toml::to_string_pretty(&StoredConfig::from_snapshot(
             &next,
             next_identity.clone(),
+            next_knowledge_base_identity.clone(),
             &agent,
             retired_adapter_contracts,
             adapter_extensions.clone(),
@@ -794,6 +849,7 @@ impl ConfigStore {
         self.revision = revision.clone();
         self.issue = None;
         self.root_identity = next_identity;
+        self.knowledge_base_identity = next_knowledge_base_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
         self.set_adapter_policy(true);
@@ -820,22 +876,28 @@ struct StoredConfig {
     root_picker_confirmed: bool,
     #[serde(default)]
     root_identity: Option<String>,
+    /// Host-only: the identity of the picker-selected knowledge base folder.
+    /// Absent while the knowledge base follows `root`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    knowledge_base_identity: Option<String>,
     #[serde(default)]
     capture_enabled: bool,
-    #[serde(default)]
-    sites: Vec<SiteConfig>,
+    // Accept and ignore the retired v5 site allowlist. Capture origins now
+    // come from the adapters; new config writes omit it.
+    #[serde(default, skip_serializing, rename = "sites")]
+    _sites: Option<toml::Value>,
     #[serde(default = "default_strip_params")]
     strip_params: Vec<String>,
     // Accept and ignore the retired M1 key. New config writes omit it.
     #[serde(default, skip_serializing, rename = "near_repeat_secs")]
     _near_repeat_secs: Option<u32>,
-    // A missing key (any config written before M2) counts as unconfirmed.
-    #[serde(default)]
-    agent_denylist: Vec<String>,
-    #[serde(default)]
-    agent_denylist_confirmed: bool,
-    #[serde(default)]
-    log_incognito: bool,
+    // Accept and ignore the retired v5 privacy keys. New config writes omit them.
+    #[serde(default, skip_serializing, rename = "agent_denylist")]
+    _agent_denylist: Option<toml::Value>,
+    #[serde(default, skip_serializing, rename = "agent_denylist_confirmed")]
+    _agent_denylist_confirmed: Option<toml::Value>,
+    #[serde(default, skip_serializing, rename = "log_incognito")]
+    _log_incognito: Option<toml::Value>,
     #[serde(default)]
     agent: Option<toml::Value>,
     #[serde(default)]
@@ -881,6 +943,9 @@ struct StoredStorage {
     artifacts_dir: Option<String>,
     #[serde(default)]
     summaries_dir: Option<String>,
+    // Added in v6. A missing key means the knowledge base follows `root`.
+    #[serde(default)]
+    knowledge_base_dir: Option<String>,
 }
 
 impl From<StorageConfig> for StoredStorage {
@@ -893,6 +958,7 @@ impl From<StorageConfig> for StoredStorage {
             later_dir: value.later_dir,
             artifacts_dir: Some(value.artifacts_dir),
             summaries_dir: value.summaries_dir,
+            knowledge_base_dir: value.knowledge_base_dir,
         }
     }
 }
@@ -918,6 +984,7 @@ impl From<StoredStorage> for StorageConfig {
             later_dir: value.later_dir,
             artifacts_dir,
             summaries_dir: value.summaries_dir,
+            knowledge_base_dir: value.knowledge_base_dir,
         }
     }
 }
@@ -1007,6 +1074,7 @@ impl StoredConfig {
     fn from_snapshot(
         value: &ConfigSnapshot,
         root_identity: Option<String>,
+        knowledge_base_identity: Option<String>,
         agent: &AgentView,
         retired_adapter_contracts: Vec<serde_json::Value>,
         adapter_extensions: BTreeMap<String, toml::Value>,
@@ -1017,13 +1085,14 @@ impl StoredConfig {
             // the picker grant for a new root. This marks the root's M1 origin.
             root_picker_confirmed: value.storage.is_some(),
             root_identity,
+            knowledge_base_identity,
             capture_enabled: value.capture_enabled,
-            sites: value.sites.clone(),
+            _sites: None,
             strip_params: value.strip_params.clone(),
             _near_repeat_secs: None,
-            agent_denylist: value.agent_denylist.clone(),
-            agent_denylist_confirmed: value.agent_denylist_confirmed,
-            log_incognito: value.log_incognito,
+            _agent_denylist: None,
+            _agent_denylist_confirmed: None,
+            _log_incognito: None,
             // The harness entry and record come from the host's own view,
             // never from the extension's snapshot.
             agent: agent.table.clone(),
@@ -1043,11 +1112,7 @@ impl From<StoredConfig> for ConfigSnapshot {
         Self {
             storage: value.storage.map(StorageConfig::from),
             capture_enabled: value.capture_enabled,
-            sites: value.sites,
             strip_params: value.strip_params,
-            agent_denylist: value.agent_denylist,
-            agent_denylist_confirmed: value.agent_denylist_confirmed,
-            log_incognito: value.log_incognito,
             agent: None,
             adapters: AdapterDocument {
                 format: value.adapters.format,
@@ -1075,6 +1140,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 issue: None,
                 needs_backup: false,
                 root_identity: None,
+                knowledge_base_identity: None,
                 agent: AgentView::default(),
                 adapter_extensions: BTreeMap::new(),
                 retired_adapter_contracts: Vec::new(),
@@ -1115,6 +1181,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             issue: Some("Configuration exceeds 64 KiB. Choose a notes folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
+            knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
@@ -1126,6 +1193,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
     match parsed {
         Ok(mut stored) => {
             let root_identity = stored.root_identity.clone();
+            let knowledge_base_identity = stored.knowledge_base_identity.clone();
             let retired_adapter_contracts = std::mem::take(&mut stored.adapter_id_history);
             let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
             let root_unconfirmed = stored.storage.is_some()
@@ -1145,6 +1213,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     issue: Some(issue.to_owned()),
                     needs_backup: true,
                     root_identity: None,
+                    knowledge_base_identity: None,
                     agent,
                     adapter_extensions: BTreeMap::new(),
                     retired_adapter_contracts: Vec::new(),
@@ -1168,6 +1237,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 issue: folder_changed.then(|| "The selected notes folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned()),
                 needs_backup: false,
                 root_identity,
+                knowledge_base_identity,
                 agent,
                 adapter_extensions,
                 retired_adapter_contracts,
@@ -1179,6 +1249,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             issue: Some("Configuration is invalid or from a newer version. Choose a notes folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
+            knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
@@ -1311,11 +1382,7 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
     ConfigSnapshot {
         storage: None,
         capture_enabled: false,
-        sites: Vec::new(),
         strip_params: default_strip_params(),
-        agent_denylist: Vec::new(),
-        agent_denylist_confirmed: false,
-        log_incognito: false,
         agent: None,
         adapters: AdapterDocument {
             format: 1,
@@ -1353,12 +1420,6 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
 }
 
 pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
-    if config.sites.len() > MAX_SITES {
-        bail!("site allowlist exceeds the 128-entry limit");
-    }
-    for site in &config.sites {
-        validate_site(site)?;
-    }
     if config.strip_params.len() > MAX_STRIP_PARAMS {
         bail!("tracking-parameter list exceeds the 64-entry limit");
     }
@@ -1375,13 +1436,9 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
             bail!("tracking parameters must be simple names or prefix patterns ending in *");
         }
     }
-    if config.capture_enabled && (config.storage.is_none() || config.sites.is_empty()) {
-        bail!("capture requires a selected notes folder and at least one site");
+    if config.capture_enabled && config.storage.is_none() {
+        bail!("capture requires a selected notes folder");
     }
-    if config.log_incognito {
-        bail!("log_incognito cannot be turned on");
-    }
-    privacy::validate_denylist(&config.agent_denylist)?;
     if let Some(agent) = &config.agent {
         validate_agent(agent)?;
     }
@@ -1398,20 +1455,29 @@ fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
 }
 
 fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
-    let document = compile_adapters(config)?;
-    for (index, adapter) in document.adapters().iter().enumerate() {
-        if !config
-            .sites
-            .iter()
-            .any(|site| site.origin == adapter.origin())
-        {
-            bail!(
-                "adapter {index} uses origin {:?}, which is not enabled for capture",
-                adapter.origin()
-            );
+    compile_adapters(config)
+}
+
+/// The origins automatic capture may record: the distinct origins of the
+/// config's adapters. A site is on exactly when it has an adapter. An adapter
+/// document that does not validate yields no origins, so capture stays off.
+/// The host itself reads `ConfigStore::capture_origins`, which reuses the
+/// document already compiled for the current revision.
+#[cfg(test)]
+pub(crate) fn capture_origins(config: &ConfigSnapshot) -> Vec<String> {
+    compile_validated_adapters(config)
+        .map(|document| document_origins(&document))
+        .unwrap_or_default()
+}
+
+fn document_origins(document: &AdapterTemplates) -> Vec<String> {
+    let mut origins = Vec::new();
+    for adapter in document.adapters() {
+        if !origins.iter().any(|origin| origin == adapter.origin()) {
+            origins.push(adapter.origin().to_owned());
         }
     }
-    Ok(document)
+    origins
 }
 
 pub(crate) fn adapter_policy_valid(config: &ConfigSnapshot) -> bool {
@@ -1716,66 +1782,6 @@ fn validate_persisted(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
-fn validate_site(site: &SiteConfig) -> Result<()> {
-    if site.origin.len() > 2048 || site.path_prefix.len() > 2048 {
-        bail!("site allowlist entry is too long");
-    }
-    let parsed = Url::parse(&site.origin).context("site origin is invalid")?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.origin().ascii_serialization() != site.origin
-    {
-        bail!("site origin must be an exact HTTP(S) scheme, host, and optional port");
-    }
-    if !site.path_prefix.starts_with('/')
-        || !site.path_prefix.bytes().all(|byte| byte.is_ascii_graphic())
-        || !valid_percent_encoding(&site.path_prefix)
-        || site.path_prefix.contains("//")
-        || (site.path_prefix != "/" && site.path_prefix.ends_with('/'))
-        || site.path_prefix.contains('?')
-        || site.path_prefix.contains('#')
-        || site.path_prefix.contains('\\')
-        || site
-            .path_prefix
-            .split('/')
-            .any(|part| part == "." || part == "..")
-    {
-        bail!("site path prefix must be an absolute URL path without query or traversal");
-    }
-    let full = Url::parse(&format!("{}{}", site.origin, site.path_prefix))
-        .context("site path prefix is invalid")?;
-    if full.path() != site.path_prefix {
-        bail!("site path prefix must use canonical URL encoding");
-    }
-    Ok(())
-}
-
-fn valid_percent_encoding(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        if bytes[offset] == b'%' {
-            if bytes
-                .get(offset + 1)
-                .is_none_or(|value| !value.is_ascii_hexdigit())
-                || bytes
-                    .get(offset + 2)
-                    .is_none_or(|value| !value.is_ascii_hexdigit())
-            {
-                return false;
-            }
-            offset += 3;
-        } else {
-            offset += 1;
-        }
-    }
-    true
-}
-
 fn validate_storage(storage: &StorageConfig) -> Result<()> {
     if storage.root.len() > MAX_ROOT_PATH_BYTES {
         bail!("storage.root exceeds the 4096-byte path limit");
@@ -1786,6 +1792,23 @@ fn validate_storage(storage: &StorageConfig) -> Result<()> {
     let root = Path::new(&storage.root);
     if !root.is_absolute() {
         bail!("storage.root must be an existing absolute folder selected by the user");
+    }
+    // The knowledge base is its own user-selected folder, read only by the
+    // summary agent. It may hold or sit inside the notes folder.
+    if let Some(knowledge_base) = &storage.knowledge_base_dir {
+        if knowledge_base.len() > MAX_ROOT_PATH_BYTES {
+            bail!("storage.knowledge_base_dir exceeds the 4096-byte path limit");
+        }
+        if has_unsafe_display_chars(knowledge_base) {
+            bail!(
+                "knowledge base folder path contains control or bidirectional formatting characters"
+            );
+        }
+        if !Path::new(knowledge_base).is_absolute() {
+            bail!(
+                "storage.knowledge_base_dir must be an existing absolute folder selected by the user"
+            );
+        }
     }
     if storage.profile != "neutral" {
         bail!("storage.profile must be neutral until the Obsidian preset is implemented");
@@ -1988,7 +2011,7 @@ pub(crate) mod fixtures {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist = [\"bank.example\"]\nagent_denylist_confirmed = true",
+            "",
             &format!("{}{}", agent_table(&binary), record_table(&binary)),
         );
         (path, root, binary)
@@ -2069,12 +2092,8 @@ mod tests {
         })
     }
 
-    fn adapter_config(origin: &str, artifacts: Vec<serde_json::Value>) -> ConfigSnapshot {
+    fn adapter_config(artifacts: Vec<serde_json::Value>) -> ConfigSnapshot {
         ConfigSnapshot {
-            sites: vec![SiteConfig {
-                origin: origin.into(),
-                path_prefix: "/".into(),
-            }],
             adapters: AdapterDocument {
                 format: 1,
                 artifacts,
@@ -2109,10 +2128,154 @@ mod tests {
     }
 
     #[test]
-    fn m1_config_without_new_keys_loads_unconfirmed() {
+    fn v5_storage_without_knowledge_base_dir_loads_as_null_and_follows_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert_eq!(
+            store
+                .snapshot()
+                .storage
+                .as_ref()
+                .unwrap()
+                .knowledge_base_dir,
+            None
+        );
+        assert_eq!(store.knowledge_base_dir().unwrap(), root);
+        assert_eq!(store.knowledge_base_identity(), store.root_identity());
+    }
+
+    #[test]
+    fn relative_knowledge_base_dir_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ConfigSnapshot {
+            storage: Some(StorageConfig {
+                root: dir.path().to_string_lossy().into_owned(),
+                profile: "neutral".into(),
+                log_dir: "log".into(),
+                pages_dir: "pages".into(),
+                later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
+                summaries_dir: None,
+                knowledge_base_dir: Some("kb".into()),
+            }),
+            ..empty_config()
+        };
+        assert!(validate_base(&config).is_err());
+        let storage = config.storage.as_mut().unwrap();
+        storage.knowledge_base_dir = Some(format!("/{}", "k".repeat(MAX_ROOT_PATH_BYTES)));
+        assert!(validate_base(&config).is_err());
+        let storage = config.storage.as_mut().unwrap();
+        storage.knowledge_base_dir = Some("/kb\u{202e}".into());
+        assert!(validate_base(&config).is_err());
+        let storage = config.storage.as_mut().unwrap();
+        // The knowledge base may be, hold, or sit inside the notes folder.
+        storage.knowledge_base_dir = Some(storage.root.clone());
+        validate_base(&config).unwrap();
+    }
+
+    #[test]
+    fn knowledge_base_dir_needs_its_own_picker_identity_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        let knowledge_base = dir.path().join("kb");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&knowledge_base).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        next.storage.as_mut().unwrap().knowledge_base_dir =
+            Some(knowledge_base.to_string_lossy().into_owned());
+        let revision = store.revision().to_owned();
+        // The notes folder's identity does not vouch for another folder.
+        let root_identity = store.root_identity().unwrap().to_owned();
+        assert!(
+            store
+                .update_with_grants(next.clone(), &revision, None, Some(&root_identity), None)
+                .is_err()
+        );
+        assert!(store.update(next.clone(), &revision).is_err());
+
+        let identity = selected_root_identity(&knowledge_base).unwrap();
+        store
+            .update_with_grants(next.clone(), &revision, None, Some(&identity), None)
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("knowledge_base_identity"), "{text}");
+        let mut reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot(), &next);
+        assert_eq!(reloaded.knowledge_base_dir().unwrap(), knowledge_base);
+        assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
+
+        // An unrelated save keeps the stored identity without a new grant.
+        let mut unrelated = next.clone();
+        unrelated.capture_enabled = true;
+        let revision = reloaded.revision().to_owned();
+        reloaded.update(unrelated, &revision).unwrap().unwrap();
+        assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
+
+        // Following the notes folder again drops the host-only identity.
+        let mut follow = reloaded.snapshot().clone();
+        follow.storage.as_mut().unwrap().knowledge_base_dir = None;
+        let revision = reloaded.revision().to_owned();
+        reloaded.update(follow, &revision).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("knowledge_base"), "{text}");
+        assert_eq!(reloaded.knowledge_base_dir().unwrap(), root);
+    }
+
+    #[test]
+    fn a_missing_knowledge_base_folder_does_not_block_unrelated_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        let knowledge_base = dir.path().join("kb");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&knowledge_base).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        next.storage.as_mut().unwrap().knowledge_base_dir =
+            Some(knowledge_base.to_string_lossy().into_owned());
+        let identity = selected_root_identity(&knowledge_base).unwrap();
+        let revision = store.revision().to_owned();
+        store
+            .update_with_grants(next.clone(), &revision, None, Some(&identity), None)
+            .unwrap()
+            .unwrap();
+
+        fs::remove_dir(&knowledge_base).unwrap();
+        let mut reloaded = loaded(&path);
+        assert_eq!(reloaded.config_issue(), None);
+        let mut paused = reloaded.snapshot().clone();
+        paused.capture_enabled = !paused.capture_enabled;
+        let revision = reloaded.revision().to_owned();
+        reloaded.update(paused.clone(), &revision).unwrap().unwrap();
+        assert_eq!(reloaded.snapshot(), &paused);
+        assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("knowledge_base_identity"), "{text}");
+
+        // A fresh selection still has to match the folder on disk.
+        let revision = reloaded.revision().to_owned();
+        assert!(
+            reloaded
+                .update_with_grants(paused, &revision, None, Some(&identity), None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn m1_config_without_new_keys_loads_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        // An M1 file: storage without summaries_dir and no privacy keys.
+        // An M1 file: storage without summaries_dir and no agent keys.
         fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
         let store = loaded(&path);
         assert_eq!(store.config_issue(), None);
@@ -2123,16 +2286,13 @@ mod tests {
             snapshot.storage.as_ref().unwrap().artifacts_dir,
             "artifacts"
         );
-        assert!(snapshot.agent_denylist.is_empty());
-        assert!(!snapshot.agent_denylist_confirmed);
-        assert!(!snapshot.log_incognito);
         assert_eq!(snapshot.agent, None);
         assert_eq!(snapshot.adapters.format, 1);
         assert!(snapshot.adapters.artifacts.is_empty());
         assert_eq!(store.adapter_issue(), None);
         assert_eq!(
             refusal(&store),
-            (ErrorCode::NotConfigured, SET_UP_AGENT.into())
+            (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
         );
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
     }
@@ -2195,7 +2355,7 @@ mod tests {
     }
 
     #[test]
-    fn adapter_config_requires_an_enabled_origin_and_shared_origin_scope() {
+    fn adapter_config_needs_no_site_entry_but_requires_shared_origin_scope() {
         let jira = adapter(
             "https://acme.atlassian.net",
             "jira.issue",
@@ -2205,13 +2365,16 @@ mod tests {
         let without_site = ConfigSnapshot {
             adapters: AdapterDocument {
                 format: 1,
-                artifacts: vec![jira.clone()],
+                artifacts: vec![jira],
             },
             ..empty_config()
         };
-        let error = validate(&without_site).unwrap_err().to_string();
-        assert!(error.contains("not enabled for capture"), "{error}");
-        validate(&adapter_config("https://acme.atlassian.net", vec![jira])).unwrap();
+        // An adapter turns its site on; there is no separate site entry.
+        validate(&without_site).unwrap();
+        assert_eq!(
+            capture_origins(&without_site),
+            vec!["https://acme.atlassian.net".to_owned()]
+        );
 
         let github = adapter(
             "https://github.com",
@@ -2219,34 +2382,31 @@ mod tests {
             "/{owner:name|lower}/{repo:name}/issues/{number:int}",
             "github.issue:{host}/{owner}/{repo}/{number}",
         );
-        let error = validate(&adapter_config("https://github.com", vec![github.clone()]))
+        let error = validate(&adapter_config(vec![github.clone()]))
             .unwrap_err()
             .to_string();
         assert!(error.contains("shared_origin_unscoped"), "{error}");
         let mut acknowledged = github;
         acknowledged["unscoped"] = json!("acknowledged");
-        validate(&adapter_config("https://github.com", vec![acknowledged])).unwrap();
+        validate(&adapter_config(vec![acknowledged])).unwrap();
     }
 
     #[test]
     fn adapter_overlap_warnings_name_both_rules() {
-        let config = adapter_config(
-            "https://work.example",
-            vec![
-                adapter(
-                    "https://work.example",
-                    "work.issue",
-                    "/issues/{id:int}",
-                    "work.issue:{host}/{id}",
-                ),
-                adapter(
-                    "https://work.example",
-                    "work.ticket",
-                    "/issues/{id:int}",
-                    "work.ticket:{host}/{id}",
-                ),
-            ],
-        );
+        let config = adapter_config(vec![
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.ticket",
+                "/issues/{id:int}",
+                "work.ticket:{host}/{id}",
+            ),
+        ]);
         assert_eq!(
             validate_adapters(&config).unwrap(),
             vec![AdapterWarning {
@@ -2263,23 +2423,20 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let config = adapter_config(
-            "https://work.example",
-            vec![
-                adapter(
-                    "https://work.example",
-                    "work.issue",
-                    "/issues/{id:int}",
-                    "work.issue:{host}/{id}",
-                ),
-                adapter(
-                    "https://work.example",
-                    "work.ticket",
-                    "/issues/{id:int}",
-                    "work.ticket:{host}/{id}",
-                ),
-            ],
-        );
+        let config = adapter_config(vec![
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.ticket",
+                "/issues/{id:int}",
+                "work.ticket:{host}/{id}",
+            ),
+        ]);
         store.update(config, MISSING_REVISION).unwrap().unwrap();
         let mut store = loaded(&path);
 
@@ -2311,24 +2468,18 @@ mod tests {
 
     #[test]
     fn existing_adapter_id_template_cannot_change_before_migrations_exist() {
-        let current = adapter_config(
+        let current = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
-        let next = adapter_config(
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
+        let next = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.ticket:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.ticket:{host}/{id}",
+        )]);
         validate(&next).unwrap();
         let error = validate_adapter_transition(&current, &next)
             .unwrap_err()
@@ -2354,12 +2505,12 @@ mod tests {
             "/tickets/{id:int}",
             "work.issue:{host}/ticket/{id}",
         );
-        let current = adapter_config("https://work.example", vec![first.clone(), second.clone()]);
+        let current = adapter_config(vec![first.clone(), second.clone()]);
         validate(&current).unwrap();
 
         // Adapter order is policy precedence, not adapter identity. Reordering
         // two same-type adapters does not change either durable ID contract.
-        let reordered = adapter_config("https://work.example", vec![second, first]);
+        let reordered = adapter_config(vec![second, first]);
         validate(&reordered).unwrap();
         validate_adapter_transition(&current, &reordered).unwrap();
     }
@@ -2378,25 +2529,22 @@ mod tests {
             "/tickets/{id:int}",
             "work.issue:{host}/ticket/{id}",
         );
-        let current = adapter_config("https://work.example", vec![survivor.clone(), removed]);
-        let next = adapter_config("https://work.example", vec![survivor.clone()]);
+        let current = adapter_config(vec![survivor.clone(), removed]);
+        let next = adapter_config(vec![survivor.clone()]);
         validate(&current).unwrap();
         validate(&next).unwrap();
 
         validate_adapter_transition(&current, &next).unwrap();
 
-        let changed = adapter_config(
-            "https://work.example",
-            vec![
-                survivor,
-                adapter(
-                    "https://work.example",
-                    "work.issue",
-                    "/tickets/{id:int}",
-                    "work.issue:{host}/changed/{id}",
-                ),
-            ],
-        );
+        let changed = adapter_config(vec![
+            survivor,
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/tickets/{id:int}",
+                "work.issue:{host}/changed/{id}",
+            ),
+        ]);
         validate(&changed).unwrap();
         assert!(validate_adapter_transition(&current, &changed).is_err());
     }
@@ -2406,28 +2554,22 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let original = adapter_config(
+        let original = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         let revision = store
             .update(original.clone(), MISSING_REVISION)
             .unwrap()
             .unwrap();
-        let remapped = adapter_config(
+        let remapped = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.ticket",
-                "/issues/{id:int}",
-                "work.ticket:{host}/{id}",
-            )],
-        );
+            "work.ticket",
+            "/issues/{id:int}",
+            "work.ticket:{host}/{id}",
+        )]);
         let direct_error = store
             .update(remapped.clone(), &revision)
             .unwrap_err()
@@ -2436,22 +2578,19 @@ mod tests {
             direct_error.contains("cannot change until artifact migrations"),
             "{direct_error}"
         );
-        let type_only = adapter_config(
+        let type_only = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.ticket",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.ticket",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         let type_error = store.update(type_only, &revision).unwrap_err().to_string();
         assert!(
             type_error.contains("cannot change until artifact migrations"),
             "{type_error}"
         );
 
-        let removed = adapter_config("https://work.example", Vec::new());
+        let removed = adapter_config(Vec::new());
         let revision = store.update(removed, &revision).unwrap().unwrap();
         assert!(
             fs::read_to_string(&store.path)
@@ -2470,15 +2609,12 @@ mod tests {
             "{error}"
         );
 
-        let disjoint = adapter_config(
+        let disjoint = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.ticket",
-                "/tickets/{id:int}",
-                "work.ticket:{host}/{id}",
-            )],
-        );
+            "work.ticket",
+            "/tickets/{id:int}",
+            "work.ticket:{host}/{id}",
+        )]);
         let revision = restarted.update(disjoint, &revision).unwrap().unwrap();
         restarted.update(original, &revision).unwrap().unwrap();
     }
@@ -2501,17 +2637,11 @@ mod tests {
             "work.issue:{host}/{id}",
         );
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![original.clone()]),
-                MISSING_REVISION,
-            )
+            .update(adapter_config(vec![original.clone()]), MISSING_REVISION)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![moved.clone()]),
-                &revision,
-            )
+            .update(adapter_config(vec![moved.clone()]), &revision)
             .unwrap()
             .unwrap();
 
@@ -2522,10 +2652,7 @@ mod tests {
             "work.issue:{host}/changed/{id}",
         );
         let error = store
-            .update(
-                adapter_config("https://work.example", vec![moved, remapped]),
-                &revision,
-            )
+            .update(adapter_config(vec![moved, remapped]), &revision)
             .unwrap_err()
             .to_string();
         assert!(
@@ -2552,31 +2679,19 @@ mod tests {
             "work.issue:{host}/{id}",
         );
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![original]),
-                MISSING_REVISION,
-            )
+            .update(adapter_config(vec![original]), MISSING_REVISION)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", Vec::new()),
-                &revision,
-            )
+            .update(adapter_config(Vec::new()), &revision)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![disjoint]),
-                &revision,
-            )
+            .update(adapter_config(vec![disjoint]), &revision)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", Vec::new()),
-                &revision,
-            )
+            .update(adapter_config(Vec::new()), &revision)
             .unwrap()
             .unwrap();
 
@@ -2587,10 +2702,7 @@ mod tests {
             "work.issue:{host}/changed/{id}",
         );
         let error = store
-            .update(
-                adapter_config("https://work.example", vec![remapped]),
-                &revision,
-            )
+            .update(adapter_config(vec![remapped]), &revision)
             .unwrap_err()
             .to_string();
         assert!(
@@ -2661,7 +2773,7 @@ mod tests {
 
         let revision = store.revision().to_owned();
         let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
+            strip_params: vec!["utm_*".into()],
             ..store.snapshot().clone()
         };
         store.update(next, &revision).unwrap().unwrap();
@@ -2733,7 +2845,7 @@ mod tests {
         let mut store = loaded(&path);
         let revision = store.revision().to_owned();
         let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
+            strip_params: vec!["utm_*".into()],
             ..store.snapshot().clone()
         };
 
@@ -2741,7 +2853,7 @@ mod tests {
 
         let mut reloaded = loaded(&path);
         assert_eq!(reloaded.snapshot().adapters.format, 2);
-        assert_eq!(reloaded.snapshot().agent_denylist, ["bank.example"]);
+        assert_eq!(reloaded.snapshot().strip_params, ["utm_*"]);
         assert!(reloaded.adapter_issue().is_some());
 
         let revision = reloaded.revision().to_owned();
@@ -2765,15 +2877,12 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let original = adapter_config(
+        let original = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         store.update(original, MISSING_REVISION).unwrap().unwrap();
         let text = fs::read_to_string(&path).unwrap();
         fs::write(&path, text.replacen("format = 1", "format = 2", 1)).unwrap();
@@ -2789,15 +2898,12 @@ mod tests {
         };
         let revision = store.revision().to_owned();
         let revision = store.update(reset, &revision).unwrap().unwrap();
-        let remapped = adapter_config(
+        let remapped = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/changed/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/changed/{id}",
+        )]);
 
         let error = store.update(remapped, &revision).unwrap_err().to_string();
         assert!(
@@ -2813,15 +2919,12 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let mut config = adapter_config(
+        let mut config = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         config.storage = Some(StorageConfig {
             root: root.to_string_lossy().into_owned(),
             profile: "neutral".into(),
@@ -2830,6 +2933,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         });
         let identity = selected_root_identity(&root).unwrap();
         store
@@ -2845,40 +2949,119 @@ mod tests {
     }
 
     #[test]
-    fn log_incognito_true_is_rejected_and_on_disk_true_is_recoverable() {
-        let config = ConfigSnapshot {
-            log_incognito: true,
-            ..empty_config()
-        };
-        assert!(validate(&config).is_err());
-
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("config.toml");
-        fixtures::write(&path, folder.path(), "", "log_incognito = true", "");
+    fn v5_config_with_retired_privacy_keys_loads_and_drops_them_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "agent_denylist = [\"bank.example\"]\nagent_denylist_confirmed = true\nlog_incognito = true",
+            "",
+        );
         let mut store = loaded(&path);
-        assert!(store.config_issue().is_some());
-        assert!(!store.configured());
-        let revision = store.revision().to_owned();
-        let repaired = ConfigSnapshot {
-            storage: Some(StorageConfig {
-                root: folder.path().to_string_lossy().into_owned(),
-                profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
-                later_dir: "later".into(),
-                artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
-            }),
-            ..empty_config()
-        };
-        let identity = selected_root_identity(folder.path()).unwrap();
+        assert_eq!(store.config_issue(), None);
+        assert!(store.configured());
+        assert_eq!(backup_count(dir.path()), 0);
+        let rev = store.revision().to_owned();
         store
-            .update_with_root_identity(repaired, &revision, Some(&identity))
+            .update(store.snapshot().clone(), &rev)
             .unwrap()
             .unwrap();
-        let store = loaded(&path);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("agent_denylist") && !text.contains("log_incognito"));
+    }
+
+    #[test]
+    fn v5_sites_key_is_accepted_and_dropped_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/allowed\" }]",
+            "",
+        );
+        let mut store = loaded(&path);
         assert_eq!(store.config_issue(), None);
-        assert!(!store.snapshot().log_incognito);
+        assert!(store.configured());
+        assert!(store.snapshot().capture_enabled);
+        assert_eq!(backup_count(dir.path()), 0);
+        let rev = store.revision().to_owned();
+        store
+            .update(store.snapshot().clone(), &rev)
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sites"), "{text}");
+        assert!(!text.contains("path_prefix"), "{text}");
+    }
+
+    #[test]
+    fn capture_enabled_needs_only_a_notes_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = StorageConfig {
+            root: dir.path().to_string_lossy().into_owned(),
+            profile: "neutral".into(),
+            log_dir: "log".into(),
+            pages_dir: "pages".into(),
+            later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
+            summaries_dir: None,
+            knowledge_base_dir: None,
+        };
+        let enabled = ConfigSnapshot {
+            storage: Some(storage),
+            capture_enabled: true,
+            ..empty_config()
+        };
+        validate_base(&enabled).unwrap();
+        validate(&enabled).unwrap();
+        let no_folder = ConfigSnapshot {
+            capture_enabled: true,
+            ..empty_config()
+        };
+        let error = validate_base(&no_folder).unwrap_err().to_string();
+        assert!(error.contains("notes folder"), "{error}");
+    }
+
+    #[test]
+    fn capture_origins_are_the_distinct_adapter_origins() {
+        let config = adapter_config(vec![
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.page",
+                "/pages/{id:int}",
+                "work.page:{host}/{id}",
+            ),
+            adapter(
+                "https://other.example",
+                "other.issue",
+                "/issues/{id:int}",
+                "other.issue:{host}/{id}",
+            ),
+        ]);
+        let mut origins = capture_origins(&config);
+        origins.sort();
+        assert_eq!(
+            origins,
+            vec![
+                "https://other.example".to_owned(),
+                "https://work.example".to_owned()
+            ]
+        );
+        assert!(capture_origins(&empty_config()).is_empty());
     }
 
     #[test]
@@ -2889,7 +3072,7 @@ mod tests {
             &path,
             folder.path(),
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             "[agent]\ndefault = \"claude-code\"\n[agent.harnesses.claude-code]\nbinary = \"claude\"\nargs = [\"{prompt}\"]\n",
         );
         let mut store = loaded(&path);
@@ -2923,6 +3106,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: Some("pages/summaries".into()),
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
         storage.summaries_dir = Some("log".into());
@@ -2946,6 +3130,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: Some("Pages".into()),
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
     }
@@ -2963,6 +3148,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: Some("ασ".into()),
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
         storage.pages_dir = "pages".into();
@@ -2978,7 +3164,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn agent_readiness_is_ready_with_confirmed_denylist_and_unchanged_harness() {
+    fn agent_readiness_is_ready_with_committed_and_unchanged_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, binary) = fixtures::ready(folder.path());
         let store = loaded(&path);
@@ -3015,7 +3201,7 @@ mod tests {
     }
 
     #[test]
-    fn update_without_commit_cannot_confirm_or_set_a_harness() {
+    fn update_without_commit_cannot_set_a_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, root, _) = fixtures::ready(folder.path());
         let agent = loaded(&path).snapshot().agent.clone().unwrap();
@@ -3023,36 +3209,16 @@ mod tests {
         let mut store = loaded(&path);
         let revision = store.revision().to_owned();
         let before = fs::read(&path).unwrap();
-        for next in [
-            ConfigSnapshot {
-                agent_denylist_confirmed: true,
-                ..store.snapshot().clone()
-            },
-            ConfigSnapshot {
-                agent: Some(agent.clone()),
-                ..store.snapshot().clone()
-            },
-        ] {
-            assert!(store.update(next, &revision).is_err());
-        }
+        let next = ConfigSnapshot {
+            agent: Some(agent),
+            ..store.snapshot().clone()
+        };
+        assert!(store.update(next, &revision).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]
-    fn update_without_commit_cannot_unconfirm_the_denylist() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = fixtures::ready(folder.path());
-        let mut store = loaded(&path);
-        let revision = store.revision().to_owned();
-        let next = ConfigSnapshot {
-            agent_denylist_confirmed: false,
-            ..store.snapshot().clone()
-        };
-        assert!(store.update(next, &revision).is_err());
-    }
-
-    #[test]
-    fn removing_harness_keeps_denylist_confirmed() {
+    fn removing_harness_leaves_ai_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, _) = fixtures::ready(folder.path());
         let mut store = loaded(&path);
@@ -3066,11 +3232,6 @@ mod tests {
         assert!(!contents.contains("[agent"));
         assert!(!contents.contains("[harness_record]"));
         let store = loaded(&path);
-        assert!(store.snapshot().agent_denylist_confirmed);
-        assert_eq!(
-            store.snapshot().agent_denylist,
-            vec!["bank.example".to_owned()]
-        );
         assert_eq!(
             refusal(&store),
             (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
@@ -3158,7 +3319,7 @@ mod tests {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             &format!(
                 "{}{}",
                 fixtures::harness_table("codex", &binary, &harness::codex_args("0.144.4").unwrap()),
@@ -3174,7 +3335,7 @@ mod tests {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             &format!(
                 "{}{}",
                 fixtures::harness_table("codex", &binary, &harness::codex_args("0.144.4").unwrap()),
@@ -3226,7 +3387,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_readiness_refuses_unconfirmed() {
+    fn v5_unconfirmed_denylist_key_no_longer_blocks_a_committed_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, root, binary) = fixtures::ready(folder.path());
         fixtures::write(
@@ -3241,14 +3402,9 @@ mod tests {
             ),
         );
         let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
         assert!(store.snapshot().agent.is_some());
-        assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, CONFIRM_DENYLIST.into())
-        );
-        let status = store.agent_status();
-        assert_eq!(status.state, AgentState::DenylistUnconfirmed);
-        assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
+        assert_ready_here(&store, "claude-code", "2.1.284");
     }
 
     #[test]
@@ -3259,7 +3415,7 @@ mod tests {
             &path,
             folder.path(),
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             "",
         );
         let store = loaded(&path);
@@ -3278,7 +3434,7 @@ mod tests {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             &fixtures::agent_table(&binary),
         );
         let store = loaded(&path);
@@ -3292,7 +3448,7 @@ mod tests {
             &path,
             &root,
             "",
-            "agent_denylist_confirmed = true",
+            "",
             &format!(
                 "{}{}",
                 fixtures::agent_table(&binary),
@@ -3306,7 +3462,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_commit_writes_entry_record_and_confirmation_in_one_write() {
+    fn harness_commit_writes_entry_and_record_in_one_write() {
         let folder = tempfile::tempdir().unwrap();
         let (path, root, binary) = fixtures::ready(folder.path());
         let record: HarnessRecord = loaded(&path).agent.record.clone().unwrap();
@@ -3314,7 +3470,6 @@ mod tests {
         let mut store = loaded(&path);
         let revision = store.revision().to_owned();
         let next = ConfigSnapshot {
-            agent_denylist_confirmed: true,
             agent: Some(claude(&binary)),
             ..store.snapshot().clone()
         };
@@ -3330,7 +3485,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
         assert!(
             store
-                .update_with_grants(next.clone(), &revision, None, Some(stale))
+                .update_with_grants(next.clone(), &revision, None, None, Some(stale))
                 .is_err()
         );
         assert_eq!(fs::read(&path).unwrap(), before);
@@ -3340,11 +3495,10 @@ mod tests {
             record,
         };
         store
-            .update_with_grants(next, &revision, None, Some(commit))
+            .update_with_grants(next, &revision, None, None, Some(commit))
             .unwrap()
             .unwrap();
         let store = loaded(&path);
-        assert!(store.snapshot().agent_denylist_confirmed);
         assert_eq!(store.snapshot().agent, Some(claude(&binary)));
         assert_ready_here(&store, "claude-code", "2.1.284");
     }
@@ -3354,17 +3508,10 @@ mod tests {
     fn committed(folder: &Path) -> (PathBuf, PathBuf, String) {
         let (path, root, binary) = fixtures::ready(folder);
         let record: HarnessRecord = loaded(&path).agent.record.clone().unwrap();
-        fixtures::write(
-            &path,
-            &root,
-            "summaries_dir = \"summaries\"",
-            "agent_denylist = [\"bank.example\"]",
-            "",
-        );
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
         let mut store = loaded(&path);
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
         let next = ConfigSnapshot {
-            agent_denylist_confirmed: true,
             agent: Some(claude(&binary)),
             ..store.snapshot().clone()
         };
@@ -3374,20 +3521,20 @@ mod tests {
         };
         let revision = store.revision().to_owned();
         let revision = store
-            .update_with_grants(next, &revision, None, Some(commit))
+            .update_with_grants(next, &revision, None, None, Some(commit))
             .unwrap()
             .unwrap();
         (path, binary, revision)
     }
 
     #[test]
-    fn harness_commit_writes_record_and_flag_in_one_revision() {
+    fn harness_commit_writes_entry_and_record_in_one_revision() {
         let folder = tempfile::tempdir().unwrap();
         let (path, binary, revision) = committed(folder.path());
         let text = fs::read_to_string(&path).unwrap();
-        // One serialization carries all three; the revision is of that file.
+        // One serialization carries both; the revision is of that file.
         assert_eq!(revision_for(text.as_bytes()), revision);
-        assert!(text.contains("agent_denylist_confirmed = true"), "{text}");
+        assert!(!text.contains("agent_denylist"), "{text}");
         assert!(text.contains("[agent"), "{text}");
         assert!(text.contains("[harness_record]"), "{text}");
         assert!(text.contains("probe_passed_at"), "{text}");
@@ -3422,7 +3569,6 @@ mod tests {
                 .iter()
                 .any(|value| value == "campaign")
         );
-        assert!(store.snapshot().agent_denylist_confirmed);
         assert_eq!(store.agent.record, record);
         assert_ready_here(&store, "claude-code", "2.1.284");
     }
@@ -3495,6 +3641,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             ..empty_config()
@@ -3561,6 +3708,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             ..empty_config()
@@ -3589,6 +3737,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             ..empty_config()
         };
@@ -3597,6 +3746,7 @@ mod tests {
             &path,
             toml::to_string(&StoredConfig::from_snapshot(
                 &next,
+                None,
                 None,
                 &AgentView::default(),
                 Vec::new(),
@@ -3638,6 +3788,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             ..empty_config()
         };
@@ -3672,7 +3823,7 @@ mod tests {
     #[test]
     fn remounted_or_missing_folder_keeps_settings_without_a_backup() {
         // An external or network volume can disappear, or come back with a
-        // new device number. Neither may wipe the site allowlist.
+        // new device number. Neither may wipe the saved settings.
         let base = tempfile::tempdir().unwrap();
         let root = base.path().join("selected");
         let away = base.path().join("away");
@@ -3688,12 +3839,9 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: true,
-            sites: vec![SiteConfig {
-                origin: "https://example.com".into(),
-                path_prefix: "/".into(),
-            }],
             ..empty_config()
         };
         let identity = selected_root_identity(&root).unwrap();
@@ -3812,6 +3960,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             ..empty_config()
@@ -3831,6 +3980,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
     }
@@ -3847,6 +3997,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
     }

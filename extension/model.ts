@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, AdapterDocument, OverflowMarker, SiteConfig, VisitEvent, VisitOutcome,
+  ActivityEvent, AdapterDocument, OverflowMarker, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
 import {
   compileDocument,
@@ -21,7 +21,7 @@ export interface PolicyLease {
   revision: string;
   expires_at: number;
   capture_enabled: boolean;
-  sites: SiteConfig[];
+  // Capture origins are the adapter origins; a v5 lease's `sites` is ignored.
   adapters: AdapterDocument;
 }
 
@@ -71,11 +71,12 @@ export interface WorkerStatus {
   last_error: string | null;
   retry_error: string | null;
   policy_expires_at: number | null;
-  revoked_origins: string[];
   pause_pending: boolean;
   pause_token: string | null;
-  navigation_ready: boolean;
-  locally_removed_sites: SiteConfig[];
+  // Origins an earlier build removed or saw revoked whose adapters the host
+  // config may still hold. Capture stays off for them until the settings page
+  // writes them out of the host config.
+  pending_removals: string[];
   // Why the worker's last background exchange with the host failed, or null
   // once one succeeds.
   host_error: string | null;
@@ -90,15 +91,13 @@ export type WorkerRequest =
   | { kind: "pause_capture" }
   | { kind: "get_pending_ids" }
   | { kind: "discard_pending"; event_ids: string[] }
-  | { kind: "remove_site"; site: SiteConfig }
   | { kind: "get_pending" }
   | { kind: "get_activity" }
   | { kind: "ack_visit"; event_id: string; outcome: VisitOutcome; reason: string | null }
   | { kind: "get_status" }
   | { kind: "sync_now" }
   | { kind: "clear_notices" }
-  | { kind: "ack_reenabled_origin"; origin: string; revision: string }
-  | { kind: "ack_revocations"; origins: string[] };
+  | { kind: "clear_pending_removals" };
 
 export interface WorkerReply<T> {
   ok: boolean;
@@ -135,41 +134,25 @@ export function localTimestamp(date: Date): string {
     `${sign}${pad(Math.floor(magnitude / 60))}:${pad(magnitude % 60)}`;
 }
 
-export function exactOriginPattern(origin: string): string {
-  const url = new URL(origin);
-  if (!isHttpUrl(url) || url.username || url.password || url.origin !== origin) {
-    throw new Error("Enter an exact HTTP(S) site origin");
-  }
-  // Chrome treats an omitted port as a wildcard. Spell out default ports too,
-  // so the browser grant matches the host's exact origin policy.
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
-  return `${url.protocol}//${url.hostname}:${port}/*`;
-}
-
 export function isHttpUrl(url: URL): boolean {
   return url.protocol === "http:" || url.protocol === "https:";
 }
 
-export function matchingSite(lease: PolicyLease, rawUrl: string): SiteConfig | null {
-  if (!lease.capture_enabled || lease.expires_at <= Date.now()) return null;
+/** Whether the lease allows automatic capture at all right now. */
+export function leaseActive(lease: PolicyLease, now = Date.now()): boolean {
+  return lease.capture_enabled && lease.expires_at > now;
+}
+
+/** Parse a URL automatic capture may consider: HTTP(S), no credentials. */
+export function captureUrl(raw: string): URL | null {
   let url: URL;
   try {
-    url = new URL(rawUrl);
+    url = new URL(raw);
   } catch {
     return null;
   }
   if (!isHttpUrl(url) || url.username || url.password) return null;
-  return (
-    lease.sites.find((site) => siteMatchesUrl(site, url)) ?? null
-  );
-}
-
-export function siteMatchesUrl(site: SiteConfig, url: URL): boolean {
-  if (site.origin !== url.origin) return false;
-  const prefix = site.path_prefix;
-  if (prefix === "/") return true;
-  if (prefix.endsWith("/")) return url.pathname.startsWith(prefix);
-  return url.pathname === prefix || url.pathname.startsWith(`${prefix}/`);
+  return url;
 }
 
 export function isPolicyLease(value: unknown): value is PolicyLease {
@@ -179,7 +162,6 @@ export function isPolicyLease(value: unknown): value is PolicyLease {
 function isPolicyLeaseShape(value: unknown): value is PolicyLease {
   if (typeof value !== "object" || value === null) return false;
   const lease = value as Record<string, unknown>;
-  const sites = lease.sites;
   const adapters = lease.adapters;
   return (
     typeof lease.revision === "string" &&
@@ -187,24 +169,12 @@ function isPolicyLeaseShape(value: unknown): value is PolicyLease {
     typeof lease.expires_at === "number" &&
     Number.isFinite(lease.expires_at) &&
     typeof lease.capture_enabled === "boolean" &&
-    Array.isArray(sites) &&
-    sites.every(
-      (site: unknown) =>
-        typeof site === "object" &&
-        site !== null &&
-        typeof (site as Record<string, unknown>).origin === "string" &&
-        typeof (site as Record<string, unknown>).path_prefix === "string",
-    ) &&
     typeof adapters === "object" &&
     adapters !== null &&
     Array.isArray((adapters as Record<string, unknown>).artifacts) &&
     ((adapters as Record<string, unknown>).artifacts as unknown[]).every((artifact) =>
       typeof artifact === "object" && artifact !== null &&
-      typeof (artifact as Record<string, unknown>).origin === "string" &&
-      sites.some((site: unknown) =>
-        typeof site === "object" && site !== null &&
-        (site as Record<string, unknown>).origin ===
-          (artifact as Record<string, unknown>).origin))
+      typeof (artifact as Record<string, unknown>).origin === "string")
   );
 }
 
@@ -216,7 +186,8 @@ type AdapterCompiler = (adapters: unknown) => CompileResult;
  * `install` always validates because extension messages are untrusted.
  * `restore` validates a stored lease once after worker startup and then trusts
  * the revision that the host minted, avoiding a full compile on every storage
- * read. The lease's site gate still runs before the compiled document is used.
+ * read. The lease's active and adapter-origin checks still run before the
+ * compiled document is used.
  */
 export class PolicyLeaseCache {
   private cached: { revision: string; doc: CompiledDocument } | null = null;

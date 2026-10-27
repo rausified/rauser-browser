@@ -469,26 +469,37 @@ pub struct Candidate {
 pub fn discover(env: &HarnessEnv) -> Vec<Candidate> {
     Adapter::ALL
         .into_iter()
-        .filter_map(|adapter| {
-            let found_at = find_on_path(&env.search_path, adapter.program())?;
-            let mut candidate = Candidate {
-                adapter,
-                harness_id: adapter.harness_id().to_owned(),
-                found_at,
-                identity: None,
-                version: None,
-                args: template_args(adapter),
-                env_names: proposed_env_names(adapter, env),
-                help_sha256: None,
-                confirmed_flags: Vec::new(),
-                refusal: None,
-            };
-            if let Err(refusal) = examine(&mut candidate, env) {
-                candidate.refusal = Some(refusal);
-            }
-            Some(candidate)
-        })
+        .filter_map(|adapter| discover_adapter(adapter, env))
         .collect()
+}
+
+/// [`discover`] for the one harness named `harness_id`, checking only it.
+/// `None` when no known harness has that ID or it is not on the search path.
+pub fn rediscover(env: &HarnessEnv, harness_id: &str) -> Option<Candidate> {
+    let adapter = Adapter::ALL
+        .into_iter()
+        .find(|adapter| adapter.harness_id() == harness_id)?;
+    discover_adapter(adapter, env)
+}
+
+fn discover_adapter(adapter: Adapter, env: &HarnessEnv) -> Option<Candidate> {
+    let found_at = find_on_path(&env.search_path, adapter.program())?;
+    let mut candidate = Candidate {
+        adapter,
+        harness_id: adapter.harness_id().to_owned(),
+        found_at,
+        identity: None,
+        version: None,
+        args: template_args(adapter),
+        env_names: proposed_env_names(adapter, env),
+        help_sha256: None,
+        confirmed_flags: Vec::new(),
+        refusal: None,
+    };
+    if let Err(refusal) = examine(&mut candidate, env) {
+        candidate.refusal = Some(refusal);
+    }
+    Some(candidate)
 }
 
 /// The first executable file with this name, like a shell's lookup.
