@@ -87,7 +87,7 @@ Agent runs are owned by a new per-user OS service (a macOS launchd agent) instal
 - **Retention.** Keep run directories for 30 days or the newest 200, whichever is more; summary files and log entries are permanent and unaffected.
 - **Config at write time (designer's call).** The service writes under the configuration current *when the run finishes*, not the one at `start_run`: it re-reads config under the config lock, re-derives the record key from the run's URL, and writes to the home folder's fixed `summaries/` folder (DESIGN.md §6.1, 2026-10-27). If the home folder is gone or unconfirmed, the run fails with Retry save. A key that changed mid-run (adapter edit) is followed, not refused; `status.json` records both the start key and the written key.
 - **Selection (designer's call).** `start_run`'s optional selection is passed to the agent as extra context ("the user highlighted this") inside `page.md`; it does not create a separate summary. One summary per record key.
-- **Finishing.** On success the service, not the agent, writes the summary file (§7.1) and appends the summary log event (§7.2) through the existing vault writers and ownership checks. If the write fails, the run is `failed` with the reason and `result.json` stays so the panel can offer Retry save (no rerun) and Copy.
+- **Finishing.** On success the service, not the agent, writes the summary file (§7.1) and appends the summary log event (§7.2) through the existing vault writers and ownership checks. If the write fails, the run is `failed` with the reason and `result.json` stays so the panel can offer Retry save (no rerun) and Copy. As built in PR 4 the reasons are plain sentences that end in what to do, the daily log's own refusal codes go to stderr only, and once the event is logged a failure to update the artifact index does not fail the save (the index catches up from the log).
 
 ### 5.3 Messages (protocol v6)
 
@@ -136,11 +136,14 @@ Type and category are open vocabularies seeded by the lists above (stored in con
 
 Location and identity follow DESIGN.md §5.2 as already specified: `summaries/<slug>.summary.md` (the fixed folder; per-folder settings were removed 2026-10-27), keyed by the same record key as the page note (so `/edit` and `/view` share it), host-written `brauser.kind: summary` ownership frontmatter, replaced whole on re-summarize, never adopting an unowned file. New content:
 
+As built in PR 4 (DESIGN.md §6.6), the identity block holds the canonical URL and exactly one key, `url_id` or `artifact_id`, rather than a `record_key` object; identity and other values are JSON-quoted; the page link is `[Page](<…>)` and the note link follows the profile (`[Page note](../notes/….md)` or `[[notes/…|Page note]]`); the **Entities** line lists only non-empty groups and is left out when all are empty; and **Related** appears only when the answer named related notes. The layout as specified:
+
 ```markdown
 ---
 brauser:
   kind: summary
-  record_key: …
+  canonical_url: …
+  url_id: …                   # or artifact_id: …
 canonical_url: https://…
 title: …
 summarized_at: 2026-10-26T14:05:00-07:00
@@ -174,7 +177,7 @@ Entity and related-note links use the notes profile's link style (DESIGN.md §6.
 
 ### 7.2 Log entry
 
-A new append-only `summary` event in the daily log (same owned-marker scheme as `activity`/`why`, with a canonical machine payload): time, canonical URL, title, record key, document type, category, importance, and a link to the summary file. One line per successful run; re-summarizing adds a new line and replaces the file. **A summarized page becomes an artifact (user decision, 2026-10-26).** When no adapter recognizes the page, the summary event creates or updates a `web.page` artifact (the index's existing `web.page` / `web:<host>/<url_id>` type in `host/src/index.rs`) keyed by the page's record key. It then behaves like any captured artifact: an artifact file in `artifacts/` (regenerated lazily, ownership-checked), a Timeline line per summary, a row in **Recent**, and worklog wording ("Summarized: <title> — specification, high importance"). The artifact file links to the summary file. On a page an adapter does recognize, the summary event attaches to that adapter's artifact instead. This is an explicit, per-click record, not automatic capture, so it does not conflict with the anti-goal in §2. This reverses DESIGN.md §5.2 step 5's "never creates a log entry".
+A new append-only `summary` event in the daily log (same owned-marker scheme as `activity`/`why`, with a canonical machine payload): time, canonical URL, title, record key, document type, category, importance, and a link to the summary file. As built in PR 4 the payload also carries `artifact_type`, `harness`, and the host-derived `artifact_id`, the event ID is the run ID, the link is a percent-encoded relative path, and the time is the answer's `answered_at` stamp in the click's `requested_at` offset, so a Retry save rebuilds the same line and it is written once (protocol/README.md). The event is logged while capture is paused, since it is an explicit action. One line per successful run; re-summarizing adds a new line and replaces the file. **A summarized page becomes an artifact (user decision, 2026-10-26).** When no adapter recognizes the page, the summary event creates or updates a `web.page` artifact (the index's existing `web.page` / `web:<host>/<url_id>` type in `host/src/index.rs`) keyed by the page's record key. It then behaves like any captured artifact: an artifact file in `artifacts/` (regenerated lazily, ownership-checked), a Timeline line per summary, a row in **Recent**, and worklog wording ("Summarized: <title> — specification, high importance"). The artifact file links to the summary file. On a page an adapter does recognize, the summary event attaches to that adapter's artifact instead. This is an explicit, per-click record, not automatic capture, so it does not conflict with the anti-goal in §2. This reverses DESIGN.md §5.2 step 5's "never creates a log entry". A summary is not measured activity: it never counts as an open or an opened day, though it can move the artifact's first and last seen. The artifact file shows the latest summary as a `Summary:` link line, and summary Timeline lines merge with the day rollups by local date.
 
 ### 7.3 Panel
 
@@ -182,6 +185,7 @@ A new append-only `summary` event in the daily log (same owned-marker scheme as 
 - Clicking extracts readable content with a bundled, pinned Readability-style library via `chrome.scripting.executeScript` in the top frame, then sends `start_run`.
 - A run card shows state, elapsed time, streamed text (rendered as text only, never HTML), Cancel, Open in Codex / Copy resume command, and on success the type/category/importance line with a link that opens the summary file. Failures show the reason and Copy; save failures add Retry save.
 - Cards for in-flight and recent runs are restored from `list_runs` when the panel opens. A page with an existing summary shows its type/category/importance line and an "open summary" link.
+- As built in PR 4 (DESIGN.md §5.7): the page's **Summary** line ("<type> · <category> · <importance> importance") and an **Open summary** button come from `get_artifact`'s nullable `summary`, which an unrecognized page also carries (and leaves null, without an error, when the lookup fails). A succeeded run card shows **Open summary** and, once its own `get_artifact` lookup answers, the same saved-summary line; a failed lookup is retried once. Summarized Recent rows add "Summarized · <type>, <importance> importance" and their own **Open summary**. Each sends `open_summary` with the page URL; the native host opens only the record's owned summary file with PR 3's desktop opener (`/usr/bin/open`), so it opens in the user's default Markdown app.
 
 ## 8. Constraints
 

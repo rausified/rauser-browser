@@ -189,7 +189,7 @@ Their line numbers predate step 6.6, so re-check them.
 order. They supersede the denylist, harness-token, `activeTab`, and per-site
 grant parts of the items below wherever those conflict. PR 1 (open access
 and the protocol v6 removals) and PR 2 (the service skeleton) are done, and
-PR 3 (real runners, extraction, and the run card) is built; see Shipped.
+PR 3 (real runners, extraction, and the run card) is merged (#98); see Shipped.
 
 - [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
   integration.** The owned summary file, the `summary` daily-log event,
@@ -198,8 +198,10 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   2026-10-27 on PR #59's merged `web.page` summary storage, which it extends
   and whose gaps it closes (no harness field, raw summary link, Timeline
   order, adapter-recognized pages). Tracks one Cookie queue item per plan task,
-  continuing the PR 3 chain; it closes when they all close. All of them are in
-  progress in the Lane E session; see In Progress.
+  continuing the PR 3 chain; it closes when they all close. Every plan task but
+  the headless smoke (`brwr-t53`, in progress in the Lane E session; see In
+  Progress) is done and recorded under Shipped, on `feat/summary-outputs-pr4`;
+  keep this item open until `brwr-t53` closes.
 - [x] **M1.5a step 6.4 — Measured artifact activity.** Replaced the temporary
   visit rows with hourly artifact activity: cold opens, focused and background
   seconds, modes, and trail sources in durable worker totals, frozen into one
@@ -255,10 +257,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   versions, native registration, the folder picker, standing HTTP(S) access,
   background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
-- [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel, now open access PR
-  4.** A tracking pointer: the summary file, log event, and index/panel
-  integration are built in `brwr-so4` (spec §7); there is no denylist check.
-  Close it with `brwr-so4`.
 
 ### Gated plan work (do not start yet)
 
@@ -427,9 +425,6 @@ were folded into `brwr-q7e` above rather than given their own item.
 - [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
   `whyPausedReason`/`whySaveBlocked` (extension/panel.ts ~289-310) ignore
   `pending_removals`, which the panel's own warning (~448) calls off.
-- [ ] `brwr-hnr` **Summary-only days count as opened days.** The Summary arm
-  of `derive` (host/src/index.rs ~1394) inserts the day with no open, unlike
-  the Activity (~1217) and Legacy (~1340) arms. Latent until summaries ship.
 - [ ] `brwr-t8m` **Capture Site promises a save that retired adapter history
   will refuse.** `planCaptureSite` (extension/capture-site.ts ~35) cannot see
   `[[adapter_id_history]]`, so the host's frozen-ID check (host/src/config.rs
@@ -515,18 +510,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   on #85).
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
-- [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
-- [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
-- [ ] `brwr-t45` Task 45: Summary file rendering and the checked summary write (after `brwr-t44`).
-- [ ] `brwr-t46` Task 46: Extend #59's summary event: record key, harness, and adapter artifacts (after `brwr-t45`).
-- [ ] `brwr-t47` Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache (after `brwr-t46`).
-- [ ] `brwr-t48` Task 48: Recent, worklog, and a page's summary on the wire (after `brwr-t47`).
-- [ ] `brwr-t49` Task 49: `SummaryFinisher`: write under the configuration current at finish (after `brwr-t48`).
-- [ ] `brwr-t50` Task 50: `open_summary`: open a page's owned summary file (after `brwr-t49`).
-- [ ] `brwr-t51` Task 51: Panel: the page's existing summary and summarized Recent rows (after `brwr-t50`).
-- [ ] `brwr-t52` Task 52: Run card: saved-summary line and Open summary (after `brwr-t51`).
 - [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
-- [ ] `brwr-t54` Task 54: Docs, backlog, and the full gate (after `brwr-t53`).
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   Extend the existing built-page smoke check so it opens the artifact card,
@@ -580,9 +564,13 @@ were folded into `brwr-q7e` above rather than given their own item.
   migration (`brwr-6x2`), not a relaxation of frozen IDs.
 
 
-- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4` except its headless smoke, `brwr-t53`, in progress in the Lane E session. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Feature. `brwr-t43`, `brwr-t44`, `brwr-t45`, `brwr-t46`, `brwr-t47`, `brwr-t48`, `brwr-t49`, `brwr-t50`, `brwr-t51`, `brwr-t52`, `brwr-t54` **Open access PR 4: summary files, the summary log event, and summaries in the index and panel (2026-10-27).** Built on `feat/summary-outputs-pr4`, not yet merged; its headless smoke (`brwr-t53`) is still in progress, so the parent `brwr-so4` stays open. The service's `SummaryFinisher` saves a validated answer under the configuration current at finish, following a key changed mid-run, with the answer's `answered_at` stamp (re-stamped when the daily log's window would refuse it) in the click's `requested_at` offset, so Retry save is idempotent; failures are plain reasons that say what to do. Summary files are rendered from the answer, written through the shared ownership-checked replace and never adopted; body text goes through a context-free escape (`&lt;`, `\!`, and backticks, `$`, tabs, `~~~` runs and code-length space runs as numeric entities) with wikilink and single-line rules, front matter is JSON-quoted YAML with no entities, and `npm run test:markdown-neutralizer` (a new CI step) renders the shared corpus with markdown-it, micromark and marked. The `summary` event gains `record_key`, `artifact_type` and `harness` and attaches to the adapter's artifact on recognized pages; the index cache is format 6 with an in-place format-5 migration, summaries never count as opens or opened days, artifact files gain a Summary line and date-ordered Timeline summary lines, and Recent rows, `get_artifact` (unrecognized pages too, quietly null on failure) and the worklog carry them. `open_summary` opens only the owned file with PR 3's opener; the panel shows the page's saved summary, summarized Recent rows, and the run card's saved line with one retried lookup. **[human]**: the neutralized corpus in Obsidian and VS Code preview (TESTING.md "Real-UI acceptance").
+- [x] `brwr-hnr` **Summary-only days no longer count as opened days (2026-10-27, open access PR 4).** Fixed by PR 4 Task 47 (697e515): the Summary arm of `derive` no longer inserts a day opened, so a summary never adds to `opens` or `days_opened` (it can still move first and last seen). Covered by Task 48's day-A/day-B regression `index::tests::an_m1_visit_and_a_later_summary_open_the_page_on_one_day` (an M1 legacy visit on day A plus a summary on day B is one open on one day, in the index, the artifact file and the worklog) and by `index::tests::a_summary_on_an_adapter_artifact_without_activity_creates_that_row` (a summary-only artifact shows `opens: 0` and `days_opened: 0`).
+- [x] `brwr-deo` **M2 step 8.5, `/summarize` in the panel: superseded by open access PRs 3-4 (2026-10-27).** The tracking pointer is closed: Summarize & log, extraction and the run card shipped in PR 3 (`brwr-sr3`, #98), and the summary file, log event and index/panel integration in PR 4 (`brwr-so4`), with no denylist check.
 
 - [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, #125).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
 - [x] `brwr-hrr` **Repair a damaged adopted-adapter record from settings (2026-10-27).** Hand-retired adapter contracts freeze their routes' IDs (#122), and `config_result.adopted_state` (additive protocol v6) now names a damaged `adopted-contracts.json`, why it cannot be used, and that notes on unrecognized pages are paused; settings' **Forget recorded adapters** confirms in the page, sends `forget_adopted_contracts` with the shown revision, and the host backs the file up as `adopted-contracts.json.<timestamp>.bak` and records afresh under the config lock. A full or unwritable record is a non-blocking settings warning. Covered by host, wire, settings and headless smoke tests.
