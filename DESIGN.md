@@ -563,6 +563,20 @@ deletion nor reindex changes these decisions. Optional older-note discovery
 on a recognized page remains best effort, so a broken optional note does not
 hide the primary note.
 
+**Known gap: hand-removed contracts (2026-10-27, `brwr-hrc`).** Only a
+removal through settings records `[[adapter_id_history]]`. If config.toml is
+edited by hand to delete one adapter while another adapter still covers the
+origin (for example, deleting `jira.board` beside a `jira.issue` rule whose
+modal route reads the stripped `selectedIssue`), the remaining contract
+decides the origin alone. It does not match the board, so the board gets the
+URL key: its artifact note stays on disk and is never overwritten, but the
+board page no longer reaches it, and the next autosave starts a separate URL
+note. The planned fix has the host record every contract it has adopted and,
+when one vanishes from config.toml, keep it in a host-owned retired-contracts
+state file that note identity reads like `[[adapter_id_history]]`. The test
+`hand_removing_only_the_board_adapter_keeps_its_note_beside_the_modal_rule`
+pins the expected behavior and stays ignored until then.
+
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
 ### 6.3 Profiles
