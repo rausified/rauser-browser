@@ -451,6 +451,14 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
     }
   }
   if (shared && scopeTable === null && !("unscoped" in raw)) fail("shared_origin_unscoped");
+  // 4.7.9: each rule needs an anchor among its required path segments. A
+  // required path capture named by a scope key anchors too: the scope list
+  // pins it the way a literal would. A query binding never anchors.
+  rules.forEach((rule, r) => {
+    const anchored = rule.required.some((segment) =>
+      isAnchorSegment(segment) || (segment.kind === "cap" && !segment.optional && scope.has(segment.name)));
+    if (!anchored) fail("no_literal_segment", r);
+  });
 
   // 8. title.
   let titles: TitleEntry[] | null = null;
@@ -546,7 +554,8 @@ function compareCodePoints(a: string, b: string): number {
 /** §4.1: a required literal, a required alternation (captured or not), or a
  * required fixed-shape capture (`uuid`, or `hex` with bounds that fix its
  * length at exactly 32 or more) anchors a template. An optional segment, and
- * any other capture type, never does. */
+ * any other capture type, never does. A required path capture named by a
+ * scope key also anchors; compileAdapter checks that after scope (4.7.9). */
 function isAnchorSegment(segment: Segment): boolean {
   if (segment.kind === "lit" || segment.kind === "alt") return true;
   if (segment.kind !== "cap" || segment.optional) return false;
@@ -587,7 +596,6 @@ function compileRule(
     if (sawOptional && !optional && segment.kind !== "rest") fail("optional_misplaced");
     if (optional) sawOptional = true;
   }
-  if (!segments.some(isAnchorSegment)) fail("no_literal_segment");
 
   // 4. query.
   // Conditions are checked in ascending key order by code point (SQ-V21):

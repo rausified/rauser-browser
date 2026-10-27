@@ -253,7 +253,6 @@ The first failing check is reported.
          2. `too_many_segments`
          3. `rest_not_last`
          4. `optional_misplaced`
-         5. `no_literal_segment`
       4. **`query`.**
          - `too_many_query`
          - Then each condition in ascending key order by Unicode code point, not document order (SQ-V21):
@@ -285,6 +284,7 @@ The first failing check is reported.
       6. `scope_capture_not_bound`, per rule. A scoped capture that is optional counts as not bound.
       7. `scope_bad_value`: each listed value must be the canonical value of the capture as at least one rule binds it. Only `mode` can differ between rules (SQ-V22).
       8. `shared_origin_unscoped`
+      9. `no_literal_segment`, per rule, unless some required path segment is an anchor (§4.1) or is a required path capture whose name is a `scope` key. A capture bound from a query value never anchors, and an `unscoped` adapter gets no scope anchor. This check follows scope so that scope keys are in view.
    8. **`title`.**
       - For the list: a value that is neither a string nor a list gives `wrong_type`. Then `empty_title_list` and `too_many_titles`.
       - For each entry, which sets `entry`:
@@ -393,8 +393,8 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 
 | Kind | Cases | Impls |
 |---|---|---|
-| validate | 576 | rust, ts |
-| evaluate | 373 | rust, ts |
+| validate | 580 | rust, ts |
+| evaluate | 375 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
@@ -403,7 +403,7 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 4 | rust |
-| **Total** | **1248** | |
+| **Total** | **1254** | |
 
 ## Maintenance
 

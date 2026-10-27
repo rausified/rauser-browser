@@ -9131,6 +9131,82 @@
       "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
     },
     {
+      "id": "validate.anchor.scoped_tenant_accepted",
+      "kind": "validate",
+      "why": "§4.1: a required path capture whose name is a scope key anchors the template",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.anchor.unscoped_tenant_rejected",
+      "kind": "validate",
+      "why": "§4.1: an unscoped adapter gets no scope anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "unscoped": "acknowledged"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.scoped_optional_rejected",
+      "kind": "validate",
+      "why": "§4.1/§6: an optional scoped capture is not bound, and step 4.7.6 reports that before the anchor check",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner?:name|lower}"}],
+            "id": "github.repo:{host}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"error": {"code": "scope_capture_not_bound", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.scope_from_query_rejected",
+      "kind": "validate",
+      "why": "§4.1: a scoped capture bound from a query value is not a path anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{repo:name}", "query": {"o": "{owner:name|lower}"}}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
       "id": "validate.path.alternation_counts_as_literal",
       "kind": "validate",
       "why": "§4.1: a plain alternation satisfies the literal rule",
@@ -18901,6 +18977,46 @@
       "expect": {"match": false, "reason": "out_of_scope"},
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/other-org/widgets/pull/42"
+    },
+    {
+      "id": "eval.anchor.scoped_tenant_home",
+      "kind": "evaluate",
+      "why": "§4.1/§6: a template anchored only by its scoped owner matches the repository home",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "github.repo", "captures": {"owner": "acme-corp", "repo": "widgets"}, "artifact_id": "github.repo:github.com/acme-corp/widgets", "mode": null},
+      "url": "https://github.com/acme-corp/widgets"
+    },
+    {
+      "id": "eval.anchor.scoped_tenant_out_of_scope",
+      "kind": "evaluate",
+      "why": "§4.1/§6: an owner outside the scope is not an artifact",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"match": false, "reason": "out_of_scope"},
+      "url": "https://github.com/other/widgets"
     },
     {
       "id": "eval.github.pr_files_case",

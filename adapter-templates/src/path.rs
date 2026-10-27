@@ -64,8 +64,10 @@ pub(crate) fn parse_capture(content: &str) -> Result<(String, CType, bool), Erro
 /// §4.1: a required literal, a required alternation (captured or not), or a
 /// required fixed-shape capture (`uuid`, or `hex` with bounds that fix its
 /// length at exactly 32 or more) anchors a template. An optional segment,
-/// and any other capture type, never does.
-fn is_anchor(s: &Segment) -> bool {
+/// and any other capture type, never does. A required path capture named by
+/// a scope key also anchors; `validate_adapter` checks that after scope
+/// (4.7.9), because scope is not in view here.
+pub(crate) fn is_anchor(s: &Segment) -> bool {
     match s {
         Segment::Literal(_) | Segment::Alternation(_) => true,
         Segment::Capture {
@@ -92,8 +94,7 @@ fn is_anchor(s: &Segment) -> bool {
 impl PathTemplate {
     /// Parses and structurally checks a path template. On error, returns the
     /// code and the character offset of the offending segment: for
-    /// `template_too_long` the first character past the limit, and for
-    /// `no_literal_segment`, which concerns the whole template, 0.
+    /// `template_too_long`, the first character past the limit.
     pub(crate) fn parse(text: &str) -> Result<PathTemplate, (ErrorCode, usize)> {
         let Some(body) = text.strip_prefix('/') else {
             return Err((ErrorCode::PathSyntax, 0));
@@ -134,9 +135,6 @@ impl PathTemplate {
         // one after an optional.
         if required + optional + usize::from(rest) != segments.len() {
             return Err((ErrorCode::OptionalMisplaced, offsets[required + optional]));
-        }
-        if !segments.iter().any(is_anchor) {
-            return Err((ErrorCode::NoLiteralSegment, 0));
         }
         Ok(PathTemplate {
             segments,
@@ -352,7 +350,8 @@ mod tests {
             at("/x/{a?:int}/{b:int}"),
             Some((ErrorCode::OptionalMisplaced, 12))
         );
-        assert_eq!(at("/{a:int}"), Some((ErrorCode::NoLiteralSegment, 0)));
+        // The anchor check needs scope, so it moved to `validate_adapter`.
+        assert_eq!(at("/{a:int}"), None);
         let many = format!("{}/x", "/ab".repeat(32));
         assert_eq!(at(&many), Some((ErrorCode::TooManySegments, 97)));
         let long = format!("/{}a", "a/".repeat(300));

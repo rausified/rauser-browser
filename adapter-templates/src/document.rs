@@ -11,7 +11,7 @@ use url::Url;
 use crate::ctype::{BaseType, CType, is_id_literal_byte};
 use crate::error::{ErrorCode, Field, ValidationError};
 use crate::eval::MAX_ID_BYTES;
-use crate::path::{PathTemplate, is_name, parse_capture};
+use crate::path::{PathTemplate, Segment, is_anchor, is_name, parse_capture};
 use crate::title::{MAX_TITLE_CHARS, Part, TitleTemplate};
 use crate::value::Value;
 
@@ -690,6 +690,21 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
     }
     if shared && scope.is_none() && unscoped.is_none() {
         return Err(at.err(ErrorCode::SharedOriginUnscoped));
+    }
+    // 7.9. Anchors (§4.1): each rule needs one among its required path
+    // segments. A required path capture named by a scope key anchors too:
+    // the scope list pins it the way a literal would. A query binding never
+    // anchors, and an unscoped adapter gets no scope anchor.
+    for (r, rule) in rules.iter().enumerate() {
+        let anchored = rule.path.segments[..rule.path.required].iter().any(|s| {
+            is_anchor(s)
+                || matches!(s, Segment::Capture { name, optional: false, .. } if scoped(name))
+        });
+        if !anchored {
+            return Err(at
+                .rule(r)
+                .err_in(ErrorCode::NoLiteralSegment, Field::Path, Some(0)));
+        }
     }
 
     // 8. Title (§9.1).
