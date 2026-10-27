@@ -19,7 +19,9 @@ uppercase Jira-key mentions to the later graph index.
 
 The draft declares `within = { type = "github.repo", id =
 "github.repo:{host}/{owner}/{repo}" }`, so each pull request sits within its
-repository (adapter-templates.md §8.3). A match names the container, for
+repository (adapter-templates.md §8.3). Capture Site and settings keep that
+declaration only when a `github.repo` rule is kept on the origin; without one,
+the saved adapter has no `within` and records no repositories. A match names the container, for
 example `github.repo:github.com/acme-corp/widgets` for
 `https://github.com/acme-corp/widgets/pull/7/files`, and a visit counts once
 toward the pull request and once toward the repository. The container ID is frozen

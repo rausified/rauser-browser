@@ -262,7 +262,7 @@ within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
 ```
 
 - `within.type` follows the adapter-type grammar (§3). It may not be `web.page`, and it may not equal the adapter's own `type`.
-- `within.id` follows the §8.1 grammar, and the scheme `web` is reserved here too. Each `{name}` must be a capture the adapter's own `id` uses or a key of its `scope`, so every rule binds it, it is never optional, and it is never `mode`. A capture that only the container ID uses is still an extra capture (§8.1).
+- `within.id` follows the §8.1 grammar, and the scheme `web` is reserved here too. It may not be the adapter's own `id` template (the same scheme and parts), which would give an artifact and its container one record key (`within_self`). Each `{name}` must be a capture the adapter's own `id` uses or a key of its `scope`, so every rule binds it, it is never optional, and it is never `mode`. A capture that only the container ID uses is still an extra capture (§8.1).
 - `{host}` is the adapter's own host, and parts take the same canonical values as the adapter's ID.
 - A match carries the container's type and built ID alongside its own. If the container ID would exceed 512 bytes, the match still stands but names no container.
 - Container IDs are as durable as artifact IDs (§8.2). The container's own adapter, if any, must build the same ID for the container's pages, and adding, changing, or removing `within` on an adapter with recorded activity is a contract change, confirmed like any other. Until migrations exist the host allows only the first addition: once an adapter declares `within`, changing or removing it is refused like an ID edit (DESIGN.md §6.2). A shipped starter's container ID is frozen with its own ID.

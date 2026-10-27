@@ -793,6 +793,11 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
             if cid.scheme == "web" {
                 return Err(in_within(ErrorCode::WithinIdReservedScheme, 0));
             }
+            // Its own ID would give the artifact and its container one
+            // record key, which is no container at all.
+            if cid.same_template(&id) {
+                return Err(at.err(ErrorCode::WithinSelf));
+            }
             for (r, rule) in rules.iter().enumerate() {
                 for (name, p) in cid.names_at() {
                     let known = name != "mode"

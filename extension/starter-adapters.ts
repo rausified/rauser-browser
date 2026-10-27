@@ -290,6 +290,23 @@ function containerType(adapter: AdapterObject): string | null {
   return typeof type === "string" ? type : null;
 }
 
+/** `additions` with `within` dropped from each adapter whose container type
+ * has no adapter on its origin among `existing` and `additions`. A starter
+ * links to its container only when the user keeps that container, so
+ * choosing pull requests without repositories records no repositories.
+ * Adapters in `existing` are never changed: an established `within` is
+ * frozen (DESIGN.md §6.2). */
+export function linkedToPresentContainers<T extends AdapterObject>(additions: T[], existing: AdapterObject[]): T[] {
+  const present = new Set([...existing, ...additions].map((adapter) => `${String(adapter.origin)} ${String(adapter.type)}`));
+  return additions.map((adapter) => {
+    const container = containerType(adapter);
+    if (container === null || present.has(`${String(adapter.origin)} ${container}`)) return adapter;
+    const unlinked: AdapterObject = { ...adapter };
+    delete unlinked.within;
+    return unlinked as T;
+  });
+}
+
 /** A stable reorder so that, on each origin, every adapter declaring
  * `within.type` T comes before every adapter of type T. First match wins
  * (adapter-templates.md §3), so a container catch-all placed first would

@@ -102,6 +102,15 @@ type CompiledRule = {
 
 type IdPart = { kind: "lit"; text: string } | { kind: "cap"; name: string };
 
+function sameIdParts(a: readonly IdPart[], b: readonly IdPart[]): boolean {
+  return a.length === b.length && a.every((part, at) => {
+    const other = b[at]!;
+    return part.kind === "lit"
+      ? other.kind === "lit" && other.text === part.text
+      : other.kind === "cap" && other.name === part.name;
+  });
+}
+
 /** `fail` is the literal's KMP failure table, built when a skip searches for
  * it: over the literal in the prefix, over the reversed literal in the suffix. */
 type TitleToken =
@@ -555,6 +564,8 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
     const parsedContainer = parseIdTemplate(containerId);
     if (parsedContainer === null) return fail("within_id_syntax");
     if (parsedContainer.scheme === "web") fail("within_id_reserved_scheme");
+    // Its own ID would give the artifact and its container one record key.
+    if (parsedContainer.scheme === parsedId.scheme && sameIdParts(parsedContainer.parts, parsedId.parts)) fail("within_self");
     const containerNames = parsedContainer.parts.flatMap((part) => (part.kind === "cap" ? [part.name] : []));
     ruleCaptures.forEach((captures, r) => {
       for (const name of containerNames) {

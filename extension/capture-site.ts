@@ -3,7 +3,7 @@
 import type { AdapterDocument, ConfigSnapshot } from "../protocol/ts/generated.js";
 import { exampleUrl, previewDocument, validateAdapterDocument, type PreviewRow } from "./adapter-review.js";
 import {
-  orderContainedFirst, parseGitHubOrganizations, starterKind, starterOffers, type StarterOffer,
+  linkedToPresentContainers, orderContainedFirst, parseGitHubOrganizations, starterKind, starterOffers, type StarterOffer,
 } from "./starter-adapters.js";
 
 export interface CaptureChoice {
@@ -71,7 +71,7 @@ export function planCaptureSite(
   } else {
     offers.push(...starterOffers(origin, []));
   }
-  const artifacts = offers.map((offer) => offer.adapter!);
+  const artifacts = linkedToPresentContainers(offers.map((offer) => offer.adapter!), config.adapters.artifacts);
   const additions: AdapterDocument = { format: 1, artifacts: orderContainedFirst(artifacts) };
   const document: AdapterDocument = {
     ...config.adapters,

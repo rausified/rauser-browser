@@ -1462,6 +1462,30 @@ test("GitHub gallery pre-fills organizations from existing GitHub rules", async 
   assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "c");
 });
 
+test("a pull request starter links to repositories only when a repository rule exists", async () => {
+  const prButton = () => env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.starterKey === "github.pr");
+  install();
+  await openSettings();
+  typeSite("https://github.com");
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  scope.value = "acme-corp";
+  scope.dispatch("input");
+  prButton().click();
+  assert.equal(JSON.parse(env.elements.get("adapter-json").value).within, undefined);
+
+  const repository = {
+    type: "github.repo", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }],
+    id: "github.repo:{host}/{owner}/{repo}",
+  };
+  install({ adapters: [repository] });
+  await openSettings();
+  prButton().click();
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value).within,
+    { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" });
+});
+
 test("github.repo is offered when only PR and issue rules exist", async () => {
   install({ adapters: existingGitHubRules(["acme-corp"], ["acme-corp"]) });
   await openSettings();

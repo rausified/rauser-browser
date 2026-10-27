@@ -316,7 +316,8 @@ The first failing check is reported.
        2. `within_self`: `type` equals the adapter's own `type`.
        3. `within_id_syntax`: `id` breaks the §8.1 grammar.
        4. `within_id_reserved_scheme`: the scheme is `web`.
-       5. `within_unknown_capture`, per rule: a `{name}` that is not a capture the rule binds and the adapter's `id` uses or `scope` lists, or that is `mode`. A second `{host}` is such a name (SQ-V19). Because the names come from the ID and scope, step 6's `extra_capture` is unchanged.
+       5. `within_self`: `id` is the adapter's own ID template, scheme and part by part, which would give the artifact and its container one record key.
+       6. `within_unknown_capture`, per rule: a `{name}` that is not a capture the rule binds and the adapter's `id` uses or `scope` lists, or that is `mode`. A second `{host}` is such a name (SQ-V19). Because the names come from the ID and scope, step 6's `extra_capture` is unchanged.
 
 ## Fixtures
 

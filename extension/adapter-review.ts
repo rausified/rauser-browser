@@ -45,7 +45,7 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   scope_capture_not_bound: "Every rule must bind each capture used for scope.",
   title_syntax: "A title template has invalid syntax.",
   within_bad_type: "The within type must be a valid adapter type other than web.page.",
-  within_self: "An adapter cannot sit within its own type.",
+  within_self: "An adapter cannot sit within its own type or its own ID.",
   within_id_syntax: "The within ID template has invalid syntax.",
   within_id_reserved_scheme: "The web ID scheme is reserved by Brauser, including in within.",
   within_unknown_capture: "The within ID may use only captures from the adapter's ID or scope, and never mode.",

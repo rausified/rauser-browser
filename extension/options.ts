@@ -43,6 +43,7 @@ import {
   configuredGitHubOrganizations,
   containerLinks,
   hasAdapter,
+  linkedToPresentContainers,
   orderContainedFirst,
   parseGitHubOrganizations,
   starterOffers,
@@ -468,7 +469,8 @@ function renderStarterGallery(): void {
     review.addEventListener("click", () => {
       const selected = currentStarterOffer(origin, offer.key);
       if (!selected?.adapter || offerConfigured(selected)) return;
-      beginAdapterDraft(selected.adapter, selected.label, selected.artifact_type === "github.repo");
+      const [draft] = linkedToPresentContainers([selected.adapter], session.config?.adapters.artifacts ?? []);
+      beginAdapterDraft(draft!, selected.label, selected.artifact_type === "github.repo");
     });
     card.append(review);
     starterGallery.append(card);

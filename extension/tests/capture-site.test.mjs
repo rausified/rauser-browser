@@ -66,6 +66,15 @@ test("capture plan puts PR and issue before repo", () => {
   assert.deepEqual(result.examples.map((row) => row.result.type), ["github.pr", "github.issue", "github.repo"]);
 });
 
+test("unchecking repositories leaves pull requests and issues unlinked", () => {
+  const result = plan("https://github.com/acme-corp/widget/pull/12", CONFIG,
+    { organizations: "acme-corp", repositories: false, pullRequests: true, issues: true });
+  assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["github.pr", "github.issue"]);
+  for (const adapter of result.document.artifacts) assert.equal(adapter.within, undefined);
+  assert.equal(result.current.result.type, "github.pr");
+  assert.equal(result.current.result.within ?? null, null);
+});
+
 test("empty, invalid, or unselected GitHub scope cannot produce a save", () => {
   for (const choice of [
     { organizations: "", repositories: true, pullRequests: false, issues: false },

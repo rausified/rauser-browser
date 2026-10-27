@@ -26431,6 +26431,14 @@
       "expect": {"error": {"code": "within_self", "adapter": 0, "rule": null, "entry": null}}
     },
     {
+      "id": "validate.within.self_id",
+      "kind": "validate",
+      "why": "§8.3: a container ID template equal to the adapter's own would give the artifact and its container one record key, so it is refused like its own type",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.tree", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/tree/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_self", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
       "id": "validate.within.id_syntax",
       "kind": "validate",
       "why": "§8.3: the container ID follows the §8.1 grammar",
