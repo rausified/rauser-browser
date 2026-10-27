@@ -6358,6 +6358,9 @@ id = "work:{host}/{id}"
         /// they are, and its answers come back unchanged.
         #[test]
         fn discover_harnesses_is_forwarded_to_the_service() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
@@ -6439,6 +6442,9 @@ id = "work:{host}/{id}"
         /// so the host forwards them unchanged.
         #[test]
         fn open_path_and_get_agent_env_are_forwarded_to_the_service() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             use brauser_protocol::{
                 AgentEnvListed, GetAgentEnvRequest, OpenPathRequest, OpenTarget, PathOpened,
             };
@@ -6492,6 +6498,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn start_run_forwards_host_resolved_key() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let url = "https://example.com/a?b=1";
@@ -6524,6 +6533,9 @@ id = "work:{host}/{id}"
         /// so a config update cannot interleave with it.
         #[test]
         fn start_run_resolves_the_key_under_the_config_lock() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let url = "https://example.com/a";
@@ -6748,6 +6760,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn run_messages_other_than_start_are_forwarded_verbatim() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
@@ -6782,6 +6797,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn notes_and_capture_do_not_touch_the_service() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
