@@ -2117,8 +2117,8 @@ impl Vault {
 
 **Files:**
 - Modify: `host/src/summary.rs` (`PageSummary`, `SummaryEvent`, `validate_page_summary`, `validate_summary_event`)
-- Modify: `host/src/capture.rs` (`record_summary`; the `kind == "summary"` branch of `fn record_entry`; the `page_summary` test helper)
-- Modify: `host/src/index.rs` (the `SummaryEvent` literals in its tests)
+- Modify: `host/src/capture.rs` (`record_summary`; the `kind == "summary"` branch of `fn record_entry`; the `page_summary` test helper; every `store.record_summary(..)` call in its tests)
+- Modify: `host/src/index.rs` (the `SummaryEvent` literals in its tests; the `page_summary` test helper; every `capture.record_summary(..)` call in its tests)
 
 **Interfaces:**
 ```rust
@@ -2157,6 +2157,10 @@ impl CaptureStore {
   - `a_replayed_adapter_summary_with_a_web_page_type_is_ignored`
 - [ ] Run `cargo test --locked -p brauser -- summary:: capture::tests::`. Expect FAIL.
 - [ ] Implement, and update #59's `PageSummary`/`SummaryEvent` test literals to the new fields.
+- [ ] Update #59's `record_summary` call sites to the tuple return. They match on a bare `CaptureOutcome` and stop compiling otherwise:
+  - In `capture.rs` tests, destructure `(outcome, event)` and match on `outcome` in `a_summary_persists_on_a_page_no_site_rule_covers`, `a_summary_persists_while_capture_is_paused`, `a_malformed_summary_is_rejected`, `a_credential_url_is_rejected_for_a_summary`, `a_noncanonical_uuid_summary_hashes_and_serializes_the_same_spelling` and `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link`. The two `Rejected` tests also assert `event.is_none()`.
+  - `a_malformed_summary_is_rejected` in `capture.rs` and `an_unknown_importance_is_rejected` in `summary.rs` set `importance = "urgent"`, which no longer compiles once `importance` is an `ImportanceLevel`. Make the capture test set `category` to an empty string and expect `invalid_summary_category`. Rewrite the summary test to assert that a `SummaryEvent` JSON with `"importance":"urgent"` fails to deserialize, so a forged log line with that value is still skipped on replay.
+  - In `index.rs` tests, `summary_event_appends_once_on_a_page_no_adapter_covers` matches `capture.record_summary(policy, &summary).0` and `capture.record_summary(policy, &again).0` against `CaptureOutcome::Persisted { .. }`.
 - [ ] Run `cargo test --locked -p brauser -- summary:: capture:: index::`. Expect PASS, including all of #59's summary tests.
 - [ ] Commit: `git add host/src/summary.rs host/src/capture.rs host/src/index.rs && git commit -m "feat(host): summary events carry the record key and harness and attach to adapter artifacts"`
 
@@ -2173,18 +2177,19 @@ impl CaptureStore {
   - `artifact_candidates_for_url` already excludes `web:` IDs and reads `CachedEvent::urls`, so an adapter summary's URL becomes a note-key candidate with no code change. Pin it with a test.
 - Timeline rules, replacing #59's "all summaries, then all rollups":
   - Summary lines and `timeline_rollups` rows are merged newest first. A rollup sorts by its `last_date`, and a summary sorts before a rollup with the same date.
-  - A summary line is `- YYYY-MM-DD HH:MM · Summarized: <type>, <importance> importance`, with the time in the event's own offset, so the file has no seconds to churn. The type goes through `markdown::inline`.
+  - A summary line is `- YYYY-MM-DD HH:MM · Summarized: <title> — <type>, <importance> importance`, with the time in the event's own offset, so the file has no seconds to churn. It keeps #59's title, so `summary_event_appends_once_on_a_page_no_adapter_covers` still finds `Summarized: A good discussion`, and it matches the worklog's wording. The title and type go through `markdown::inline`.
   - #59's cap stays: the 20 newest summary lines are kept, and older ones become one `- N earlier summaries` line at the end.
 
 - [ ] Write the failing tests:
   - `timeline_interleaves_summaries_and_rollups_by_date` (a summary on day 3 between rollups on days 1 and 5 is printed between them, and a summary on day 5 comes before day 5's rollup)
+  - `a_timeline_summary_line_has_the_title_and_no_seconds` (an event at `2026-10-20T09:15:42-07:00` titled "A good discussion" renders exactly `- 2026-10-20 09:15 · Summarized: A good discussion — discussion, high importance`)
   - `a_summary_on_an_adapter_artifact_without_activity_creates_that_row` (it is typed `jira.issue`, and its later activity keeps one row)
   - `an_adapter_summary_is_a_note_key_candidate` and `web_summaries_never_redirect_note_keys`
   - `a_version_3_state_cache_is_rescanned` (modeled on #59's `a_version_1_state_cache_is_rescanned`)
   - `reusing_a_summary_event_id_with_other_content_bails`
 - [ ] Run `cargo test --locked -p brauser index::tests::`. Expect FAIL.
 - [ ] Implement.
-- [ ] Run `cargo test --locked -p brauser index::`. Expect PASS, including #59's `a_summary_joins_the_m1_legacy_visit_of_the_same_url` and `forged_summary_markers_are_ignored`.
+- [ ] Run `cargo test --locked -p brauser index::`. Expect PASS, including #59's `a_summary_joins_the_m1_legacy_visit_of_the_same_url`, `forged_summary_markers_are_ignored` and `summary_event_appends_once_on_a_page_no_adapter_covers` with its `Summarized: A good discussion` assertion unchanged.
 - [ ] Commit: `git add host/src/index.rs && git commit -m "feat(index): adapter-attached summaries and a chronological Timeline"`
 
 ### Task 48: Recent, worklog, and a page's summary on the wire
