@@ -914,7 +914,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   Keep the existing product proposals; adding more internal health work
   would not unblock the assigned Capture Site implementation.
 
-- Latest recheck on `21d06c3` reproduces those exact counts with no test
+- Rechecks on `21d06c3` and `5231f9e` reproduce those exact counts with no test
   exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
   and all 13 extension files passing. The script diagnostic still reports
   8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
@@ -926,3 +926,14 @@ were folded into `brwr-q7e` above rather than given their own item.
   whether its own unfiltered gate passes and supply that result in the
   handoff. Product priority remains selected-rule Capture Site review and
   example artifact grouping, not another health surface.
+
+- Baseline `5231f9e` evidence is retained in
+  `target/overnight-health/baseline-5231f9e/` (gitignored), including the
+  unfiltered Cargo output and non-isolated script diagnostic. No quarantine
+  file or incomplete diff existed. No preceding commit in the last five has
+  a verified green gate in this restricted runner, so resetting history would
+  discard work without fixing the denied operations. The dialog repair is
+  retained under blocked `brwr-4vb`; no new feature or contract shipped.
+  The existing Capture Site proposals remain sufficient: resume the host
+  drafter and selected-rule preview once the driver supplies an unfiltered
+  green baseline, rather than scheduling repeated unchanged restricted runs.
