@@ -127,6 +127,19 @@ or explicit context; separate older URL notes remain viewable. Ambiguous
 history falls back to the URL key, while unavailable history or an incomplete
 bounded note scan refuses loads and saves instead of guessing an autosave target.
 
+The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
+SharePoint/OneDrive, and GitHub origins using the existing development starter
+catalog. It reviews the current page, illustrative examples and fixed safety
+probes inline, with separate GitHub pull-request and issue organization lists,
+then saves once through revisioned `update_config`. It preserves configured
+sites and global pauses, refuses pending local pauses/removals and stale
+reviews, and saves old note edits before reloading their host-derived identity.
+Installing policy from a page seeds already-open recognized tabs for attention
+measurement without inventing cold opens; background renewals retain their
+normal navigation accounting.
+Unknown-site URL shaping, link shapes and the host structural drafter are still
+unbuilt (`brwr-t40`); starter live-tool certification remains human work.
+
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
 opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the

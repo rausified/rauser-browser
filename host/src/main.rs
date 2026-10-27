@@ -66,12 +66,19 @@ fn reindex() -> Result<()> {
         .storage
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("choose a notes folder before reindexing"))?;
-    let report =
-        ArtifactIndex::open_in(storage, config.root_identity(), &config.cache_dir()?)?.reindex()?;
+    let report = ArtifactIndex::open_in(storage, config.root_identity(), &config.cache_dir()?)?
+        .with_adapters(config.adapter_document().ok())
+        .reindex()?;
     println!(
         "Rebuilt index.db; wrote {}, kept {}, and left {} conflicting artifact file(s).",
         report.written, report.unchanged, report.conflicts
     );
+    if let Some(failure) = report.first_failure {
+        bail!(
+            "{} artifact file(s) could not be written; first: {failure}",
+            report.failed
+        );
+    }
     Ok(())
 }
 

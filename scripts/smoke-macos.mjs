@@ -612,7 +612,8 @@ async function nativeHostPreflight(cdp, extensionId) {
 function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
-    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/after-removal", "/fresh/page"]);
+    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/while-paused", "/allowed/after-resume",
+      "/allowed/after-removal", "/fresh/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (!known.has(pathname)) {
@@ -1024,6 +1025,8 @@ async function run() {
     const siteInput = options.defaultPort ? `${origin}:80` : origin;
     const allowed = `${origin}/allowed/page?case=${caseId}`;
     const blocked = `${origin}/blocked/page?case=${caseId}`;
+    const whilePaused = `${origin}/allowed/while-paused?case=${caseId}`;
+    const afterResume = `${origin}/allowed/after-resume?case=${caseId}`;
     const afterRemoval = `${origin}/allowed/after-removal?case=${caseId}`;
     const freshPage = `${origin}/fresh/page?case=${caseId}`;
     const freshTitle = `${APP_NAME} smoke /fresh/page`;
@@ -1417,6 +1420,88 @@ async function run() {
       const files = await markdownFiles(path.join(notesRoot, "pages"));
       requireCondition(files.length === 1 && files[0].text.includes(recovered),
         "The recovered edit was not saved after the conflict");
+    });
+
+    await step("Pausing from the panel turns capture off and offers Resume in settings", async () => {
+      await openPanel();
+      await waitFor(() => onPanel(async (page) =>
+        requireCondition(await page.enabled("#pause-capture"), "The panel's pause button is disabled")));
+      // The pause button sits in the collapsed capture strip, as a user finds it.
+      await onPanel(async (page) => {
+        if (!(await page.evaluate('document.getElementById("capture-strip").open'))) {
+          await page.click("#capture-strip-summary");
+        }
+        await page.click("#pause-capture");
+      });
+      await waitFor(async () => requireCondition((await hostConfig(wrapper)).config.capture_enabled === false,
+        "Host still has capture enabled"), { timeout: 20_000, interval: 1_000 });
+      // A paused setup is complete, so no setup warning (DESIGN.md §5.7).
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.hidden("#setup-warning") === true, "Panel shows a setup warning while paused");
+        const strip = await page.text("#capture-strip-summary");
+        requireCondition(strip?.includes("Capture off"), `Capture strip says: ${strip}`);
+        const status = await page.text("#status");
+        requireCondition(/Resume (capture|it) in settings/.test(status ?? ""), `Panel status says: ${status}`);
+      }), { timeout: 20_000 });
+      await openSettingsTab();
+      await settingsConnected();
+      await waitFor(() => onSettings(async (page) => {
+        requireCondition(await page.hidden("#resume-capture") === false, "Settings does not show Resume capture");
+        requireCondition(await page.enabled("#resume-capture"), "Resume capture is disabled");
+      }), { timeout: 20_000 });
+      // Pausing keeps the site's adapter; only the capture switch is off.
+      requireCondition((await hostConfig(wrapper)).config.adapters.artifacts.length > 0,
+        "Pausing removed the site's adapter");
+      await closePanel();
+      await navigate(origin, whilePaused);
+      await openSettingsTab();
+      await delay(1_000);
+      requireCondition(!(await activityTotals()).some((total) => total.url === whilePaused),
+        "Activity was measured while capture was paused");
+    });
+
+    await step("Resume capture turns capture on with no dialog, and captures again", async () => {
+      const dialogsBefore = (await dialogLogLines()).length;
+      await inSettings(async (page) => {
+        await page.evaluate('document.getElementById("status").textContent = ""');
+        await page.click("#resume-capture");
+      });
+      await waitFor(async () => {
+        requireCondition((await hostConfig(wrapper)).config.capture_enabled === true,
+          "Capture is not enabled in the host");
+        const status = await settingsStatus();
+        requireCondition(status?.startsWith("Capturing on sites with adapters."), `Settings page says: ${status}`);
+      }, { timeout: 20_000, interval: 1_000 });
+      // From protocol v6, resuming saves capture back on with no native confirmation.
+      requireCondition((await dialogLogLines()).length === dialogsBefore, "Resume capture opened a native dialog");
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.hidden("#resume-capture"), "Settings still shows Resume capture")));
+      await openPanel();
+      await waitFor(() => onPanel(async (page) => {
+        const strip = await page.text("#capture-strip-summary");
+        requireCondition(strip?.includes("Capture on"), `Capture strip says: ${strip}`);
+      }), { timeout: 20_000 });
+      await closePanel();
+      await navigate(origin, afterResume);
+      await openSettingsTab();
+      await waitFor(async () => {
+        const forResumed = (await activityTotals()).filter((total) => total.url === afterResume);
+        requireCondition(forResumed.length === 1 && forResumed[0].opens === 1,
+          `Expected one open of the resumed page in the hourly totals; found ${JSON.stringify(forResumed)}`);
+      }, { timeout: 20_000, interval: 1_000 });
+      await openPanel();
+      await waitFor(async () => {
+        if (activityRows((await logRows()).rows, afterResume).length === 0) {
+          await rewindActivityHour();
+          await onPanel((page) => page.evaluate(`chrome.runtime.sendMessage({ kind: "sync_now" })`));
+        }
+        const { files, rows } = await logRows();
+        requireCondition(activityRows(rows, afterResume).length === 1,
+          "Expected exactly one activity entry for the resumed page in the daily log");
+        requireCondition(!files.some((file) => file.text.includes(whilePaused)),
+          "Activity from while capture was paused reached the daily log");
+      }, { timeout: 60_000, interval: 2_000 });
+      await pendingVisitsCleared();
     });
 
     // AI harness setup runs only the fakes under fake-install. It shows no
