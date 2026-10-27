@@ -19,7 +19,7 @@ the typed request. A mismatch returns an `error` response with code
 `unsupported_protocol_version` and the host's protocol version. If malformed
 input has no recoverable request ID, an `error` response may use an empty ID.
 
-Protocol version 5 covers host discovery, configuration, consent, visit and
+Protocol version 6 covers host discovery, configuration, consent, visit and
 artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
 configuration. `get_config` returns a
@@ -71,6 +71,10 @@ an `[adapters]` table loads as format 1 with no artifacts. Until alias
 migrations arrive, an existing adapter's `id` template is immutable. Adapter
 additions or changes require native confirmation, and an unscoped adapter on a
 shared origin adds an explicit every-account-in-this-Chrome-profile warning.
+
+Version 6 is the current protocol. The host refuses version 5 and earlier
+requests with `unsupported_protocol_version`. Its message changes are
+documented as they land (to be completed with the open-access work).
 
 `load_note` returns the host-derived `RecordKey` and any bounded older
 URL-keyed notes that now resolve to the same artifact. `save_note` must echo

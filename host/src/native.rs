@@ -3717,6 +3717,21 @@ id = "work:{host}/{id}"
         }
     }
 
+    #[test]
+    fn protocol_v5_request_gets_unsupported_version() {
+        let folder = tempfile::tempdir().unwrap();
+        let config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let request =
+            r#"{"type":"get_config","protocol_version":5,"request_id":"old-5"}"#.to_owned();
+        match &served(&[request], config)[0] {
+            Response::Error(value) => {
+                assert_eq!(value.code, ErrorCode::UnsupportedProtocolVersion);
+                assert_eq!(value.request_id, "old-5");
+            }
+            other => panic!("expected version error, got {other:?}"),
+        }
+    }
+
     /// Native harness setup against fake harnesses on an injected search
     /// path. No real harness is ever found or run.
     #[cfg(unix)]
