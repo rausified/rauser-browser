@@ -886,7 +886,11 @@ async function loadRecent(): Promise<void> {
     return;
   }
   recentWaitingForHost = false;
-  if (!session.config?.storage) return;
+  if (!session.config?.storage) {
+    recentStatus.textContent = "Choose a home folder in settings to view Recent.";
+    recentList.replaceChildren();
+    return;
+  }
   recentStatus.textContent = "Loading…";
   try {
     const response = await session.host.call({
@@ -920,7 +924,11 @@ async function loadWorklog(): Promise<void> {
     return;
   }
   worklogWaitingForHost = false;
-  if (!session.config?.storage) return;
+  if (!session.config?.storage) {
+    worklogText.textContent = "Choose a home folder in settings to generate a worklog.";
+    copyWorklogButton.disabled = true;
+    return;
+  }
   const range = worklogRange();
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
@@ -1127,10 +1135,6 @@ void (async () => {
     reachedHost = true;
     showHostBuild(hello.host_version);
     await reloadConfig();
-    if (!recentView.hidden) {
-      if (recentWaitingForHost) void loadRecent();
-      if (worklogWaitingForHost) void loadWorklog();
-    }
     if (hello.config_issue) show(hello.config_issue, true);
     initialized = true;
   } catch (error) {
@@ -1143,6 +1147,12 @@ void (async () => {
     busy = false;
     await session.refreshStatus().catch(() => undefined);
     updateControls();
+    // A worker-policy failure can follow a successful host config read.
+    // History can still load once connected, even if capture setup failed.
+    if (session.connected && !recentView.hidden) {
+      if (recentWaitingForHost) void loadRecent();
+      if (worklogWaitingForHost) void loadWorklog();
+    }
   }
   await refreshActiveTab();
   // list_runs makes the host start the registered service, which runs on

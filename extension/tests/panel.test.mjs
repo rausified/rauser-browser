@@ -414,8 +414,9 @@ async function until(condition, what) {
 // The panel has settled once its first tab refresh rendered the page area.
 const shownTitle = (page) => page.el("page-title").textContent;
 
-for (const phase of ["before hello", "during policy install", "after startup"]) {
+for (const phase of ["before hello", "during policy install", "after startup", "before policy failure"]) {
   test(`Recent loads once when opened ${phase}`, async () => {
+    const waitForHello = phase.startsWith("before");
     let releaseHello;
     const hello = new Promise((resolve) => { releaseHello = resolve; });
     let releasePolicy;
@@ -430,7 +431,7 @@ for (const phase of ["before hello", "during policy install", "after startup"]) 
     const page = await install({
       tab: { id: 1, url: "https://new.example/a", title: "A" },
       intercept(request) {
-        if (request.type === "hello" && phase === "before hello") return hello;
+        if (request.type === "hello" && waitForHello) return hello;
         if (request.type === "list_artifacts") return {
           type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
           items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
@@ -445,6 +446,9 @@ for (const phase of ["before hello", "during policy install", "after startup"]) 
       },
       workerReply(request) {
         if (request.kind === "install_policy" && phase === "during policy install") return policy;
+        if (request.kind === "install_policy" && phase === "before policy failure") {
+          return { ok: false, error: "Worker policy install failed" };
+        }
       },
     });
     if (phase === "during policy install") {
@@ -454,7 +458,7 @@ for (const phase of ["before hello", "during policy install", "after startup"]) 
     }
     page.el("tab-recent").click();
     try {
-      if (phase === "before hello") {
+      if (waitForHello) {
         assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
         assert.equal(page.el("worklog-text").textContent, "Waiting for the host…");
         assert.equal(page.el("copy-worklog").disabled, true);
@@ -465,7 +469,11 @@ for (const phase of ["before hello", "during policy install", "after startup"]) 
       releaseHello(hostReply({ type: "hello" }));
       releasePolicy({ ok: true, value: statusFor() });
       // Drain startup even if the waiting-state assertions fail.
-      await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+      if (phase === "before policy failure") {
+        await until(() => page.el("status").textContent.includes("Worker policy install failed"), "policy error");
+      } else {
+        await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+      }
     }
     await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog result");
     await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent result");
@@ -474,6 +482,28 @@ for (const phase of ["before hello", "during policy install", "after startup"]) 
     assert.equal(page.el("copy-worklog").disabled, false);
   });
 }
+
+test("Recent replaces its startup wait with setup guidance when no home folder is chosen", async () => {
+  let releaseHello;
+  const hello = new Promise((resolve) => { releaseHello = resolve; });
+  const page = await install({
+    tab: { id: 1, url: "https://new.example/a", title: "A" },
+    config: { ...CONFIG, storage: null },
+    intercept: (request) => request.type === "hello" ? hello : null,
+  });
+  page.el("tab-recent").click();
+  assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+  releaseHello(hostReply({ type: "hello" }));
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+  for (const clickAgain of [false, true]) {
+    if (clickAgain) page.el("tab-recent").click();
+    assert.match(page.el("recent-status").textContent, /home folder.*settings/i);
+    assert.match(page.el("worklog-text").textContent, /home folder.*settings/i);
+    assert.equal(page.el("copy-worklog").disabled, true);
+  }
+  assert.equal(page.sent("list_artifacts").length, 0);
+  assert.equal(page.sent("worklog").length, 0);
+});
 
 test("an HTTP(S) tab shows the note editor and no grant or address warning", async () => {
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: true });
