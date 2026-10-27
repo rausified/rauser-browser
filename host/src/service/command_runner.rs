@@ -287,6 +287,45 @@ mod tests {
         );
     }
 
+    /// A harness that echoes its prompt as it reads it gets a prompt far
+    /// larger than the output queue and the pipes hold, and still answers
+    /// with all of it instead of stalling until the run is killed.
+    #[test]
+    fn a_large_prompt_to_an_echoing_harness_is_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = script(dir.path(), "fake", "exec cat\n");
+        let mut spec = spec(dir.path());
+        spec.prompt = (0..30_000).map(|i| format!("line {i:05}\n")).collect();
+        let runner = CommandRunner {
+            harness: HarnessId::Codex,
+            program,
+        };
+        let slot = ProcessSlot::default();
+        let watchdog = slot.clone();
+        let (stop, stopped) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            if stopped.recv_timeout(Duration::from_secs(5)).is_err() {
+                watchdog.kill();
+            }
+        });
+        let mut session = runner.start(&spec, &slot).unwrap();
+        let started = Instant::now();
+        let outcome = session.turn(&spec.prompt, &mut |_| {});
+        let elapsed = started.elapsed();
+        let _ = stop.send(());
+        session.close();
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "the turn took {elapsed:?}"
+        );
+        assert_eq!(
+            outcome,
+            TurnOutcome::Answered {
+                final_text: spec.prompt.clone()
+            }
+        );
+    }
+
     #[test]
     fn nonzero_exit_fails_with_last_stderr_line() {
         let dir = tempfile::tempdir().unwrap();
