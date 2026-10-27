@@ -128,6 +128,9 @@ test("githubOwnerFromUrl pre-fills a confident owner and nothing else", () => {
     "notifications", "search", "explore", "marketplace", "topics", "trending", "collections",
     "sponsors", "login", "logout", "signup", "new", "pulls", "issues", "codespaces", "dashboard",
     "features", "enterprise", "pricing", "about", "apps", "users", "account", "stars", "watching",
+    "organizations", "enterprises", "copilot", "sessions", "join", "security", "settings",
+    "readme", "team", "customer-stories", "solutions", "resources", "events", "site", "home",
+    "mobile", "nonprofit", "education", "partners",
   ]) assert.equal(githubOwnerFromUrl(`https://github.com/${route}`), null, route);
   assert.equal(githubOwnerFromUrl("https://github.com/-leading"), null);
   assert.equal(githubOwnerFromUrl("https://github.com/trailing-"), null);

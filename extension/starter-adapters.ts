@@ -56,7 +56,9 @@ const GITHUB_RESERVED_ROUTES = new Set([
   "settings", "notifications", "search", "orgs", "explore", "marketplace", "topics",
   "trending", "collections", "sponsors", "login", "logout", "signup", "new", "pulls",
   "issues", "codespaces", "dashboard", "features", "enterprise", "pricing", "about",
-  "apps", "users", "account", "stars", "watching",
+  "apps", "users", "account", "stars", "watching", "organizations", "enterprises", "copilot",
+  "sessions", "join", "security", "readme", "team", "customer-stories", "solutions", "resources",
+  "events", "site", "home", "mobile", "nonprofit", "education", "partners",
 ]);
 
 /** The owner Brauser can read off a GitHub URL, to pre-fill (never apply
