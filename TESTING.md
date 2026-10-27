@@ -139,7 +139,7 @@ This standard is meant to improve with use. When you change it:
   errors used invalid adapter syntax and a future timestamp and were corrected
   first). The existing unavailable-history test now exercises both activity
   and `why` evidence hiding a conflicting identity. No real browser or native
-  dialog is involved; the macOS smoke expectation stays 14 dialogs.
+  dialog is involved; for the macOS smoke, the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 - 2026-10-27: Independent review reproduced a wrong-note load and overwrite
   when log catch-up failed and note recovery silently ignored the missing
   historical candidates. The regression creates two artifacts sharing a
@@ -158,7 +158,7 @@ This standard is meant to improve with use. When you change it:
   tests cover checkpoint migration, changed-file-only reads, a completed
   trailing marker, dirty tracking, and the aggregate read cap without partial
   publication. These are local filesystem fixtures; no macOS browser run is
-  claimed and the scripted-dialog count remains 14.
+  claimed; for the macOS smoke, the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 
 - 2026-10-27: The single/batch activity parity test covers 13 scenarios through
   both native handlers with separate stores, explicit expected outcomes and
@@ -168,7 +168,7 @@ This standard is meant to improve with use. When you change it:
   was confirmed, but no existing behavioral divergence was reproduced. Initial
   test-only failures assumed markers contained plain event IDs or struct field
   order; decoding their hex JSON checks the actual contract. No macOS run is
-  claimed; the scripted-dialog count stays 14.
+  claimed; for the macOS smoke, the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 - 2026-10-27: Independent review reproduced a sanitizer-upgrade recovery failure with a pre-upgrade v1 intent and a log torn inside a Unicode format character. Exact-hash compatibility now resumes that original entry through both single and batch delivery, preserves unrelated bytes, refuses changed payloads and edited tails, and deduplicates a complete marker. A second regression covers activity and context payloads. Future renderer-independent single-entry intent storage remains tracked as `brwr-3cc`; no macOS execution is claimed.
 - 2026-10-27: Unicode-spoofing regressions first failed in daily rows and
   generated artifact files, then passed with the shared host presentation
@@ -178,8 +178,8 @@ This standard is meant to improve with use. When you change it:
   The format-character table was exhaustively compared with the local Node
   Unicode 17 `General_Category=Cf` property (170 scalars); no dependency or
   network fetch is needed. These are host filesystem tests, not evidence of
-  an Obsidian/VS Code preview or a macOS Chrome run. The smoke runner still
-  expects 14 scripted dialogs.
+  an Obsidian/VS Code preview or a macOS Chrome run. For the macOS smoke,
+  the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 - 2026-10-27: Trail-transition validation uses a strict allowlist for new activity and the original bounded shape checks for historical markers. The regressions test terminal refusal through both native delivery paths, all browser values plus `forward_back`, and a pre-validation ingestion cache followed by reindexing an owned marker. They verify actual SQLite edge kinds, retained activity totals and exact payloads, unchanged source logs, and continued rejection of oversized or unpaired legacy trails. No browser or native dialog is involved.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.
