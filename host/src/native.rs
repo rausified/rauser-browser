@@ -1943,7 +1943,7 @@ pub(crate) fn summary_artifact(
 /// The latest summary of a page no live adapter recognizes, under the
 /// artifact the finisher logs it to: a recorded contract's artifact (a
 /// removed adapter's page) when its type is known, else the page's
-/// `web.page` identity (`finisher::summary_artifact` decides both). Any
+/// `web.page` identity ([`summary_artifact`] decides both). Any
 /// failure, including a contract this host cannot read, means no summary.
 fn unrecognized_page_summary(
     config: &ConfigStore,

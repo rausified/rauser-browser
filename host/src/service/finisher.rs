@@ -36,7 +36,7 @@ use super::supervisor::{RunFinisher, SavedRun, accept_summary_answer, timestamp}
 use crate::answer::SummaryAnswer;
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url};
-use crate::config::ConfigStore;
+use crate::config::{ADOPTED_CONTRACTS_PAUSED, ConfigStore};
 use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::markdown::link_style;
@@ -237,6 +237,11 @@ fn key_error((code, message): crate::native::Refusal) -> String {
         ErrorCode::InvalidConfig => NEEDS_REPAIR.into(),
         ErrorCode::NotConfigured => NO_STORAGE.into(),
         ErrorCode::Internal if message == HOME_UNAVAILABLE => FOLDER_UNAVAILABLE.into(),
+        // An unusable adopted-contract record already names its repair
+        // (Forget recorded adapters in settings), which a retry cannot do.
+        ErrorCode::Internal if message.starts_with(ADOPTED_CONTRACTS_PAUSED) => {
+            message.into_owned()
+        }
         _ => format!("This page's notes record could not be found ({message}). Retry save."),
     }
 }
@@ -922,6 +927,27 @@ mod tests {
             key_error((ErrorCode::Internal, crate::native::HOME_UNAVAILABLE.into())),
             FOLDER_UNAVAILABLE
         );
+    }
+
+    /// An unreadable adopted-contract record pauses notes on a page no
+    /// adapter recognizes; the save fails with the record's own repair, not
+    /// wrapped in a "could not be found ... Retry save" sentence.
+    #[test]
+    fn an_unusable_adopted_contract_record_fails_with_its_repair() {
+        let world = World::new();
+        let run = run(&world, PAGE, HarnessId::Codex);
+        fs::write(
+            crate::config::adopted_contracts_path(world.dir.path()),
+            b"{",
+        )
+        .unwrap();
+
+        let error = world.finisher().save(&run, &answer()).unwrap_err();
+        let expected = ConfigStore::load_from(world.config_path()).adopted_contracts_unavailable();
+        assert_eq!(error, expected);
+        assert!(error.contains("Forget recorded adapters"), "{error}");
+        assert!(!error.contains("could not be found"), "{error}");
+        assert!(world.summary_events().is_empty());
     }
 
     #[test]

@@ -74,6 +74,11 @@ const ADOPTED_CONTRACTS_REPAIR: &str = "Choose Forget recorded adapters in Braus
 /// the config lock (see `AdoptedContracts`). It lives beside config.toml in
 /// the OS config directory, or beside an injected test config; like the rest
 /// of the host's state, it stays out of the home folder (DESIGN.md §6.1).
+/// How every refusal of a note key while the adopted-contract state file
+/// cannot be used begins (`ConfigStore::adopted_contracts_unavailable`).
+pub(crate) const ADOPTED_CONTRACTS_PAUSED: &str =
+    "Notes on this page are paused to protect note identity";
+
 pub(crate) fn adopted_contracts_path(config_dir: &Path) -> PathBuf {
     config_dir.join("adopted-contracts.json")
 }
@@ -634,7 +639,7 @@ impl ConfigStore {
             |dir| adopted_contracts_path(dir).display().to_string(),
         );
         format!(
-            "Notes on this page are paused to protect note identity: Brauser's record of the adapters it has used ({state}) cannot be read. {ADOPTED_CONTRACTS_REPAIR}"
+            "{ADOPTED_CONTRACTS_PAUSED}: Brauser's record of the adapters it has used ({state}) cannot be read. {ADOPTED_CONTRACTS_REPAIR}"
         )
     }
 
