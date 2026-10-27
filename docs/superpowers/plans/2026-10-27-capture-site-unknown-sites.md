@@ -75,6 +75,16 @@ The leading-literal rule stays as it is (adapter-templates.md §10.4). On `https
 
 DESIGN §5.1 (the `brwr-gf1` paragraph) and §12.2 step 7.6 are updated in Task 15. No checker is weakened. This plan does not close the bead.
 
+## Contract decision: scope, unscoped and title are panel-owned overlays applied after the check
+
+`FORBIDDEN_KEYS` in `adapter-templates/src/draft.rs` is `title`, `scope`, `unscoped`, `alias`, `fields`, `path_case`, and the forbidden-key check refuses the whole draft. DESIGN §5.1 says that choosing scope and adding a title entry in the review "never relax the checks" and are "part of drafting, not a user edit". So they are applied **on top of** a checked draft and are never fed into the forbidden-key check:
+
+- **Checked tables.** `check_draft_rules` (Task 3) and `check_site_draft` (Tasks 7–8) receive the drafted adapter tables as they stand *before* the overlays: only the Tier 0 keys (`type`, `origin`, `match`, `id`, `modes`, `refs`), after unchecking and renaming. These tables never hold `title`, `scope` or `unscoped`. The forbidden-key check stays a whole-draft refusal for any adapter with a `Drafted` rule. A drafter that emits a forbidden key, or a panel bug that leaves an overlay inside a table, therefore still fails closed.
+- **Scope travels separately.** `check_site_draft` carries a per-adapter `scope` field: `{ values: [string] }`, `"unscoped"` or `null`. The host computes `ScopeState` from the checked table and judges the choice with `resolve_scope_choice` (Task 3). Pending needs non-empty values or `"unscoped"`, unscoped-only accepts only `"unscoped"`, copied accepts only `null` (the host's copy is used) and not-shared accepts only `null`. Rule verdicts never depend on the choice, because root, probe and overlap checks match without scope.
+- **The title entry never crosses.** Its suffix comes from the tab title, which never goes to the host. The panel adds `{title}<suffix>` to the saved document after the check passes. `update_config`'s normal adapter validation covers the template, as it does for starters.
+- **Two outputs from the plan.** `planDraftedSite` (Task 9) returns `plan.checked` (tables, provenance and scope choices), which is the only thing sent to `check_site_draft`, and `plan.document` (the same tables with scope, unscoped and the title entry applied), which is the only thing saved.
+- **Advanced editor (Task 12).** The editor strips adapter-level `title`, `scope` and `unscoped` from the tables it checks the same way, and sends the scope as the separate field. A hand-added `alias`, `fields` or `path_case` is a user edit to the whole adapter. That adapter's rules are all sent as `user_written`, and for an adapter whose rules are all `UserWritten`, the forbidden-key step becomes a `Warned(ForbiddenKey)` and not a refusal, consistent with "user-written failures only warn".
+
 ## Out of scope, with seams
 
 - **Agent drafting (`brwr-f45`, step 7.7).** The seam:
@@ -87,13 +97,14 @@ DESIGN §5.1 (the `brwr-gf1` paragraph) and §12.2 step 7.6 are updated in Task 
 
 ## Review Focus
 
-These are the five failure modes most likely to slip through, each pinned by a named test.
+These are the six failure modes most likely to slip through, each pinned by a named test.
 
 1. **Planted links steering the draft wider.** Pinned by the nine `planted_*` tests and `link_only_alternative_never_widens_visited_rule` (Tasks 4, 6).
 2. **A dropped rule surviving into the save.** The panel's selection is re-checked against the then-current config before `update_config`. Pinned by `a check_site_draft refusal at save time saves nothing` (Task 11) and `check_site_draft_rejects_drafted_rule_that_now_overlaps` (Task 8).
 3. **Pending scope saved as unscoped or as an empty scope.** Pinned by `pending scope blocks the plan until scope or unscoped is chosen` (Task 9) and `a shared origin with pending scope keeps Save disabled until the user chooses` (Task 10).
 4. **Raw page data reaching the host.** Pinned by `the draft request carries shapes and origin only` (Task 9) and `draft_site_refuses_invalid_shapes_and_raw_urls` (Task 8).
 5. **Non-deterministic or colliding IDs.** Pinned by `draft_is_deterministic_for_permuted_input` and `taken_types_get_numeric_suffix_and_ids_never_collide` (Task 5), and `draft_site_counts_recorded_contract_types_as_taken` (Task 8).
+6. **Panel-owned overlays tripping, or bypassing, the forbidden-key check.** A chosen scope or a title entry must not turn a valid save into a `draft_forbidden_key` refusal, and an overlay left inside a checked table must still fail closed. Pinned by `saving a pending-scope shared-origin draft with chosen scope succeeds` and `a title entry does not trip draft_forbidden_key at save` (Task 11), `check_site_draft_accepts_pending_scope_with_chosen_scope` and `check_site_draft_still_refuses_a_table_carrying_scope_or_title` (Task 8).
 
 Commands used throughout:
 - **Crate:** `cargo test --locked -p adapter-templates`
@@ -185,16 +196,17 @@ Today `fn check_draft` stops at the first failure for the whole draft. It also r
   - Add `pub enum ScopeState { NotShared, Copied(Scope), Pending { capture: String }, UnscopedOnly }`.
   - Add `pub enum RuleVerdict { Kept, Dropped(DraftErrorCode), Warned(DraftErrorCode) }`.
   - Add `pub struct DraftRulesReport { scope: ScopeState, rules: Vec<RuleVerdict>, document: Option<Document> }`, holding the survivors validated as a one-adapter document with any copied scope.
-  - Add `pub fn check_draft_rules(existing: &Document, draft: &Value, provenance: &[Provenance], policy: &DraftPolicy, accepted: &[Document]) -> Result<DraftRulesReport, DraftOutcome>`. `accepted` holds the earlier-ranked drafted adapters, so a later rule that overlaps one is dropped.
+  - Add `pub fn check_draft_rules(existing: &Document, draft: &Value, provenance: &[Provenance], policy: &DraftPolicy, accepted: &[Document]) -> Result<DraftRulesReport, DraftOutcome>`. `accepted` holds the earlier-ranked drafted adapters, so a later rule that overlaps one is dropped. `draft` is the checked table, before the scope, unscoped and title overlays (see "Contract decision: scope, unscoped and title are panel-owned overlays"). The function never receives the user's scope choice or a title entry.
+  - Add `pub enum ScopeChoice { Values(Vec<String>), Unscoped, None }` and `pub fn resolve_scope_choice(state: &ScopeState, choice: &ScopeChoice) -> Result<ResolvedScope, DraftErrorCode>`, where `ResolvedScope` is `NotShared`, `Scoped(Scope)` or `Unscoped`. Pending needs non-empty, valid `name` values or `Unscoped`; unscoped-only accepts only `Unscoped`; copied and not-shared accept only `None` (copied resolves to the host's copy). It is a separate step after `check_draft_rules` and never changes a rule verdict.
   - Order of checks:
-    1. Forbidden keys, for the whole draft.
+    1. Forbidden keys, for the whole draft, when any rule is `Drafted`. When every rule is `UserWritten` (an adapter the user edited by hand in the advanced editor), this becomes `Warned(ForbiddenKey)` on every rule instead.
     2. Scope state: copied when every scoped adapter on the origin agrees; pending when there is none or they disagree; unscoped-only where the catalog has no tenant.
     3. Validation of each rule as a one-rule adapter.
     4. Per rule: leading literal, `{*}` not second, no blocked route word as a literal, no ID capture from a `search_keys` or `paging_keys` parameter, root and probe URLs (matched without scope, SQ-V3), and overlap with `existing` and then with `accepted`.
     5. The ID must use an identifier capture, checked for the adapter.
   - A `UserWritten` rule's failure becomes `Warned` and the rule is kept.
   - Refactor `fn check_draft` to share the step helpers without changing its results.
-- Modify `adapter-templates/src/error.rs`: add `DraftErrorCode::BlockedRoute => "draft_blocked_route"`, `PagingCapture => "draft_paging_capture"`, `InvalidRule => "draft_invalid_rule"`.
+- Modify `adapter-templates/src/error.rs`: add `DraftErrorCode::BlockedRoute => "draft_blocked_route"`, `PagingCapture => "draft_paging_capture"`, `InvalidRule => "draft_invalid_rule"`, `ScopePending => "draft_scope_pending"`, `ScopeChoice => "draft_scope_choice"`.
 - Modify `protocol/adapter-templates/vectors.json` and `protocol/adapter-templates/README.md`: add a `draft_rules` kind (`impls: ["rust"]`) whose output is `{scope, rules:[verdict]}`, with one case per check below.
 - Modify `adapter-templates/tests/vectors.rs`: add the `"draft_rules"` arm next to `"draft"`.
 - Test: `adapter-templates/src/draft.rs` `#[cfg(test)]`, vectors.
@@ -213,7 +225,13 @@ Today `fn check_draft` stops at the first failure for the whole draft. It also r
   - `draft_rules_overlap_drops_only_overlapping_rules`
   - `overlap_between_drafted_kinds_keeps_the_higher_ranked_rule`
   - `draft_rules_user_written_failures_only_warn`
-  - `draft_rules_forbidden_key_rejects_whole_draft`
+  - `draft_rules_forbidden_key_rejects_whole_draft_when_any_rule_is_drafted`
+  - `draft_rules_all_user_written_adapter_forbidden_key_only_warns`
+  - `resolve_scope_choice_accepts_values_or_unscoped_for_pending_scope`
+  - `resolve_scope_choice_refuses_missing_or_empty_scope_when_pending` (`draft_scope_pending`)
+  - `resolve_scope_choice_allows_only_unscoped_where_no_tenant_position` (`draft_scope_choice`)
+  - `resolve_scope_choice_keeps_copied_scope_fixed`
+  - `scope_choice_never_changes_rule_verdicts`
   - `draft_rules_id_without_identifier_rejects_draft`
   - `notion_paths_without_route_word_are_refused_by_the_leading_literal_rule` (`brwr-gf1`)
 - [ ] Run **Crate**. Expect FAIL. Confirm that the existing `draft` vectors still pass, so the refactor is pinned before it starts.
@@ -233,7 +251,7 @@ Today `fn check_draft` stops at the first failure for the whole draft. It also r
     - shapes with a blocked route word;
     - shapes with a `search_keys`/`paging_keys` query identifier (only the pair is removed when the shape has another identifier);
     - `{param}` pairs;
-    - shapes an existing adapter recognizes, tested by filling the shape and evaluating with `Document::evaluate`.
+    - shapes an existing adapter recognizes, tested by filling the shape and matching each existing rule **without scope** (`match_rule`, as the Task 3 overlap check does). With `Document::evaluate`, an owner-scoped adapter such as GitHub's would not recognize the filler `example-page` and the shape would slip through to be dropped later by overlap. Matching without scope makes the filter report `DropReason::AlreadyRecognized` for it, so this filter, the Task 3 overlap check and the Task 13 "listed as already captured" test agree.
 
     It also rewrites catalog account-index positions to `{_}`.
   - `fn group(tagged) -> Vec<Kind>`:
@@ -247,13 +265,14 @@ Today `fn check_draft` stops at the first failure for the whole draft. It also r
 - Test: `adapter-templates/src/structural.rs` `#[cfg(test)]`.
 
 **Interfaces:**
-- Consumes: `UrlShape` (Task 2), `DraftPolicy` (Task 1), `Document::evaluate`.
+- Consumes: `UrlShape` (Task 2), `DraftPolicy` (Task 1), `match_rule` (scope ignored).
 
 - [ ] Write failing tests:
   - `root_probe_search_and_paging_shapes_are_filtered`
   - `blocked_route_word_shapes_are_filtered`
   - `param_names_are_dropped`
   - `recognized_shapes_are_filtered`
+  - `shapes_a_scoped_existing_adapter_would_recognize_are_filtered_as_already_recognized` (GitHub owner scope, filler `example-page`)
   - `account_index_becomes_anonymous`
   - `hex32_and_tailhex32_group_as_one_class`
   - `endings_after_last_identifier_share_a_kind`
@@ -357,8 +376,8 @@ These are the step 7.6 drafter tests, run on real recorded URLs through the shar
   - `DraftedRuleView { rule: integer, checked: boolean, unchecked_reason: enum [link_only, token_only]|null, visited: integer, links: integer, example: string }`.
   - `DroppedView { shape: string|null, adapter: integer|null, rule: integer|null, reason: string enum (the `DropReason` and `DraftErrorCode` values) }`.
   - `PreviewRowView { source: enum [visited, link, probe], shape: string, url: string, adapter: integer|null, rule: integer|null, artifact_id: string|null }`. The `url` holds a filled or probe URL only, never a real one.
-  - `CheckSiteDraftRequest { …, type: "check_site_draft", origin, expected_revision, adapters: object[] ≤8, provenance: (enum [drafted, user_written])[][] ≤8×16, visited, links }`.
-  - `SiteDraftChecked { …, type: "site_draft_checked", revision, rules: RuleVerdictView[][], scope: enum[], preview: PreviewRowView[] }` with `RuleVerdictView { verdict: enum [kept, dropped, warned], reason: string|null }`.
+  - `CheckSiteDraftRequest { …, type: "check_site_draft", origin, expected_revision, adapters: object[] ≤8, provenance: (enum [drafted, user_written])[][] ≤8×16, scope: ScopeChoiceView[] ≤8, visited, links }`. `adapters` holds the checked tables, before the scope, unscoped and title overlays. `ScopeChoiceView` is `{ values: string[] 1..64, each ≤128 } | "unscoped" | null`, one per adapter. There is no title field.
+  - `SiteDraftChecked { …, type: "site_draft_checked", revision, rules: RuleVerdictView[][], scope: ScopeVerdictView[], preview: PreviewRowView[] }` with `RuleVerdictView { verdict: enum [kept, dropped, warned], reason: string|null }` and `ScopeVerdictView { state: enum [not_shared, copied, pending, unscoped_only], resolved: enum [not_shared, scoped, unscoped]|null, reason: string|null }`.
   - Add both requests and both responses to the request/response unions.
 - Regenerate `protocol/src/generated.rs` and `protocol/ts/generated.ts`.
 - Modify `protocol/README.md` with a "Version 6 additions: Capture Site drafting" paragraph. It covers what crosses (origin and shapes only), the bounds, the revision binding, and the fact that an older v6 host answers `invalid_request` for unknown types and the panel then asks for a host rebuild.
@@ -370,6 +389,7 @@ These are the step 7.6 drafter tests, run on real recorded URLs through the shar
   - `draft_site_rejects_more_than_50_link_shapes`
   - `site_drafted_rejects_unknown_fields`
   - `check_site_draft_round_trips`
+  - `check_site_draft_scope_choice_round_trips_and_rejects_an_empty_values_list`
   - `unknown_drafter_value_is_rejected`
   - Node: `site_drafted with an extra key or an unbounded list fails the response shape check`
 - [ ] Run `cargo test --locked -p brauser-protocol` and **Extension**. Expect FAIL.
@@ -393,7 +413,7 @@ These are the step 7.6 drafter tests, run on real recorded URLs through the shar
     7. Build the preview by filling each visited and link shape and each probe path, then evaluating against the surviving adapters without scope.
     8. `remapped` is the count of existing recognized artifacts the survivors would re-map. It is 0 by construction after overlap removal, and asserted.
     9. Return `revision`.
-  - `pub fn check_site_draft(value, config) -> Response`. It applies the same lock and refusals and returns `Conflict` when `expected_revision` differs. It runs `check_draft_rules` per adapter with the given provenance and the earlier adapters as `accepted`, and returns verdicts and a preview.
+  - `pub fn check_site_draft(value, config) -> Response`. It applies the same lock and refusals and returns `Conflict` when `expected_revision` differs. It runs `check_draft_rules` per checked table with the given provenance and the earlier adapters as `accepted`, then `resolve_scope_choice` with that adapter's `scope` field, and returns rule verdicts, scope verdicts and a preview. It never merges the scope choice into the table before the forbidden-key step, so a table that itself carries `title`, `scope` or `unscoped` with a drafted rule is still refused as `draft_forbidden_key`.
 - Modify `host/src/config.rs`: add `pub(crate) fn recorded_adapter_types(&self) -> Vec<String>`, which reads from `retired_adapter_contracts` and the adopted contracts used by `fn note_key_rule`.
 - Modify `host/src/native.rs`: replace Task 7's temporary arms with `Request::DraftSite(value) => capture_site::draft_site(value, config)` and the same for `CheckSiteDraft`. Leave `SetupContext` alone.
 - Test: `host/src/capture_site.rs` `#[cfg(test)]` (with `served(...)` from native tests where the full loop matters).
@@ -411,6 +431,10 @@ These are the step 7.6 drafter tests, run on real recorded URLs through the shar
   - `check_site_draft_rejects_drafted_rule_that_now_overlaps`
   - `check_site_draft_user_written_rule_only_warns`
   - `check_site_draft_stale_revision_is_conflict`
+  - `check_site_draft_accepts_pending_scope_with_chosen_scope`: Linear `/acme/issue/ABC-12`, the table has no `scope`, and `scope: {values:["acme"]}` resolves to scoped.
+  - `check_site_draft_accepts_unscoped_choice_on_unscoped_only_origin`
+  - `check_site_draft_refuses_pending_scope_without_a_choice` (`draft_scope_pending`)
+  - `check_site_draft_still_refuses_a_table_carrying_scope_or_title` (`draft_forbidden_key`)
 - [ ] Run **Host**. Expect FAIL.
 - [ ] Implement.
 - [ ] Run **Host**, the scripted-dialogs test and clippy commands, and **Windows clippy**. Expect PASS. On a restricted runner, compare the failing set with the baseline, as in Global Constraints.
@@ -432,10 +456,11 @@ These are the step 7.6 drafter tests, run on real recorded URLs through the shar
     - Apply the type rename to both `type` and the ID scheme, validated against the type grammar, `taken_types` and the other kinds.
     - Apply scope: on pending, require values (a generalized `parseGitHubOrganizations` → `parseTenantList`) or `"unscoped"`; `unscoped_only` offers only unscoped; `copied` is fixed.
     - Add an optional title entry `{title}<suffix>` when the tab title ends with the typed suffix (a suffix with `{`, `}` or a control character is refused).
+    - Keep the overlays apart: `plan.checked = { adapters, provenance, scope }` holds the Tier 0 tables after unchecking and renaming, all-`drafted` provenance and the per-adapter `ScopeChoice` (`{values}`, `"unscoped"` or `null` for copied and not-shared). `plan.document` is those tables with the scope or `unscoped: true` and the title entry applied. Only `plan.checked` goes to `check_site_draft`, and only `plan.document` goes to `update_config`.
     - Validate the whole document with `validateAdapterDocument`.
     - Evaluate the real current URL with `previewDocument`, locally.
     - Compute matched visited/link counts from `draft.preview`.
-  - `DraftPlan` reuses the `CapturePlan` fields (`origin`, `document`, `current`, `examples`, `probes`, `startsCapture`) plus `kinds` and `counts`.
+  - `DraftPlan` reuses the `CapturePlan` fields (`origin`, `document`, `current`, `examples`, `probes`, `startsCapture`) plus `checked`, `kinds` and `counts`.
 - Test: `extension/tests/capture-site.test.mjs`.
 
 - [ ] Write failing tests:
@@ -448,6 +473,8 @@ These are the step 7.6 drafter tests, run on real recorded URLs through the shar
   - `scope prefill comes from the current tab's tenant position, never from the host`
   - `rename must keep types unique and valid`
   - `title entry builds a valid title template and never reaches draft_site`
+  - `checked tables carry no title, scope or unscoped and the chosen scope travels separately`
+  - `a copied scope is applied to the document but sent as null`
   - `the draft request carries shapes and origin only`: no `http`, no tab title and no link href appear in the serialized request.
   - `the real current URL is evaluated locally`
 - [ ] Run **Extension**. Expect FAIL.
@@ -508,8 +535,8 @@ Read DESIGN.md §5.7 and `panel.css` first.
 **Files:**
 - Modify `extension/capture-site-panel.ts` (`commit`). Reuse the starter commit sequence:
   1. `withConfigMutationLock`, `readHostConfig` revision equality, issue refusal, the active-tab check and the worker `get_status` pause/removal check, all as they are now.
-  2. New: `session.checkSiteDraft` with `expected_revision`, the selected adapters and all-`drafted` provenance. Any `dropped` verdict refuses with its reason and saves nothing.
-  3. Then `beforeSave`, then `session.saveConfig({...latest.config, adapters: plan.document, capture_enabled: plan.startsCapture})`, as now.
+  2. New: `session.checkSiteDraft` with `expected_revision` and `plan.checked`: the checked tables before the overlays, all-`drafted` provenance and the separate scope choices. Any `dropped` rule verdict, or any scope verdict with a reason, refuses with its reason and saves nothing. The overlays are never sent.
+  3. Then `beforeSave`, then `session.saveConfig({...latest.config, adapters: plan.document, capture_enabled: plan.startsCapture})`, as now. `plan.document` is the one that carries the scope, `unscoped` and title overlays.
   4. Keep the committed/not-committed messages and `afterSave`.
 - Test: `extension/tests/panel.test.mjs`, `extension/tests/worker.test.mjs`.
 
@@ -517,6 +544,10 @@ Read DESIGN.md §5.7 and `panel.css` first.
   - `saving a draft unchecked down to one rule saves exactly that rule`
   - `a revision change between draft and save refuses without rebasing`
   - `a check_site_draft refusal at save time saves nothing`
+  - `saving a pending-scope shared-origin draft with chosen scope succeeds`: Linear `/acme/issue/ABC-12` with scope `acme`. `check_site_draft` receives a table without `scope` plus `scope: {values:["acme"]}`, and `update_config` receives the scoped adapter.
+  - `saving an unscoped-only origin draft with the unscoped statement succeeds`
+  - `a copied scope is not echoed into check_site_draft and still saves`
+  - `a title entry does not trip draft_forbidden_key at save`: the `check_site_draft` request has no `title` and no tab-title text, and `update_config` receives the `{title}<suffix>` entry.
   - `a saved drafted site starts capture and reloads the note under its host-derived key` (reuse the `brwr-qox` note-identity scenario)
   - `a pending pause or removal blocks the drafted save`
   - worker: `link shapes are never sampled, buffered or sent in update_config`
@@ -537,7 +568,7 @@ This maps the step 7.6 flow test "a user edit turning only the edited rule into 
   - On load, it consumes the entry once: read, then delete, and an expired entry is ignored and deleted.
   - It opens the adapter editor for that origin with the drafted adapters.
   - It tracks per-rule provenance by comparing each rule's canonical JSON with `baseline_rules`: an edited rule is `user_written`.
-  - Before save it calls `checkSiteDraft`. A drafted rule's `dropped` verdict blocks the save with its reason. A user-written rule's `warned` verdict shows a warning and saves.
+  - Before save it calls `checkSiteDraft` with the checked tables: adapter-level `title`, `scope` and `unscoped` are stripped, and the scope goes in the separate `scope` field, as in Task 11. An adapter where the user added `alias`, `fields` or `path_case` by hand is sent with all-`user_written` provenance, so its forbidden key only warns (Task 3). A drafted rule's `dropped` verdict blocks the save with its reason. A user-written rule's `warned` verdict shows a warning and saves the full edited document.
 - Modify `extension/worker.ts`: startup and the maintenance alarm delete expired `captureSiteDraft:*` entries.
 - Test: `extension/tests/options.test.mjs`, `extension/tests/worker.test.mjs`.
 
@@ -545,6 +576,8 @@ This maps the step 7.6 flow test "a user edit turning only the edited rule into 
   - `a handed-off draft opens in the adapter editor once and expires after 30 minutes`
   - `editing one rule makes only that rule user-written`
   - `user-written rule failures only warn while unedited drafted failures block save`
+  - `adding a title or choosing scope in the advanced editor does not trip draft_forbidden_key`
+  - `an adapter with a hand-added path_case is user-written and its forbidden key only warns`
   - worker: `expired capture-site drafts are deleted at startup and on maintenance`
 - [ ] Run **Extension**. Expect FAIL.
 - [ ] Implement.
@@ -567,7 +600,7 @@ On an enabled origin, the panel offers a draft from the worker sample when unrec
   - `hint appears only after three unrecognized visits of a candidate shape and sends nothing to the host`
   - `the sample reaches the host only after the user asks`
   - `drafting on a configured origin adds adapters and never changes existing ones`
-  - `rules overlapping the origin's existing adapters are listed as already captured`
+  - `rules overlapping the origin's existing adapters are listed as already captured`, including a shape that an owner-scoped existing adapter recognizes only without scope (Task 4 filters it as `AlreadyRecognized`)
 - [ ] Run **Extension**. Expect FAIL.
 - [ ] Implement.
 - [ ] Run **Extension**. Expect PASS.
@@ -599,8 +632,9 @@ On an enabled origin, the panel offers a draft from the worker sample when unrec
 
 **Files:**
 - Modify `DESIGN.md`:
-  - §5.1: add an "As built (unknown sites, `brwr-t40`)" paragraph covering the messages, the per-rule checks, the pending scope, the hint, the handoff and the remap invariant. Rewrite the `brwr-gf1` paragraph with the decision above. Add the shared-origin and short-lowercase-repository limitation.
-  - §12.2 step 7.6: mark it built, add the superseded-requirement mapping from this plan, and correct the Notion named case.
+  - §5.1: add an "As built (unknown sites, `brwr-t40`)" paragraph covering the messages, the per-rule checks, the pending scope, the panel-owned overlays (scope, unscoped and title are applied after `check_site_draft`, and scope is judged as a separate field), the hint, the handoff and the remap invariant. Rewrite the `brwr-gf1` paragraph with the decision above. Add the shared-origin and short-lowercase-repository limitation.
+  - §12.2 step 7: correct "if it adds messages, it takes the next protocol version". Capture Site added `draft_site` and `check_site_draft` additively within v6, following the agent-run precedent in protocol/README ("Also added in version 6"). Say that additive host-only messages may stay within the current version and that a changed existing message takes the next one.
+  - §12.2 step 7.6: mark it built, add the superseded-requirement mapping from this plan, correct the Notion named case, and record that scope, unscoped and the title entry are overlays applied after the check.
   - §5.7: the "Origin not enabled" and "Enabled origin, page not an artifact" rows name the Capture Site and hint behavior.
   - §14: add a dated line for the gf1 decision.
 - Modify `adapter-templates.md`:
