@@ -219,6 +219,8 @@ mod tests {
                 error_kind: None,
                 summary_path: None,
                 stream_truncated: false,
+                run_timeout_secs: None,
+                vocabulary: None,
             };
             self.store.create(&status, "page").unwrap();
             id

@@ -10,7 +10,9 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{HarnessId, RecordKey, RunAnswer, RunErrorKind, RunState, RunView};
+use brauser_protocol::{
+    HarnessId, RecordKey, RunAnswer, RunErrorKind, RunState, RunView, SummaryVocabulary,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -129,6 +131,14 @@ pub struct RunStatusFile {
     pub error_kind: Option<RunErrorKind>,
     pub summary_path: Option<String>,
     pub stream_truncated: bool,
+    /// The run's own time limit (its harness entry's `timeout_secs`) and
+    /// the vocabulary its prompt offers, as they were when it was queued,
+    /// so a run resumed after a restart keeps them. Older records have
+    /// neither and resume with the service's limit and the default lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<SummaryVocabulary>,
 }
 
 impl RunStatusFile {
@@ -543,6 +553,8 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
+            run_timeout_secs: None,
+            vocabulary: None,
         }
     }
 

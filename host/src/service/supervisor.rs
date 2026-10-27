@@ -45,7 +45,7 @@ use super::record::{
     page_markdown,
 };
 use crate::answer::parse_answer;
-use crate::config::{ConfigStore, default_summary_vocabulary};
+use crate::config::{ConfigStore, default_summary_vocabulary, valid_summary_vocabulary};
 use crate::open::Opener;
 use crate::vault::Vault;
 
@@ -380,13 +380,20 @@ impl Supervisor {
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
-                    // The run's own limit and vocabulary were not recorded;
-                    // use the service's and the defaults.
-                    let timeout = inner.options.timeout_for(None);
-                    let launch = Launch {
-                        cwd,
-                        vocabulary: default_summary_vocabulary(),
-                    };
+                    // The run's own limit and vocabulary, as recorded when
+                    // it was queued; a record without them (or with a
+                    // vocabulary no configuration could hold) gets the
+                    // service's limit and the default lists.
+                    let requested = status
+                        .run_timeout_secs
+                        .filter(|secs| *secs > 0)
+                        .map(Duration::from_secs);
+                    let timeout = inner.options.timeout_for(requested);
+                    let vocabulary = status
+                        .vocabulary
+                        .filter(valid_summary_vocabulary)
+                        .unwrap_or_else(default_summary_vocabulary);
+                    let launch = Launch { cwd, vocabulary };
                     let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
@@ -454,6 +461,8 @@ impl Supervisor {
                 error_kind: None,
                 summary_path: None,
                 stream_truncated: false,
+                run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
+                vocabulary: Some(req.vocabulary.clone()),
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
@@ -2189,6 +2198,8 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
+            run_timeout_secs: None,
+            vocabulary: None,
         }
     }
 
@@ -2255,6 +2266,8 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
+            run_timeout_secs: None,
+            vocabulary: None,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
@@ -2287,6 +2300,56 @@ mod tests {
         assert_eq!(view.state, RunState::Succeeded, "{view:?}");
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
         assert!(fixture.supervisor.is_idle());
+    }
+
+    fn custom_vocabulary() -> SummaryVocabulary {
+        SummaryVocabulary {
+            document_types: vec!["memo".to_string()],
+            categories: vec!["legal review".to_string()],
+        }
+    }
+
+    /// A queued run records its own limit and vocabulary, so a restart
+    /// does not trade them for the service's limit and the default lists.
+    #[test]
+    fn a_queued_run_records_its_limit_and_vocabulary() {
+        let fixture = Fixture::new(ANSWER);
+        let mut request = fixture.request("a");
+        request.timeout = Some(Duration::from_secs(900));
+        request.vocabulary = custom_vocabulary();
+        let (view, _) = fixture.supervisor.start_run(request).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        let status = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(status.run_timeout_secs, Some(900));
+        assert_eq!(status.vocabulary, Some(custom_vocabulary()));
+        fixture.wait_finished(id);
+    }
+
+    #[test]
+    fn a_resumed_queued_run_keeps_its_recorded_limit_and_vocabulary() {
+        let mut queued = None;
+        let fixture = Fixture::seeded(
+            "/bin/cat > \"$COUNT.prompt\"\nexec /bin/sleep 30\n",
+            DEFAULT_RUN_TIMEOUT,
+            |store, cwd| {
+                let id = seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                );
+                let mut status = store.status(id).unwrap();
+                status.run_timeout_secs = Some(1);
+                status.vocabulary = Some(custom_vocabulary());
+                store.write_status(&status).unwrap();
+                queued = Some(id);
+            },
+        );
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.error_kind, Some(RunErrorKind::TimedOut), "{view:?}");
+        assert_eq!(view.error.as_deref(), Some("Timed out after 1 second"));
+        let prompt = read(&fixture.path("count.prompt"));
+        assert!(prompt.contains("legal review"), "{prompt}");
     }
 
     #[test]
