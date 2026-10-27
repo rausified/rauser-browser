@@ -1,7 +1,11 @@
 use brauser_protocol::{Request, Response};
 
-// Every agent and adapter key is required on the wire, like `storage`.
-const AGENT_AND_ADAPTERS: &str = r#""agent":null,"adapters":{"format":1,"artifacts":[]}"#;
+// Every agent, vocabulary and adapter key is required on the wire, like `storage`.
+const AGENT_AND_ADAPTERS: &str = concat!(
+    r#""agent":null,"#,
+    r#""summary_vocabulary":{"document_types":["report"],"categories":["news"]},"#,
+    r#""adapters":{"format":1,"artifacts":[]}"#,
+);
 
 fn config(storage: &str) -> String {
     format!(
@@ -193,6 +197,32 @@ fn v6_config_requires_agent_and_adapter_keys() {
         assert!(
             serde_json::from_str::<Request>(&update(&without)).is_err(),
             "config without {key} was accepted"
+        );
+    }
+}
+
+#[test]
+fn config_requires_summary_vocabulary() {
+    let plain = config(r#""storage":null,"#);
+    assert!(
+        serde_json::from_str::<Request>(&update(&plain)).is_ok(),
+        "{plain}"
+    );
+    let vocabulary = r#""summary_vocabulary":{"document_types":["report"],"categories":["news"]},"#;
+    for (from, to) in [
+        (vocabulary, ""),
+        (r#""document_types":["report"],"#, ""),
+        (r#","categories":["news"]"#, ""),
+        (
+            r#""categories":["news"]"#,
+            r#""categories":["news"],"tags":[]"#,
+        ),
+    ] {
+        let changed = plain.replace(from, to);
+        assert_ne!(changed, plain, "{from} was not replaced");
+        assert!(
+            serde_json::from_str::<Request>(&update(&changed)).is_err(),
+            "{changed}"
         );
     }
 }

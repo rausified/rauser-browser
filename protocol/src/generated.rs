@@ -108,7 +108,15 @@ pub struct ConfigSnapshot {
     pub strip_params: Vec<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub agent: Option<AgentConfig>,
+    pub summary_vocabulary: SummaryVocabulary,
     pub adapters: AdapterDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryVocabulary {
+    pub document_types: Vec<String>,
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -848,6 +856,7 @@ pub struct ServiceReady {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Request {
     Hello(HelloRequest),
     GetConfig(GetConfigRequest),
@@ -940,6 +949,7 @@ impl Request {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Response {
     HelloResult(HelloResult),
     ConfigResult(ConfigResult),

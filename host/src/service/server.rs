@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ErrorCode, HarnessId, PROTOCOL_VERSION, Request, Response, RunFetched, RunStarted, RunUpdated,
-    RunsListed, ServiceReady,
+    RunsListed, ServiceReady, SummaryVocabulary,
 };
 use uuid::Uuid;
 
@@ -288,6 +288,7 @@ impl Server {
                     requested_at: value.requested_at,
                     cwd: setup.cwd,
                     timeout: setup.timeout,
+                    vocabulary: setup.vocabulary,
                 }) {
                     Ok((run, existing)) => Response::RunStarted(RunStarted {
                         protocol_version: PROTOCOL_VERSION,
@@ -376,6 +377,7 @@ impl Server {
             harness,
             cwd: knowledge_base,
             timeout,
+            vocabulary: config.snapshot().summary_vocabulary.clone(),
         })
     }
 }
@@ -385,6 +387,7 @@ struct RunSetup {
     harness: HarnessId,
     cwd: PathBuf,
     timeout: Option<Duration>,
+    vocabulary: SummaryVocabulary,
 }
 
 fn parse_run_id(run_id: &str) -> Option<Uuid> {
@@ -788,6 +791,28 @@ mod tests {
                 .contains(&format!("\"cwd\": \"{}\"", expected.display())),
             "{fetched:?}"
         );
+    }
+
+    #[test]
+    fn start_run_prompts_with_the_configured_vocabulary() {
+        let world = World::unconfigured("cat > \"$0.prompt\"\necho '{\"ok\": true}'\n");
+        world.configure(
+            Some("\n[summary_vocabulary]\ndocument_types = [\"memo\"]\ncategories = [\"legal review\"]\n"),
+            None,
+        );
+        world.start(Duration::from_secs(600));
+        let run_id = world.started_run_id();
+        let fetched = world.wait_finished(&run_id);
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+        let prompt = std::fs::read_to_string(world.program.with_extension("prompt")).unwrap();
+        let page = world.paths.runs().join(&run_id).join("page.md");
+        assert!(prompt.contains(&page.display().to_string()), "{prompt}");
+        assert!(
+            prompt.contains("\n- memo\n") && prompt.contains("\n- legal review\n"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("- report\n"), "{prompt}");
+        assert!(!prompt.contains("Body text"), "{prompt}");
     }
 
     #[test]

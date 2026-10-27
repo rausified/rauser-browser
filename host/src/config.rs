@@ -10,7 +10,7 @@ use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterV
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
-    ErrorCode, HarnessAdapter, StorageConfig,
+    ErrorCode, HarnessAdapter, StorageConfig, SummaryVocabulary,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,8 @@ const MAX_ENV_ALLOW: usize = 32;
 const MAX_ENV_NAME_BYTES: usize = 64;
 const MAX_TIMEOUT_SECS: u32 = 600;
 const MAX_ADAPTER_WARNINGS: usize = 256;
+const MAX_VOCABULARY_ENTRIES: usize = 64;
+const MAX_VOCABULARY_CHARS: usize = 64;
 pub(crate) const DEFAULT_TIMEOUT_SECS: u32 = 120;
 /// The summaries folder harness setup uses when none is chosen.
 pub(crate) const DEFAULT_SUMMARIES_DIR: &str = "summaries";
@@ -53,6 +55,33 @@ const MAX_HASHED_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(crate) fn default_strip_params() -> Vec<String> {
     vec!["utm_*".into(), "fbclid".into(), "gclid".into()]
+}
+
+/// The document types the summary prompt offers until the user edits them.
+pub const DEFAULT_DOCUMENT_TYPES: [&str; 6] = [
+    "report",
+    "announcement",
+    "ticket",
+    "specification",
+    "email",
+    "article",
+];
+/// The categories the summary prompt offers until the user edits them.
+pub const DEFAULT_CATEGORIES: [&str; 7] = [
+    "technical specification",
+    "product plan",
+    "administrative",
+    "project plan",
+    "marketing material",
+    "research paper",
+    "news",
+];
+
+pub(crate) fn default_summary_vocabulary() -> SummaryVocabulary {
+    SummaryVocabulary {
+        document_types: DEFAULT_DOCUMENT_TYPES.map(String::from).to_vec(),
+        categories: DEFAULT_CATEGORIES.map(String::from).to_vec(),
+    }
 }
 
 pub struct ConfigStore {
@@ -946,6 +975,9 @@ struct StoredConfig {
     _sites: Option<toml::Value>,
     #[serde(default = "default_strip_params")]
     strip_params: Vec<String>,
+    // Absent before protocol v6: the default lists.
+    #[serde(default = "default_summary_vocabulary")]
+    summary_vocabulary: SummaryVocabulary,
     // Accept and ignore the retired M1 key. New config writes omit it.
     #[serde(default, skip_serializing, rename = "near_repeat_secs")]
     _near_repeat_secs: Option<u32>,
@@ -1147,6 +1179,7 @@ impl StoredConfig {
             capture_enabled: value.capture_enabled,
             _sites: None,
             strip_params: value.strip_params.clone(),
+            summary_vocabulary: value.summary_vocabulary.clone(),
             _near_repeat_secs: None,
             _agent_denylist: None,
             _agent_denylist_confirmed: None,
@@ -1172,6 +1205,7 @@ impl From<StoredConfig> for ConfigSnapshot {
             capture_enabled: value.capture_enabled,
             strip_params: value.strip_params,
             agent: None,
+            summary_vocabulary: value.summary_vocabulary,
             adapters: AdapterDocument {
                 format: value.adapters.format,
                 artifacts: value.artifacts,
@@ -1442,6 +1476,7 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
         capture_enabled: false,
         strip_params: default_strip_params(),
         agent: None,
+        summary_vocabulary: default_summary_vocabulary(),
         adapters: AdapterDocument {
             format: 1,
             artifacts: Vec::new(),
@@ -1494,6 +1529,8 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
             bail!("tracking parameters must be simple names or prefix patterns ending in *");
         }
     }
+    validate_vocabulary("document type", &config.summary_vocabulary.document_types)?;
+    validate_vocabulary("category", &config.summary_vocabulary.categories)?;
     if config.capture_enabled && config.storage.is_none() {
         bail!("capture requires a selected notes folder");
     }
@@ -1502,6 +1539,25 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     }
     if let Some(storage) = &config.storage {
         validate_storage(storage)?;
+    }
+    Ok(())
+}
+
+/// One summary vocabulary list: 1-64 distinct entries (ignoring case) of
+/// 1-64 characters, none of them control characters.
+fn validate_vocabulary(name: &str, values: &[String]) -> Result<()> {
+    if values.is_empty() || values.len() > MAX_VOCABULARY_ENTRIES {
+        bail!("the summary {name} list must have 1 to 64 entries");
+    }
+    let mut seen = HashSet::new();
+    for value in values {
+        let chars = value.chars().count();
+        if chars == 0 || chars > MAX_VOCABULARY_CHARS || value.chars().any(char::is_control) {
+            bail!("each summary {name} must be 1 to 64 characters with no control characters");
+        }
+        if !seen.insert(value.to_lowercase()) {
+            bail!("the summary {name} list repeats {value:?}");
+        }
     }
     Ok(())
 }
@@ -2384,6 +2440,81 @@ mod tests {
         );
         assert_eq!(store.knowledge_base_dir().unwrap(), root);
         assert_eq!(store.knowledge_base_identity(), store.root_identity());
+    }
+
+    #[test]
+    fn v5_config_without_vocabulary_loads_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        let vocabulary = &store.snapshot().summary_vocabulary;
+        assert_eq!(vocabulary.document_types, DEFAULT_DOCUMENT_TYPES);
+        assert_eq!(vocabulary.categories, DEFAULT_CATEGORIES);
+        assert_eq!(empty_config().summary_vocabulary, *vocabulary);
+        // A plain update saves an edited vocabulary.
+        let mut next = store.snapshot().clone();
+        next.summary_vocabulary.document_types = vec!["memo".into(), "report".into()];
+        next.summary_vocabulary.categories.push("legal".into());
+        let revision = store.revision().to_owned();
+        store.update(next.clone(), &revision).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[summary_vocabulary]"), "{text}");
+        let reloaded = loaded(&path);
+        assert_eq!(reloaded.config_issue(), None);
+        assert_eq!(
+            reloaded.snapshot().summary_vocabulary,
+            next.summary_vocabulary
+        );
+    }
+
+    #[test]
+    fn duplicate_vocabulary_entry_is_invalid_config() {
+        let valid = empty_config();
+        validate_base(&valid).unwrap();
+        let invalid = |edit: &dyn Fn(&mut SummaryVocabulary)| {
+            let mut config = empty_config();
+            edit(&mut config.summary_vocabulary);
+            validate_base(&config).is_err()
+        };
+        assert!(invalid(&|v| v.document_types.push("Report".into())));
+        assert!(invalid(&|v| v.categories.push("NEWS".into())));
+        assert!(invalid(&|v| v.document_types.clear()));
+        assert!(invalid(&|v| v.categories.clear()));
+        assert!(invalid(&|v| v.document_types.push(String::new())));
+        assert!(invalid(&|v| v.categories.push("tab\there".into())));
+        assert!(invalid(&|v| v.categories.push("x".repeat(65))));
+        assert!(invalid(&|v| {
+            v.document_types = (0..65).map(|n| format!("type {n}")).collect();
+        }));
+        // The limits are inclusive, and a value may be in both lists.
+        assert!(!invalid(&|v| {
+            v.document_types = (0..64).map(|n| format!("type {n}")).collect();
+            v.categories.push("é".repeat(64));
+            v.categories.push("report".into());
+        }));
+
+        // A config.toml with a duplicate loads as needing repair.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "",
+            "[summary_vocabulary]\ndocument_types = [\"report\", \"REPORT\"]\ncategories = [\"news\"]\n",
+        );
+        let store = loaded(&path);
+        assert!(store.config_issue().is_some());
+        assert_eq!(
+            store.snapshot().summary_vocabulary,
+            valid.summary_vocabulary
+        );
     }
 
     #[test]

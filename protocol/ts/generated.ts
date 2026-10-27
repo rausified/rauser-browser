@@ -67,7 +67,13 @@ export interface ConfigSnapshot {
   capture_enabled: boolean;
   strip_params: string[];
   agent: AgentConfig | null;
+  summary_vocabulary: SummaryVocabulary;
   adapters: AdapterDocument;
+}
+
+export interface SummaryVocabulary {
+  document_types: string[];
+  categories: string[];
 }
 
 export interface AdapterDocument {

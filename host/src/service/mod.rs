@@ -11,6 +11,7 @@ pub mod command_runner;
 pub mod harness_api;
 pub mod maintenance;
 pub mod paths;
+pub mod prompt;
 pub mod queue;
 pub mod record;
 pub mod server;

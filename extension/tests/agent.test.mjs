@@ -13,6 +13,7 @@ const config = {
   },
   capture_enabled: false, strip_params: [],
   agent: null,
+  summary_vocabulary: { document_types: ["report"], categories: ["news"] },
   adapters: { format: 1, artifacts: [] },
 };
 
@@ -63,10 +64,17 @@ test("isConfig requires exactly the v6 keys", () => {
     assert.equal(isConfig({ ...config, [key]: false }), false, key);
   }
   assert.equal(isConfig({ ...config, sites: [] }), false, "sites");
-  for (const key of ["storage", "capture_enabled", "strip_params", "agent", "adapters"]) {
+  for (const key of ["storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);
+  }
+  for (const summary_vocabulary of [
+    null, { document_types: ["report"] }, { document_types: ["report"], categories: [1] },
+    { document_types: "report", categories: ["news"] },
+    { document_types: ["report"], categories: ["news"], tags: [] },
+  ]) {
+    assert.equal(isConfig({ ...config, summary_vocabulary }), false, JSON.stringify(summary_vocabulary));
   }
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);

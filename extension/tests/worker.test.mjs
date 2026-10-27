@@ -1349,6 +1349,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
     },
     capture_enabled: false, strip_params: [],
     agent: null,
+    summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
   };
   assert.equal(isConfig(config), true);
@@ -1461,6 +1462,7 @@ function configResult(request, origin, overrides = {}) {
       },
       capture_enabled: true, strip_params: [],
       agent: null,
+      summary_vocabulary: { document_types: ["report"], categories: ["news"] },
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,

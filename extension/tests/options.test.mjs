@@ -69,6 +69,7 @@ function configWith(adapters, captureEnabled) {
     capture_enabled: captureEnabled ?? adapters.length > 0,
     strip_params: [],
     agent: null,
+    summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
   };
 }

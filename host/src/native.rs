@@ -2014,6 +2014,7 @@ mod tests {
                     capture_enabled: false,
                     strip_params: Vec::new(),
                     agent: None,
+                    summary_vocabulary: crate::config::default_summary_vocabulary(),
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
@@ -2243,6 +2244,7 @@ mod tests {
                 capture_enabled: false,
                 strip_params: Vec::new(),
                 agent: None,
+                summary_vocabulary: crate::config::default_summary_vocabulary(),
                 adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(

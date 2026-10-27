@@ -25,21 +25,24 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use brauser_protocol::{ErrorCode, HarnessId, RecordKey, RunErrorKind, RunState, RunView};
+use brauser_protocol::{
+    ErrorCode, HarnessId, RecordKey, RunErrorKind, RunState, RunView, SummaryVocabulary,
+};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::harness_api::{
-    HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome, draft_prompt,
+    HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
+use super::prompt::summary_prompt;
 use super::queue::{Scheduler, Submit};
 use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, fit_session_id,
     page_markdown,
 };
-use crate::config::ConfigStore;
+use crate::config::{ConfigStore, default_summary_vocabulary};
 use crate::vault::Vault;
 
 /// How long a run may take before its process group is killed.
@@ -185,6 +188,8 @@ pub struct StartRun {
     /// The harness entry's `timeout_secs`; `None` uses
     /// [`ServiceOptions::run_timeout`].
     pub timeout: Option<Duration>,
+    /// The document types and categories the prompt offers.
+    pub vocabulary: SummaryVocabulary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +208,7 @@ struct StopState {
 /// What the worker needs that is not in `status.json`.
 struct Launch {
     cwd: PathBuf,
+    vocabulary: SummaryVocabulary,
 }
 
 /// The in-memory side of one queued or running run.
@@ -363,9 +369,14 @@ impl Supervisor {
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
-                    // The run's own limit was not recorded; use the service's.
+                    // The run's own limit and vocabulary were not recorded;
+                    // use the service's and the defaults.
                     let timeout = inner.options.timeout_for(None);
-                    let control = RunControl::new(Launch { cwd }, timeout);
+                    let launch = Launch {
+                        cwd,
+                        vocabulary: default_summary_vocabulary(),
+                    };
+                    let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
                 Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
@@ -432,7 +443,11 @@ impl Supervisor {
                 ));
             }
             let timeout = inner.options.timeout_for(req.timeout);
-            let control = RunControl::new(Launch { cwd: req.cwd }, timeout);
+            let launch = Launch {
+                cwd: req.cwd,
+                vocabulary: req.vocabulary,
+            };
+            let control = RunControl::new(launch, timeout);
             lock(&inner.runs).insert(id, Arc::new(control));
         }
         Inner::pump(inner);
@@ -780,8 +795,8 @@ impl Inner {
             run_id: id,
             harness: status.harness,
             title: status.title.clone(),
+            prompt: summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
             cwd: launch.cwd,
-            prompt: draft_prompt(&page_path),
             page_path,
             env,
         };
@@ -1253,6 +1268,7 @@ mod tests {
                 requested_at: "2026-10-26T10:00:00Z".to_string(),
                 cwd: self.dir.path().to_path_buf(),
                 timeout: None,
+                vocabulary: default_summary_vocabulary(),
             }
         }
 

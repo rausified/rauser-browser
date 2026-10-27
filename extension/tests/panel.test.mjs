@@ -88,6 +88,7 @@ const CONFIG = {
   capture_enabled: false,
   strip_params: [],
   agent: null,
+  summary_vocabulary: { document_types: ["report"], categories: ["news"] },
   adapters: { format: 1, artifacts: [] },
 };
 

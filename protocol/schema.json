@@ -444,6 +444,7 @@
         "capture_enabled",
         "strip_params",
         "agent",
+        "summary_vocabulary",
         "adapters"
       ],
       "properties": {
@@ -479,8 +480,42 @@
             }
           ]
         },
+        "summary_vocabulary": {
+          "$ref": "#/$defs/SummaryVocabulary"
+        },
         "adapters": {
           "$ref": "#/$defs/AdapterDocument"
+        }
+      }
+    },
+    "SummaryVocabulary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The open document-type and category lists the summary prompt offers the agent. Entries contain no control characters and are unique ignoring case.",
+      "required": [
+        "document_types",
+        "categories"
+      ],
+      "properties": {
+        "document_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
         }
       }
     },

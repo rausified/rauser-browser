@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -30,7 +30,7 @@ pub struct RunSpec {
     pub cwd: PathBuf,
     /// Absolute path to the run's `page.md`.
     pub page_path: PathBuf,
-    /// PR 2: [`draft_prompt`]; PR 3: the §6.4 prompt.
+    /// The §6.4 prompt ([`super::prompt::summary_prompt`]).
     pub prompt: String,
     /// The complete child environment, built by the server: the service's
     /// environment overlaid with `agent.env`. Runners clear the inherited
@@ -229,20 +229,11 @@ fn fake_harness(get: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(program)
 }
 
-/// A placeholder prompt naming the page file. PR 3 replaces it with the §6.4
-/// prompt.
-pub fn draft_prompt(page_path: &Path) -> String {
-    format!(
-        "Read the web page saved as Markdown at {} and summarize it. \
-         Reply with a single JSON object.\n",
-        page_path.display()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
     use crate::brand::FAKE_HARNESS_ENV;
 
@@ -368,11 +359,5 @@ mod tests {
             codex.contains("codex is not on the service's PATH"),
             "{codex}"
         );
-    }
-
-    #[test]
-    fn draft_prompt_names_the_page_file() {
-        let prompt = draft_prompt(Path::new("/tmp/runs/abc/page.md"));
-        assert!(prompt.contains("/tmp/runs/abc/page.md"), "{prompt}");
     }
 }

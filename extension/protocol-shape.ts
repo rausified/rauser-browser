@@ -149,8 +149,16 @@ function isArtifactListItem(value: unknown): boolean {
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
  * `agent_denylist` or `sites` means the host speaks another shape. */
 const CONFIG_KEYS: readonly string[] = [
-  "storage", "capture_enabled", "strip_params", "agent", "adapters",
+  "storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "adapters",
 ];
+
+/** The host validates entry lengths and duplicates; this checks the shape. */
+function isSummaryVocabulary(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const vocabulary = value as Record<string, unknown>;
+  return Object.keys(vocabulary).length === 2 &&
+    isStringArray(vocabulary.document_types) && isStringArray(vocabulary.categories);
+}
 
 export function isConfig(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
@@ -167,7 +175,8 @@ export function isConfig(value: unknown): boolean {
   }
   return typeof config.capture_enabled === "boolean" &&
     isStringArray(config.strip_params) &&
-    isAgent(config.agent) && isAdapterDocument(config.adapters);
+    isAgent(config.agent) && isSummaryVocabulary(config.summary_vocabulary) &&
+    isAdapterDocument(config.adapters);
 }
 
 export function isResponseShape(value: Record<string, unknown>): boolean {

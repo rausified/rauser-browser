@@ -113,6 +113,11 @@ Added in version 6:
   `knowledge_base_token`. A new or changed `knowledge_base_dir` needs a picker
   token minted for the `knowledge_base` purpose, and a notes-folder token
   cannot set it (or the reverse).
+- `ConfigSnapshot.summary_vocabulary`, required: the `document_types` and
+  `categories` lists the summary prompt offers the agent. Each has 1 to 64
+  entries of 1 to 64 characters, with no control characters and no
+  duplicates ignoring case. It is saved with the revision check alone. TOML
+  without a `[summary_vocabulary]` table loads the default lists.
 
 Also added in version 6, the agent run messages. The extension sends them to
 the native host, which forwards them to the per-user Brauser service (macOS
