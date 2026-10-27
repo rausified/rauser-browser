@@ -707,7 +707,9 @@ and retried on later refreshes, and until it succeeds a hand
 removal of an unrecorded contract leaves its pages on URL keys as before.
 Settings shows that as a non-blocking warning (`config_result.adopted_state.warnings`,
 from the reporting host's own last attempt under the lock; `get_config`
-refreshes under the lock so the attempt is current). A
+refreshes under the lock so the attempt is current). A full record
+(`adopted_state.full`) also offers **Forget recorded adapters** below, since
+a fresh record has room; a write or lock failure does not. A
 file the host cannot use (unreadable, not a regular file, over a bound,
 malformed, or from a newer host) is never rewritten, and every URL the current
 policy does not recognize has unavailable identity: loads and saves refuse,

@@ -77,7 +77,7 @@ function isAdapterWarning(value: unknown): boolean {
 function isAdoptedState(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const state = value as Record<string, unknown>;
-  return Object.keys(state).length === 3 && stringOrNull(state.issue) &&
+  return Object.keys(state).length === 4 && stringOrNull(state.issue) && typeof state.full === "boolean" &&
     typeof state.revision === "string" && state.revision.length > 0 &&
     isStringArray(state.warnings) && (state.warnings as unknown[]).length <= 8;
 }

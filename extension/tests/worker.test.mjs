@@ -1765,7 +1765,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   const result = {
     type: "config_result", revision: "missing", config, config_issue: null,
     adapter_issue: null, adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
   };
   assert.equal(isResponseShape(result), false);
   const agentStatus = { state: "not_set_up", harness_version: null, message: "Set up" };
@@ -1842,7 +1842,7 @@ function configResult(request, origin, overrides = {}) {
     agent_status: { state: "not_set_up", harness_version: null, message: "Set up" },
     adapter_issue: null,
     adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
     ...overrides,
   };
 }

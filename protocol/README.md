@@ -99,7 +99,9 @@ contracts, `adopted-contracts.json` beside config.toml (DESIGN.md §6.2).
 and saves on pages the current adapters do not recognize and refuses adapter
 additions; it names the file and why. `warnings` (at most 8) says recording
 failed or the record is full, which leaves later hand removals unprotected
-and blocks nothing. `revision` is `missing`, `unreadable`, `not-a-file`, or
+and blocks nothing. `full` is true when the warning is the record's bound
+(1,024 contracts or 1 MiB), the one recording failure a forget repairs, so
+settings offers Forget for it too. `revision` is `missing`, `unreadable`, `not-a-file`, or
 the `sha256:` revision of the file's bytes. `forget_adopted_contracts`
 carries that revision as `expected_revision`: a changed record is a
 `conflict`; otherwise the host renames the record aside to

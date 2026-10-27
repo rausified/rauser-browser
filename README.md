@@ -99,7 +99,8 @@ in the page, backs the file up beside it, and starts a fresh record; the
 panel's message points there. Forgetting drops those adapters, so notes
 from adapters removed by hand may need **Use as artifact note** again. If
 Brauser cannot record an adapter (the record is full or cannot be written),
-settings shows a warning; nothing is blocked. Notes alone do not turn
+settings shows a warning; nothing is blocked. For a full record it also
+offers **Forget recorded adapters**. Notes alone do not turn
 capture back on.
 
 Expand **Page patterns** in the panel and choose **Review page patterns** to

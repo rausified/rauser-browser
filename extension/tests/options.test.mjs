@@ -83,7 +83,7 @@ function install({
     config: { ...configWith(adapters, captureEnabled, stripParams), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
-    adoptedState: { issue: null, revision: "missing", warnings: [] },
+    adoptedState: { issue: null, revision: "missing", warnings: [], full: false },
     storageChanged: [],
     requests: [],
     workerRequests: [],
@@ -139,7 +139,7 @@ function install({
           adapter_issue: null, adapter_warnings: [], adopted_state: state.adoptedState,
         };
       case "forget_adopted_contracts":
-        state.adoptedState = { issue: null, revision: "sha256:fresh", warnings: [] };
+        state.adoptedState = { issue: null, revision: "sha256:fresh", warnings: [], full: false };
         return hostReply({ ...request, type: "get_config" });
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
@@ -461,7 +461,7 @@ test("Resume capture waits for an invalid adapter policy to be repaired", async 
         type: "config_result", revision: String(current.revision), config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -506,7 +506,7 @@ test("a settings load failure after hello is not reported as a missing host", as
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "config.json is unreadable",
         agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -558,7 +558,7 @@ test("pending removals leave an adapter document that needs repair as it is", as
         config: { ...current.config, adapters: futureAdapters }, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -590,7 +590,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -605,7 +605,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: null,
         adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -662,7 +662,7 @@ test("no strip_params notice without a conflict, and the fix waits for repair", 
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "choose the folder again",
         agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -686,7 +686,7 @@ test("an unsupported adapter document can be removed without blocking unrelated 
           ? "unsupported adapter format 2"
           : null,
         adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -722,7 +722,7 @@ test("resetting a host-only adapter key on an empty document clears the key befo
         type: "config_result", revision: String(current.revision), config: current.config,
         config_issue: null, agent_status: AGENT_STATUS, adapter_issue: issue(),
         adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
       update_config: (request, current) => {
         const empty = request.config.adapters.format === 1 && request.config.adapters.artifacts.length === 0;
@@ -756,7 +756,7 @@ test("an adapter reset that leaves the issue in place does not report success", 
         type: "config_result", revision: String(current.revision), config: current.config,
         config_issue: null, agent_status: AGENT_STATUS,
         adapter_issue: "unsupported adapter-table key future_mode", adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -868,7 +868,7 @@ test("adapter workspace names overlaps and highlights a matching safety probe", 
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: null,
         adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -1191,7 +1191,7 @@ function opaqueRevision(state) {
   return {
     type: "config_result", revision: `r${state.revision}`, config: state.config,
     config_issue: null, agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
   };
 }
 
@@ -1395,7 +1395,7 @@ const DAMAGED_RECORD = "Brauser's record of the adapters it has used (/cfg/adopt
 
 test("settings names a damaged adopted-adapter record and offers to forget it", async () => {
   install({ adapters: [artifactFor("https://work.example")] });
-  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [] };
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
   await openSettings();
   const el = (id) => env.elements.get(id);
   assert.equal(el("adopted-state").hidden, false);
@@ -1409,7 +1409,7 @@ test("settings names a damaged adopted-adapter record and offers to forget it", 
 
 test("forgetting recorded adapters asks in the page first, then sends the shown revision", async () => {
   install({ adapters: [artifactFor("https://work.example")] });
-  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [] };
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
   await openSettings();
   const el = (id) => env.elements.get(id);
   const forgets = () => env.requests.filter((request) => request.type === "forget_adopted_contracts");
@@ -1445,12 +1445,12 @@ test("a record that changed before forgetting is reread and shown, not forgotten
     adapters: [artifactFor("https://work.example")],
     host: {
       forget_adopted_contracts: (_request, state) => {
-        state.adoptedState = { issue: changed, revision: "sha256:newer", warnings: [] };
+        state.adoptedState = { issue: changed, revision: "sha256:newer", warnings: [], full: false };
         return { type: "error", code: "conflict", message: "the record of adopted adapters changed" };
       },
     },
   });
-  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [] };
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
   await openSettings();
   const el = (id) => env.elements.get(id);
   el("forget-adopted").click();
@@ -1468,11 +1468,31 @@ test("a record that changed before forgetting is reread and shown, not forgotten
     "sha256:newer");
 });
 
-test("recording warnings are shown as notices without the forget repair", async () => {
+test("a full record's warning offers the forget repair with the same confirmation", async () => {
   const full = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) is full " +
-    "(1,024 adapters or 1 MiB), so 1 adapter in use is not recorded.";
+    "(1,024 adapters or 1 MiB), so 1 adapter in use is not recorded. Forget recorded adapters starts a fresh record.";
   install({ adapters: [artifactFor("https://work.example")] });
-  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full] };
+  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full], full: true };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-issue").hidden, true);
+  assert.deepEqual(el("adopted-warnings").children.map((item) => item.textContent), [full]);
+  assert.equal(el("forget-adopted").hidden, false);
+  el("forget-adopted").click();
+  assert.equal(el("forget-adopted-confirm").hidden, false);
+  assert.equal(env.requests.filter((request) => request.type === "forget_adopted_contracts").length, 0);
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-state").hidden, "the fresh record");
+  const forgets = env.requests.filter((request) => request.type === "forget_adopted_contracts");
+  assert.equal(forgets.length, 1);
+  assert.equal(forgets[0].expected_revision, "sha256:full");
+});
+
+test("recording warnings Forget cannot fix are shown as notices without the forget repair", async () => {
+  const full = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) could not be " +
+    "updated: permission denied.";
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full], full: false };
   await openSettings();
   const el = (id) => env.elements.get(id);
   assert.equal(el("adopted-state").hidden, false);
