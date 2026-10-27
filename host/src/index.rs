@@ -6,7 +6,7 @@
 //! readers. Either file may be deleted; `brauser reindex` recreates both.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions as StdOpenOptions};
+use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -1181,7 +1181,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(unix)]
 fn sync_host_directory(path: &Path) -> std::io::Result<()> {
-    File::open(path)?.sync_all()
+    fs::File::open(path)?.sync_all()
 }
 
 #[cfg(not(unix))]
@@ -1823,6 +1823,7 @@ fn read_sqlite_varint(bytes: &[u8]) -> Result<(u64, usize)> {
 mod tests {
     use super::*;
     use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
+    use std::fs::File;
     use std::process::Command;
     use tempfile::TempDir;
 
