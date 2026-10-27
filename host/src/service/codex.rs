@@ -250,16 +250,21 @@ impl CodexSession {
         Ok(())
     }
 
-    /// Send a request and return its id.
+    /// Send a request and return its id. A broken pipe means the app-server
+    /// is gone, whether or not its stdout has closed yet.
     fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
         let id = self.next_id;
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let child = self.child.as_mut().ok_or(EXITED)?;
-        child
-            .write_line(&request.to_string())
-            .map_err(|error| format!("sending {method} to codex app-server: {error}"))?;
-        Ok(id)
+        match child.write_line(&request.to_string()) {
+            Ok(()) => Ok(id),
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                self.exited = true;
+                Err(EXITED.to_string())
+            }
+            Err(error) => Err(format!("sending {method} to codex app-server: {error}")),
+        }
     }
 
     /// Send a request and wait up to [`RPC_TIMEOUT`] for its result.
@@ -880,6 +885,20 @@ done
                 completed_message("msg-1", "not json"),
                 turn_completed("completed"),
             ])
+        ));
+        let turns = run(fake.runner(None), fake.spec(), &["the prompt", "fix it"]);
+        assert_eq!(turns[0].1, answered("not json"));
+        assert_eq!(turns[1], (Vec::new(), failed(EXITED)));
+    }
+
+    /// The app-server stops reading before its stdout closes, so the next
+    /// `turn/start` hits a broken pipe rather than a seen exit.
+    #[test]
+    fn second_turn_into_a_closed_stdin_fails_as_exited() {
+        let fake = Fake::turns(&format!(
+            "{}; exec 0<&-; printf '%s\\n' '{}'; sleep 2; exit 0",
+            answer_turn(&[completed_message("msg-1", "not json")]),
+            turn_completed("completed"),
         ));
         let turns = run(fake.runner(None), fake.spec(), &["the prompt", "fix it"]);
         assert_eq!(turns[0].1, answered("not json"));
