@@ -53,6 +53,10 @@ jobs:
       # run in both engines: Rust in `cargo test`, TypeScript here.
       - name: Run extension worker tests
         run: npm run test:extension
+      # Renders the host neutralizer's corpus outputs with markdown-it,
+      # micromark (GFM) and marked and fails on any live element.
+      - name: Check the Markdown neutralizer with real renderers
+        run: npm run test:markdown-neutralizer
       - name: Run development script tests
         run: npm run test:scripts
       # Uses the host built by "Build Rust workspace" and the extension build.
