@@ -3179,7 +3179,16 @@ id = "work:{host}/{id}"
             artifact_type: "work.item".into(),
             url: "https://work.example/issues/1".into(),
             title: Some("Issue 1".into()),
-            occurred_at: "2026-10-16T13:00:00Z".into(),
+            // Relative to now: a fixed date ages out of the 30-day window.
+            occurred_at: time::OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
             incognito: false,
             opens: 1,
             focused_seconds: 3,
@@ -3188,6 +3197,11 @@ id = "work:{host}/{id}"
             trails: Vec::new(),
             refs: Vec::new(),
         }
+    }
+
+    /// The local log day `activity_for_invalid_policy` events land on.
+    fn invalid_policy_day() -> String {
+        activity_for_invalid_policy().occurred_at[..10].to_owned()
     }
 
     fn invalid_adapter_config(folder: &tempfile::TempDir) -> ConfigStore {
@@ -3919,8 +3933,8 @@ id = "work:{host}/{id}"
                     brauser_protocol::WorklogRequest {
                         protocol_version: PROTOCOL_VERSION,
                         request_id: "worklog".into(),
-                        start_date: "2026-10-16".into(),
-                        end_date: "2026-10-16".into(),
+                        start_date: invalid_policy_day(),
+                        end_date: invalid_policy_day(),
                     },
                     &mut config,
                 ) else {
@@ -4028,8 +4042,8 @@ id = "work:{host}/{id}"
                     brauser_protocol::WorklogRequest {
                         protocol_version: PROTOCOL_VERSION,
                         request_id: "worklog".into(),
-                        start_date: "2026-10-16".into(),
-                        end_date: "2026-10-16".into(),
+                        start_date: invalid_policy_day(),
+                        end_date: invalid_policy_day(),
                     },
                     &mut config,
                 ),
