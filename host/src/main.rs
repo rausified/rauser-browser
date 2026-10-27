@@ -65,7 +65,7 @@ fn reindex() -> Result<()> {
         .snapshot()
         .storage
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("choose a notes folder before reindexing"))?;
+        .ok_or_else(|| anyhow::anyhow!("choose a home folder before reindexing"))?;
     let report = ArtifactIndex::open_in(storage, config.root_identity(), &config.cache_dir()?)?
         .with_adapters(config.adapter_document().ok())
         .reindex()?;
