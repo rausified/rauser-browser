@@ -105,6 +105,16 @@ pub struct CapturePolicy<'a> {
     pub strip_params: &'a [String],
 }
 
+/// What authorizes a single log append. Every existing capture path keeps
+/// requiring a matching enabled site; a summary is the one exception (spec
+/// §7.2 and §7.3): it is allowed on any HTTP(S) page, independent of the
+/// site allowlist `is_authorized` enforces.
+#[derive(Clone, Copy)]
+enum EntryGate {
+    SiteAllowlist,
+    AnyHttpPage,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CaptureOutcome {
     Persisted { relative_path: PathBuf },
@@ -229,7 +239,7 @@ impl CaptureStore {
     }
 
     pub fn record(&self, policy: CapturePolicy<'_>, event: &VisitEvent) -> CaptureOutcome {
-        self.record_entry(policy, event, None, None)
+        self.record_entry(policy, event, None, None, EntryGate::SiteAllowlist)
     }
 
     pub fn record_activity(
@@ -329,7 +339,13 @@ impl CaptureStore {
                 };
             }
         };
-        self.record_entry(policy, &visit, Some(&body), Some(("activity", marker)))
+        self.record_entry(
+            policy,
+            &visit,
+            Some(&body),
+            Some(("activity", marker)),
+            EntryGate::SiteAllowlist,
+        )
     }
 
     pub fn record_why(&self, policy: CapturePolicy<'_>, event: &WhyEvent) -> CaptureOutcome {
@@ -359,7 +375,62 @@ impl CaptureStore {
                 };
             }
         };
-        self.record_entry(policy, &visit, Some(&body), Some(("why", marker)))
+        self.record_entry(
+            policy,
+            &visit,
+            Some(&body),
+            Some(("why", marker)),
+            EntryGate::SiteAllowlist,
+        )
+    }
+
+    /// Record a "Summarize & log" result (spec §7.2) for a page no adapter
+    /// recognizes. Unlike every other entry, this is allowed on any HTTP(S)
+    /// page regardless of the site allowlist or whether capture is paused;
+    /// only the master `capture_enabled` toggle still applies. The host
+    /// derives the `web.page` artifact identity from the normalized URL —
+    /// callers never supply or influence it. This never invokes a harness
+    /// and never writes the summary file itself; `summary.summary_path` is
+    /// an opaque reference the caller already produced.
+    pub fn record_summary(
+        &self,
+        policy: CapturePolicy<'_>,
+        summary: &crate::summary::PageSummary,
+    ) -> CaptureOutcome {
+        if let Err(reason) = crate::summary::validate_page_summary(summary) {
+            return CaptureOutcome::Rejected {
+                reason: reason.into(),
+            };
+        }
+        let title = safe_markdown_line(Some(&summary.title), MAX_TITLE_BYTES);
+        let document_type = safe_markdown_line(Some(&summary.document_type), 64);
+        let body = format!(
+            "{} — Summarized: {} — {}, {} importance",
+            summary.occurred_at, title, document_type, summary.importance
+        );
+        let visit = VisitEvent {
+            event_id: summary.event_id.clone(),
+            url: summary.url.clone(),
+            title: Some(summary.title.clone()),
+            occurred_at: summary.occurred_at.clone(),
+            incognito: false,
+        };
+        let marker = serde_json::json!({
+            "event_id": summary.event_id,
+            "title": summary.title,
+            "occurred_at": summary.occurred_at,
+            "document_type": summary.document_type,
+            "category": summary.category,
+            "importance": summary.importance,
+            "summary_path": summary.summary_path,
+        });
+        self.record_entry(
+            policy,
+            &visit,
+            Some(&body),
+            Some(("summary", marker)),
+            EntryGate::AnyHttpPage,
+        )
     }
 
     /// Append the durable evidence for worker-side buffer loss. The batch ID
@@ -403,7 +474,13 @@ impl CaptureStore {
             occurred_at: overflow.last_occurred_at.clone(),
             incognito: false,
         };
-        self.record_entry(policy, &event, Some(&body), Some(("overflow", marker)))
+        self.record_entry(
+            policy,
+            &event,
+            Some(&body),
+            Some(("overflow", marker)),
+            EntryGate::SiteAllowlist,
+        )
     }
 
     /// Validate a complete native delivery first, then publish its surviving
@@ -703,6 +780,7 @@ impl CaptureStore {
         event: &VisitEvent,
         custom_body: Option<&str>,
         marker_payload: Option<(&str, serde_json::Value)>,
+        gate: EntryGate,
     ) -> CaptureOutcome {
         if !policy.enabled {
             return CaptureOutcome::Suppressed {
@@ -743,9 +821,14 @@ impl CaptureStore {
             Ok(value) => value,
             Err(reason) => return CaptureOutcome::Rejected { reason },
         };
-        let allowed = match is_authorized(&original, policy.sites) {
-            Ok(value) => value,
-            Err(message) => return CaptureOutcome::Retryable { message },
+        let allowed = match gate {
+            EntryGate::SiteAllowlist => match is_authorized(&original, policy.sites) {
+                Ok(value) => value,
+                Err(message) => return CaptureOutcome::Retryable { message },
+            },
+            // `original` already passed `parse_page_url` above, so it is
+            // already restricted to a credential-free HTTP(S) origin.
+            EntryGate::AnyHttpPage => true,
         };
         if !allowed {
             return CaptureOutcome::Rejected {
@@ -760,6 +843,21 @@ impl CaptureStore {
             Some((kind, mut payload)) => {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("url".into(), serde_json::Value::String(normalized.clone()));
+                    if kind == "summary" {
+                        let artifact_id = match crate::summary::web_page_artifact_id(&normalized) {
+                            Ok(value) => value,
+                            Err(reason) => {
+                                return CaptureOutcome::Rejected {
+                                    reason: reason.into(),
+                                };
+                            }
+                        };
+                        object.insert("artifact_id".into(), serde_json::Value::String(artifact_id));
+                        object.insert(
+                            "artifact_type".into(),
+                            serde_json::Value::String("web.page".into()),
+                        );
+                    }
                 }
                 match serde_json::to_vec(&payload) {
                     Ok(json) => Some(format!(" kind={kind} data={}", hex::encode(json))),
@@ -2429,6 +2527,108 @@ mod tests {
             store.record_why(policy(), &why),
             CaptureOutcome::Suppressed {
                 reason: "duplicate_event".into()
+            }
+        );
+    }
+
+    fn page_summary(url: &str) -> crate::summary::PageSummary {
+        crate::summary::PageSummary {
+            event_id: Uuid::new_v4().to_string(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&Rfc3339)
+                .unwrap(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "medium".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        }
+    }
+
+    #[test]
+    fn a_summary_persists_on_a_page_no_site_rule_covers() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        // No sites at all: a summary must not need the allowlist a visit does.
+        let policy = CapturePolicy {
+            enabled: true,
+            sites: &[],
+            strip_params: &[],
+        };
+        let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        let CaptureOutcome::Persisted { relative_path } = store.record_summary(policy, &summary)
+        else {
+            panic!("expected persisted summary event");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        assert!(markdown.contains("Summarized: A good discussion"));
+        assert!(markdown.contains("discussion, medium importance"));
+        assert!(markdown.contains(" kind=summary data="));
+        assert!(markdown.contains("news.ycombinator.com"));
+    }
+
+    #[test]
+    fn a_summary_is_suppressed_when_capture_is_disabled() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let policy = CapturePolicy {
+            enabled: false,
+            sites: &[],
+            strip_params: &[],
+        };
+        let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        assert_eq!(
+            store.record_summary(policy, &summary),
+            CaptureOutcome::Suppressed {
+                reason: "capture_disabled".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_malformed_summary_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let policy = CapturePolicy {
+            enabled: true,
+            sites: &[],
+            strip_params: &[],
+        };
+        let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        summary.importance = "urgent".into();
+        assert_eq!(
+            store.record_summary(policy, &summary),
+            CaptureOutcome::Rejected {
+                reason: "invalid_summary_importance".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_credential_url_is_rejected_for_a_summary() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let policy = CapturePolicy {
+            enabled: true,
+            sites: &[],
+            strip_params: &[],
+        };
+        let summary = page_summary("https://user:pass@news.ycombinator.com/item?id=1");
+        assert_eq!(
+            store.record_summary(policy, &summary),
+            CaptureOutcome::Rejected {
+                reason: "url_contains_credentials".into()
             }
         );
     }

@@ -25,6 +25,7 @@ use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{
     activity_shape_is_bounded, activity_shape_is_valid, canonical_url, trail_transition_is_valid,
 };
+use crate::summary::SummaryEvent;
 use crate::vault::{
     TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
 };
@@ -71,6 +72,7 @@ enum CachedEvent {
     Activity(ActivityEvent),
     Why(WhyEvent),
     Legacy(LegacyVisit),
+    Summary(SummaryEvent),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +101,7 @@ struct ArtifactRow {
     last_mode: Option<String>,
     why: Option<String>,
     activities: Vec<ActivityEvent>,
+    summaries: Vec<SummaryEvent>,
     latest_at: OffsetDateTime,
 }
 
@@ -162,6 +165,14 @@ impl ArtifactIndex {
         let mut event = event.clone();
         event.url = canonical_url(&event.url, strip_params)?;
         self.record_events([CachedEvent::Why(event)])
+    }
+
+    /// Index a "Summarize & log" result already durable in the daily log
+    /// (`crate::capture::CaptureStore::record_summary` wrote it). `event.url`
+    /// and `event.artifact_id` must already be normalized/derived, exactly as
+    /// that writer leaves them.
+    pub fn record_summary(&self, event: &SummaryEvent) -> Result<()> {
+        self.record_events([CachedEvent::Summary(event.clone())])
     }
 
     pub fn record_activities<'a>(
@@ -651,6 +662,7 @@ fn event_identity(event: &CachedEvent) -> (String, String) {
         CachedEvent::Activity(event) => (event.event_id.clone(), event.artifact_id.clone()),
         CachedEvent::Why(event) => (event.event_id.clone(), event.artifact_id.clone()),
         CachedEvent::Legacy(event) => (event.marker_id.clone(), event.artifact_id.clone()),
+        CachedEvent::Summary(event) => (event.event_id.clone(), event.artifact_id.clone()),
     }
 }
 
@@ -686,6 +698,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         last_mode: None,
                         why: None,
                         activities: Vec::new(),
+                        summaries: Vec::new(),
                         latest_at: at,
                     });
                 row.focused_secs = row
@@ -781,6 +794,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         last_mode: None,
                         why: None,
                         activities: Vec::new(),
+                        summaries: Vec::new(),
                         latest_at: at,
                     });
                 row.days.insert(day.clone());
@@ -808,6 +822,59 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     url: event.url.clone(),
                 });
             }
+            CachedEvent::Summary(event) => {
+                let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let day = at.date().to_string();
+                let site = Url::parse(&event.url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .unwrap_or_default();
+                let row = artifacts
+                    .entry(event.artifact_id.clone())
+                    .or_insert_with(|| ArtifactRow {
+                        artifact_id: event.artifact_id.clone(),
+                        artifact_type: event.artifact_type.clone(),
+                        site,
+                        title: event.title.clone(),
+                        url: event.url.clone(),
+                        first_seen: day.clone(),
+                        last_seen: day.clone(),
+                        focused_secs: 0,
+                        background_secs: 0,
+                        opens: 0,
+                        days: BTreeSet::new(),
+                        last_mode: None,
+                        why: None,
+                        activities: Vec::new(),
+                        summaries: Vec::new(),
+                        latest_at: at,
+                    });
+                row.days.insert(day.clone());
+                if day < row.first_seen {
+                    row.first_seen = day.clone();
+                }
+                if day > row.last_seen {
+                    row.last_seen = day.clone();
+                }
+                if at >= row.latest_at {
+                    row.latest_at = at;
+                    row.title = event.title.clone();
+                    row.url = event.url.clone();
+                }
+                row.summaries.push(event.clone());
+                visits.push(VisitRow {
+                    event_id: event.event_id.clone(),
+                    artifact_id: event.artifact_id.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    local_date: day,
+                    focused_secs: 0,
+                    background_secs: 0,
+                    opens: 0,
+                    mode: None,
+                    title: event.title.clone(),
+                    url: event.url.clone(),
+                });
+            }
         }
     }
     visits.sort_by(|a, b| {
@@ -815,6 +882,9 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
     });
     for row in artifacts.values_mut() {
         row.activities.sort_by(|a, b| {
+            timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
+        });
+        row.summaries.sort_by(|a, b| {
             timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
         });
         row.why = whys.remove(&row.artifact_id).map(|(_, text)| text);
@@ -969,6 +1039,24 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 return None;
             }
             Some(CachedEvent::Why(event))
+        }
+        (Some("summary"), Some(data)) => {
+            let bytes = hex::decode(data).ok()?;
+            if bytes.len() > 256 * 1024 {
+                return None;
+            }
+            let event: SummaryEvent = serde_json::from_slice(&bytes).ok()?;
+            if event.event_id.is_empty()
+                || event.event_id.len() > 512
+                || !safe_page_url(&event.url)
+                || sha256_hex(event.event_id.as_bytes()) != id_hash
+                || sha256_hex(event.url.as_bytes()) != url_hash
+                || event.occurred_at != at
+                || !crate::summary::validate_summary_event(&event)
+            {
+                return None;
+            }
+            Some(CachedEvent::Summary(event))
         }
         (None, None) => parse_legacy(previous, id_hash, url_hash, at).map(CachedEvent::Legacy),
         _ => None,
@@ -1276,7 +1364,31 @@ fn render_artifact(artifact: &ArtifactRow) -> String {
     if let Some(why) = &artifact.why {
         out.push_str(&format!("Why: {}\n\n", safe_markdown(why)));
     }
+    if let Some(summary) = artifact.summaries.last() {
+        out.push_str(&format!(
+            "Summary: [{}, {} importance]({})\n\n",
+            safe_markdown(&summary.document_type),
+            safe_markdown(&summary.importance),
+            summary.summary_path
+        ));
+    }
     out.push_str("## Timeline\n\n");
+    const MAX_SUMMARY_LINES: usize = 20;
+    let total_summaries = artifact.summaries.len();
+    let shown_summaries = total_summaries.min(MAX_SUMMARY_LINES);
+    for summary in artifact.summaries.iter().rev().take(shown_summaries) {
+        out.push_str(&format!(
+            "- {} · Summarized: {}\n",
+            summary.occurred_at,
+            safe_markdown(&summary.title)
+        ));
+    }
+    if total_summaries > shown_summaries {
+        out.push_str(&format!(
+            "- {} earlier summaries\n",
+            total_summaries - shown_summaries
+        ));
+    }
     for period in timeline_rollups(&artifact.activities) {
         out.push_str(&format!(
             "- {} · {}\n",
@@ -2602,6 +2714,162 @@ print(json.dumps([tables,row]))"#;
 
         let error = index.reindex().unwrap_err().to_string();
         assert!(error.contains("reuses an event ID"), "{error}");
+    }
+
+    fn page_summary(url: &str, occurred_at: &str) -> crate::summary::PageSummary {
+        crate::summary::PageSummary {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: occurred_at.into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        }
+    }
+
+    fn rfc3339_seconds_ago(seconds: i64) -> String {
+        (OffsetDateTime::now_utc() - time::Duration::seconds(seconds))
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap()
+    }
+
+    #[test]
+    fn summary_event_appends_once_on_a_page_no_adapter_covers() {
+        use crate::capture::{CapturePolicy, CaptureStore};
+
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let config = storage(root.path());
+        let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
+        let index = index(&root, &cache);
+        let policy = CapturePolicy {
+            enabled: true,
+            sites: &[],
+            strip_params: &[],
+        };
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let summary = page_summary(url, &rfc3339_seconds_ago(5));
+
+        assert!(matches!(
+            capture.record_summary(policy, &summary),
+            crate::capture::CaptureOutcome::Persisted { .. }
+        ));
+
+        let report = index.reindex().unwrap();
+        assert_eq!(report.written, 1);
+        let expected_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let artifact = index.artifact(&expected_id).unwrap().expect("indexed");
+        assert_eq!(artifact.artifact_type, "web.page");
+        assert_eq!(artifact.title, "A good discussion");
+
+        let file = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(file.contains("type: \"web.page\""));
+        assert!(file.contains("Summary: [discussion, high importance]"));
+        assert!(file.contains("Summarized: A good discussion"));
+
+        // Re-summarizing the same URL updates the one artifact, not a second.
+        let mut again = page_summary(url, &rfc3339_seconds_ago(0));
+        again.title = "An even better discussion".into();
+        assert!(matches!(
+            capture.record_summary(policy, &again),
+            crate::capture::CaptureOutcome::Persisted { .. }
+        ));
+        index.reindex().unwrap();
+        assert_eq!(artifact_files(root.path()).len(), 1);
+        let updated = index.artifact(&expected_id).unwrap().expect("indexed");
+        assert_eq!(updated.title, "An even better discussion");
+    }
+
+    #[test]
+    fn a_summary_joins_the_m1_legacy_visit_of_the_same_url() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let url_hash = sha256_hex(url.as_bytes());
+
+        let legacy_line = format!(
+            "\n- 2026-10-20T10:00:00Z — A good discussion — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+            sha256_hex("legacy-marker".as_bytes()),
+        );
+
+        let event = SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: artifact_id.clone(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: "2026-10-26T18:00:00Z".into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        };
+        let payload = hex::encode(serde_json::to_vec(&event).unwrap());
+        let summary_line = format!(
+            "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            event.occurred_at,
+        );
+
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!("{LOG_HEADER}\n{legacy_line}"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2026-10-26.md"),
+            format!("{LOG_HEADER}\n{summary_line}"),
+        )
+        .unwrap();
+
+        index.reindex().unwrap();
+        assert_eq!(artifact_files(root.path()).len(), 1, "one shared artifact");
+        let artifact = index.artifact(&artifact_id).unwrap().expect("indexed");
+        assert_eq!(artifact.artifact_type, "web.page");
+    }
+
+    #[test]
+    fn forged_summary_markers_are_ignored() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let url_hash = sha256_hex(url.as_bytes());
+        let event = SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id:
+                "web:evil.example/0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: "2026-10-26T18:00:00Z".into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        };
+        let payload = hex::encode(serde_json::to_vec(&event).unwrap());
+        let line = format!(
+            "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            event.occurred_at,
+        );
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-10-26.md"), format!("{LOG_HEADER}\n{line}")).unwrap();
+
+        let report = index.reindex().unwrap();
+        assert_eq!(report.written, 0);
+        assert!(!root.path().join("artifacts").exists());
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {

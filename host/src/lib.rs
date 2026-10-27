@@ -17,4 +17,5 @@ pub mod native;
 pub mod note;
 mod presentation;
 pub mod privacy;
+mod summary;
 pub mod vault;
