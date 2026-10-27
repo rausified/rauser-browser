@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
 // Guided real-Chrome M1 smoke run, plus M2 step 1 harness setup. Native
-// dialogs and Chrome permission prompts are answered by a person, or with
-// --auto through UI scripting; all host and vault state is kept in a temp
-// home. --headless runs the same flow with nothing on screen: headless Chrome,
-// a scripted-dialogs host build, and Chrome access granted ahead of time
-// instead of through Chrome's prompt. Only --headless runs harness setup, with
-// fake harnesses on a pinned PATH and a cleared host environment.
+// dialogs are answered by a person, or with --auto through UI scripting; all
+// host and vault state is kept in a temp home. The extension holds HTTP(S)
+// access from install, so Chrome shows no permission prompt. --headless runs
+// the same flow with nothing on screen: headless Chrome and a scripted-dialogs
+// host build. Only --headless runs harness setup, with fake harnesses on a
+// pinned PATH and a cleared host environment.
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
-  access, chmod, cp, lstat, mkdir, mkdtemp, open, readFile,
+  access, chmod, lstat, mkdir, mkdtemp, open, readFile,
   readdir, realpath, rename, symlink, unlink, writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -218,13 +218,6 @@ async function choosePickerFolder(folder) {
       if (attempt === 3) throw error;
     }
   }
-}
-
-// Chrome's permission prompt is a sheet on the settings window.
-async function allowInChrome(press, pid) {
-  await waitFor(() => commandOutput(press, [String(pid), "Allow"]).catch((error) => {
-    throw new Error(error.message.includes("exited 2") ? "Chrome's Allow button is not showing" : error.message);
-  }), { timeout: 20_000 });
 }
 
 // Fake harnesses for AI setup. Each logs one tab-separated line per run: its
@@ -580,7 +573,7 @@ async function nativeHostPreflight(cdp, extensionId) {
 function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
-    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/after-removal"]);
+    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/after-removal", "/fresh/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (!known.has(pathname)) {
@@ -721,12 +714,8 @@ async function run() {
   const profile = path.join(runDir, "chrome-profile");
   const notes = path.join(runDir, "notes");
   const wrapper = path.join(runDir, `${BINARY_NAME}-host-wrapper`);
-  const press = path.join(runDir, "smoke-macos-press");
   const windowCheck = path.join(runDir, "smoke-macos-windows");
   const dialogs = path.join(runDir, "dialogs");
-  // Headless Chrome loads a copy whose first load carries webNavigation; see
-  // preGrantChromeAccess.
-  const extensionCopy = path.join(runDir, "extension");
   const manifest = path.join(profile, "NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`);
   const caseId = randomUUID().slice(0, 8);
   const server = fixtureServer(caseId);
@@ -756,8 +745,8 @@ async function run() {
     console.log(`PASS: ${title}`);
   }
 
-  // Only Chrome's permission prompt and the host's native dialogs need a
-  // person, or with --auto, the given automation.
+  // Only the host's native dialogs need a person, or with --auto, the given
+  // automation.
   async function userAction(instruction, check, automate) {
     if ((options.auto || options.headless) && automate) {
       console.log(`  ${options.headless ? "SCRIPTED" : "AUTO"}: ${instruction}`);
@@ -890,29 +879,6 @@ async function run() {
     return onSettings((page) => page.text("#status"));
   }
 
-  async function chromeGrants(pattern) {
-    return onSettings((page) => page.evaluate(`Promise.all([
-      chrome.permissions.contains({ origins: [${JSON.stringify(pattern)}] }),
-      chrome.permissions.contains({ permissions: ["webNavigation"] }),
-    ]).then(([origin, api]) => ({ origin, api }))`));
-  }
-
-  // Chrome skips its prompt when it already holds the requested access, so a
-  // missing prompt is reported, and the step's own checks decide the result.
-  async function chromePrompt() {
-    if (options.headless) {
-      console.log("  No Chrome prompt in --headless: its access was granted before the run.");
-      return;
-    }
-    try {
-      await allowInChrome(press, chrome.pid);
-      console.log("  Clicked Allow in Chrome's prompt.");
-    } catch (error) {
-      const status = await settingsStatus().catch(() => "(settings page unavailable)");
-      console.log(`  No Chrome prompt was clicked: ${error.message}. Settings page says: ${status}`);
-    }
-  }
-
   // --headless: every Chrome and host process must stay invisible, with no
   // on-screen window (menu-bar items included) and no Dock presence.
   async function nothingOnScreen() {
@@ -951,37 +917,6 @@ async function run() {
   const pickFolder = (folder) => options.headless
     ? scriptedDialog("pick-folder", `picked:${folder}`) : choosePickerFolder(folder);
 
-  // --headless: Chrome's permission prompt is browser UI that no command-line
-  // switch or DevTools method can answer, so grant the access ahead of time
-  // through Chrome's own mechanisms. webNavigation stays active when an
-  // extension version that required it is replaced by one that makes it
-  // optional, and chrome://extensions grants a site as a user would under
-  // Site access. permissions.request then resolves without a prompt, and
-  // permissions.remove still revokes both.
-  async function loadExtension(directory) {
-    if (!options.headless) return cdp.send("Extensions.loadUnpacked", { path: directory });
-    const manifestFile = path.join(directory, "manifest.json");
-    const shipped = await readFile(manifestFile, "utf8");
-    const earlier = JSON.parse(shipped);
-    earlier.permissions = [...earlier.permissions, "webNavigation"];
-    await writeFile(manifestFile, JSON.stringify(earlier, null, 2));
-    await cdp.send("Extensions.loadUnpacked", { path: directory });
-    await writeFile(manifestFile, shipped);
-    return cdp.send("Extensions.loadUnpacked", { path: directory });
-  }
-
-  async function preGrantSite(pattern) {
-    const { targetId } = await cdp.send("Target.createTarget", { url: "chrome://extensions", background: true });
-    try {
-      await cdp.withTarget(targetId, async (page) => {
-        await waitFor(() => page.evaluate("typeof chrome.developerPrivate?.addHostPermission === 'function' || Promise.reject(new Error('loading'))"));
-        await page.evaluate(`chrome.developerPrivate.addHostPermission(${JSON.stringify(extensionId)}, ${JSON.stringify(pattern)})`);
-      });
-    } finally {
-      await cdp.send("Target.closeTarget", { targetId }).catch(() => undefined);
-    }
-  }
-
   async function typeNote(text) {
     await waitFor(() => onPanel(async (page) =>
       requireCondition(await page.enabled("#note-body"), "The note editor is disabled")));
@@ -1001,9 +936,6 @@ async function run() {
 
   try {
     await Promise.all([mkdir(testHome), mkdir(notes), mkdir(profile)]);
-    if (options.auto) {
-      await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-press.swift"), "-o", press]);
-    }
     if (options.headless) {
       await mkdir(dialogs, { mode: 0o700 });
       await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-windows.swift"), "-o", windowCheck]);
@@ -1027,8 +959,7 @@ async function run() {
     requireCondition(path.isAbsolute(configPath) &&
       (inside(testHome, configPath) || inside(actualHome, configPath)),
     `Host config would escape the temporary home: ${configPath}`);
-    if (options.headless) await cp(DIST, extensionCopy, { recursive: true });
-    const dist = await realpath(options.headless ? extensionCopy : DIST);
+    const dist = await realpath(DIST);
     extensionId = unpackedExtensionId(dist);
     const hostManifest = Buffer.from(`${JSON.stringify({
       name: NATIVE_HOST_NAME,
@@ -1048,6 +979,8 @@ async function run() {
     const allowed = `${origin}/allowed/page?case=${caseId}`;
     const blocked = `${origin}/blocked/page?case=${caseId}`;
     const afterRemoval = `${origin}/allowed/after-removal?case=${caseId}`;
+    const freshPage = `${origin}/fresh/page?case=${caseId}`;
+    const freshTitle = `${APP_NAME} smoke /fresh/page`;
     // The panel titles a page note from the tab, so this is the fixture page title.
     const title = `${APP_NAME} smoke /allowed/page`;
     const firstBody = `First note ${caseId}`;
@@ -1074,7 +1007,7 @@ async function run() {
     });
 
     cdp = new Cdp(chrome);
-    const loaded = await loadExtension(dist);
+    const loaded = await cdp.send("Extensions.loadUnpacked", { path: dist });
     const loadedId = loaded?.id;
     requireCondition(loadedId === extensionId,
       `Chrome loaded extension ID ${loadedId ?? "none"}; expected ${extensionId}`);
@@ -1088,15 +1021,7 @@ async function run() {
     console.log("Chrome-to-native-host hello passed.");
     console.log(`The runner drives ${APP_NAME}'s pages itself. Answer only the prompts it names; press Ctrl+C to stop.`);
 
-    // The grant the settings page requests: always an explicit port, never
-    // Chrome's any-port form, which the run checks is not granted.
-    const pattern = `${origin}${options.defaultPort ? ":80" : ""}/*`;
-    const anyPortPattern = `${new URL(origin).protocol}//${new URL(origin).hostname}/*`;
-    if (options.headless) {
-      await preGrantSite(pattern);
-      await nothingOnScreen();
-      console.log(`Granted ${pattern} and webNavigation ahead of time; nothing is on screen.`);
-    }
+    if (options.headless) await nothingOnScreen();
     // Any empty folder will do; the suggested one is only a convenience.
     // Later checks count files, so the chosen folder must start empty.
     let notesRoot = null;
@@ -1164,6 +1089,25 @@ async function run() {
       }));
     });
 
+    // Standing HTTP(S) access: with no site enabled and nothing granted during
+    // the run, the panel still sees a page it has never shown before.
+    await step("Panel shows URL and title on a never-visited page", async () => {
+      await navigate(origin, freshPage);
+      await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+      await openPanel();
+      await waitFor(() => onPanel(async (page) => {
+        const [shownUrl, shownTitle] = await Promise.all([page.text("#page-url"), page.text("#page-title")]);
+        requireCondition(shownUrl === freshPage, `Panel shows the URL: ${shownUrl || "(none)"}`);
+        requireCondition(shownTitle === freshTitle, `Panel shows the title: ${shownTitle || "(none)"}`);
+        requireCondition(await page.hidden("#site-access-warning") === true, "Panel shows the site-access banner");
+        requireCondition(await page.hidden("#page-unusable") === true, "Panel says it cannot use this tab");
+        requireCondition(await page.hidden("#note-editor") === false, "The note editor is hidden");
+        requireCondition(await page.enabled("#note-body"), "The note editor is disabled");
+      }), { timeout: 20_000 });
+      const pages = await markdownFiles(path.join(notesRoot, "pages"));
+      requireCondition(pages.length === 0, "Showing a page's note editor wrote a note");
+    });
+
     await step("Confirmed setup", async () => {
       await onSettings(async (page) => {
         await page.fill("#site-url", siteInput);
@@ -1175,7 +1119,9 @@ async function run() {
         await page.evaluate('document.getElementById("status").textContent = ""');
         await page.click("#enable-site");
       });
-      await userAction("If Chrome prompts, click Allow.", async () => {
+      // Enabling a site asks Chrome for nothing: the extension already holds
+      // HTTP(S) access, so the setting is saved straight to the host.
+      await waitFor(async () => {
         const status = await settingsStatus().catch(() => null);
         if (status?.startsWith("Setup failed")) {
           throw Object.assign(new Error(`${status} Rerun the smoke test; a folder selection expires after five minutes.`), { fatal: true });
@@ -1188,27 +1134,11 @@ async function run() {
         requireCondition(reply.config.sites.length === 1 &&
           reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/",
         "Host site rule does not match the fixture origin");
-      }, () => chromePrompt());
-      // A first navigation grant makes the settings page restart the extension,
-      // which closes every extension page.
-      const outcome = await waitFor(async () => {
-        const target = await cdp.targetFor(settingsUrl());
-        if (!target) return "restarted";
-        const status = await settingsStatus().catch(() => null);
-        if (status?.startsWith("Capture enabled for")) return "enabled";
-        if (status?.startsWith("Chrome is restarting")) throw new Error("Waiting for the extension restart");
-        throw new Error(`Settings page says: ${status}`);
+      }, { timeout: 30_000, interval: 500, signal: abort.signal });
+      await waitFor(async () => {
+        const status = await settingsStatus();
+        requireCondition(status?.startsWith("Capture enabled for"), `Settings page says: ${status}`);
       }, { timeout: 20_000 });
-      if (outcome === "restarted") {
-        console.log("  The extension restarted to activate navigation access; reopening its pages.");
-        await delay(1_000);
-        await openSettingsTab();
-        await settingsConnected();
-      }
-      const granted = await chromeGrants(pattern);
-      requireCondition(granted.origin && granted.api, `Chrome did not grant ${pattern} and webNavigation`);
-      requireCondition(!(await chromeGrants(anyPortPattern)).origin,
-        `Chrome granted every port (${anyPortPattern}), not just ${pattern}`);
       await openPanel();
       await waitFor(() => onPanel(async (page) =>
         requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")),
@@ -1565,10 +1495,6 @@ async function run() {
           requireCondition(reply.config.agent !== null, "Site removal dropped the AI harness");
         }
       }, { timeout: 20_000, interval: 1_000 });
-      await waitFor(async () => {
-        const grants = await chromeGrants(pattern);
-        requireCondition(!grants.origin && !grants.api, `Chrome still grants ${grants.origin ? origin : "webNavigation"}`);
-      });
       await waitFor(() => onPanel(async (page) => {
         requireCondition(await page.hidden("#setup-warning") === false, "Panel does not show the setup warning");
         const reason = await page.text("#setup-reason");

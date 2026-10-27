@@ -1324,35 +1324,8 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((
   console.warn(`${APP_NAME} side panel setup failed:`, describe(error));
 });
 
-// The first note on a page the extension has no standing grant for starts
-// from one of these triggers, which grant `activeTab` for the invoking tab
-// (§5.3). The toolbar action's own grant is Chrome's, from declaring
-// "action" and setPanelBehavior above; no extra listener is needed for it.
-const NOTE_CONTEXT_MENU_ID = `${BINARY_NAME}-note`;
-
+// Earlier builds added a "note" page context-menu item; clear it on install
+// or update so no stale entry survives.
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: NOTE_CONTEXT_MENU_ID,
-      title: `Add a note in ${APP_NAME}`,
-      contexts: ["page"],
-    });
-  });
-});
-
-function openPanelForNote(tab: ChromeTab | undefined): void {
-  if (tab?.id === undefined) return;
-  // Open synchronously in this handler, before any await, so Chrome still
-  // attributes the call to the user gesture that triggered it (§5.2, §5.3).
-  void chrome.sidePanel.open({ tabId: tab.id }).catch((error: unknown) => {
-    console.warn(`${APP_NAME} could not open the side panel for a note:`, describe(error));
-  });
-}
-
-chrome.commands.onCommand.addListener((command, tab) => {
-  if (command === "note") openPanelForNote(tab);
-});
-
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === NOTE_CONTEXT_MENU_ID) openPanelForNote(tab);
+  chrome.contextMenus.removeAll();
 });

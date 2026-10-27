@@ -94,7 +94,6 @@ globalThis.chrome = {
     async get(name) { return alarms.get(name); },
     onAlarm: { addListener(listener) { onAlarm = listener; } },
   },
-  commands: { onCommand: { addListener() {} } },
   contextMenus: {
     create() {},
     removeAll(callback) { callback?.(); },

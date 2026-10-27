@@ -25,6 +25,11 @@
         <button id="setup-open-settings" type="button">Open settings</button>
       </div>
 
+      <div id="site-access-warning" class="site-access-warning" role="alert" hidden>
+        <p><strong>{{APP_NAME}} needs site access — re-enable in Chrome.</strong> Chrome has withdrawn {{APP_NAME}}'s access to websites, so it cannot see this tab.</p>
+        <button id="site-access-reenable" type="button">Open {{APP_NAME}} in Chrome's extension settings</button>
+      </div>
+
       <div id="status" class="status" role="status" aria-live="polite">Connecting to native host…</div>
 
       <section id="page-area" aria-labelledby="page-heading">
@@ -66,15 +71,10 @@
           <h2 id="note-heading">My note</h2>
           <span id="note-status" class="note-status" role="status" aria-live="polite"></span>
         </div>
-        <p id="note-unavailable" class="warning" hidden>
-          {{APP_NAME}} can't see this tab's address yet. Click the {{APP_NAME}} toolbar button, press its keyboard
-          shortcut, or right-click the page and choose <strong>Add a note in {{APP_NAME}}</strong> to start a note here.
-        </p>
-        <div class="field">
+        <div id="note-editor" class="field" hidden>
           <label for="note-body" class="visually-hidden">Your note</label>
           <textarea id="note-body" rows="6" maxlength="98304" disabled></textarea>
         </div>
-        <button id="note-grant-origin" type="button" class="secondary" hidden>Keep working on this page from the panel</button>
         <div id="note-conflict" class="setup-warning" hidden>
           <p>This note changed elsewhere and your edit could not be saved. Copy it back in below:</p>
           <textarea id="note-unsaved" rows="4" readonly></textarea>

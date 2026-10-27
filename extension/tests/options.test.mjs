@@ -2,16 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-const { storageKey } = await import("../dist/brand.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 
 // Run after build:extension. Each test loads a fresh copy of the settings page
-// against a fake DOM, a scripted native host, a stub worker, and a Chrome
-// permission store that fires onAdded/onRemoved as Chrome does.
-const NOTE_ORIGINS_KEY = storageKey("note_origins_v1");
+// against a fake DOM, a scripted native host, a stub worker, and a
+// Chrome permissions API that fails any use.
 const SITE = { origin: "https://a.com", path_prefix: "/" };
-const PATTERN = "https://a.com:443/*";
 const AGENT_STATUS = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
 
 class FakeElement {
@@ -76,25 +73,19 @@ function configWith(sites) {
   };
 }
 
-function fire(listeners, permissions) {
-  setTimeout(() => { for (const listener of listeners) listener(permissions); }, 0);
-}
-
 function install({
-  sites = [SITE], adapters = [], grants = [], storage = {}, host = {}, worker = {}, workerStatus = {},
+  sites = [SITE], adapters = [], storage = {}, host = {}, worker = {}, workerStatus = {},
 } = {}) {
   const elements = new Map();
   const state = {
-    grants: new Set(grants),
     storage: new Map(Object.entries(storage)),
     config: { ...configWith(sites), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
-    added: [],
-    removed: [],
     storageChanged: [],
     requests: [],
     workerRequests: [],
+    permissionCalls: [],
     elements,
   };
   state.firePolicyChange = () => {
@@ -150,9 +141,6 @@ function install({
         throw new Error(`Unexpected host request ${request.type}`);
     }
   }
-
-  const has = ({ permissions = [], origins = [] }) =>
-    [...permissions, ...origins].every((entry) => state.grants.has(entry));
 
   env = state;
   globalThis.document = {
@@ -213,20 +201,22 @@ function install({
       onChanged: { addListener(listener) { state.storageChanged.push(listener); } },
     },
     permissions: {
-      async contains(permissions) { return has(permissions); },
-      async request({ permissions = [], origins = [] }) {
-        const entries = [...permissions, ...origins].filter((entry) => !state.grants.has(entry));
-        for (const entry of entries) state.grants.add(entry);
-        if (entries.length) fire(state.added, { permissions, origins });
-        return true;
+      // Brauser's site access is granted at install, so the settings page
+      // never asks Chrome about, for, or to give back a permission.
+      async contains() {
+        state.permissionCalls.push("contains");
+        throw new Error("chrome.permissions.contains must not be called");
       },
-      async remove({ permissions = [], origins = [] }) {
-        for (const entry of [...permissions, ...origins]) state.grants.delete(entry);
-        fire(state.removed, { permissions, origins });
-        return true;
+      async request() {
+        state.permissionCalls.push("request");
+        throw new Error("chrome.permissions.request must not be called");
       },
-      onAdded: { addListener(listener) { state.added.push(listener); } },
-      onRemoved: { addListener(listener) { state.removed.push(listener); } },
+      async remove() {
+        state.permissionCalls.push("remove");
+        throw new Error("chrome.permissions.remove must not be called");
+      },
+      onAdded: { addListener() { state.permissionCalls.push("onAdded"); } },
+      onRemoved: { addListener() { state.permissionCalls.push("onRemoved"); } },
     },
   };
   return state;
@@ -265,65 +255,35 @@ async function removeListedSite() {
   await until(() => statusText().startsWith("Removed ") && idle(), "the removal to finish");
 }
 
-test("a failed re-enable after removing a site rolls back Chrome grants", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    host: {
-      update_config: (_request, current) => current.failNext
-        ? { type: "error", code: "internal", message: "could not save configuration" }
-        : null,
-    },
-  });
-  await openSettings();
-  await typeSite("https://a.com");
-
-  await removeListedSite();
-  assert.equal(state.grants.has(PATTERN), false);
-  assert.equal(state.grants.has("webNavigation"), false);
-
-  // The preflight taken before removal said both grants were already held.
-  await until(() => !env.elements.get("enable-site").disabled, "Enable after removal");
-  state.failNext = true;
-  env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Setup failed") && idle(), "the failed setup");
-  await until(() => !state.grants.has(PATTERN) && !state.grants.has("webNavigation"),
-    "the new Chrome grants to be rolled back");
-});
-
-test("removing a logging site keeps an origin grant the side panel made for notes", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] },
-  });
-  await openSettings();
-  await removeListedSite();
-  assert.equal(state.grants.has(PATTERN), true);
-  assert.equal(state.grants.has("webNavigation"), false);
-  assert.deepEqual(state.storage.get(NOTE_ORIGINS_KEY), [SITE.origin]);
-  assert.match(statusText(), /kept for its page notes/);
-});
-
 test("removing an origin's final site removes its adapters in the same host update", async () => {
   const adapter = {
     type: "work.item", origin: SITE.origin,
     match: [{ path: "/items/{id:int}" }], id: "work.item:{host}/{id}",
   };
-  const state = install({ grants: ["webNavigation", PATTERN], adapters: [adapter] });
+  const state = install({ adapters: [adapter] });
   await openSettings();
   await removeListedSite();
   assert.deepEqual(state.config.adapters.artifacts, []);
   assert.match(statusText(), /Also removed 1 adapter for that origin/);
 });
 
-test("a notes grant Chrome no longer holds does not protect a later logging grant", async () => {
-  const state = install({ sites: [], storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] } });
+test("enabling a site never requests a Chrome permission", async () => {
+  const state = install({ sites: [] });
   await openSettings();
   await typeSite("https://a.com");
   env.elements.get("enable-site").click();
   await until(() => statusText().startsWith("Capture enabled") && idle(), "setup to finish");
+  assert.deepEqual(state.config.sites, [SITE]);
+  assert.equal(state.config.capture_enabled, true);
+  assert.deepEqual(state.permissionCalls, []);
+});
+
+test("removing a site never removes a Chrome permission", async () => {
+  const state = install();
+  await openSettings();
   await removeListedSite();
-  assert.equal(state.grants.has(PATTERN), false);
-  assert.deepEqual(state.storage.get(NOTE_ORIGINS_KEY) ?? [], []);
+  assert.deepEqual(state.config.sites, []);
+  assert.deepEqual(state.permissionCalls, []);
 });
 
 test("a settings load failure after hello is not reported as a missing host", async () => {
@@ -697,21 +657,10 @@ test("a failed hello reports the host as unavailable", async () => {
   assert.match(statusText(), /^Native host unavailable: host broke\./);
 });
 
-test("the panel's recorded notes origins survive until Chrome drops the grant", async () => {
-  const state = install({ grants: [PATTERN] });
-  const { noteOrigins, pruneNoteOrigins, recordNoteOrigin } = await import("../dist/grants.js");
-  await recordNoteOrigin(SITE.origin);
-  await recordNoteOrigin(SITE.origin);
-  await recordNoteOrigin("https://b.com");
-  assert.deepEqual(state.storage.get(NOTE_ORIGINS_KEY), [SITE.origin, "https://b.com"]);
-  await pruneNoteOrigins();
-  assert.deepEqual([...await noteOrigins()], [SITE.origin]);
-});
-
 const FOLDER_ISSUE = "The selected notes folder is unavailable or changed. Choose it again.";
 
 test("a kept config with a folder issue needs a new folder pick, which repairs it", async () => {
-  const state = install({ grants: ["webNavigation", PATTERN] });
+  const state = install();
   state.configIssue = FOLDER_ISSUE;
   await openSettings();
   assert.match(statusText(), /needs repair/);
@@ -763,26 +712,6 @@ test("choosing a folder saves it at once, leaving sites and capture as they were
   assert.deepEqual(state.config.sites, []);
   assert.equal(env.elements.get("folder-path").textContent, "/vault");
   assert.match(statusText(), /^No sites are enabled for capture\. Enable a site to begin\./);
-});
-
-test("a failed repair still rolls back the Chrome grants it added", async () => {
-  const state = install({
-    grants: ["webNavigation", PATTERN],
-    host: {
-      update_config: () => ({ type: "error", code: "internal", message: "could not save configuration" }),
-    },
-  });
-  state.configIssue = FOLDER_ISSUE;
-  await openSettings();
-  env.elements.get("choose-folder").click();
-  // The failed repair keeps the selection, so enabling a site can save it.
-  await until(() => statusText() === "could not save configuration" && idle(), "the folder pick");
-  await typeSite("https://b.com");
-  env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Setup failed") && idle(), "the failed setup");
-  await until(() => !state.grants.has("https://b.com:443/*"), "the new origin grant to be rolled back");
-  assert.equal(state.grants.has("webNavigation"), true);
-  assert.equal(state.grants.has(PATTERN), true);
 });
 
 test("a host restart drops a folder selection only the old host knew", async () => {

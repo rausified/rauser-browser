@@ -1,5 +1,4 @@
 import {
-  exactOriginPattern,
   isHttpUrl,
   localTimestamp,
   type WorkerStatus,
@@ -7,7 +6,6 @@ import {
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
-import { recordNoteOrigin } from "./grants.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import type {
   ArtifactListItem,
@@ -21,6 +19,8 @@ const settingsButton = element<HTMLButtonElement>("open-settings");
 const setupWarning = element<HTMLDivElement>("setup-warning");
 const setupReason = element<HTMLSpanElement>("setup-reason");
 const setupSettingsButton = element<HTMLButtonElement>("setup-open-settings");
+const siteAccessWarning = element<HTMLDivElement>("site-access-warning");
+const siteAccessReenableButton = element<HTMLButtonElement>("site-access-reenable");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
 const queueSummary = element<HTMLParagraphElement>("queue-summary");
 const queueWarning = element<HTMLParagraphElement>("queue-warning");
@@ -34,9 +34,8 @@ const pageTitle = element<HTMLParagraphElement>("page-title");
 const pageUrl = element<HTMLParagraphElement>("page-url");
 const pageUnusable = element<HTMLParagraphElement>("page-unusable");
 const noteStatus = element<HTMLSpanElement>("note-status");
-const noteUnavailable = element<HTMLParagraphElement>("note-unavailable");
+const noteEditor = element<HTMLDivElement>("note-editor");
 const noteBody = element<HTMLTextAreaElement>("note-body");
-const noteGrantOrigin = element<HTMLButtonElement>("note-grant-origin");
 const noteConflict = element<HTMLDivElement>("note-conflict");
 const noteConflictMessage = noteConflict.querySelector("p")!;
 const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
@@ -79,13 +78,14 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 // polls to show the queue and to settle Chrome grant revocations.
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
+// The site access the manifest grants at install (host_permissions).
+const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 
 // --- Page area (§5.3, §5.7) --------------------------------------------------
 // The panel follows the active tab. `tabRefreshSeq` lets a refresh whose tab
 // query was overtaken by a newer one be ignored; the note itself is owned by
 // `notes` (note-editor.ts), which serializes every load and save.
 let tabRefreshSeq = 0;
-let grantOrigin: string | null = null;
 let currentPage: { url: string; title: string } | null = null;
 let currentArtifact: ArtifactView | null = null;
 let olderNoteEntries: OlderNote[] = [];
@@ -537,34 +537,6 @@ const notes = new NoteEditor({
   }, ["note_saved", "note_conflict"]),
 }, describe, NOTE_SAVE_DEBOUNCE_MS);
 
-async function refreshGrantButton(origin: string): Promise<void> {
-  try {
-    const granted = await chrome.permissions.contains({ origins: [exactOriginPattern(origin)] });
-    grantOrigin = granted ? null : origin;
-    noteGrantOrigin.hidden = granted;
-  } catch {
-    grantOrigin = null;
-    noteGrantOrigin.hidden = true;
-  }
-}
-
-function requestNoteOrigin(): void {
-  const origin = grantOrigin;
-  if (!origin) return;
-  // This call must run in the click stack to keep Chrome's user gesture.
-  const granted = chrome.permissions.request({ origins: [exactOriginPattern(origin)] });
-  void granted.then((ok) => {
-    if (ok) {
-      grantOrigin = null;
-      noteGrantOrigin.hidden = true;
-      // Removing a logging site for this origin must not revoke the grant.
-      return recordNoteOrigin(origin);
-    } else {
-      showNoteStatus("Chrome access was declined.", true);
-    }
-  }).catch((error: unknown) => showNoteStatus(describe(error), true));
-}
-
 function copyUnsavedText(): void {
   void navigator.clipboard.writeText(noteUnsaved.value).catch((error: unknown) => {
     showNoteStatus(`Could not copy: ${describe(error)}`, true);
@@ -711,9 +683,9 @@ function copyWorklog(): void {
     .catch((error: unknown) => show(`Could not copy worklog: ${describe(error)}`, true));
 }
 
-/** Follows the active tab (§5.7). The header and the note editor are pointed
- * at the tab this call found in the same step, so they cannot disagree;
- * `notes` saves the page being left before loading the new one. */
+/** Follows the active tab (§5.7). The page area is pointed at the tab this
+ * call found, so the header and the note editor cannot disagree; `notes`
+ * saves the page being left before loading the new one. */
 async function refreshActiveTab(): Promise<void> {
   const seq = ++tabRefreshSeq;
   let tab: ChromeTab | undefined;
@@ -723,30 +695,44 @@ async function refreshActiveTab(): Promise<void> {
     tab = undefined;
   }
   if (seq !== tabRefreshSeq) return; // A newer refresh has the current tab.
+  await refreshSiteAccess(tab);
+}
 
+function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void {
+  pageUnusable.hidden = state !== "unusable";
+  siteAccessWarning.hidden = state !== "site-access";
+  noteEditor.hidden = state !== "note";
+}
+
+async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
+  currentPage = null;
+  renderArtifact(null, false);
+  pageTitle.textContent = title;
+  pageUrl.textContent = url;
+  showPageArea(state);
+  await notes.showPage(null);
+}
+
+/** Decides between the note editor, the "not a web page" state, and the one
+ * site-access banner for `tab`. Brauser holds HTTP(S) access from install, so
+ * Chrome withholds a tab's address only for pages outside it (chrome://, New
+ * Tab, file://) or after the user withdrew that access in Chrome. */
+async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
+  const seq = tabRefreshSeq;
   if (!tab || tab.incognito) {
-    currentPage = null;
-    renderArtifact(null, false);
-    pageTitle.textContent = "No page yet";
-    pageUrl.textContent = "";
-    pageUnusable.hidden = true;
-    noteUnavailable.hidden = true;
-    noteGrantOrigin.hidden = true;
-    await notes.showPage(null);
+    await showNoPage("No page yet", "", "none");
     return;
   }
 
   if (tab.url === undefined) {
-    currentPage = null;
-    renderArtifact(null, false);
-    // §5.3: without an origin grant or a live activeTab, the panel cannot
-    // see this tab's address at all.
-    pageTitle.textContent = tab.title?.trim() || "This page";
-    pageUrl.textContent = "";
-    pageUnusable.hidden = true;
-    noteUnavailable.hidden = false;
-    noteGrantOrigin.hidden = true;
-    await notes.showPage(null);
+    let granted = true;
+    try {
+      granted = await chrome.permissions.contains({ origins: SITE_ACCESS_ORIGINS });
+    } catch {
+      // Without an answer, show the ordinary state rather than a false alarm.
+    }
+    if (seq !== tabRefreshSeq) return;
+    await showNoPage(tab.title?.trim() || "This page", "", granted ? "unusable" : "site-access");
     return;
   }
 
@@ -757,25 +743,23 @@ async function refreshActiveTab(): Promise<void> {
     url = new URL("about:blank");
   }
   if (!isHttpUrl(url)) {
-    currentPage = null;
-    renderArtifact(null, false);
-    pageTitle.textContent = tab.title?.trim() || tab.url;
-    pageUrl.textContent = tab.url;
-    pageUnusable.hidden = false;
-    noteUnavailable.hidden = true;
-    noteGrantOrigin.hidden = true;
-    await notes.showPage(null);
+    await showNoPage(tab.title?.trim() || tab.url, tab.url, "unusable");
     return;
   }
 
-  pageTitle.textContent = tab.title?.trim() || url.hostname;
+  // A URL means Chrome granted this site, so no banner shows here.
+  const title = tab.title?.trim() || url.hostname;
+  pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
-  pageUnusable.hidden = true;
-  noteUnavailable.hidden = true;
-  currentPage = { url: tab.url, title: tab.title?.trim() || url.hostname };
-  void refreshGrantButton(url.origin);
-  await notes.showPage({ url: tab.url, title: tab.title?.trim() || url.hostname });
+  showPageArea("note");
+  currentPage = { url: tab.url, title };
+  await notes.showPage({ url: tab.url, title });
   void refreshArtifact();
+}
+
+function reenableSiteAccess(): void {
+  void chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` })
+    .catch((error: unknown) => show(`Could not open Chrome's extension settings: ${describe(error)}`, true));
 }
 
 settingsButton.addEventListener("click", openSettings);
@@ -785,7 +769,7 @@ replayButton.addEventListener("click", () => void replayVisits());
 discardButton.addEventListener("click", () => void discardPendingVisits());
 dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
-noteGrantOrigin.addEventListener("click", requestNoteOrigin);
+siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
 copyUnsavedButton.addEventListener("click", copyUnsavedText);
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
@@ -811,6 +795,9 @@ worklogPeriod.addEventListener("change", () => void loadWorklog());
 copyWorklogButton.addEventListener("click", copyWorklog);
 session.watchPolicy(scheduleReload);
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
+// Withdrawing or restoring site access in Chrome changes what this tab shows.
+chrome.permissions.onAdded.addListener(() => void refreshActiveTab());
+chrome.permissions.onRemoved.addListener(() => void refreshActiveTab());
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (changeInfo.title !== undefined || changeInfo.url !== undefined || changeInfo.status === "complete") {
     void refreshActiveTab();
