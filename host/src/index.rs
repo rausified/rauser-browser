@@ -39,8 +39,8 @@ use crate::vault::{
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
 // already durable in the log. v4 records log positions and the adapter
 // document fingerprint. v5 counts M1 visits as opens and bounds logged
-// titles; the rescan marks every artifact dirty so owned files are
-// regenerated and a cached over-limit event is dropped.
+// titles. A v4 cache is migrated in place (`migrate_v4_state`) rather than
+// rescanned, so its checkpoints survive the upgrade.
 const STATE_VERSION: u8 = 5;
 // How often a long regeneration pass publishes its progress. Chrome ends a
 // host soon after its port closes; without checkpoints a pass killed that
@@ -609,9 +609,9 @@ impl ArtifactIndex {
     }
 
     fn load_current_state(&self) -> Result<(IndexState, bool)> {
-        let (mut state, rebuild) = match read_state(&self.state_path()) {
-            Ok(Some(state)) if self.state_matches(&state) => (state, false),
-            Ok(_) | Err(_) => (self.empty_state(), true),
+        let (mut state, rebuild) = match self.read_current_state() {
+            Some((state, migrated)) => (state, migrated),
+            None => (self.empty_state(), true),
         };
         let changed = self.catch_up_logs(&mut state)?;
         // Ref resolution follows the current adapters, so a policy change
@@ -623,9 +623,25 @@ impl ArtifactIndex {
         Ok((state, publish))
     }
 
-    fn state_matches(&self, state: &IndexState) -> bool {
-        state.version == STATE_VERSION
-            && state.root == self.storage.root
+    /// The cache for this root and layout, if any. A version 4 cache is
+    /// migrated in place; the flag reports that it must be republished.
+    fn read_current_state(&self) -> Option<(IndexState, bool)> {
+        let mut state = read_state(&self.state_path()).ok()??;
+        if !self.state_location_matches(&state) {
+            return None;
+        }
+        match state.version {
+            STATE_VERSION => Some((state, false)),
+            4 => {
+                migrate_v4_state(&mut state);
+                Some((state, true))
+            }
+            _ => None,
+        }
+    }
+
+    fn state_location_matches(&self, state: &IndexState) -> bool {
+        state.root == self.storage.root
             && state.root_identity == self.root_identity
             && state.log_dir == self.storage.log_dir
             && state.artifacts_dir == self.storage.artifacts_dir
@@ -662,10 +678,7 @@ impl ArtifactIndex {
     /// the earliest position. Also returns that cache.
     fn rescan_logs(&self) -> Result<(IndexState, Option<IndexState>)> {
         let mut state = self.scan_logs()?;
-        let previous = match read_state(&self.state_path()) {
-            Ok(Some(previous)) if self.state_matches(&previous) => Some(previous),
-            _ => None,
-        };
+        let previous = self.read_current_state().map(|(previous, _)| previous);
         if let Some(previous) = &previous {
             for (id, seen) in std::mem::take(&mut state.conflicts) {
                 if let Some(winner) = previous.events.get(&id)
@@ -1012,6 +1025,34 @@ impl ArtifactIndex {
     pub fn database_path(&self) -> PathBuf {
         self.cache_dir.join("index.db")
     }
+}
+
+/// Upgrade a version 4 cache without rereading the logs: drop activity a
+/// log rescan would now skip (a title over capture's limit), and mark those
+/// artifacts and every M1 visit's artifact dirty so their owned files are
+/// regenerated with the v5 derivation (M1 visits count as opens).
+fn migrate_v4_state(state: &mut IndexState) {
+    let dropped = state
+        .events
+        .iter()
+        .filter(|(_, event)| {
+            matches!(event, CachedEvent::Activity(event) if !logged_activity_is_bounded(event))
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    for id in dropped {
+        if let Some(event) = state.events.remove(&id) {
+            state.dirty.insert(event.artifact_id().to_owned());
+        }
+        state.positions.remove(&id);
+        state.sequence.remove(&id);
+    }
+    for event in state.events.values() {
+        if let CachedEvent::Legacy(event) = event {
+            state.dirty.insert(event.artifact_id.clone());
+        }
+    }
+    state.version = STATE_VERSION;
 }
 
 fn saturating_u32(value: u64) -> u32 {
@@ -4433,6 +4474,18 @@ print(json.dumps([tables,row]))"#;
         );
         // Only index.db leaves the row out; the derived history keeps it.
         assert!(index.artifact(&oversize.artifact_id).unwrap().is_some());
+        // A version 4 cache (from before log titles were bounded) drops
+        // the event while it migrates, as a log rescan now would.
+        let mut cached: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        cached["version"] = 4.into();
+        fs::write(index.state_path(), serde_json::to_vec(&cached).unwrap()).unwrap();
+        assert!(index.artifact(&oversize.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&good.artifact_id).unwrap().is_some());
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().version,
+            STATE_VERSION
+        );
     }
 
     #[test]
@@ -4507,7 +4560,7 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
-    fn a_version_4_cache_is_rescanned_so_existing_m1_artifact_files_gain_their_opens() {
+    fn a_version_4_cache_migrates_so_existing_m1_artifact_files_gain_their_opens() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -4539,7 +4592,10 @@ print(json.dumps([tables,row]))"#;
         state["dirty"] = serde_json::json!([]);
         fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
 
+        // The migration keeps the checkpoints: no log is reread.
+        LOG_BYTES_READ.with(|count| count.set(0));
         assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
         assert_eq!(fs::read_to_string(&path).unwrap(), current);
     }
 
