@@ -1763,12 +1763,8 @@ revealAgentEnv(): Promise<void>;
 ### Task 38: Bundle pinned Readability and a self-contained page extractor
 
 **Files:**
-- **[human]** Run `npm install --save-exact @mozilla/readability@0.6.0`, which updates the `package.json` `dependencies` and `package-lock.json`. Then:
-  - Confirm the license is Apache-2.0 and that `npm audit` is clean.
-  - Confirm that the CI `dependency-review` job accepts Apache-2.0.
-  - Record the `sha256` of `node_modules/@mozilla/readability/Readability.js`.
-
-  This is the first runtime npm dependency.
+- **Already done (commit "build: add @mozilla/readability 0.6.0 for plan Task 38"):** `@mozilla/readability@0.6.0` is installed with `--save-exact` and recorded in the `package.json` `dependencies` and `package-lock.json` (resolved from `registry.npmjs.org`, license Apache-2.0, `npm audit` 0 vulnerabilities). This is the first runtime npm dependency. Do not run `npm install`; `npm ci` installs it from the lockfile. The CI `dependency-review` job runs with no license allow/deny list, so it does not block Apache-2.0.
+  - Record the `sha256` of `node_modules/@mozilla/readability/Readability.js` (after `npm ci`, e.g. `shasum -a 256` or `sha256sum`) as `READABILITY_SHA256` below. At install time it was `34dcab3d0832d0019f02990eed6b6124e029e8c32b9f0c6f2550544ff8dff174`; verify yours matches before pinning it.
 - Modify `extension/build.mjs`:
   - Add `READABILITY_VERSION = "0.6.0"` and `READABILITY_SHA256` side by side.
   - When `node_modules/@mozilla/readability` is missing, fail with "Run npm ci first: @mozilla/readability is missing".
@@ -1807,7 +1803,7 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage;
 - [ ] Run the extension command. Expect FAIL.
 - [ ] Implement.
 - [ ] Run the extension command, `npm run typecheck && npm run lint && npm audit`. Expect PASS, with `dist/vendor/readability.js` present.
-- [ ] Commit: `git add package.json package-lock.json extension/build.mjs extension/extract.ts extension/readability.d.ts extension/tests/extract.test.mjs && git commit -m "feat(extension): bundle pinned Readability 0.6.0 and a byte-capped page extractor"`
+- [ ] Commit: `git add package.json extension/build.mjs extension/extract.ts extension/readability.d.ts extension/tests/extract.test.mjs && git commit -m "feat(extension): bundle pinned Readability 0.6.0 and a byte-capped page extractor"`
 
 ### Task 39: Summarize & log button, `summarize` command, context-menu item
 
