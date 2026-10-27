@@ -633,6 +633,46 @@ test("a pending local pause does not keep pending removals from clearing", async
   assert.equal(cleared.pause_pending, true);
 });
 
+test("malformed legacy site removal state is kept and keeps capture paused", async () => {
+  const removedOrigin = "https://malformed-removal.example";
+  const keptOrigin = "https://malformed-kept.example";
+  const malformed = [
+    "not-a-list",
+    [{ origin: removedOrigin, path_prefix: "/" }, { origin: 42, path_prefix: "/" }],
+    [{ origin: removedOrigin, path_prefix: "/" }, { origin: `${keptOrigin}/path`, path_prefix: "/" }],
+    [{ origin: removedOrigin }],
+    Array.from({ length: 257 }, (_, index) => ({ origin: `https://r${index}.example`, path_prefix: "/" })),
+  ];
+  for (const [index, legacy] of malformed.entries()) {
+    values.clear();
+    sessionValues.clear();
+    tabs.clear();
+    values.set(storageKey("locally_removed_sites_v1"), legacy);
+    values.set(storageKey("policy_v1"), {
+      ...lease(keptOrigin),
+      adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+    });
+    onInstalled({ reason: "update" });
+    await flush();
+    assert.deepEqual(values.get(storageKey("locally_removed_sites_v1")), legacy,
+      `case ${index}: the legacy evidence is not deleted`);
+    assert.equal(values.has(storageKey("pending_site_removals_v1")), false, `case ${index}`);
+
+    for (const [tabId, origin] of [[60, removedOrigin], [61, keptOrigin]]) {
+      tabs.set(tabId, { id: tabId, url: `${origin}/items/x`, title: "X", incognito: false });
+      onCommitted({
+        tabId, frameId: 0, documentId: `doc-malformed-${index}-${tabId}`, documentLifecycle: "active",
+        url: `${origin}/items/x`, timeStamp: Date.now() - 2 * 60 * 60_000,
+      });
+    }
+    await flush();
+    assert.equal(values.get(storageKey("queue_v1"))?.items.length ?? 0, 0,
+      `case ${index}: capture stays paused`);
+    await assert.rejects(send({ kind: "get_status" }), /unreadable/);
+  }
+  values.clear();
+});
+
 test("a failed pending-removal migration write keeps honoring the legacy removal state", async () => {
   values.clear();
   sessionValues.clear();

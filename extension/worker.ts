@@ -7,6 +7,7 @@ import {
   TRUSTED_PAGES,
   captureUrl,
   emptyQueue,
+  isHttpUrl,
   isPolicyLease,
   isQueuedVisit,
   leaseActive,
@@ -42,6 +43,8 @@ const LEGACY_REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
 // Written by the per-origin note grants of earlier builds.
 const LEGACY_NOTE_ORIGINS_KEY = storageKey("note_origins_v1");
 const MAX_PENDING_REMOVALS = 256;
+// The per-list cap earlier builds enforced on each legacy key.
+const LEGACY_MAX_REMOVALS = 256;
 const HOST_ERROR_KEY = storageKey("host_error_v1");
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const ACTIVITY_SESSION_KEY = storageKey("activity_session_v1");
@@ -358,6 +361,32 @@ function legacyOrigins(value: unknown, pick: (entry: unknown) => unknown): strin
   return value.map(pick).filter((origin): origin is string => typeof origin === "string");
 }
 
+function legacyRemovedSite(value: unknown): value is { origin: string; path_prefix: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const site = value as Record<string, unknown>;
+  if (typeof site.origin !== "string" || typeof site.path_prefix !== "string") return false;
+  try {
+    const url = new URL(site.origin);
+    if (!isHttpUrl(url) || url.username || url.password || url.origin !== site.origin) return false;
+  } catch {
+    return false;
+  }
+  const path = site.path_prefix;
+  return path.startsWith("/") && !path.includes("?") && !path.includes("#") &&
+    !path.includes("\\") && !path.split("/").some((part) => part === "." || part === "..");
+}
+
+/** The earlier build's local site removals, validated exactly as it read
+ * them. That build paused capture on a malformed list; so does this one,
+ * and migration keeps the key rather than deleting the evidence. */
+function legacyRemovedSites(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > LEGACY_MAX_REMOVALS || !value.every(legacyRemovedSite)) {
+    throw new Error("Local site removal state is unreadable; capture is paused");
+  }
+  return value.map((site) => site.origin);
+}
+
 /** Origins an earlier build removed or saw revoked. Until migration has
  * carried them into the pending list and deleted the legacy keys, they keep
  * gating capture, so a failed migration write cannot reopen them. */
@@ -365,8 +394,7 @@ async function readLegacyRemovals(): Promise<string[]> {
   const stored = await chrome.storage.local.get([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
   return [
     ...legacyOrigins(stored[LEGACY_REVOCATIONS_KEY], (entry) => entry),
-    ...legacyOrigins(stored[LEGACY_REMOVED_SITES_KEY], (entry) =>
-      typeof entry === "object" && entry !== null ? (entry as { origin?: unknown }).origin : null),
+    ...legacyRemovedSites(stored[LEGACY_REMOVED_SITES_KEY]),
   ];
 }
 
