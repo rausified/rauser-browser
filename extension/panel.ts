@@ -17,6 +17,7 @@ import { SETUP_WARNING } from "./agent.js";
 import { summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
+import { NoteRecovery } from "./note-recovery.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
 } from "./artifact-refresh.js";
@@ -58,6 +59,8 @@ const noteBody = element<HTMLTextAreaElement>("note-body");
 const noteConflict = element<HTMLDivElement>("note-conflict");
 const noteConflictMessage = noteConflict.querySelector("p")!;
 const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
+const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
+const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
 const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
 const artifactCard = element<HTMLElement>("artifact-card");
@@ -768,6 +771,10 @@ const notes = new NoteEditor({
   setEditable: (editable) => { noteBody.disabled = !editable; },
   setStatus: showNoteStatus,
   showUnsaved: showUnsavedText,
+  setRecoveryWarning: (message) => {
+    noteRecoveryWarning.textContent = message;
+    noteRecoveryWarning.hidden = !message;
+  },
   showOlderNotes: renderOlderNotes,
 }, {
   load: (url) => session.host.call({
@@ -782,7 +789,7 @@ const notes = new NoteEditor({
     request_id: newRequestId(),
     ...request,
   }, ["note_saved", "note_conflict"]),
-}, describe, NOTE_SAVE_DEBOUNCE_MS);
+}, describe, NOTE_SAVE_DEBOUNCE_MS, new NoteRecovery(() => window.localStorage));
 
 captureSite = new CaptureSitePanel(session, {
   isBusy: changing,
@@ -1041,6 +1048,7 @@ dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
 copyUnsavedButton.addEventListener("click", copyUnsavedText);
+discardUnsavedButton.addEventListener("click", () => notes.discardUnsaved());
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
