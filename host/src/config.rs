@@ -64,6 +64,9 @@ const MAX_HASHED_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ADOPTED_CONTRACTS: usize = 1024;
 const MAX_ADOPTED_CONTRACTS_BYTES: usize = 1024 * 1024;
 const ADOPTED_CONTRACTS_FORMAT: u32 = 1;
+/// How the user repairs an adopted-contract state file the host cannot use.
+/// Moving it aside forgets its contracts, like a config repair.
+const ADOPTED_CONTRACTS_REPAIR: &str = "Move adopted-contracts.json aside (rename it, keeping a backup) or fix it to restore notes on pages the current adapters do not recognize; once it is moved aside, notes from adapters removed by hand may need Use as artifact note again.";
 
 /// The host-owned record of every adapter contract a host has adopted under
 /// the config lock (see `AdoptedContracts`). It lives beside config.toml in
@@ -597,6 +600,18 @@ impl ConfigStore {
         })
     }
 
+    /// The note refusal on a page whose key the adopted-contract state file
+    /// decides while that file cannot be used (`NoteKeyRule::StateUnavailable`).
+    pub(crate) fn adopted_contracts_unavailable(&self) -> String {
+        let state = self.path.parent().map_or_else(
+            || "adopted-contracts.json".to_owned(),
+            |dir| adopted_contracts_path(dir).display().to_string(),
+        );
+        format!(
+            "Notes on this page are paused to protect note identity: Brauser's record of the adapters it has used ({state}) cannot be read. {ADOPTED_CONTRACTS_REPAIR}"
+        )
+    }
+
     /// A malformed or newer config is shown to setup, never used for capture.
     pub fn config_issue(&self) -> Option<&str> {
         self.issue.as_deref()
@@ -665,7 +680,7 @@ impl ConfigStore {
     /// the host's adopted-contract state (`AdoptedContracts`).
     pub(crate) fn note_key_rule(&self, url: &str) -> NoteKeyRule {
         if self.note_key_rules.all_unavailable {
-            return NoteKeyRule::Unavailable;
+            return NoteKeyRule::StateUnavailable;
         }
         let mut covered = self.adapter_document.as_ref().is_some_and(|document| {
             !matches!(document.evaluate(url, None), Err(NoMatch::NoAdapter))
@@ -674,8 +689,13 @@ impl ConfigStore {
         let origin = url::Url::parse(url)
             .ok()
             .map(|parsed| parsed.origin().ascii_serialization());
-        if origin.is_some_and(|origin| self.note_key_rules.unavailable_origins.contains(&origin)) {
-            return NoteKeyRule::Unavailable;
+        if let Some(origin) = origin {
+            if self.note_key_rules.unavailable_origins.contains(&origin) {
+                return NoteKeyRule::Unavailable;
+            }
+            if self.note_key_rules.damaged_state_origins.contains(&origin) {
+                return NoteKeyRule::StateUnavailable;
+            }
         }
         for document in &self.note_key_rules.documents {
             match document.evaluate(url, None) {
@@ -892,10 +912,18 @@ impl ConfigStore {
             );
         }
         if !adapters_unchanged {
+            let state_path = adopted_contracts_path(&parent);
+            let by_hand = retired_by_hand(
+                &read_adopted_contracts(&state_path),
+                &current.config,
+                &current.retired_adapter_contracts,
+            );
             validate_adapter_transition_with_history(
                 &current.config,
                 &next,
                 &current.retired_adapter_contracts,
+                &by_hand,
+                Some(&state_path),
             )?;
         }
         let retired_adapter_contracts = if adapters_unchanged {
@@ -1735,6 +1763,10 @@ pub(crate) enum NoteKeyRule {
     /// A recorded contract for this origin cannot be compiled here, so the
     /// key cannot be established; loads and saves refuse.
     Unavailable,
+    /// As `Unavailable`, because the adopted-contract state file cannot be
+    /// used (or holds a damaged entry for this origin); its repair is
+    /// different, so the refusal names it.
+    StateUnavailable,
 }
 
 /// The note-only identity rules (see `ConfigStore::note_key_rule`).
@@ -1745,6 +1777,8 @@ struct NoteKeyRules {
     /// contract may have named artifacts there, so identity on those origins
     /// is unavailable rather than decided by the contracts that remain.
     unavailable_origins: std::collections::BTreeSet<String>,
+    /// Origins with a damaged entry in the adopted-contract state.
+    damaged_state_origins: std::collections::BTreeSet<String>,
     /// The adopted-contract state is unreadable, or holds a damaged entry
     /// with no origin, so no unrecognized URL's key can be established.
     all_unavailable: bool,
@@ -1792,17 +1826,7 @@ fn note_key_rules(
         match compiled {
             Some(document) => rules.documents.push(document),
             None => {
-                let Some(origin) = contract
-                    .get("origin")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|origin| url::Url::parse(origin).ok())
-                    // Only a page origin can localize the damage; any other
-                    // scheme serializes to an origin no page has.
-                    .filter(|origin| {
-                        matches!(origin.scheme(), "http" | "https") && origin.host().is_some()
-                    })
-                    .map(|origin| origin.origin().ascii_serialization())
-                else {
+                let Some(origin) = page_origin(contract) else {
                     return false;
                 };
                 rules.unavailable_origins.insert(origin);
@@ -1824,22 +1848,66 @@ fn note_key_rules(
     for contract in retired {
         add(&mut rules, contract, 1, true);
     }
+    let by_hand = retired_by_hand(adopted, config, retired);
+    for contract in &by_hand.contracts {
+        add(&mut rules, contract, 1, true);
+    }
+    rules.damaged_state_origins = by_hand.damaged_origins;
+    rules.all_unavailable = by_hand.unreadable;
+    rules
+}
+
+/// The origin a recorded contract names, when it is a page origin. Only a
+/// page origin can localize damage; any other scheme serializes to an origin
+/// no page has.
+fn page_origin(contract: &serde_json::Value) -> Option<String> {
+    contract
+        .get("origin")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|origin| url::Url::parse(origin).ok())
+        .filter(|origin| matches!(origin.scheme(), "http" | "https") && origin.host().is_some())
+        .map(|origin| origin.origin().ascii_serialization())
+}
+
+/// The adopted contracts config.toml no longer holds, as a current adapter
+/// or a history entry: they were removed or reshaped by hand. Like
+/// `[[adapter_id_history]]`, they name note keys and freeze the IDs of the
+/// routes they matched. The state file is host-written, so an entry this
+/// host cannot validate is damage: it makes its origin unknown, or, with no
+/// page origin, every origin, as an unusable file does.
+#[derive(Default)]
+struct RetiredByHand {
+    contracts: Vec<serde_json::Value>,
+    damaged_origins: std::collections::BTreeSet<String>,
+    unreadable: bool,
+}
+
+fn retired_by_hand(
+    adopted: &AdoptedContracts,
+    config: &ConfigSnapshot,
+    retired: &[serde_json::Value],
+) -> RetiredByHand {
+    let mut by_hand = RetiredByHand::default();
     match adopted {
         AdoptedContracts::Read { contracts, .. } => {
             let current = adapter_contracts(config);
             for contract in contracts {
-                if !current.contains(contract)
-                    && !retired.contains(contract)
-                    && !add(&mut rules, contract, 1, true)
-                {
-                    rules.all_unavailable = true;
+                if current.contains(contract) || retired.contains(contract) {
+                    continue;
+                }
+                if validate_adapter_history(std::slice::from_ref(contract)).is_ok() {
+                    by_hand.contracts.push(contract.clone());
+                } else if let Some(origin) = page_origin(contract) {
+                    by_hand.damaged_origins.insert(origin);
+                } else {
+                    by_hand.unreadable = true;
                 }
             }
         }
-        AdoptedContracts::Unreadable => rules.all_unavailable = true,
+        AdoptedContracts::Unreadable => by_hand.unreadable = true,
         AdoptedContracts::Unread => {}
     }
-    rules
+    by_hand
 }
 
 /// Every adapter contract, in the recognition form `[[adapter_id_history]]`
@@ -1847,8 +1915,9 @@ fn note_key_rules(
 /// settings save records history, so a contract deleted from config.toml in
 /// an editor would otherwise leave its routes on URL keys and its artifact
 /// note unreachable. A recorded contract config.toml no longer holds names
-/// note keys like a history entry; it never authorizes capture and never
-/// guards ID changes. Contracts are only ever added: re-adding one makes it
+/// note keys and freezes its routes' IDs like a history entry
+/// (`RetiredByHand`); it never authorizes capture. Contracts are only ever
+/// added: re-adding one makes it
 /// current again, and one later moved to history is read from there.
 ///
 /// Several hosts (one per native-messaging connection) share the file. Each
@@ -2036,13 +2105,18 @@ pub(crate) fn validate_adapter_transition(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
 ) -> Result<()> {
-    validate_adapter_transition_with_history(current, next, &[])
+    validate_adapter_transition_with_history(current, next, &[], &RetiredByHand::default(), None)
 }
 
+/// `retired` is `[[adapter_id_history]]`; `by_hand` holds the contracts
+/// removed from config.toml by hand, read from the state file at
+/// `state_path`. Both freeze the IDs of the routes they matched.
 fn validate_adapter_transition_with_history(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
     retired: &[serde_json::Value],
+    by_hand: &RetiredByHand,
+    state_path: Option<&Path>,
 ) -> Result<()> {
     validate_adapter_history(retired)?;
     let current_is_valid = adapter_policy_valid(current);
@@ -2055,16 +2129,44 @@ fn validate_adapter_transition_with_history(
     } else {
         individually_valid_adapter_contracts(current)
     };
-    let (removed, added) =
-        adapter_contract_delta_between(current_contracts, adapter_contracts(next));
-    for candidate in &added {
+    let next_contracts = adapter_contracts(next);
+    // Every contract this save adds or reshapes. The delta pairs a
+    // recognition edit that keeps its identity with the contract it replaces,
+    // so it is in neither list, yet widening its match can claim a retired
+    // route under its own ID just as an addition can.
+    let changed: Vec<_> = next_contracts
+        .iter()
+        .filter(|contract| !current_contracts.contains(contract))
+        .cloned()
+        .collect();
+    let (removed, _added) = adapter_contract_delta_between(current_contracts, next_contracts);
+    for candidate in &changed {
+        // A contract that cannot be read back may be the one this adapter
+        // would re-key, so the change waits for the record's repair.
+        let unknown = by_hand.unreadable
+            || page_origin(candidate)
+                .is_some_and(|origin| by_hand.damaged_origins.contains(&origin));
+        if unknown {
+            let state = state_path.map_or_else(
+                || "adopted-contracts.json".to_owned(),
+                |path| path.display().to_string(),
+            );
+            match page_origin(candidate).filter(|_| !by_hand.unreadable) {
+                Some(origin) => bail!(
+                    "Brauser's record of the adapters it has used ({state}) has an entry for {origin} it cannot read, so a new or changed adapter there cannot be checked against adapters removed from config.toml by hand. {ADOPTED_CONTRACTS_REPAIR}"
+                ),
+                None => bail!(
+                    "Brauser's record of the adapters it has used ({state}) cannot be read, so a new or changed adapter cannot be checked against adapters removed from config.toml by hand. {ADOPTED_CONTRACTS_REPAIR}"
+                ),
+            }
+        }
         let Some((origin, id)) = adapter_contract_identity(candidate) else {
             continue;
         };
         let Some(artifact_type) = adapter_contract_type(candidate) else {
             continue;
         };
-        for previous in retired.iter().chain(&removed) {
+        for previous in retired.iter().chain(&removed).chain(&by_hand.contracts) {
             let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
                 continue;
             };
@@ -2906,7 +3008,7 @@ mod tests {
             assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
             fs::write(state_path(folder.path()), b"not json").unwrap();
             store.refresh().unwrap();
-            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unavailable);
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::StateUnavailable);
         }
 
         #[test]
@@ -2945,7 +3047,7 @@ mod tests {
                 for url in [DOC_8, BOARD, ELSEWHERE] {
                     assert_eq!(
                         store.note_key_rule(url),
-                        NoteKeyRule::Unavailable,
+                        NoteKeyRule::StateUnavailable,
                         "{damage}: {url}"
                     );
                 }
@@ -2995,7 +3097,7 @@ mod tests {
             )
             .unwrap();
             let store = loaded(&path);
-            assert_eq!(store.note_key_rule(ITEM_7), NoteKeyRule::Unavailable);
+            assert_eq!(store.note_key_rule(ITEM_7), NoteKeyRule::StateUnavailable);
             assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Uncovered);
 
             // An entry that names no HTTP(S) origin cannot be attributed to
@@ -3017,7 +3119,7 @@ mod tests {
                 let store = loaded(&path);
                 assert_eq!(
                     store.note_key_rule(ELSEWHERE),
-                    NoteKeyRule::Unavailable,
+                    NoteKeyRule::StateUnavailable,
                     "{origin:?}"
                 );
             }
@@ -3046,6 +3148,187 @@ mod tests {
                 NoteKeyRule::Artifact("work:site3.example/4".into())
             );
             assert!(store.adapter_matches(ITEM_7, None).unwrap());
+        }
+
+        /// A settings save that adds `added` to the current adapters.
+        fn save_adding(store: &mut ConfigStore, added: serde_json::Value) -> Result<String> {
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(added);
+            let revision = store.revision().to_owned();
+            Ok(store.update(next, &revision)?.expect("no conflict"))
+        }
+
+        fn doc(artifact_type: &str, path: &str, id: &str) -> serde_json::Value {
+            adapter("https://work.example", artifact_type, path, id)
+        }
+
+        /// A contract removed by hand still names note keys, so settings
+        /// must not re-add its route under another ID or type, exactly as
+        /// for `[[adapter_id_history]]`.
+        #[test]
+        fn a_hand_retired_contract_freezes_its_routes_id() {
+            for (case, added) in [
+                (
+                    "new id",
+                    doc("work.doc", "/docs/{id:int}", "other:{host}/{id}"),
+                ),
+                (
+                    "new type",
+                    doc("work.page", "/docs/{id:int}", "doc:{host}/{id}"),
+                ),
+                (
+                    "overlapping route",
+                    doc("work.doc", "/docs/{n:int}", "other:{host}/{n}"),
+                ),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+                adopted(&path);
+                write_by_hand(folder.path(), &[ITEM]);
+                let mut store = adopted(&path);
+                let before = fs::read(&path).unwrap();
+                let error = save_adding(&mut store, added).unwrap_err();
+                assert!(
+                    format!("{error:#}").contains("cannot change until artifact migrations"),
+                    "{case}: {error:#}"
+                );
+                assert_eq!(fs::read(&path).unwrap(), before, "{case}");
+            }
+        }
+
+        /// Widening a current adapter keeps its identity, so the contract
+        /// delta pairs it as a recognition edit rather than an addition; it
+        /// must still not claim a hand-retired route under its own ID.
+        #[test]
+        fn widening_an_adapter_over_a_hand_retired_route_is_refused() {
+            let widened = json!({
+                "type": "work.item",
+                "origin": "https://work.example",
+                "match": [{"path": "/items/{id:int}"}, {"path": "/docs/{id:int}"}],
+                "id": "work:{host}/{id}",
+            });
+            for damage in [None, Some(b"{".as_slice())] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+                adopted(&path);
+                write_by_hand(folder.path(), &[ITEM]);
+                if let Some(bytes) = damage {
+                    fs::write(state_path(folder.path()), bytes).unwrap();
+                }
+                let mut store = loaded(&path);
+                let mut next = store.snapshot().clone();
+                next.adapters.artifacts[0] = widened.clone();
+                let revision = store.revision().to_owned();
+                let before = fs::read(&path).unwrap();
+                let error = store.update(next, &revision).unwrap_err();
+                let expected = if damage.is_some() {
+                    "cannot be read"
+                } else {
+                    "cannot change until artifact migrations"
+                };
+                assert!(format!("{error:#}").contains(expected), "{error:#}");
+                assert_eq!(fs::read(&path).unwrap(), before);
+            }
+        }
+
+        #[test]
+        fn a_hand_retired_contract_may_be_restored_or_routed_around() {
+            for (case, added) in [
+                (
+                    "exact restore",
+                    doc("work.doc", "/docs/{id:int}", "doc:{host}/{id}"),
+                ),
+                (
+                    "disjoint route",
+                    doc("work.page", "/pages/{id:int}", "page:{host}/{id}"),
+                ),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+                adopted(&path);
+                write_by_hand(folder.path(), &[ITEM]);
+                let mut store = adopted(&path);
+                save_adding(&mut store, added).unwrap_or_else(|error| panic!("{case}: {error:#}"));
+            }
+        }
+
+        /// Without a readable record, a new adapter cannot be checked
+        /// against contracts removed by hand, so additions wait for the
+        /// repair; removals and unrelated edits still save.
+        #[test]
+        fn unreadable_state_refuses_added_adapters_until_repaired() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            adopted(&path);
+            write_by_hand(folder.path(), &[ITEM, DOC]);
+            fs::write(state_path(folder.path()), b"{").unwrap();
+            let mut store = adopted(&path);
+
+            let elsewhere = adapter(
+                "https://elsewhere.example",
+                "work.item",
+                "/items/{id:int}",
+                "work:{host}/{id}",
+            );
+            let error = save_adding(&mut store, elsewhere).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("adopted-contracts.json"), "{message}");
+            assert!(
+                message.contains("Move adopted-contracts.json aside"),
+                "{message}"
+            );
+
+            let mut next = store.snapshot().clone();
+            next.adapters
+                .artifacts
+                .retain(|adapter| adapter["type"] != "work.doc");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let mut next = store.snapshot().clone();
+            next.capture_enabled = !next.capture_enabled;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            // The damaged file is never rewritten.
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), b"{");
+        }
+
+        /// A damaged entry with a readable origin blocks additions on that
+        /// origin only, as it makes only that origin's identity unavailable.
+        #[test]
+        fn a_damaged_entry_refuses_additions_on_its_origin_only() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let damaged = json!({
+                "type": "work.other",
+                "origin": "https://work.example",
+                "match": [{"path": "/items/{n:nope}"}],
+                "id": "other:{host}/{n}",
+            });
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": [damaged]})).unwrap(),
+            )
+            .unwrap();
+            let mut store = loaded(&path);
+            let error = save_adding(
+                &mut store,
+                doc("work.page", "/pages/{id:int}", "page:{host}/{id}"),
+            )
+            .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("https://work.example"),
+                "{error:#}"
+            );
+            save_adding(
+                &mut store,
+                adapter(
+                    "https://elsewhere.example",
+                    "work.item",
+                    "/items/{id:int}",
+                    "work:{host}/{id}",
+                ),
+            )
+            .unwrap();
         }
     }
 

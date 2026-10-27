@@ -90,10 +90,13 @@ removed before Brauser kept those rules), the host cannot tell that board from i
 uses its own URL note; the shared artifact note is left untouched in the
 home folder. Deleting an adapter from config.toml by hand keeps its notes
 too: the host records every adapter it has used in `adopted-contracts.json`
-beside config.toml and reads removed ones from there. If that file is damaged,
-notes on pages no current adapter recognizes refuse to load or save until it
-is fixed or removed; removing it forgets those adapters. Notes alone do not
-turn capture back on.
+beside config.toml and reads removed ones from there. Settings will not add an
+adapter that gives a removed one's pages a different artifact ID or type.
+If that file is damaged, notes on pages no current adapter recognizes refuse
+to load or save, and settings refuses to add adapters, until it is fixed or
+moved aside; the panel's message names the file. Moving it aside forgets
+those adapters, so notes from adapters removed by hand may need **Use as
+artifact note** again. Notes alone do not turn capture back on.
 
 Expand **Page patterns** in the panel and choose **Review page patterns** to
 inspect the current address and same-site link patterns, including on sites
