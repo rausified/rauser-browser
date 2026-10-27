@@ -2861,7 +2861,11 @@ id = "jira:{host}/{key}"
                     artifact_type: "jira.issue".into(),
                     url: jira_modal(issue),
                     title: Some(issue.into()),
-                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    occurred_at: time::OffsetDateTime::now_utc()
+                        .replace_nanosecond(0)
+                        .unwrap()
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap(),
                     incognito: false,
                     opens: 1,
                     focused_seconds: 3,
