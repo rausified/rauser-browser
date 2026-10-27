@@ -331,6 +331,15 @@ export interface ArtifactView {
   linked_count: number;
 }
 
+export interface SummaryView {
+  summarized_at: string;
+  document_type: string;
+  category: string;
+  importance: ImportanceLevel;
+  summary_path: string;
+  harness: HarnessId;
+}
+
 export interface ArtifactListItem {
   local_date: string;
   artifact_id: string;
@@ -341,6 +350,7 @@ export interface ArtifactListItem {
   background_seconds: number;
   opens: number;
   why: string | null;
+  summary: SummaryView | null;
 }
 
 export interface ArtifactResult {
@@ -349,6 +359,7 @@ export interface ArtifactResult {
   request_id: string;
   recognized: boolean;
   artifact: ArtifactView | null;
+  summary: SummaryView | null;
 }
 
 export interface ArtifactListResult {

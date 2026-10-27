@@ -1295,10 +1295,24 @@
         "linked_count": { "type": "integer", "minimum": 0 }
       }
     },
+    "SummaryView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An artifact's latest summary, from its summary log event. summarized_at is RFC 3339 in the offset of the click that requested it; summary_path is relative to the notes folder.",
+      "required": ["summarized_at", "document_type", "category", "importance", "summary_path", "harness"],
+      "properties": {
+        "summarized_at": { "type": "string", "maxLength": 32 },
+        "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "importance": { "$ref": "#/$defs/ImportanceLevel" },
+        "summary_path": { "type": "string", "maxLength": 1024 },
+        "harness": { "$ref": "#/$defs/HarnessId" }
+      }
+    },
     "ArtifactListItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["local_date", "artifact_id", "artifact_type", "title", "url", "focused_seconds", "background_seconds", "opens", "why"],
+      "required": ["local_date", "artifact_id", "artifact_type", "title", "url", "focused_seconds", "background_seconds", "opens", "why", "summary"],
       "properties": {
         "local_date": { "type": "string", "minLength": 10, "maxLength": 10 },
         "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
@@ -1308,19 +1322,21 @@
         "focused_seconds": { "type": "integer", "minimum": 0 },
         "background_seconds": { "type": "integer", "minimum": 0 },
         "opens": { "type": "integer", "minimum": 0 },
-        "why": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] }
+        "why": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "summary": { "oneOf": [{ "$ref": "#/$defs/SummaryView" }, { "type": "null" }] }
       }
     },
     "ArtifactResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "protocol_version", "request_id", "recognized", "artifact"],
+      "required": ["type", "protocol_version", "request_id", "recognized", "artifact", "summary"],
       "properties": {
         "type": { "const": "artifact_result" },
         "protocol_version": { "type": "integer", "const": 6 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "recognized": { "type": "boolean" },
-        "artifact": { "oneOf": [{ "$ref": "#/$defs/ArtifactView" }, { "type": "null" }] }
+        "artifact": { "oneOf": [{ "$ref": "#/$defs/ArtifactView" }, { "type": "null" }] },
+        "summary": { "oneOf": [{ "$ref": "#/$defs/SummaryView" }, { "type": "null" }] }
       }
     },
     "ArtifactListResult": {

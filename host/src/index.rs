@@ -17,7 +17,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, WhyEvent};
+use brauser_protocol::{
+    ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, SummaryView, WhyEvent,
+};
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -1066,6 +1068,25 @@ impl ArtifactIndex {
         }))
     }
 
+    /// The artifact's latest summary (by instant, then event ID, as the
+    /// artifact file's Summary line picks it), or `None` when it has none.
+    pub fn summary_for(&self, artifact_id: &str) -> Result<Option<SummaryView>> {
+        Ok(self
+            .load_or_rebuild()?
+            .events
+            .values()
+            .filter_map(|event| match event {
+                CachedEvent::Summary(summary) if summary.artifact_id == artifact_id => {
+                    Some(summary)
+                }
+                _ => None,
+            })
+            .max_by(|a, b| {
+                timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
+            })
+            .map(summary_view))
+    }
+
     /// Canonical URLs previously recorded for an artifact, including mode
     /// evidence and explicit context before any measured activity. Note
     /// lookup uses these to discover URL-keyed M1 notes.
@@ -1143,7 +1164,12 @@ impl ArtifactIndex {
                     background_seconds: 0,
                     opens: 0,
                     why: artifact.why.clone(),
+                    summary: None,
                 });
+            // Visits are in time order, so the day's latest summary wins.
+            if let Some(summary) = &visit.summary {
+                row.summary = Some(summary_view(summary));
+            }
             row.focused_seconds =
                 saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
             row.background_seconds = saturating_u32(
@@ -1189,18 +1215,27 @@ impl ArtifactIndex {
                 row.summary = Some(summary.clone());
             }
         }
-        let opened = rows
-            .values()
-            .filter(|row| row.opens > 0 || row.summary.is_some())
-            .count();
+        // A summary is not measured activity: it is counted on its own and
+        // never as an open.
+        let opened = rows.values().filter(|row| row.opens > 0).count();
         let carried = rows
             .values()
-            .filter(|row| row.opens == 0 && row.summary.is_none() && row.focused > 0)
+            .filter(|row| row.opens == 0 && row.focused > 0)
             .count();
-        let mut text = format!(
-            "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
-            if opened == 1 { "" } else { "s" }
-        );
+        let summarized = rows.values().filter(|row| row.summary.is_some()).count();
+        let plural = |count: usize| if count == 1 { "" } else { "s" };
+        let mut text = if summarized > 0 {
+            format!(
+                "Opened {opened} artifact{}, focused on {carried} left open from an earlier day, and summarized {summarized} page{}.",
+                plural(opened),
+                plural(summarized)
+            )
+        } else {
+            format!(
+                "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
+                plural(opened)
+            )
+        };
         let mut ordered = rows.into_iter().collect::<Vec<_>>();
         ordered.sort_by(|left, right| {
             right
@@ -1328,6 +1363,29 @@ fn migrate_v4_state(state: &mut IndexState) {
         }
     }
     state.version = 5;
+}
+
+/// The wire view of a summary event. `summarized_at` is the event's own
+/// timestamp; one longer than the wire's 32 bytes (fractional seconds in a
+/// hand-edited log) is shown at whole seconds in the same offset.
+fn summary_view(event: &SummaryEvent) -> SummaryView {
+    let summarized_at = if event.occurred_at.len() <= 32 {
+        event.occurred_at.clone()
+    } else {
+        parsed_timestamp(&event.occurred_at)
+            .and_then(|at| at.replace_nanosecond(0).ok())
+            .and_then(|at| at.format(&Rfc3339).ok())
+            .filter(|value| value.len() <= 32)
+            .unwrap_or_default()
+    };
+    SummaryView {
+        summarized_at,
+        document_type: event.document_type.clone(),
+        category: event.category.clone(),
+        importance: event.importance,
+        summary_path: event.summary_path.clone(),
+        harness: event.harness,
+    }
 }
 
 fn saturating_u32(value: u64) -> u32 {
@@ -4804,28 +4862,133 @@ print(json.dumps([tables,row]))"#;
         assert!(!root.path().join("artifacts").exists());
     }
 
+    fn web_summary(url: &str, at: &str) -> SummaryEvent {
+        SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: at.into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
+            summary_path: "summaries/hn-item.summary.md".into(),
+            record_key: crate::vault::url_record_key(url).unwrap(),
+            harness: brauser_protocol::HarnessId::Codex,
+        }
+    }
+
+    fn expected_view(event: &SummaryEvent) -> brauser_protocol::SummaryView {
+        brauser_protocol::SummaryView {
+            summarized_at: event.occurred_at.clone(),
+            document_type: event.document_type.clone(),
+            category: event.category.clone(),
+            importance: event.importance,
+            summary_path: event.summary_path.clone(),
+            harness: event.harness,
+        }
+    }
+
     #[test]
-    fn worklog_names_a_summary_only_artifact_instead_of_just_seen() {
+    fn recent_lists_a_summary_only_page_with_its_summary() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
         let url = "https://news.ycombinator.com/item?id=50251344";
-        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let event = web_summary(url, "2026-10-15T12:00:00-07:00");
+        index.record_summary(&event).unwrap();
+
+        let (recent, types, truncated) = index.recent(None, None, 32).unwrap();
+        assert_eq!(types, ["web.page"]);
+        assert!(!truncated);
+        assert_eq!(recent.len(), 1);
+        let row = &recent[0];
+        assert_eq!(row.local_date, "2026-10-15");
+        assert_eq!(row.artifact_id, event.artifact_id);
+        assert_eq!(row.artifact_type, "web.page");
+        assert_eq!(row.title, "A good discussion");
+        assert_eq!(
+            (row.opens, row.focused_seconds, row.background_seconds),
+            (0, 0, 0)
+        );
+        assert_eq!(row.summary, Some(expected_view(&event)));
+        assert_eq!(
+            row.summary.as_ref().unwrap().importance,
+            brauser_protocol::ImportanceLevel::High
+        );
+    }
+
+    #[test]
+    fn a_recent_row_carries_only_its_own_days_latest_summary() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let measured = activity(
+            "00000000-0000-4000-8000-000000000031",
+            "PROJ-1",
+            "Ticket",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&measured, &[]).unwrap();
+        let summary = |at: &str, level| SummaryEvent {
+            importance: level,
+            ..adapter_summary(&measured.artifact_id, "work.item", &measured.url, at)
+        };
+        let early = summary(
+            "2026-10-16T08:00:00Z",
+            brauser_protocol::ImportanceLevel::Low,
+        );
+        let late = summary(
+            "2026-10-16T09:00:00Z",
+            brauser_protocol::ImportanceLevel::Medium,
+        );
+        // Recorded out of order: the later summary still wins.
+        index.record_summary(&late).unwrap();
+        index.record_summary(&early).unwrap();
+
+        let (recent, _, _) = index.recent(None, None, 32).unwrap();
+        let days = recent
+            .iter()
+            .map(|row| (row.local_date.as_str(), row.summary.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            days,
+            [
+                ("2026-10-16", Some(expected_view(&late))),
+                ("2026-10-15", None)
+            ]
+        );
+        assert_eq!(
+            index.summary_for(&measured.artifact_id).unwrap(),
+            Some(expected_view(&late))
+        );
+        assert_eq!(index.summary_for("work:example.com/none").unwrap(), None);
+    }
+
+    #[test]
+    fn a_summary_view_keeps_summarized_at_within_the_wire_bound() {
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let short = web_summary(url, "2026-10-26T14:05:00-07:00");
+        assert_eq!(
+            summary_view(&short).summarized_at,
+            "2026-10-26T14:05:00-07:00"
+        );
+        let long = web_summary(url, "2026-10-26T14:05:00.123456789-07:00");
+        assert_eq!(
+            summary_view(&long).summarized_at,
+            "2026-10-26T14:05:00-07:00"
+        );
+    }
+
+    #[test]
+    fn worklog_names_summaries_without_counting_them_as_opened() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
         index
-            .record_summary(&SummaryEvent {
-                event_id: uuid::Uuid::new_v4().to_string(),
-                artifact_id: artifact_id.clone(),
-                artifact_type: "web.page".into(),
-                url: url.into(),
-                title: "A good discussion".into(),
-                occurred_at: "2026-10-15T12:00:00Z".into(),
-                document_type: "discussion".into(),
-                category: "reading".into(),
-                importance: brauser_protocol::ImportanceLevel::High,
-                summary_path: "pages/hn-item.summary.md".into(),
-                record_key: crate::vault::url_record_key(url).unwrap(),
-                harness: brauser_protocol::HarnessId::Codex,
-            })
+            .record_summary(&web_summary(url, "2026-10-15T12:00:00Z"))
             .unwrap();
 
         let (text, count) = index
@@ -4835,12 +4998,86 @@ print(json.dumps([tables,row]))"#;
             )
             .unwrap();
         assert_eq!(count, 1);
-        // Zero focused/background/opens must not collapse this into the
-        // generic "seen" wording a bare-activity artifact with no measured
-        // time would get: a summary is a distinct, named action.
-        assert!(text.starts_with("Opened 1 artifact,"));
-        assert!(text.contains("Summarized: A good discussion — discussion, high importance"));
+        // A summary is a distinct, named action: it is neither an open nor
+        // the generic "seen" wording of an artifact with no measured time.
+        assert!(
+            text.starts_with(
+                "Opened 0 artifacts, focused on 0 left open from an earlier day, and summarized 1 page.\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("\nSummarized: A good discussion — discussion, high importance"));
         assert!(!text.contains("seen"));
+    }
+
+    #[test]
+    fn an_m1_visit_and_a_later_summary_open_the_page_on_one_day() {
+        // brwr-hnr: an M1 legacy visit on day A and a summary on day B are
+        // one artifact opened on one day, and the summary is never an open.
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let url_hash = sha256_hex(url.as_bytes());
+        let legacy_line = format!(
+            "\n- 2026-10-20T10:00:00Z — A good discussion — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+            sha256_hex("legacy-marker-hnr".as_bytes()),
+        );
+        let summary = web_summary(url, "2026-10-26T18:00:00Z");
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!("{LOG_HEADER}\n{legacy_line}"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2026-10-26.md"),
+            format!("{LOG_HEADER}\n{}", summary_marker(&summary)),
+        )
+        .unwrap();
+
+        index.reindex().unwrap();
+        let artifact = index
+            .artifact(&summary.artifact_id)
+            .unwrap()
+            .expect("indexed");
+        assert_eq!((artifact.opens, artifact.days_opened), (1, 1));
+        assert_eq!(
+            (artifact.first_seen.as_str(), artifact.last_seen.as_str()),
+            ("2026-10-20", "2026-10-26")
+        );
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(
+            markdown.contains("  opens: 1\n  days_opened: 1\n"),
+            "{markdown}"
+        );
+
+        let worklog = |start: &str, end: &str| {
+            index
+                .worklog(parse_date(start).unwrap(), parse_date(end).unwrap())
+                .unwrap()
+        };
+        let (both, count) = worklog("2026-10-20", "2026-10-26");
+        assert_eq!(count, 1);
+        assert_eq!(
+            both,
+            "Opened 1 artifact, focused on 0 left open from an earlier day, and summarized 1 page.\n\
+             Summarized: A good discussion — discussion, high importance — opened 1×"
+        );
+        let (summary_day, _) = worklog("2026-10-26", "2026-10-26");
+        assert_eq!(
+            summary_day,
+            "Opened 0 artifacts, focused on 0 left open from an earlier day, and summarized 1 page.\n\
+             Summarized: A good discussion — discussion, high importance"
+        );
+        let (visit_day, _) = worklog("2026-10-20", "2026-10-20");
+        assert!(
+            visit_day.starts_with(
+                "Opened 1 artifact, and focused on 0 left open from an earlier day.\n"
+            ),
+            "{visit_day}"
+        );
     }
 
     #[test]
@@ -4886,6 +5123,12 @@ print(json.dumps([tables,row]))"#;
             )
             .unwrap();
         assert_eq!(count, 1);
+        assert!(
+            text.starts_with(
+                "Opened 1 artifact, focused on 0 left open from an earlier day, and summarized 1 page.\n"
+            ),
+            "{text}"
+        );
         assert!(text.contains("Summarized: Ticket — ticket, high importance"));
         assert!(text.contains("focused 2 min"), "{text}");
     }

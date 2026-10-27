@@ -141,7 +141,7 @@ function hostReply(request, config = CONFIG) {
         key: { kind: "url", value: request.url }, older_notes: [],
       };
     case "get_artifact":
-      return { type: "artifact_result", recognized: false, artifact: null };
+      return { type: "artifact_result", recognized: false, artifact: null, summary: null };
     case "list_runs":
       return { type: "runs_listed", runs: [] };
     case "record_why":
@@ -884,7 +884,7 @@ function artifact(id, title, why = null) {
   };
 }
 
-const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value });
+const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value, summary: null });
 const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function typeWhy(page, text) {

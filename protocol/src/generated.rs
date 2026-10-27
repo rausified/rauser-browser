@@ -446,6 +446,17 @@ pub struct ArtifactView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SummaryView {
+    pub summarized_at: String,
+    pub document_type: String,
+    pub category: String,
+    pub importance: ImportanceLevel,
+    pub summary_path: String,
+    pub harness: HarnessId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactListItem {
     pub local_date: String,
     pub artifact_id: String,
@@ -457,6 +468,8 @@ pub struct ArtifactListItem {
     pub opens: u32,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub why: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary: Option<SummaryView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -467,6 +480,8 @@ pub struct ArtifactResult {
     pub recognized: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub artifact: Option<ArtifactView>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary: Option<SummaryView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

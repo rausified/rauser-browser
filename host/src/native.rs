@@ -1674,15 +1674,17 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
     let matched = config
         .adapter_match(&value.url, value.title.as_deref())
         .ok();
-    let Some(matched) = matched else {
-        return Response::ArtifactResult(ArtifactResult {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id,
-            recognized: false,
-            artifact: None,
-        });
-    };
     let Some(storage) = config.snapshot().storage.as_ref() else {
+        if matched.is_none() {
+            // Without a home folder there is no summary to report.
+            return Response::ArtifactResult(ArtifactResult {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                recognized: false,
+                artifact: None,
+                summary: None,
+            });
+        }
         return error(
             &value.request_id,
             ErrorCode::NotConfigured,
@@ -1709,6 +1711,35 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             );
         }
     };
+    let history_unavailable = |request_id: &str| {
+        error(
+            request_id,
+            ErrorCode::Internal,
+            "artifact history is unavailable; log catch-up could not complete",
+        )
+    };
+    let Some(matched) = matched else {
+        // An unrecognized page is not an artifact, but a summary made it a
+        // `web.page` artifact keyed by its canonical URL (spec §7.2).
+        let summary = match crate::summary::web_page_artifact_id(&canonical) {
+            Ok(artifact_id) => match index.summary_for(&artifact_id) {
+                Ok(summary) => summary,
+                Err(_) => return history_unavailable(&value.request_id),
+            },
+            Err(_) => None,
+        };
+        return Response::ArtifactResult(ArtifactResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            recognized: false,
+            artifact: None,
+            summary,
+        });
+    };
+    let summary = match index.summary_for(&matched.artifact_id) {
+        Ok(summary) => summary,
+        Err(_) => return history_unavailable(&value.request_id),
+    };
     let artifact = match index.artifact(&matched.artifact_id) {
         Ok(Some(artifact)) => artifact,
         Ok(None) => ArtifactView {
@@ -1734,19 +1765,14 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
             linked_count: 0,
         },
-        Err(_) => {
-            return error(
-                &value.request_id,
-                ErrorCode::Internal,
-                "artifact history is unavailable; log catch-up could not complete",
-            );
-        }
+        Err(_) => return history_unavailable(&value.request_id),
     };
     Response::ArtifactResult(ArtifactResult {
         protocol_version: PROTOCOL_VERSION,
         request_id: value.request_id,
         recognized: true,
         artifact: Some(artifact),
+        summary,
     })
 }
 
@@ -4377,6 +4403,176 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected artifact_result, got {other:?}"),
         }
+    }
+
+    /// Log and index a summary the way the service's finisher does: the
+    /// daily-log event first, then the index row from the event it wrote.
+    fn record_page_summary(
+        config: &ConfigStore,
+        url: &str,
+        record_key: RecordKey,
+        artifact_type: &str,
+    ) -> crate::summary::SummaryEvent {
+        let storage = config.snapshot().storage.as_ref().unwrap();
+        let capture =
+            CaptureStore::open_in(storage, config.root_identity(), config.dir().unwrap()).unwrap();
+        let policy = CapturePolicy {
+            enabled: config.snapshot().capture_enabled,
+            origins: &[],
+            strip_params: &config.snapshot().strip_params,
+        };
+        let summary = crate::summary::PageSummary {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            url: url.into(),
+            title: "A summarized page".into(),
+            occurred_at: time::OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
+            document_type: "specification".into(),
+            category: "technical specification".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
+            summary_path: "summaries/a.summary.md".into(),
+            record_key,
+            artifact_type: artifact_type.into(),
+            harness: brauser_protocol::HarnessId::Claude,
+        };
+        let (CaptureOutcome::Persisted { .. }, Some(event)) =
+            capture.record_summary(policy, &summary)
+        else {
+            panic!("expected a persisted summary");
+        };
+        open_index(config, storage, &config.cache_dir().unwrap())
+            .unwrap()
+            .record_summary(&event)
+            .unwrap();
+        event
+    }
+
+    fn expected_summary(event: &crate::summary::SummaryEvent) -> brauser_protocol::SummaryView {
+        brauser_protocol::SummaryView {
+            summarized_at: event.occurred_at.clone(),
+            document_type: "specification".into(),
+            category: "technical specification".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
+            summary_path: "summaries/a.summary.md".into(),
+            harness: brauser_protocol::HarnessId::Claude,
+        }
+    }
+
+    fn artifact_result(config: &mut ConfigStore, url: &str) -> ArtifactResult {
+        match get_artifact(
+            brauser_protocol::GetArtifactRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "artifact".into(),
+                url: url.into(),
+                title: None,
+            },
+            config,
+        ) {
+            Response::ArtifactResult(result) => result,
+            other => panic!("expected artifact_result, got {other:?}"),
+        }
+    }
+
+    fn recent_items(config: &mut ConfigStore) -> Vec<brauser_protocol::ArtifactListItem> {
+        match list_artifacts(
+            brauser_protocol::ListArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "recent".into(),
+                artifact_type: None,
+                title_query: None,
+                limit: 32,
+            },
+            config,
+        ) {
+            Response::ArtifactListResult(result) => result.items,
+            other => panic!("expected artifact_list_result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_artifact_reports_the_summary_of_an_unrecognized_page() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let none = artifact_result(&mut config, url);
+        assert!(!none.recognized);
+        assert_eq!((none.artifact, none.summary), (None, None));
+
+        let event = record_page_summary(
+            &config,
+            url,
+            crate::vault::url_record_key(url).unwrap(),
+            crate::summary::WEB_PAGE_TYPE,
+        );
+        let result = artifact_result(&mut config, url);
+        assert!(!result.recognized);
+        assert_eq!(result.artifact, None);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        // Another page has no summary of its own.
+        assert_eq!(
+            artifact_result(&mut config, "https://example.com/other").summary,
+            None
+        );
+
+        let items = recent_items(&mut config);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].artifact_type, "web.page");
+        assert_eq!(items[0].summary, Some(expected_summary(&event)));
+    }
+
+    #[test]
+    fn get_artifact_on_an_unrecognized_page_without_a_home_has_no_summary() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let result = artifact_result(&mut config, "https://example.com/spec");
+        assert!(!result.recognized);
+        assert_eq!((result.artifact, result.summary), (None, None));
+    }
+
+    #[test]
+    fn get_artifact_reports_an_adapter_artifacts_summary() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        assert_eq!(artifact_result(&mut config, url).summary, None);
+        let event = record_page_summary(
+            &config,
+            url,
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "work:work.example/7".into(),
+            },
+            "work.item",
+        );
+
+        let result = artifact_result(&mut config, url);
+        assert!(result.recognized);
+        let artifact = result.artifact.expect("the summary created the row");
+        assert_eq!(artifact.artifact_id, "work:work.example/7");
+        assert_eq!((artifact.opens, artifact.days_opened), (0, 0));
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        let items = recent_items(&mut config);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].artifact_id, "work:work.example/7");
+        assert_eq!(items[0].summary, Some(expected_summary(&event)));
     }
 
     #[test]
