@@ -1,7 +1,7 @@
 //! Native dialogs run in a short-lived child process.
 //!
-//! A native messaging host blocks its main thread on stdin between requests.
-//! On macOS, showing an AppKit modal registers the process with the window
+//! A native messaging host has no GUI event loop between requests. On macOS,
+//! showing an AppKit modal registers the process with the window
 //! server; once the modal closes, the idle process no longer services its
 //! event queue and macOS shows a persistent busy cursor. Running each dialog
 //! in a child that exits when the dialog closes avoids leaving an unresponsive
@@ -247,6 +247,9 @@ fn run_child(command: &str, input: &str) -> Result<String> {
 /// `timeout`. The child's stdin stays open until it has exited, so if this
 /// process ends first the child sees end of input and closes its dialog.
 fn run_dialog_process(mut command: Command, input: &str, timeout: Duration) -> Result<String> {
+    if crate::connection::cancelled() {
+        bail!("native connection closed");
+    }
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -287,14 +290,31 @@ fn wait_for_reply(child: &mut Child, input: &str, timeout: Duration) -> Result<S
             .map(|_| reply);
         let _ = sender.send(result);
     });
-    let reply = match receiver.recv_timeout(timeout) {
-        Ok(result) => result.context("reading dialog reply")?,
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            bail!("native dialog was not answered in time and was closed")
+    let deadline = Instant::now() + timeout;
+    let reply = loop {
+        if crate::connection::cancelled() {
+            bail!("native connection closed");
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => bail!("reading dialog reply failed"),
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("native dialog was not answered in time and was closed");
+        }
+        match receiver.recv_timeout(remaining.min(Duration::from_millis(20))) {
+            Ok(result) => break result.context("reading dialog reply")?,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => bail!("reading dialog reply failed"),
+        }
     };
-    let status = child.wait().context("waiting for the native dialog")?;
+    // A child can close stdout before exiting. Keep that wait cancellable too.
+    let status = loop {
+        if crate::connection::cancelled() || Instant::now() >= deadline {
+            bail!("native dialog did not exit before the connection closed or timed out");
+        }
+        if let Some(status) = child.try_wait().context("waiting for the native dialog")? {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
     drop(stdin);
     if !status.success() {
         bail!("native dialog exited unsuccessfully ({status})");

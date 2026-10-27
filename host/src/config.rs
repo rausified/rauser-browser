@@ -220,6 +220,12 @@ struct AgentRefusal {
 }
 
 impl ConfigStore {
+    /// Lazy read view while this connection's ordered worker is waiting on a
+    /// dialog or harness. Query handlers must refresh before inspecting it.
+    pub(crate) fn query_view(&self) -> Self {
+        Self::for_path(self.path.clone())
+    }
+
     pub fn default_path() -> Result<PathBuf> {
         let dirs = ProjectDirs::from("", "", APP_NAME)
             .context("cannot locate this user's application config directory")?;

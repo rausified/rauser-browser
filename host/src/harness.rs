@@ -890,6 +890,9 @@ pub fn run_bounded(
     const POLL: Duration = Duration::from_millis(10);
     const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
+    if crate::connection::cancelled() {
+        bail!("native connection closed");
+    }
     let run_dir = WorkDir::new(&env.work_root, "run")?;
     let mut command = Command::new(real_path);
     command
@@ -958,6 +961,11 @@ pub fn run_bounded(
 
     let deadline = Instant::now() + limits.timeout;
     let mut status = loop {
+        if crate::connection::cancelled() {
+            kill_group();
+            let _ = child.wait();
+            bail!("native connection closed");
+        }
         match child.try_wait() {
             Ok(Some(exit)) => {
                 break match exit.code() {

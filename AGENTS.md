@@ -46,6 +46,12 @@ command exists yet, so nothing runs a harness beyond setup's own checks and
 probe. The headless smoke run covers setup with fake harnesses on a pinned
 `PATH` and a cleared host environment.
 
+The native connection now has a dedicated input reader, one ordered
+config/consent worker and a serialized writer. Health/settings queries can
+reply while setup waits on a dialog or fake/real harness; EOF and terminal
+transport failures cancel child waits. This is the prerequisite for M2
+streaming, with no protocol change or new AI command.
+
 M1.5a is in progress on protocol version 5. The adapter-template language
 (`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a
 TypeScript twin (`extension/adapter-templates.ts`) checked against each other
