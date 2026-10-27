@@ -60,7 +60,8 @@ const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
 const artifactMeasures = element<HTMLParagraphElement>("artifact-measures");
 const artifactLinks = element<HTMLParagraphElement>("artifact-links");
 const artifactWithin = element<HTMLParagraphElement>("artifact-within");
-const artifactContained = element<HTMLUListElement>("artifact-contained");
+const artifactContained = element<HTMLDivElement>("artifact-contained");
+const artifactContainedList = element<HTMLUListElement>("artifact-contained-list");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
@@ -181,13 +182,10 @@ function containedRow(item: ContainedArtifactView): HTMLLIElement {
 }
 
 function renderContained(contained: readonly ContainedArtifactView[]): void {
-  artifactContained.replaceChildren();
+  artifactContainedList.replaceChildren();
   artifactContained.hidden = contained.length === 0;
   if (!contained.length) return;
-  const heading = document.createElement("li");
-  heading.className = "artifact-label";
-  heading.textContent = "Worked on inside";
-  artifactContained.append(heading, ...contained.map(containedRow));
+  artifactContainedList.append(...contained.map(containedRow));
 }
 
 function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null = null): void {

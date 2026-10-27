@@ -1099,13 +1099,13 @@ test("repository card lists contained work", async () => {
   });
   await until(() => page.el("artifact-card").hidden === false, "the artifact card");
   assert.equal(page.el("artifact-contained").hidden, false);
-  const rows = page.el("artifact-contained").children;
-  assert.equal(rows.length, 3, "a heading row plus one row per contained artifact");
-  assert.equal(rows[0].textContent, "Worked on inside");
-  const firstLink = rows[1].querySelector("a");
+  assert.equal(page.el("artifact-contained-heading").textContent, "Worked on inside");
+  const rows = page.el("artifact-contained-list").children;
+  assert.equal(rows.length, 2, "one row per contained artifact");
+  const firstLink = rows[0].querySelector("a");
   assert.equal(firstLink.textContent, "Fix the thing · 2 min");
   assert.equal(firstLink.href, pr.url);
-  const secondLink = rows[2].querySelector("a");
+  const secondLink = rows[1].querySelector("a");
   assert.equal(secondLink.textContent, "Flaky test · 40 sec");
   assert.equal(secondLink.href, issue.url);
 });
@@ -1120,5 +1120,5 @@ test("card hides container rows when absent", async () => {
   assert.equal(page.el("artifact-within").hidden, true);
   assert.equal(page.el("artifact-within").textContent, "");
   assert.equal(page.el("artifact-contained").hidden, true);
-  assert.equal(page.el("artifact-contained").children.length, 0);
+  assert.equal(page.el("artifact-contained-list").children.length, 0);
 });
