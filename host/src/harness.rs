@@ -239,10 +239,7 @@ pub(crate) fn resolve_for_run(
     let program = adapter.program();
     let found = find_on_path(&HarnessEnv::from_run_env(run_env).search_path, program)
         .ok_or_else(|| format!("{program} is not on the service's PATH"))?;
-    let real =
-        fs::canonicalize(&found).map_err(|_| format!("{} could not be read", found.display()))?;
-    check_install(&real).map_err(|problem| format!("{program} cannot be used: {problem}"))?;
-    Ok(real)
+    resolve_install(&found).map_err(|problem| format!("{program} cannot be used: {problem}"))
 }
 
 /// Check the install `found` resolves to, then run its `--version`.
@@ -251,9 +248,7 @@ fn installed_version(
     found: &Path,
     run_env: &[(OsString, OsString)],
 ) -> Result<String, String> {
-    let real =
-        fs::canonicalize(found).map_err(|_| format!("{} could not be read", found.display()))?;
-    check_install(&real)?;
+    let real = resolve_install(found)?;
     let command = format!("{} --version", adapter.program());
     let output = run_bounded(&real, &["--version".to_owned()], run_env, VERSION_LIMITS).map_err(
         |error| {
@@ -276,32 +271,63 @@ fn installed_version(
     .ok_or_else(|| format!("{command} output was not recognized"))
 }
 
-/// The real path must be an executable regular file that neither it nor
-/// its directory lets another user replace.
+/// Most symlink hops [`resolve_install`] follows, as the kernel's own limit.
 #[cfg(unix)]
-fn check_install(real: &Path) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// Resolve the harness `found` on the search path to the real file a run
+/// starts, checking every directory on the way: the `PATH` directory it was
+/// found in, the directory of every symlink hop, and the real file's own
+/// directory must not let another user replace an entry, and the real path
+/// must be an executable regular file no other user can rewrite. Checking
+/// only the final target would let anyone who can write a `PATH` directory
+/// swap its link, after setup, for one to a trusted dispatcher such as
+/// `/usr/bin/env`.
+#[cfg(unix)]
+fn resolve_install(found: &Path) -> Result<PathBuf, String> {
     let unreadable = |path: &Path| format!("{} could not be read", path.display());
-    let metadata = fs::symlink_metadata(real).map_err(|_| unreadable(real))?;
-    if !executable(&metadata) || metadata.file_type().is_symlink() {
-        return Err(format!("{} is not an executable file", real.display()));
+    let mut current = found.to_path_buf();
+    for _ in 0..=MAX_SYMLINK_HOPS {
+        let (Some(parent), Some(name)) = (current.parent(), current.file_name()) else {
+            return Err(unreadable(&current));
+        };
+        let dir = fs::canonicalize(parent).map_err(|_| unreadable(parent))?;
+        let dir_metadata = fs::metadata(&dir).map_err(|_| unreadable(&dir))?;
+        check_not_replaceable(&dir, &dir_metadata)?;
+        let entry = dir.join(name);
+        let metadata = fs::symlink_metadata(&entry).map_err(|_| unreadable(&entry))?;
+        if !metadata.file_type().is_symlink() {
+            if !executable(&metadata) {
+                return Err(format!("{} is not an executable file", entry.display()));
+            }
+            check_not_replaceable(&entry, &metadata)?;
+            return Ok(entry);
+        }
+        let target = fs::read_link(&entry).map_err(|_| unreadable(&entry))?;
+        // A relative target is relative to the link's directory; an
+        // absolute one replaces it.
+        current = dir.join(target);
     }
-    let parent = real.parent().ok_or_else(|| unreadable(real))?;
-    let parent_metadata = fs::symlink_metadata(parent).map_err(|_| unreadable(parent))?;
+    Err(format!("{} has too many symbolic links", found.display()))
+}
+
+/// Neither group nor other may write `path`, and it must belong to this
+/// user or root.
+#[cfg(unix)]
+fn check_not_replaceable(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if metadata.mode() & 0o022 != 0 {
+        return Err(format!("{} is writable by other users", path.display()));
+    }
     let uid = rustix::process::getuid().as_raw();
-    for (path, metadata) in [(real, &metadata), (parent, &parent_metadata)] {
-        if metadata.mode() & 0o022 != 0 {
-            return Err(format!("{} is writable by other users", path.display()));
-        }
-        if metadata.uid() != uid && metadata.uid() != 0 {
-            return Err(format!("{} is owned by another user", path.display()));
-        }
+    if metadata.uid() != uid && metadata.uid() != 0 {
+        return Err(format!("{} is owned by another user", path.display()));
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn check_install(_real: &Path) -> Result<(), String> {
+fn resolve_install(_found: &Path) -> Result<PathBuf, String> {
     Err(UNSUPPORTED_PLATFORM.to_owned())
 }
 
@@ -768,6 +794,86 @@ mod process_tests {
             assert_eq!(fake.log("claude", "argv.log"), None);
             fs::set_permissions(fake.path("bin"), fs::Permissions::from_mode(0o755)).unwrap();
         }
+    }
+
+    /// The `PATH` directory a harness was found in, and every directory a
+    /// symlink hop passes through, must also be safe from other users: a
+    /// link in a shared directory can be swapped after setup for one to a
+    /// trusted dispatcher such as `/usr/bin/env`.
+    #[test]
+    fn refuses_symlink_found_in_a_directory_other_users_can_write() {
+        for dir_mode in [0o777, 0o775, 0o757] {
+            for target in ["trusted", "/usr/bin/env"] {
+                let fake = Fake::new();
+                let real_dir = fake.path("versions");
+                fs::create_dir(&real_dir).unwrap();
+                fs::set_permissions(&real_dir, fs::Permissions::from_mode(0o700)).unwrap();
+                let real = real_dir.join("2.1.284");
+                fake.write_script(&real, "claude", "2.1.284 (Claude Code)", PASSING_BODY);
+                let target = if target == "trusted" {
+                    real.clone()
+                } else {
+                    PathBuf::from(target)
+                };
+                symlink(&target, fake.path("bin").join("claude")).unwrap();
+                fs::set_permissions(fake.path("bin"), fs::Permissions::from_mode(dir_mode))
+                    .unwrap();
+
+                let found = detected_claude(&fake);
+                let problem = found.problem.clone().unwrap();
+                assert!(
+                    problem.ends_with("is writable by other users"),
+                    "{dir_mode:o} {target:?}: {problem}"
+                );
+                assert_eq!(found.version, None);
+                assert_eq!(fake.log("claude", "argv.log"), None);
+                let run_env = vec![("PATH".into(), fake.path("bin").into_os_string())];
+                let error = resolve_for_run(Adapter::ClaudeCode, &run_env).unwrap_err();
+                assert!(
+                    error.ends_with("is writable by other users"),
+                    "{dir_mode:o} {target:?}: {error}"
+                );
+                fs::set_permissions(fake.path("bin"), fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_symlink_chain_through_a_directory_other_users_can_write() {
+        let fake = Fake::new();
+        let real_dir = fake.path("versions");
+        fs::create_dir(&real_dir).unwrap();
+        fs::set_permissions(&real_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let real = real_dir.join("2.1.284");
+        fake.write_script(&real, "claude", "2.1.284 (Claude Code)", PASSING_BODY);
+        let shared = fake.path("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        symlink(&real, shared.join("claude")).unwrap();
+        // A relative hop, resolved against the link's own directory.
+        symlink("../shared/claude", fake.path("bin").join("claude")).unwrap();
+
+        let found = detected_claude(&fake);
+        let problem = found.problem.clone().unwrap();
+        assert_eq!(
+            problem,
+            format!(
+                "{} is writable by other users",
+                fs::canonicalize(&shared).unwrap().display()
+            )
+        );
+        assert_eq!(fake.log("claude", "argv.log"), None);
+        let run_env = vec![("PATH".into(), fake.path("bin").into_os_string())];
+        let error = resolve_for_run(Adapter::ClaudeCode, &run_env).unwrap_err();
+        assert!(error.ends_with(&problem), "{error}");
+
+        // The same chain through safe directories resolves to the real file.
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(detected_claude(&fake).version.as_deref(), Some("2.1.284"));
+        assert_eq!(
+            resolve_for_run(Adapter::ClaudeCode, &run_env).unwrap(),
+            fs::canonicalize(&real).unwrap()
+        );
     }
 
     #[test]
