@@ -26,6 +26,30 @@ export const HOME_LAYOUT = {
   later_dir: "later",
 } as const;
 
+// A summary started outside the panel (the shortcut or the context menu), for
+// the panel to show. The worker keeps the latest in chrome.storage.session, so
+// a panel that had not loaded yet still sees it, and sends it to open pages.
+export const PANEL_NOTICE_KEY = storageKey("panel_notice_v1");
+// The panel shows a stored notice only this soon after it was written.
+export const PANEL_NOTICE_MAX_AGE_MS = 2 * 60_000;
+// The site access the manifest grants at install (host_permissions).
+export const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
+
+export type PanelNotice =
+  | { kind: "run_started"; run_id: string; tab_id: number; at: number }
+  | { kind: "summarize_failed"; message: string; tab_id: number; at: number };
+
+export function isPanelNotice(value: unknown): value is PanelNotice {
+  if (typeof value !== "object" || value === null) return false;
+  const notice = value as Record<string, unknown>;
+  if (typeof notice.tab_id !== "number" || !Number.isInteger(notice.tab_id) ||
+      typeof notice.at !== "number" || !Number.isFinite(notice.at)) {
+    return false;
+  }
+  return (notice.kind === "run_started" && typeof notice.run_id === "string") ||
+    (notice.kind === "summarize_failed" && typeof notice.message === "string");
+}
+
 export interface PolicyLease {
   revision: string;
   expires_at: number;

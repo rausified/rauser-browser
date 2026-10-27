@@ -1,29 +1,28 @@
 #!/usr/bin/env node
 
-// Guided real-Chrome M1 smoke run, plus M2 step 1 harness setup. Native
-// dialogs are answered by a person, or with --auto through UI scripting; all
-// host and vault state is kept in a temp home. The extension holds HTTP(S)
-// access from install, so Chrome shows no permission prompt. --headless runs
-// the same flow with nothing on screen: headless Chrome and a scripted-dialogs
-// host build. Only --headless runs harness setup, with fake harnesses on a
-// pinned PATH and a cleared host environment, and only --headless starts the
-// agent service (never through launchd) to run, reattach, cancel, and fail
-// summary runs with a fake agent.
+// Guided real-Chrome M1 smoke run, plus summary harness setup and summary
+// runs. Native dialogs are answered by a person, or with --auto through UI
+// scripting; all host and vault state is kept in a temp home. The extension
+// holds HTTP(S) access from install, so Chrome shows no permission prompt.
+// --headless runs the same flow with nothing on screen: headless Chrome and a
+// scripted-dialogs host build. Only --headless starts the agent service
+// (never through launchd), sets up a summary harness, and summarizes pages
+// through the real Codex and Claude Code runners, against fake `codex` and
+// `claude` programs on a pinned PATH and a cleared environment.
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
   access, chmod, lstat, mkdir, mkdtemp, open, readFile,
-  readdir, realpath, rename, rm, symlink, unlink, writeFile,
+  readdir, realpath, rename, rm, unlink, writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { APP_NAME, BINARY_NAME, NATIVE_HOST_NAME, storageKey } from "../extension/brand.ts";
-import { SETUP_WARNING } from "../extension/agent.ts";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DIST = path.join(REPO, "extension", "dist");
@@ -35,10 +34,11 @@ const SCRIPTED_HOST = path.join(REPO, "target", "scripted-dialogs", "debug", BIN
 // runner looks even when run from host/.
 const SCRIPTED_BUILD = `cargo build --locked -p ${BINARY_NAME} --features scripted-dialogs --target-dir ${shellQuote(path.dirname(path.dirname(SCRIPTED_HOST)))}`;
 const SCRIPTED_DIALOGS_ENV = `${BINARY_NAME.toUpperCase()}_SCRIPTED_DIALOGS`;
-// Keep in step with FAKE_HARNESS_ENV in host/src/brand.rs. The wrapper never
-// sets SERVICE_SPAWN_ENV: the smoke starts the service itself, and SERVICE_LABEL
-// is never passed to launchctl.
-const FAKE_HARNESS_ENV = `${BINARY_NAME.toUpperCase()}_FAKE_HARNESS`;
+// Keep in step with OPEN_LOG_ENV in host/src/brand.rs: a scripted-dialogs
+// build appends what it would open there instead of running /usr/bin/open.
+// The wrapper never sets SERVICE_SPAWN_ENV: the smoke starts the service
+// itself, and SERVICE_LABEL is never passed to launchctl.
+const OPEN_LOG_ENV = `${BINARY_NAME.toUpperCase()}_OPEN_LOG`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
@@ -46,17 +46,11 @@ const PROTOCOL_VERSION = 6;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const EXTENSION_ID = /^[a-p]{32}$/;
-const CLAUDE_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "claude_help.txt");
-const CODEX_EXEC_HELP = path.join(REPO, "host", "tests", "fixtures", "harness", "codex_exec_help.txt");
-const CODEX_FEATURES = path.join(REPO, "host", "tests", "fixtures", "harness", "codex_features.txt");
-// The probe argv the host must run: the §7.1 Claude Code template with its
-// test prompt in place of {prompt}. Any other flag is a fallback it must not try.
-const PROBE_ARGV = [
-  "-p", "Reply with the single word OK.", "--tools", "", "--disallowedTools", "*",
-  "--strict-mcp-config", "--setting-sources", "", "--permission-mode", "dontAsk",
-  "--no-session-persistence", "--output-format", "stream-json", "--verbose",
-  "--include-partial-messages",
-];
+// Keep in step with PROBE_PROMPT in host/src/harness.rs and repair_prompt in
+// host/src/service/prompt.rs: the fakes answer the setup probe and the repair
+// turn by these.
+const PROBE_PROMPT = "Reply with the single word OK.";
+const REPAIR_PREFIX = "Your previous answer was not valid";
 const EXTENSION_ID_ALPHABET = "abcdefghijklmnop";
 
 function usage() {
@@ -226,107 +220,135 @@ async function choosePickerFolder(folder) {
   }
 }
 
-// Fake harnesses for AI setup. Each logs one tab-separated line per run: its
-// name, its argv as [arg][arg]..., and its environment variable names (never
-// values). Only shell builtins and /bin/cat run, so nothing depends on PATH.
-// fake-bin holds symlinks into fake-install, which the run re-points to swap
-// a passing harness for a failing one.
-function fakeHarnessScript(name, log, body) {
-  return `#!/bin/sh
-log=${shellQuote(log)}
-line=''
-for arg in "$@"; do line="$line[$arg]"; done
-names=''
-while IFS= read -r entry; do
-  case "$entry" in
-    'export '*|'declare -x '*)
-      entry=\${entry#export }; entry=\${entry#declare -x }; entry=\${entry%%=*}
-      case "$entry" in PWD|OLDPWD|SHLVL|_) ;; *) names="$names $entry" ;; esac ;;
-  esac
-done <<ENV
-$(export -p)
-ENV
-printf '%s\\t%s\\t%s\\n' ${shellQuote(name)} "$line" "$names" >> "$log"
-${body}
+// Fake `codex` and `claude` for summary harness setup and runs. They are Node
+// scripts (this Node, by absolute path, so nothing depends on PATH) speaking
+// just enough of each harness's protocol for the real runners: Codex's
+// app-server JSON-RPC on stdio and Claude Code's `-p` stream-json. Each logs
+// JSON lines to harness-argv.log: one per start with its argv, cwd and
+// environment variable names (never values), then what it read on stdin (each
+// JSON-RPC request for codex, the whole prompt for claude). Each run writes a
+// line of stderr, which the service keeps in run.log. $HOME/fake-agent.mode
+// picks how a summary turn ends:
+// - ok: a valid §6.4 answer, streamed in two deltas;
+// - slow: no answer, until killed;
+// - fail: "fake failure" on stderr, and a failed turn;
+// - badjson-once: text that is not JSON, then a valid answer to the repair turn;
+// - badjson: text that is not JSON, every time.
+// The setup probe is answered "OK" in every mode except fail.
+const FAKE_SESSION = "fake-session-1";
+const FAKE_THREAD = "fake-thread-1";
+const FAKE_ANSWER = {
+  document_type: "article", category: "news",
+  entities: { technologies: ["Smoke"], products: [], people: [], companies: [] },
+  description: "A smoke article the fake agent read.",
+  importance: { level: "high", reason: "The smoke run needs it." },
+  assessment: "Nothing new beyond the smoke run.",
+  related_notes: [],
+};
+
+function fakeHarnessPrelude(name, log) {
+  return `#!${process.execPath}
+"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+const NAME = ${JSON.stringify(name)};
+const LOG = ${JSON.stringify(log)};
+const log = (entry) => fs.appendFileSync(LOG, JSON.stringify({ program: NAME, pid: process.pid, ...entry }) + "\\n");
+const mode = () => {
+  try { return fs.readFileSync(path.join(process.env.HOME || "/nonexistent", "fake-agent.mode"), "utf8").trim(); } catch { return "ok"; }
+};
+// What a turn answers: { text } or { fail: true } or { slow: true }.
+function reply(prompt) {
+  const current = mode();
+  if (current === "fail") return { fail: true };
+  if (prompt.trim() === ${JSON.stringify(PROBE_PROMPT)}) return { text: "OK" };
+  if (current === "slow") return { slow: true };
+  const bad = current === "badjson" || (current === "badjson-once" && !prompt.startsWith(${JSON.stringify(REPAIR_PREFIX)}));
+  return { text: bad ? "Here is my summary, not as JSON." : ${JSON.stringify(JSON.stringify(FAKE_ANSWER))} };
+}
+const halves = (text) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
+const args = process.argv.slice(2);
+log({ argv: args, cwd: process.cwd(), env: Object.keys(process.env).sort() });
 `;
 }
 
+const FAKE_CODEX = `if (args.length === 1 && args[0] === "--version") {
+  process.stdout.write("codex-cli 0.144.4\\n");
+  process.exit(0);
+}
+if (args.join(" ") !== "app-server --listen stdio://") process.exit(2);
+process.stderr.write("fake codex diagnostics\\n");
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+const notify = (method, params) => send({ method, params: { threadId: ${JSON.stringify(FAKE_THREAD)}, ...params } });
+let turns = 0;
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  let request;
+  try { request = JSON.parse(line); } catch { return; }
+  log({ rpc: request });
+  const { id, method, params } = request;
+  if (method === "initialize") return send({ id, result: { userAgent: "fake-codex" } });
+  if (method === "thread/start") return send({ id, result: { thread: { id: ${JSON.stringify(FAKE_THREAD)} } } });
+  if (method === "thread/name/set") return send({ id, result: {} });
+  if (method !== "turn/start") return send({ id, error: { code: -32601, message: "fake codex: " + method } });
+  turns += 1;
+  const turn = "fake-turn-" + turns;
+  send({ id, result: { turn: { id: turn } } });
+  const answer = reply(params.input.map((item) => item.text).join(""));
+  if (answer.slow) return;
+  if (answer.fail) {
+    process.stderr.write("fake failure\\n");
+    return notify("turn/completed", { turn: { id: turn, status: "failed", error: { message: "fake failure" } } });
+  }
+  const item = "msg-" + turns;
+  for (const delta of halves(answer.text)) notify("item/agentMessage/delta", { turnId: turn, itemId: item, delta });
+  notify("item/completed", { turnId: turn, item: { type: "agentMessage", id: item, text: answer.text } });
+  notify("turn/completed", { turn: { id: turn, status: "completed", error: null } });
+});
+`;
+
+const FAKE_CLAUDE = `if (args.length === 1 && args[0] === "--version") {
+  process.stdout.write("2.1.310 (Claude Code)\\n");
+  process.exit(0);
+}
+if (args[0] !== "-p") process.exit(2);
+process.stderr.write("fake claude diagnostics\\n");
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  const prompt = Buffer.concat(chunks).toString("utf8");
+  log({ stdin: prompt });
+  const answer = reply(prompt);
+  if (answer.fail) {
+    process.stderr.write("fake failure\\n");
+    process.exit(3);
+  }
+  const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+  line({ type: "system", subtype: "init", session_id: ${JSON.stringify(FAKE_SESSION)}, cwd: process.cwd(), tools: [] });
+  if (answer.slow) {
+    setTimeout(() => undefined, 60_000);
+    return;
+  }
+  for (const text of halves(answer.text)) {
+    line({ type: "stream_event", session_id: ${JSON.stringify(FAKE_SESSION)},
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+  }
+  line({ type: "assistant", session_id: ${JSON.stringify(FAKE_SESSION)},
+    message: { role: "assistant", content: [{ type: "text", text: answer.text }] } });
+  line({ type: "result", subtype: "success", is_error: false, result: answer.text, session_id: ${JSON.stringify(FAKE_SESSION)} });
+});
+`;
+
 async function installFakeHarnesses(runDir) {
   const fakeBin = path.join(runDir, "fake-bin");
-  const fakeInstall = path.join(runDir, "fake-install");
   const argvLog = path.join(runDir, "harness-argv.log");
-  const help = path.join(fakeInstall, "claude-help.txt");
-  for (const dir of [fakeBin, fakeInstall, ...["good", "bad", "codex"].map((name) => path.join(fakeInstall, name))]) {
-    await mkdir(dir, { mode: 0o700 });
-    await chmod(dir, 0o700);
-  }
-  await writeFile(help, await readFile(CLAUDE_HELP), { mode: 0o600 });
-  const codexHelp = path.join(fakeInstall, "codex-exec-help.txt");
-  const codexFeatures = path.join(fakeInstall, "codex-features.txt");
-  await writeFile(codexHelp, await readFile(CODEX_EXEC_HELP), { mode: 0o600 });
-  await writeFile(codexFeatures, await readFile(CODEX_FEATURES), { mode: 0o600 });
-  const checks = `case "$1" in
-  --version) echo '2.1.284 (Claude Code)'; exit 0 ;;
-  --help) /bin/cat ${shellQuote(help)}; exit 0 ;;
-esac
-/bin/cat > /dev/null`;
-  const scripts = {
-    good: fakeHarnessScript("claude-good", argvLog, `${checks}
-printf '%s\\n' '{"type":"system","subtype":"init","tools":[]}' '{"type":"result","subtype":"success","is_error":false,"result":"OK"}'`),
-    bad: fakeHarnessScript("claude-bad", argvLog, `${checks}
-echo 'fake harness: simulated failure' >&2
-exit 1`),
-    // A reviewed codex-cli whose features list honors the --disable pairs it
-    // is given, and fails unless the host gave it an empty CODEX_HOME (runs
-    // ignore the user's config, so the list must too). Its exec run prints
-    // only allowlisted text events; any other run fails.
-    codex: fakeHarnessScript("codex", argvLog, `if [ "$1" = --version ]; then echo 'codex-cli 0.144.4'; exit 0; fi
-if [ "$1" = exec ] && [ "$2" = --help ]; then /bin/cat ${shellQuote(codexHelp)}; exit 0; fi
-if [ "$1" = features ] && [ "$2" = list ]; then
-  [ -d "$CODEX_HOME" ] && [ -z "$(/bin/ls -A "$CODEX_HOME")" ] || exit 3
-  disabled=' '; previous=''
-  for arg in "$@"; do [ "$previous" = --disable ] && disabled="$disabled$arg "; previous=$arg; done
-  while IFS= read -r feature; do
-    case "$disabled" in *" \${feature%% *} "*) feature="\${feature% true} false" ;; esac
-    printf '%s\\n' "$feature"
-  done < ${shellQuote(codexFeatures)}
-  exit 0
-fi
-if [ "$1" = exec ]; then
-  /bin/cat > /dev/null
-  printf '%s\\n' '{"type":"thread.started","thread_id":"t"}' '{"type":"turn.started"}' \\
-    '{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"OK"}}' \\
-    '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
-  exit 0
-fi
-exit 1`),
-  };
-  for (const [dir, text] of Object.entries(scripts)) {
-    const file = path.join(fakeInstall, dir, dir === "codex" ? "codex" : "claude");
-    await writeFile(file, text, { mode: 0o700 });
+  await mkdir(fakeBin, { mode: 0o700 });
+  await chmod(fakeBin, 0o700);
+  for (const [name, body] of [["codex", FAKE_CODEX], ["claude", FAKE_CLAUDE]]) {
+    const file = path.join(fakeBin, name);
+    await writeFile(file, `${fakeHarnessPrelude(name, argvLog)}${body}`, { mode: 0o700 });
     await chmod(file, 0o700);
   }
-  await symlink(path.join(fakeInstall, "good", "claude"), path.join(fakeBin, "claude"));
-  await symlink(path.join(fakeInstall, "codex", "codex"), path.join(fakeBin, "codex"));
-  // The service's summary harness (FAKE_HARNESS_ENV): one run per turn with
-  // the page path as $1 and the prompt on stdin. $HOME/fake-agent.mode picks
-  // ok, slow, or fail. It sits outside fake-bin, so discovery never sees it.
-  // PR 2 accepts only stdout that is one JSON object, so "working" streams
-  // inside the answer rather than on its own line.
-  const fakeAgent = path.join(fakeInstall, "fake-agent");
-  await writeFile(fakeAgent, `#!/bin/sh
-/bin/cat > /dev/null
-echo 'fake agent diagnostics' >&2
-mode=$(/bin/cat "$HOME/fake-agent.mode" 2>/dev/null)
-case "$mode" in
-  slow) /bin/sleep 60 ;;
-  fail) echo 'fake failure' >&2; exit 3 ;;
-esac
-echo 'session: smoke-session'
-echo '{"progress":"working","ok":true}'
-`, { mode: 0o700 });
-  await chmod(fakeAgent, 0o700);
-  return { fakeBin, fakeInstall, argvLog, fakeAgent };
+  return { fakeBin, argvLog };
 }
 
 // Every file a finished run keeps in its record directory.
@@ -344,23 +366,30 @@ async function stopService(service) {
   })]);
 }
 
-// Re-point fake-bin/claude in one rename, so discovery never sees it missing.
-async function pointFakeClaude(fakeBin, fakeInstall, which) {
-  const staged = path.join(fakeBin, ".claude-next");
-  await unlink(staged).catch(() => undefined);
-  await symlink(path.join(fakeInstall, which, "claude"), staged);
-  await rename(staged, path.join(fakeBin, "claude"));
+// What the fakes logged, one entry per line; each entry also carries its pid,
+// so a start and what that process read can be matched.
+async function harnessLog(argvLog) {
+  return (await readFile(argvLog, "utf8").catch(() => "")).split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
+// Each fake process: its start entry with what it read on stdin.
 async function harnessRuns(argvLog) {
-  return (await readFile(argvLog, "utf8").catch(() => "")).split("\n").filter(Boolean).map((line) => {
-    const [program, argv, names = ""] = line.split("\t");
-    return { program, argv, env: names.split(" ").filter(Boolean).sort() };
-  });
+  const runs = new Map();
+  for (const entry of await harnessLog(argvLog)) {
+    if (entry.argv) runs.set(entry.pid, { ...entry, rpc: [], stdin: null });
+    const run = runs.get(entry.pid);
+    if (!run) continue;
+    if (entry.rpc) run.rpc.push(entry.rpc);
+    if (typeof entry.stdin === "string") run.stdin = entry.stdin;
+  }
+  return [...runs.values()];
 }
 
-const isCheckRun = (run) => ["[--version]", "[--help]", "[exec][--help]"].includes(run.argv) ||
-  run.argv.startsWith("[features][list]");
+const isVersionCheck = (run) => run.argv.length === 1 && run.argv[0] === "--version";
+const isProbe = (run) => run.stdin?.trim() === PROBE_PROMPT ||
+  run.rpc.some((request) => request.method === "turn/start" &&
+    request.params.input.some((item) => item.text === PROBE_PROMPT));
 
 // Spawn a short-lived host process for one framed request, independent of
 // whatever host process is serving the live panel or settings connection.
@@ -609,11 +638,27 @@ async function nativeHostPreflight(cdp, extensionId) {
   }
 }
 
+// The /article page: a link-only navigation block beside an article body.
+// Extraction must keep the article and drop the navigation.
+const articleText = (caseId) => `The smoke article body ${caseId}`;
+const ARTICLE_NAV_TEXT = "Smoke navigation link";
+
+function articlePage(title, caseId) {
+  const links = ["home", "news", "archive", "about"].map((name) =>
+    `<li><a href="/?nav=${name}">${ARTICLE_NAV_TEXT} ${name}</a></li>`).join("");
+  const paragraphs = ["first", "second", "third", "fourth"].map((which) =>
+    `<p>${articleText(caseId)}, ${which} paragraph, says what a reader came for, with enough words, commas, and ` +
+    "sentences that a readability pass treats it as the main content of the page, not as a menu or a footer.</p>").join("");
+  return `<!doctype html><html><head><title>${title}</title></head><body>` +
+    `<nav class="menu" role="navigation"><ul>${links}</ul></nav>` +
+    `<article><h1>${title}</h1>${paragraphs}</article></body></html>`;
+}
+
 function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
     const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/while-paused", "/allowed/after-resume",
-      "/allowed/after-removal", "/fresh/page"]);
+      "/allowed/after-removal", "/fresh/page", "/article"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (!known.has(pathname)) {
@@ -622,6 +667,10 @@ function fixtureServer(caseId) {
       return;
     }
     const title = pathname === "/" ? `${APP_NAME} smoke fixture` : `${APP_NAME} smoke ${pathname}`;
+    if (pathname === "/article") {
+      response.end(articlePage(title, caseId));
+      return;
+    }
     response.end(`<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1><p>Run ${caseId}</p><ul><li><a href="/allowed/page?case=${caseId}">Allowed page</a></li><li><a href="/blocked/page?case=${caseId}">Blocked page</a></li><li><a href="/allowed/after-removal?case=${caseId}">After removal</a></li></ul></body></html>`);
   });
   return server;
@@ -748,6 +797,8 @@ async function run() {
   await access(path.join(DIST, "manifest.json"), constants.R_OK).catch(() => {
     throw new Error(`Build the extension first: npm run build:extension (${DIST} is unavailable)`);
   });
+  // The built module, since agent.ts imports other modules by their .js names.
+  const { SETUP_WARNING } = await import(pathToFileURL(path.join(DIST, "agent.js")).href);
 
   const runDir = await mkdtemp(path.join(os.tmpdir(), `${BINARY_NAME}-smoke-macos-`));
   // The service socket lives under HOME, and a Unix socket path must fit in
@@ -986,17 +1037,15 @@ async function run() {
       await mkdir(dialogs, { mode: 0o700 });
       await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-windows.swift"), "-o", windowCheck]);
     }
-    // PATH is pinned in every mode, so harness discovery finds only the fakes,
-    // never a real harness. Headless also clears the environment: the host
-    // sees a fake credential and one name setup must never pass on.
-    const { fakeBin, fakeInstall, argvLog, fakeAgent } = await installFakeHarnesses(runDir);
-    const fakeInstallReal = await realpath(fakeInstall);
+    // PATH is pinned in every mode, so harness detection finds only the fakes,
+    // never a real harness. Headless also clears the environment, so the
+    // service and every run get only these names (plus agent.env).
+    const { fakeBin, argvLog } = await installFakeHarnesses(runDir);
+    const openLog = path.join(runDir, "open.log");
     const hostPath = `${fakeBin}:/usr/bin:/bin`;
-    const secret = `smoke-secret-${caseId}`;
     const wrapperBody = options.headless
       ? `exec /usr/bin/env -i HOME=${shellQuote(testHome)} PATH=${shellQuote(hostPath)} ` +
-        `ANTHROPIC_API_KEY=${shellQuote(secret)} SMOKE_NOT_ALLOWED=x ` +
-        `${SCRIPTED_DIALOGS_ENV}=${shellQuote(dialogs)} ${FAKE_HARNESS_ENV}=${shellQuote(fakeAgent)} ` +
+        `${SCRIPTED_DIALOGS_ENV}=${shellQuote(dialogs)} ${OPEN_LOG_ENV}=${shellQuote(openLog)} ` +
         `${shellQuote(options.host)} "$@"\n`
       : `export HOME=${shellQuote(testHome)}\nexport PATH=${shellQuote(hostPath)}\nexec ${shellQuote(options.host)} "$@"\n`;
     await writeFile(wrapper, `#!/bin/sh\n${wrapperBody}`, { mode: 0o700 });
@@ -1035,7 +1084,7 @@ async function run() {
     const firstBody = `First note ${caseId}`;
     await writeFile(path.join(runDir, "run-info.json"), `${JSON.stringify({
       origin, allowed, blocked, afterRemoval, notes, profile, testHome, configPath,
-      manifest, host: options.host, chrome: options.chrome, siteInput, fakeBin, argvLog,
+      manifest, host: options.host, chrome: options.chrome, siteInput, fakeBin, argvLog, openLog,
     }, null, 2)}\n`);
 
     console.log(`\nSmoke artifacts: ${runDir}`);
@@ -1518,22 +1567,50 @@ async function run() {
       await pendingVisitsCleared();
     });
 
-    // AI harness setup runs only the fakes under fake-install. It shows no
-    // dialog: the host detects the harness again, runs one test prompt, and
-    // commits it. Guided runs skip it; the headless run covers the host's side.
-    const probeArgv = PROBE_ARGV.map((arg) => `[${arg}]`).join("");
+    // The agent service and summary runs, headless only: a normal build would
+    // ask launchd for the service, and only the scripted opener writes
+    // open.log. The smoke starts `service` itself through the wrapper's
+    // cleared environment. Harness setup runs in the service, so it starts
+    // first; setup shows no dialog, and runs only the fakes in fake-bin.
+    const support = path.dirname(configPath);
+    const runDirOf = (runId) => path.join(support, "runs", runId);
+    const setAgentMode = (mode) => atomicWrite(path.join(testHome, "fake-agent.mode"), `${mode}\n`);
     const agentRequest = (fields) => hostRequest(wrapper, {
       protocol_version: PROTOCOL_VERSION, request_id: randomUUID(), ...fields,
     });
-    const offerRows = () => onSettings((page) => page.evaluate(`[...document.querySelectorAll("#harness-offers li[data-adapter]")]
-      .map((row) => ({ adapter: row.dataset.adapter, ready: row.dataset.ready === "true",
-        realPath: row.dataset.realPath ?? null, text: row.textContent }))`));
-    // Never click Set up unless every offer the host found is one of the fakes.
+    const startRun = (url) => agentRequest({
+      type: "start_run", url, title: `${APP_NAME} smoke run`, content: `# Smoke run\n\n${caseId}\n`,
+      selection: null, harness: null, record_key: null, requested_at: requestedAt(),
+    });
+    const getRun = (runId) => agentRequest({ type: "get_run", run_id: runId, since_offset: 0 });
+    const runIn = (runId, states) => waitFor(async () => {
+      const reply = await getRun(runId);
+      requireCondition(reply.type === "run_fetched", `get_run answered ${JSON.stringify(reply)}`);
+      requireCondition(states.includes(reply.run.state), `Run ${runId} is ${reply.run.state}`);
+      return reply;
+    }, { timeout: 30_000, interval: 300, signal: abort.signal });
+    const failPage = `${origin}/run/fail?case=${caseId}`;
+    const article = `${origin}/article?case=${caseId}`;
+    const runIds = {};
+    const noNewDialog = async (before) => requireCondition((await dialogLogLines()).length === before,
+      "Harness setup opened a native dialog");
+    const settledStatus = (prefix) => waitFor(async () => {
+      const status = await settingsStatus();
+      requireCondition(status?.startsWith(prefix), `Settings page says: ${status}`);
+      return status;
+    }, { timeout: 60_000 });
+
+    // The settings page's harness list, as the service detected it.
+    const harnessRows = () => onSettings((page) => page.evaluate(`[...document.querySelectorAll("#harness-list li[data-harness]")]
+      .map((row) => ({ harness: row.dataset.harness, ready: row.dataset.ready === "true",
+        text: row.querySelector("label span")?.textContent ?? "", binary: row.querySelector("small")?.textContent.trim() || null }))`));
+    // Never click Test and use unless every harness found is one of the fakes.
     async function onlyFakeHarnesses() {
-      const rows = await offerRows();
-      const stray = rows.find((row) => !row.realPath || !inside(fakeInstallReal, row.realPath));
-      if (!rows.length || stray) {
-        throw Object.assign(new Error(`A harness outside the fakes was offered: ${JSON.stringify(stray ?? rows)}`),
+      const rows = await harnessRows();
+      const fakeDirs = [fakeBin, await realpath(fakeBin)];
+      const stray = rows.find((row) => row.binary !== null && !fakeDirs.some((dir) => inside(dir, row.binary)));
+      if (rows.length !== 2 || stray) {
+        throw Object.assign(new Error(`A harness outside the fakes was found: ${JSON.stringify(stray ?? rows)}`),
           { fatal: true });
       }
       return rows;
@@ -1545,160 +1622,75 @@ async function run() {
       });
       await waitFor(async () => {
         const status = await settingsStatus();
-        requireCondition(status?.startsWith("Found Claude Code 2.1.284"), `Settings page says: ${status}`);
-        requireCondition(await onSettings((page) => page.enabled("#setup-harness")), "Set up harness is disabled");
+        requireCondition(status?.startsWith("Found "), `Settings page says: ${status}`);
       }, { timeout: 60_000 });
       return onlyFakeHarnesses();
     }
-    async function startSetup() {
+    // Choose `harness` and run Test and use; resolves with the settled status.
+    async function testAndUse(harness, prefix) {
       await onlyFakeHarnesses();
       await inSettings(async (page) => {
+        await page.click(`#harness-list li[data-harness="${harness}"] input[type="radio"]`);
         await page.evaluate('document.getElementById("status").textContent = ""');
-        await page.click("#setup-harness");
+        await page.click("#test-harness");
       });
+      return settledStatus(prefix);
     }
-    const probeRuns = async () => (await harnessRuns(argvLog)).filter((run) => !isCheckRun(run));
-    const settledStatus = (prefix) => waitFor(async () => {
-      const status = await settingsStatus();
-      requireCondition(status?.startsWith(prefix), `Settings page says: ${status}`);
-      return status;
-    }, { timeout: 60_000 });
-    const noNewDialog = async (before) => requireCondition((await dialogLogLines()).length === before,
-      "Harness setup opened a native dialog");
+    const isFakeBinary = async (binary, name) =>
+      [path.join(fakeBin, name), path.join(await realpath(fakeBin), name)].includes(binary);
+
+    // The panel's run cards. Each re-renders its buttons on every poll, so a
+    // button is found and clicked in one evaluation; none of them needs a
+    // user gesture.
+    const runCards = () => onPanel((page) => page.evaluate(`[...document.querySelectorAll("#run-area .run-card")]
+      .map((card) => ({ id: card.dataset.runId, state: card.querySelector(".run-card-state")?.textContent ?? "",
+        answer: card.querySelector(".run-card-answer")?.textContent ?? "",
+        buttons: [...card.querySelectorAll(".run-card-actions button")].map((button) => button.textContent) }))`));
+    const clickCardButton = (runId, label) => waitFor(() => onPanel((page) => page.evaluate(`(() => {
+      const card = document.querySelector(${JSON.stringify(`#run-area .run-card[data-run-id="${runId}"]`)});
+      const button = [...(card?.querySelectorAll(".run-card-actions button") ?? [])]
+        .find((candidate) => candidate.textContent === ${JSON.stringify(label)} && !candidate.disabled);
+      if (!button) throw new Error(${JSON.stringify(`The run card has no ${label} button`)});
+      button.click();
+    })()`)));
+    const cardIn = (runId, states, timeout = 60_000) => waitFor(async () => {
+      const card = (await runCards()).find((candidate) => candidate.id === runId);
+      requireCondition(card, `The panel shows no card for run ${runId}`);
+      requireCondition(states.some((state) => card.state.startsWith(state)), `The run card says: ${card.state}`);
+      return card;
+    }, { timeout, interval: 500, signal: abort.signal });
+    const finished = ["Summarized", "Failed", "Canceled"];
+    // Follow the article tab in a freshly opened panel, so it reads the
+    // harness state from the host again.
+    async function panelOnArticle() {
+      await closePanel();
+      await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+      await openPanel();
+      await waitFor(() => onPanel(async (page) => {
+        const shown = await page.text("#page-url");
+        requireCondition(shown === article, `Panel shows the URL: ${shown || "(none)"}`);
+        requireCondition(await page.enabled("#summarize"), "Summarize & log is disabled");
+      }), { timeout: 20_000 });
+    }
+    // Click Summarize & log; resolves with the new card's run id.
+    async function summarizeFromPanel() {
+      const before = new Set((await runCards()).map((card) => card.id));
+      await onPanel((page) => page.click("#summarize"));
+      return waitFor(async () => {
+        const fresh = (await runCards()).find((card) => !before.has(card.id));
+        requireCondition(fresh, "Summarize & log showed no new run card");
+        return fresh.id;
+      }, { timeout: 30_000, signal: abort.signal });
+    }
+    const newRuns = async (since) => (await harnessRuns(argvLog)).slice(since).filter((run) => !isVersionCheck(run));
+    const anyArgvHasArticle = (runs) => runs.some((run) => run.argv.some((arg) => arg.includes(articleText(caseId))));
 
     if (!options.headless) {
-      console.log("\nAI harness setup steps skipped: they run with --headless only.");
-    } else {
-      await step("Detect harnesses", async () => {
-        const rows = await detect();
-        const claude = rows.find((row) => row.adapter === "claude_code");
-        const codex = rows.find((row) => row.adapter === "codex");
-        requireCondition(claude?.ready && claude.text.includes("Claude Code 2.1.284"),
-          `Claude Code offer: ${JSON.stringify(claude)}`);
-        requireCondition(codex?.ready && codex.text.includes("Codex 0.144.4"),
-          `Codex offer: ${JSON.stringify(codex)}`);
-        // The full-access warning sits above Set up harness.
-        const warning = await onSettings((page) => page.text("#harness-warning"));
-        requireCondition(warning === SETUP_WARNING, `The setup warning says: ${warning}`);
-        const runs = await harnessRuns(argvLog);
-        requireCondition(runs.length > 0 && runs.every((run) => ["claude-good", "codex"].includes(run.program) &&
-          isCheckRun(run) && run.env.join(",") ===
-            (run.argv.startsWith("[features][list]") ? "CODEX_HOME,HOME,PATH" : "HOME,PATH")),
-        `Discovery ran: ${JSON.stringify(runs)}`);
-        const codexRuns = runs.filter((run) => run.program === "codex").map((run) => run.argv);
-        requireCondition(codexRuns.length === 3 && codexRuns[1] === "[exec][--help]" &&
-          codexRuns[2].startsWith("[features][list][--disable][shell_tool]"),
-        `Codex discovery ran: ${JSON.stringify(codexRuns)}`);
-        const env = await onSettings((page) => page.evaluate(`({
-          key: document.querySelector('#harness-env input[data-env="ANTHROPIC_API_KEY"]')?.checked ?? null,
-          text: document.body.textContent })`));
-        requireCondition(env.key === true, "ANTHROPIC_API_KEY is not offered, or not preselected though set");
-        requireCondition(!env.text.includes("SMOKE_NOT_ALLOWED") && !env.text.includes(secret),
-          "The settings page shows an environment name or value it must not");
-      });
-
-      await step("Failing harness refused", async () => {
-        await pointFakeClaude(fakeBin, fakeInstall, "bad");
-        const before = await hostConfig(wrapper);
-        await detect();
-        const dialogsBefore = (await dialogLogLines()).length;
-        await startSetup();
-        const status = await settledStatus("Harness setup did not finish");
-        await noNewDialog(dialogsBefore);
-        requireCondition(status.includes("failed its test run"), `Settings page says: ${status}`);
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && after.config.agent === null,
-          "A failed test run changed the config");
-        const probes = await probeRuns();
-        requireCondition(probes.length === 1 && probes[0].program === "claude-bad" && probes[0].argv === probeArgv,
-          `Expected one test run with the template argv; got ${JSON.stringify(probes)}`);
-      });
-
-      await step("Harness setup confirmed", async () => {
-        await pointFakeClaude(fakeBin, fakeInstall, "good");
-        await detect();
-        const dialogsBefore = (await dialogLogLines()).length;
-        await startSetup();
-        await settledStatus("Claude Code is set up.");
-        await noNewDialog(dialogsBefore);
-        const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.agent?.binary === `${fakeBin}/claude` &&
-          reply.config.storage?.summaries_dir === "summaries",
-        `The host config after setup: ${JSON.stringify(reply.config)}`);
-        requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "2.1.284",
-          `Agent status: ${JSON.stringify(reply.agent_status)}`);
-        const probes = await probeRuns();
-        const good = probes.filter((run) => run.program === "claude-good");
-        requireCondition(probes.length === 2 && good.length === 1 && good[0].argv === probeArgv &&
-          good[0].env.join(",") === "ANTHROPIC_API_KEY,HOME,PATH",
-        `Expected one passing test run with the chosen env names; got ${JSON.stringify(probes)}`);
-        requireCondition(!(await readFile(configPath, "utf8")).includes(secret), "config.toml holds an environment value");
-        const checked = await agentRequest({ type: "check_agent" });
-        requireCondition(checked.type === "agent_checked" && checked.harness_version === "2.1.284" &&
-          !("url_allowed" in checked), `check_agent answered ${JSON.stringify(checked)}`);
-      });
-
-      // Codex runs under the user's own HOME (and CODEX_HOME when set).
-      await step("Codex setup confirmed", async () => {
-        const probesBefore = (await probeRuns()).length;
-        const rows = await detect();
-        requireCondition(rows.find((row) => row.adapter === "codex")?.ready, "Codex is not offered");
-        await inSettings((page) => page.click('#harness-offers li[data-adapter="codex"] input[type="radio"]'));
-        const dialogsBefore = (await dialogLogLines()).length;
-        await startSetup();
-        await settledStatus("Codex is set up.");
-        await noNewDialog(dialogsBefore);
-        const reply = await hostConfig(wrapper);
-        const agent = reply.config.agent;
-        requireCondition(agent?.binary === `${fakeBin}/codex` && agent.env_allow.join(",") === "HOME,PATH",
-        `The host config after Codex setup: ${JSON.stringify(reply.config)}`);
-        requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "0.144.4",
-          `Agent status: ${JSON.stringify(reply.agent_status)}`);
-        const expectedArgv = agent.args.map((arg) => `[${arg === "{prompt}" ? PROBE_ARGV[1] : arg}]`).join("");
-        const probes = (await probeRuns()).slice(probesBefore);
-        requireCondition(probes.length === 1 && probes[0].program === "codex" && probes[0].argv === expectedArgv &&
-          probes[0].argv.startsWith("[exec][--sandbox][read-only]") && probes[0].argv.includes("[--disable][tool_suggest]") &&
-          probes[0].env.join(",") === "HOME,PATH",
-        `Expected one Codex test run with the reviewed argv and HOME,PATH only; got ${JSON.stringify(probes)}`);
-      });
-    }
-
-    // The agent service: the host forwards run messages over the service's
-    // socket. Only a scripted-dialogs host honors FAKE_HARNESS_ENV, and a
-    // normal build would ask launchd, so guided runs skip these steps. The
-    // smoke starts `service` itself through the wrapper's cleared environment.
-    const support = path.dirname(configPath);
-    const runDirOf = (runId) => path.join(support, "runs", runId);
-    const setAgentMode = (mode) => atomicWrite(path.join(testHome, "fake-agent.mode"), `${mode}\n`);
-    const startRun = (url) => agentRequest({
-      type: "start_run", url, title: `${APP_NAME} smoke run`, content: `# Smoke run\n\n${caseId}\n`,
-      selection: null, harness: null, record_key: null, requested_at: requestedAt(),
-    });
-    const getRun = (runId) => agentRequest({ type: "get_run", run_id: runId, since_offset: 0 });
-    async function startedRun(url) {
-      const reply = await startRun(url);
-      requireCondition(reply.type === "run_started", `start_run answered ${JSON.stringify(reply)}`);
-      return reply;
-    }
-    const runIn = (runId, states) => waitFor(async () => {
-      const reply = await getRun(runId);
-      requireCondition(reply.type === "run_fetched", `get_run answered ${JSON.stringify(reply)}`);
-      requireCondition(states.includes(reply.run.state), `Run ${runId} is ${reply.run.state}`);
-      return reply;
-    }, { timeout: 30_000, interval: 300, signal: abort.signal });
-    const runPages = {
-      ok: `${origin}/run/ok?case=${caseId}`,
-      slow: `${origin}/run/slow?case=${caseId}`,
-      fail: `${origin}/run/fail?case=${caseId}`,
-    };
-    const runIds = {};
-
-    if (!options.headless) {
-      console.log("\nAgent service steps skipped: they run with --headless only.");
+      console.log("\nAgent service and summary steps skipped: they run with --headless only.");
     } else {
       await step("Without the service, a run is service_unavailable", async () => {
         await setAgentMode("ok");
-        const reply = await startRun(runPages.ok);
+        const reply = await startRun(failPage);
         requireCondition(reply.type === "error" && reply.code === "service_unavailable",
           `start_run answered ${JSON.stringify(reply)}`);
         requireCondition(!(await maybeLstat(path.join(support, "service.sock"))), "A service socket appeared");
@@ -1720,29 +1712,148 @@ async function run() {
         }, { timeout: 15_000, interval: 200, signal: abort.signal });
       });
 
-      await step("A run succeeds and keeps its record", async () => {
+      await step("Harness setup in settings", async () => {
+        await openSettingsTab();
+        await settingsConnected();
+        const warning = await onSettings((page) => page.text("#harness-warning"));
+        requireCondition(warning === SETUP_WARNING, `The setup warning says: ${warning}`);
+        const rows = await detect();
+        const codex = rows.find((row) => row.harness === "codex");
+        const claude = rows.find((row) => row.harness === "claude");
+        requireCondition(codex?.ready && codex.text === "Codex 0.144.4", `Codex row: ${JSON.stringify(codex)}`);
+        requireCondition(claude?.ready && claude.text === "Claude Code 2.1.310", `Claude Code row: ${JSON.stringify(claude)}`);
+        const detection = await harnessRuns(argvLog);
+        requireCondition(detection.length > 0 && detection.every(isVersionCheck),
+          `Detection ran more than --version: ${JSON.stringify(detection.map((run) => [run.program, run.argv]))}`);
+
+        // A failing test run changes nothing.
+        const dialogsBefore = (await dialogLogLines()).length;
+        const before = await hostConfig(wrapper);
+        await setAgentMode("fail");
+        const refused = await testAndUse("codex", "The harness test did not pass");
+        requireCondition(refused.includes("Codex failed its test run") && refused.includes("fake failure"),
+          `Settings page says: ${refused}`);
+        const unchanged = await hostConfig(wrapper);
+        requireCondition(unchanged.revision === before.revision && unchanged.config.agent === null,
+          "A failed test run changed the config");
+
         await setAgentMode("ok");
-        const started = await startedRun(runPages.ok);
-        requireCondition(started.existing === false, "A first run was reported as existing");
-        runIds.ok = started.run.run_id;
-        const done = await runIn(runIds.ok, ["succeeded", "failed", "canceled"]);
-        requireCondition(done.run.state === "succeeded", `The run ended ${JSON.stringify(done.run)}`);
-        requireCondition(done.stream_text.includes("working"), `The run streamed: ${done.stream_text}`);
-        requireCondition(done.run.session_id === "smoke-session", `The run's session: ${done.run.session_id}`);
-        for (const file of RUN_FILES) {
-          requireCondition((await maybeLstat(path.join(runDirOf(runIds.ok), file)))?.isFile(),
-            `The run record has no ${file}`);
-        }
+        await testAndUse("codex", "Codex is set up.");
+        await noNewDialog(dialogsBefore);
+        const reply = await hostConfig(wrapper);
+        const agent = reply.config.agent;
+        requireCondition(agent?.harness === "codex" && await isFakeBinary(agent.binary, "codex") &&
+          agent.version === "0.144.4" && agent.timeout_secs === 600,
+        `The host config after setup: ${JSON.stringify(agent)}`);
+        requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "0.144.4",
+          `Agent status: ${JSON.stringify(reply.agent_status)}`);
+        // The probe ran as a real run would: an app-server thread in the knowledge base.
+        const probes = (await harnessRuns(argvLog)).filter(isProbe);
+        const knowledgeBaseReal = await realpath(knowledgeBase);
+        requireCondition(probes.length === 2 && probes.every((run) => run.program === "codex" &&
+          run.argv.join(" ") === "app-server --listen stdio://" && run.cwd === knowledgeBaseReal),
+        `Expected two Codex test runs in the knowledge base; got ${JSON.stringify(probes.map((run) => [run.argv, run.cwd]))}`);
       });
 
-      await step("A second start reattaches, and cancel ends the process group", async () => {
+      await step("Summarize a page with Codex", async () => {
+        await setAgentMode("ok");
+        await navigate(origin, article);
+        await panelOnArticle();
+        const since = (await harnessRuns(argvLog)).length;
+        runIds.codex = await summarizeFromPanel();
+        const card = await cardIn(runIds.codex, finished);
+        requireCondition(card.state.startsWith("Summarized"), `The run card says: ${card.state}`);
+        requireCondition(/Importance: high/.test(card.answer), `The run card's answer: ${card.answer}`);
+        for (const file of RUN_FILES) {
+          requireCondition((await maybeLstat(path.join(runDirOf(runIds.codex), file)))?.isFile(),
+            `The run record has no ${file}`);
+        }
+        const page = await readFile(path.join(runDirOf(runIds.codex), "page.md"), "utf8");
+        requireCondition(page.includes(articleText(caseId)), "page.md lacks the article text");
+        requireCondition(!page.includes(ARTICLE_NAV_TEXT), "page.md kept the navigation block");
+        const runs = await newRuns(since);
+        const knowledgeBaseReal = await realpath(knowledgeBase);
+        requireCondition(runs.length === 1 && runs[0].program === "codex" &&
+          runs[0].argv.join(" ") === "app-server --listen stdio://" && runs[0].cwd === knowledgeBaseReal,
+        `Expected one app-server in the knowledge base; got ${JSON.stringify(runs.map((run) => [run.program, run.argv, run.cwd]))}`);
+        const thread = runs[0].rpc.find((request) => request.method === "thread/start")?.params;
+        requireCondition(thread?.approvalPolicy === "never" && thread.sandbox === "danger-full-access" &&
+          await realpath(thread.cwd).catch(() => null) === knowledgeBaseReal,
+        `thread/start asked for ${JSON.stringify(thread)}`);
+        requireCondition(!anyArgvHasArticle(runs), "Article text reached a command line");
+      });
+
+      await step("Open in Codex", async () => {
+        await clickCardButton(runIds.codex, "Open in Codex");
+        await waitFor(async () => {
+          const opened = (await readFile(openLog, "utf8").catch(() => "")).split("\n").filter(Boolean);
+          requireCondition(opened.includes(`codex://threads/${FAKE_THREAD}`), `open.log has ${JSON.stringify(opened)}`);
+        }, { timeout: 15_000, signal: abort.signal });
+      });
+
+      await step("Claude Code and resume", async () => {
+        await openSettingsTab();
+        await settingsConnected();
+        await detect();
+        const dialogsBefore = (await dialogLogLines()).length;
+        await testAndUse("claude", "Claude Code is set up.");
+        await noNewDialog(dialogsBefore);
+        const agent = (await hostConfig(wrapper)).config.agent;
+        requireCondition(agent?.harness === "claude" && await isFakeBinary(agent.binary, "claude") &&
+          agent.version === "2.1.310", `The host config after Claude Code setup: ${JSON.stringify(agent)}`);
+
+        await setAgentMode("badjson-once");
+        await panelOnArticle();
+        const since = (await harnessRuns(argvLog)).length;
+        runIds.claude = await summarizeFromPanel();
+        const card = await cardIn(runIds.claude, finished);
+        requireCondition(card.state.startsWith("Summarized"), `The run card says: ${card.state}`);
+        const runs = await newRuns(since);
+        requireCondition(runs.length === 2 && runs.every((run) => run.program === "claude"),
+          `Expected exactly two claude runs; got ${JSON.stringify(runs.map((run) => [run.program, run.argv]))}`);
+        const [first, second] = runs;
+        requireCondition(first.argv.includes("--dangerously-skip-permissions") && first.argv.includes("--session-id") &&
+          second.argv.includes("--dangerously-skip-permissions"), `claude ran with ${JSON.stringify([first.argv, second.argv])}`);
+        const resume = second.argv.indexOf("--resume");
+        requireCondition(resume >= 0 && second.argv[resume + 1] === FAKE_SESSION,
+          `The repair turn ran with ${JSON.stringify(second.argv)}`);
+        requireCondition(first.stdin?.includes(path.join(runDirOf(runIds.claude), "page.md")) ||
+          first.stdin?.includes(path.join(await realpath(runDirOf(runIds.claude)), "page.md")),
+        "The prompt on stdin does not name the page file");
+        requireCondition(second.stdin?.startsWith(REPAIR_PREFIX), `The repair prompt was ${JSON.stringify(second.stdin)}`);
+        requireCondition(!anyArgvHasArticle(runs), "Article text reached a command line");
+        // The panel copies through the clipboard; capture what it would copy.
+        await onPanel((page) => page.evaluate(`Object.defineProperty(navigator.clipboard, "writeText", {
+          configurable: true, value: (text) => { window.smokeCopied = text; return Promise.resolve(); } })`));
+        await clickCardButton(runIds.claude, "Copy resume command");
+        const copied = await waitFor(() => onPanel(async (page) => {
+          const text = await page.evaluate("window.smokeCopied ?? null");
+          requireCondition(text !== null, "Nothing was copied");
+          return text;
+        }));
+        const { run } = await getRun(runIds.claude);
+        requireCondition(run.session_id === FAKE_SESSION && await realpath(run.cwd) === await realpath(knowledgeBase),
+          `The Claude Code run: ${JSON.stringify(run)}`);
+        requireCondition(copied === `cd ${shellQuote(run.cwd)} && claude --resume ${FAKE_SESSION}`,
+          `Copy resume command copied ${copied}`);
+      });
+
+      await step("Second invalid answer", async () => {
+        await setAgentMode("badjson");
+        runIds.badjson = await summarizeFromPanel();
+        const card = await cardIn(runIds.badjson, finished);
+        requireCondition(card.state.startsWith("Failed") && card.state.includes("not valid"),
+          `The run card says: ${card.state}`);
+        requireCondition(card.buttons.includes("Copy") && !card.buttons.includes("Retry save"),
+          `The failed card offers ${JSON.stringify(card.buttons)}`);
+        const { run } = await getRun(runIds.badjson);
+        requireCondition(run.error_kind === "invalid_output", `The run failed as ${run.error_kind}`);
+      });
+
+      await step("Cancel", async () => {
         await setAgentMode("slow");
-        const first = await startedRun(runPages.slow);
-        runIds.slow = first.run.run_id;
-        const again = await startedRun(runPages.slow);
-        requireCondition(again.existing === true && again.run.run_id === runIds.slow,
-          `A second start on the same page answered ${JSON.stringify(again)}`);
-        await runIn(runIds.slow, ["running"]);
+        runIds.slow = await summarizeFromPanel();
+        await cardIn(runIds.slow, ["Running"]);
         const group = await waitFor(async () => {
           const status = JSON.parse(await readFile(path.join(runDirOf(runIds.slow), "status.json"), "utf8"));
           requireCondition(Number.isInteger(status.process_group) && status.process_group > 1,
@@ -1751,10 +1862,13 @@ async function run() {
         }, { timeout: 15_000, interval: 200, signal: abort.signal });
         lingeringGroup = group;
         process.kill(-group, 0);
-        const canceled = await agentRequest({ type: "cancel_run", run_id: runIds.slow });
-        requireCondition(canceled.type === "run_updated", `cancel_run answered ${JSON.stringify(canceled)}`);
-        const done = await runIn(runIds.slow, ["canceled", "succeeded", "failed"]);
-        requireCondition(done.run.state === "canceled", `The canceled run ended ${JSON.stringify(done.run)}`);
+        // A second start on the same page reattaches to the running run.
+        const again = await startRun(article);
+        requireCondition(again.type === "run_started" && again.existing === true && again.run.run_id === runIds.slow,
+          `A second start on the same page answered ${JSON.stringify(again)}`);
+        await clickCardButton(runIds.slow, "Cancel");
+        const card = await cardIn(runIds.slow, finished, 20_000);
+        requireCondition(card.state.startsWith("Canceled"), `The canceled run card says: ${card.state}`);
         await waitFor(() => {
           try {
             process.kill(-group, 0);
@@ -1769,18 +1883,47 @@ async function run() {
 
       await step("A failing harness fails the run with its stderr", async () => {
         await setAgentMode("fail");
-        runIds.fail = (await startedRun(runPages.fail)).run.run_id;
+        const started = await startRun(failPage);
+        requireCondition(started.type === "run_started", `start_run answered ${JSON.stringify(started)}`);
+        runIds.fail = started.run.run_id;
         const done = await runIn(runIds.fail, ["succeeded", "failed", "canceled"]);
         requireCondition(done.run.state === "failed" && done.run.error_kind === "harness_failed" &&
           done.run.error?.includes("fake failure"), `The failing run ended ${JSON.stringify(done.run)}`);
+      });
+
+      await step("Restore", async () => {
+        await panelOnArticle();
+        const card = await waitFor(async () => {
+          const shown = await runCards();
+          const ids = new Set(shown.map((candidate) => candidate.id));
+          requireCondition(Object.values(runIds).every((id) => ids.has(id)),
+            `The reopened panel shows ${JSON.stringify([...ids])}; expected ${JSON.stringify(runIds)}`);
+          return shown.find((candidate) => candidate.id === runIds.codex);
+        }, { timeout: 20_000, signal: abort.signal });
+        requireCondition(card.state.startsWith("Summarized") && /Importance: high/.test(card.answer),
+          `The restored Codex card: ${JSON.stringify(card)}`);
       });
 
       await step("list_runs shows every run", async () => {
         const listed = await agentRequest({ type: "list_runs" });
         requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
         const ids = new Set(listed.runs.map((run) => run.run_id));
-        requireCondition(Object.values(runIds).length === 3 && Object.values(runIds).every((id) => ids.has(id)),
+        requireCondition(Object.values(runIds).length === 5 && Object.values(runIds).every((id) => ids.has(id)),
           `list_runs shows ${JSON.stringify([...ids])}; expected ${JSON.stringify(runIds)}`);
+      });
+
+      await step("agent.env", async () => {
+        const value = `smoke-agent-value-${caseId}`;
+        await atomicWrite(path.join(support, "agent.env"), `SMOKE_AGENT_NAME=${value}\n`, 0o600);
+        await openSettingsTab();
+        await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
+        await settingsConnected();
+        await waitFor(() => onSettings(async (page) => {
+          const names = await page.text("#agent-env-names");
+          requireCondition(names?.includes("SMOKE_AGENT_NAME"), `Settings shows agent.env as: ${names}`);
+          requireCondition(!(await page.evaluate("document.documentElement.outerHTML")).includes(value),
+            "The settings page shows an agent.env value");
+        }), { timeout: 20_000 });
       });
     }
 

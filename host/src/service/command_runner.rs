@@ -10,16 +10,13 @@
 //!   with the last stderr line.
 
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use brauser_protocol::HarnessId;
-use rustix::process::{Pid, Signal, kill_process_group};
 
+use super::child::{ChildLine, LineChild};
 use super::harness_api::{
     HarnessEvent, HarnessRunner, HarnessSession, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
@@ -63,12 +60,6 @@ struct CommandSession {
     slot: ProcessSlot,
 }
 
-enum Output {
-    Line(Vec<u8>),
-    Stderr(Vec<u8>),
-    Closed,
-}
-
 impl HarnessSession for CommandSession {
     fn turn(&mut self, prompt: &str, sink: &mut dyn FnMut(HarnessEvent)) -> TurnOutcome {
         let mut command = Command::new(&self.program);
@@ -76,11 +67,8 @@ impl HarnessSession for CommandSession {
             .arg(&self.page_path)
             .current_dir(&self.cwd)
             .env_clear()
-            .envs(self.env.iter().map(|(name, value)| (name, value)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = match self.slot.spawn(&mut command) {
+            .envs(self.env.iter().map(|(name, value)| (name, value)));
+        let mut child = match LineChild::spawn(&self.slot, command) {
             Ok(child) => child,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
                 return failed("the run was stopped before the harness started".to_string());
@@ -89,67 +77,22 @@ impl HarnessSession for CommandSession {
                 return failed(format!("starting {}: {error}", display_name(&self.program)));
             }
         };
-        let group = Pid::from_child(&child);
 
-        if let Some(mut input) = child.stdin.take() {
-            let prompt = prompt.as_bytes().to_vec();
-            // Dropping the pipe after the write closes the harness's stdin.
-            thread::spawn(move || {
-                let _ = input.write_all(&prompt);
-            });
-        }
-        let (sender, receiver) = mpsc::channel();
-        let mut open = 0;
-        if let Some(stdout) = child.stdout.take() {
-            open += 1;
-            let sender = sender.clone();
-            thread::spawn(move || {
-                let mut reader = BufReader::new(stdout);
-                loop {
-                    let mut line = Vec::new();
-                    match reader.read_until(b'\n', &mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            if sender.send(Output::Line(line)).is_err() {
-                                return;
-                            }
-                        }
-                    }
-                }
-                let _ = sender.send(Output::Closed);
-            });
-        }
-        if let Some(mut stderr) = child.stderr.take() {
-            open += 1;
-            let sender = sender.clone();
-            thread::spawn(move || {
-                let mut chunk = [0_u8; 8192];
-                loop {
-                    match stderr.read(&mut chunk) {
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => {
-                            if sender.send(Output::Stderr(chunk[..read].to_vec())).is_err() {
-                                return;
-                            }
-                        }
-                    }
-                }
-                let _ = sender.send(Output::Closed);
-            });
-        }
-        drop(sender);
+        // The prompt goes as is: `write_line` adds the `\n` it may end with.
+        // A harness that exits without reading it fails on its exit status.
+        let _ = child.write_line(prompt.strip_suffix('\n').unwrap_or(prompt));
+        child.close_stdin();
 
         let mut final_text = String::new();
         let mut stderr_tail = Vec::new();
         let mut exit: Option<ExitStatus> = None;
         let mut drain_deadline = None;
         let mut wait_error = None;
+        let mut closed = false;
         loop {
-            match receiver.recv_timeout(POLL) {
-                Ok(Output::Line(bytes)) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let line = text.strip_suffix('\n').unwrap_or(&text);
-                    let line = line.strip_suffix('\r').unwrap_or(line);
+            match child.next(POLL) {
+                Some(ChildLine::Stdout(line)) => {
+                    let line = line.strip_suffix('\r').unwrap_or(&line);
                     match line.strip_prefix(SESSION_PREFIX) {
                         Some(id) if !id.trim().is_empty() => sink(HarnessEvent::Session(
                             SessionRef::ClaudeSession(id.trim().to_string()),
@@ -161,16 +104,15 @@ impl HarnessSession for CommandSession {
                         }
                     }
                 }
-                Ok(Output::Stderr(bytes)) => {
+                Some(ChildLine::Stderr(bytes)) => {
                     stderr_tail.extend_from_slice(&bytes);
                     if stderr_tail.len() > STDERR_TAIL {
                         stderr_tail.drain(..stderr_tail.len() - STDERR_TAIL);
                     }
                     sink(HarnessEvent::Diagnostic(bytes));
                 }
-                Ok(Output::Closed) => open -= 1,
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => open = 0,
+                Some(ChildLine::Closed) => closed = true,
+                None => {}
             }
             if exit.is_none() && wait_error.is_none() {
                 match child.try_wait() {
@@ -178,15 +120,14 @@ impl HarnessSession for CommandSession {
                     Ok(None) => {}
                     Err(error) => wait_error = Some(error),
                 }
+                // `try_wait` also ends what the child left running in its
+                // group, closing the pipes such children hold.
                 if exit.is_some() || wait_error.is_some() {
-                    // Nothing the harness left in the background outlives
-                    // the turn; this also closes pipes such children hold.
-                    let _ = kill_process_group(group, Signal::KILL);
                     drain_deadline = Some(Instant::now() + DRAIN_GRACE);
                 }
             }
             if let Some(deadline) = drain_deadline
-                && (open == 0 || Instant::now() >= deadline)
+                && (closed || Instant::now() >= deadline)
             {
                 break;
             }
@@ -346,6 +287,45 @@ mod tests {
         );
     }
 
+    /// A harness that echoes its prompt as it reads it gets a prompt far
+    /// larger than the output queue and the pipes hold, and still answers
+    /// with all of it instead of stalling until the run is killed.
+    #[test]
+    fn a_large_prompt_to_an_echoing_harness_is_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = script(dir.path(), "fake", "exec cat\n");
+        let mut spec = spec(dir.path());
+        spec.prompt = (0..30_000).map(|i| format!("line {i:05}\n")).collect();
+        let runner = CommandRunner {
+            harness: HarnessId::Codex,
+            program,
+        };
+        let slot = ProcessSlot::default();
+        let watchdog = slot.clone();
+        let (stop, stopped) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            if stopped.recv_timeout(Duration::from_secs(5)).is_err() {
+                watchdog.kill();
+            }
+        });
+        let mut session = runner.start(&spec, &slot).unwrap();
+        let started = Instant::now();
+        let outcome = session.turn(&spec.prompt, &mut |_| {});
+        let elapsed = started.elapsed();
+        let _ = stop.send(());
+        session.close();
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "the turn took {elapsed:?}"
+        );
+        assert_eq!(
+            outcome,
+            TurnOutcome::Answered {
+                final_text: spec.prompt.clone()
+            }
+        );
+    }
+
     #[test]
     fn nonzero_exit_fails_with_last_stderr_line() {
         let dir = tempfile::tempdir().unwrap();
@@ -429,5 +409,25 @@ mod tests {
         let outcome = session.turn(&spec.prompt, &mut |event| events.push(event));
         assert!(events.is_empty(), "{events:?}");
         assert!(matches!(outcome, TurnOutcome::Failed { .. }), "{outcome:?}");
+    }
+
+    /// After a turn its child is reaped, so the slot no longer names the
+    /// group a later cancel or timeout would kill.
+    #[test]
+    fn a_finished_turn_leaves_no_group_to_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = spec(dir.path());
+        for body in ["echo answer\n", "echo bad >&2\nexit 2\n"] {
+            let program = script(dir.path(), "fake", body);
+            let runner = CommandRunner {
+                harness: HarnessId::Claude,
+                program,
+            };
+            let slot = ProcessSlot::default();
+            let mut session = runner.start(&spec, &slot).unwrap();
+            session.turn(&spec.prompt, &mut |_| {});
+            assert_eq!(slot.group(), None, "{body}");
+            session.close();
+        }
     }
 }
