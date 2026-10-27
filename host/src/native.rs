@@ -3886,6 +3886,9 @@ id = "jira.board:{host}/{id}"
             "{:?}",
             result.adopted_state.warnings
         );
+        // Forgetting needs the same lock, so it is not offered.
+        assert!(!result.adopted_state.full);
+        assert!(!result.adopted_state.warnings[0].contains("Forget"));
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the

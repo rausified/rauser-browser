@@ -395,11 +395,12 @@
     "AdoptedState": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The host's record of the adapter contracts it has adopted. issue is set while the record cannot be used, which pauses notes on pages the current adapters do not recognize; warnings say recording failed, which degrades protection for adapters later removed by hand. revision identifies the file for forget_adopted_contracts.",
+      "description": "The host's record of the adapter contracts it has adopted. issue is set while the record cannot be used, which pauses notes on pages the current adapters do not recognize; warnings say recording failed, which degrades protection for adapters later removed by hand. revision identifies the file for forget_adopted_contracts. full says the record reached its bound (1,024 contracts or 1 MiB), the one warning forget_adopted_contracts repairs.",
       "required": [
         "issue",
         "revision",
-        "warnings"
+        "warnings",
+        "full"
       ],
       "properties": {
         "issue": {
@@ -423,6 +424,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "full": {
+          "type": "boolean"
         }
       }
     },

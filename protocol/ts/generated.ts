@@ -56,6 +56,7 @@ export interface AdoptedState {
   issue: string | null;
   revision: string;
   warnings: string[];
+  full: boolean;
 }
 
 export interface ConfigUpdated {

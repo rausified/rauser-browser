@@ -61,7 +61,7 @@ fn v6_retires_config_confirmation() {
 fn config_responses_always_report_the_revision() {
     for kind in ["config_result", "config_updated"] {
         let extra = if kind == "config_result" {
-            r#","config_issue":null,"agent_status":{"state":"not_set_up","harness_version":null,"message":null},"adapter_issue":null,"adapter_warnings":[],"adopted_state":{"issue":null,"revision":"missing","warnings":[]}"#
+            r#","config_issue":null,"agent_status":{"state":"not_set_up","harness_version":null,"message":null},"adapter_issue":null,"adapter_warnings":[],"adopted_state":{"issue":null,"revision":"missing","warnings":[],"full":false}"#
         } else {
             ""
         };
@@ -147,7 +147,7 @@ fn config_with_extra(key: &str) -> String {
     };
     let body = config(r#""storage":null,"#).replacen('{', &format!(r#"{{"{key}":{value},"#), 1);
     format!(
-        r#"{{"type":"config_result","protocol_version":6,"request_id":"r1","revision":"missing","config_issue":null,"agent_status":{{"state":"not_set_up","harness_version":null,"message":null}},"adapter_issue":null,"adapter_warnings":[],"adopted_state":{{"issue":null,"revision":"missing","warnings":[]}},"config":{body}}}"#
+        r#"{{"type":"config_result","protocol_version":6,"request_id":"r1","revision":"missing","config_issue":null,"agent_status":{{"state":"not_set_up","harness_version":null,"message":null}},"adapter_issue":null,"adapter_warnings":[],"adopted_state":{{"issue":null,"revision":"missing","warnings":[],"full":false}},"config":{body}}}"#
     )
 }
 
@@ -705,16 +705,26 @@ fn adopted_state_and_its_forget_request_round_trip() {
         .is_err()
     );
 
-    let state = r#"{"issue":"damaged","revision":"not-a-file","warnings":["full"]}"#;
+    let state = r#"{"issue":null,"revision":"sha256:abc","warnings":["full"],"full":true}"#;
     let parsed: AdoptedState = serde_json::from_str(state).unwrap();
     assert_eq!(serde_json::to_string(&parsed).unwrap(), state);
+    // full is required, as are issue (even when null) and the rest.
+    assert!(
+        serde_json::from_str::<AdoptedState>(
+            r#"{"issue":null,"revision":"missing","warnings":[]}"#
+        )
+        .is_err()
+    );
     // issue is required even when null, and no other key is allowed.
     assert!(
-        serde_json::from_str::<AdoptedState>(r#"{"revision":"missing","warnings":[]}"#).is_err()
+        serde_json::from_str::<AdoptedState>(
+            r#"{"revision":"missing","warnings":[],"full":false}"#
+        )
+        .is_err()
     );
     assert!(
         serde_json::from_str::<AdoptedState>(
-            r#"{"issue":null,"revision":"missing","warnings":[],"extra":1}"#
+            r#"{"issue":null,"revision":"missing","warnings":[],"full":false,"extra":1}"#
         )
         .is_err()
     );

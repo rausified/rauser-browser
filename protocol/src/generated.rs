@@ -82,6 +82,7 @@ pub struct AdoptedState {
     pub issue: Option<String>,
     pub revision: String,
     pub warnings: Vec<String>,
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
