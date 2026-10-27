@@ -706,13 +706,17 @@ async function installPolicy(
   const queue = await readQueue();
   queue.items = queue.items.filter((item) =>
     effectiveLease.capture_enabled && matchingArtifact(effectiveLease, item.event.url));
+  // Removing a site promises to clear its samples, so the purge commits with
+  // the policy or not at all. Unreadable samples are dropped, not kept.
+  const samples = await patternSamples(effectiveLease.capture_enabled ? effectiveLease : null)
+    .catch(() => ({}));
   await chrome.storage.local.set({
     [POLICY_KEY]: lease,
     [PAUSE_KEY]: false,
     [QUEUE_KEY]: queue,
+    [SITE_PATTERNS_KEY]: samples,
   });
   await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
-  await pruneSitePatterns(effectiveLease.capture_enabled ? effectiveLease : null).catch(patternFailure);
   // A page installing policy may have just enabled capture on an open tab.
   // Background renewal must leave its in-flight navigation unmapped until
   // captureNavigation records the real open after renewal completes.
@@ -916,8 +920,8 @@ async function suspendPolicy(): Promise<WorkerStatus> {
   // A repairable host config issue is not a site removal. Remove the
   // capture lease immediately, but leave queued visits and an explicit
   // local pause untouched until a valid host policy can reconcile them.
-  await chrome.storage.local.set({ [POLICY_KEY]: null });
-  await pruneSitePatterns(null).catch(patternFailure);
+  // Samples go with the lease in one write, so neither outlives the other.
+  await chrome.storage.local.set({ [POLICY_KEY]: null, [SITE_PATTERNS_KEY]: {} });
   return currentStatus();
 }
 

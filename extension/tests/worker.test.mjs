@@ -1037,6 +1037,47 @@ test("a failed sample purge during pause is reported, not hidden", async () => {
   assert.deepEqual(values.get(key), {}, "retrying the pause clears the samples");
 });
 
+test("a failed sample purge on site removal fails the install instead of keeping the rows", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const kept = "https://kept-site.example";
+  const removed = "https://removed-site.example";
+  const key = storageKey("site_patterns_v1");
+  const both = { ...lease(kept), adapters: { format: 1, artifacts: [artifact(kept), artifact(removed)] } };
+  values.set(storageKey("policy_v1"), both);
+  const row = () => [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }];
+  values.set(key, { [kept]: row(), [removed]: row() });
+  const install = () => send({
+    kind: "install_policy", lease: lease(kept), resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  rejectLocalSet = (items) => Object.hasOwn(items, key);
+  try {
+    await assert.rejects(install(), /quota exceeded/);
+  } finally { rejectLocalSet = null; }
+  assert.deepEqual(values.get(storageKey("policy_v1")), both,
+    "the removal is not reported as done while its samples remain");
+  await install();
+  assert.deepEqual(Object.keys(values.get(key)), [kept], "retrying the install clears the removed site's samples");
+});
+
+test("a failed sample purge on suspend fails the suspend instead of keeping the rows", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://suspend-purge.example";
+  const key = storageKey("site_patterns_v1");
+  values.set(storageKey("policy_v1"), lease(origin));
+  values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  rejectLocalSet = (items) => Object.hasOwn(items, key);
+  try {
+    await assert.rejects(send({ kind: "suspend_policy" }), /quota exceeded/);
+  } finally { rejectLocalSet = null; }
+  await send({ kind: "suspend_policy" });
+  assert.equal(values.get(storageKey("policy_v1")), null);
+  assert.deepEqual(values.get(key), {}, "retrying the suspend clears the samples");
+});
+
 test("private pattern samples include skipped pages but never enter delivery or native messages", async () => {
   values.clear();
   sessionValues.clear();

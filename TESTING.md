@@ -189,6 +189,12 @@ This standard is meant to improve with use. When you change it:
   A same-URL reload kept a completed review's link shapes, since the panel
   compared only tab ID and URL; any `loading` or URL update in the reviewed
   tab now discards the review, held reads included.
+  A failed sample purge on site removal or policy suspension was likewise
+  only logged, so re-enabling the origin revived its rows; the purge now
+  commits in the same storage write as the policy, so the call fails and can
+  be retried. A same-origin skipped page whose tab read failed also left the
+  previous artifact mapped, since sampling moved the tab read ahead of the
+  artifact match; that path now ends the entry too.
 - 2026-10-27: Independent review reproduced an oversized same-origin
   navigation leaving the previous artifact mapped for attention measurement.
   The worker regression starts on a recognized artifact, navigates to a
