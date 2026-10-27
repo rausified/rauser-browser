@@ -125,6 +125,11 @@ impl RunFinisher for VaultCheckFinisher {
     }
 }
 
+/// Builds a run's child environment (the service environment overlaid with
+/// `agent.env`) when the run leaves the queue. The error is shown as the
+/// run's error, so it must never carry a value from the file.
+pub type EnvSource = Arc<dyn Fn() -> Result<Vec<(OsString, OsString)>, String> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ServiceOptions {
     pub run_timeout: Duration,
@@ -132,28 +137,26 @@ pub struct ServiceOptions {
     pub idle_exit: Duration,
     /// Recorded in each run's `status.json` for recovery.
     pub service_pid: u32,
-    /// The child environment for runs that were still queued when the last
-    /// service process ended and are re-submitted by [`Supervisor::new`]. The
-    /// server builds it the same way as a `start_run` environment.
-    pub resume_env: Vec<(OsString, OsString)>,
+    /// Read at the start of every run, including runs resumed after a
+    /// restart; a run whose environment cannot be built fails before its
+    /// harness starts.
+    pub run_env: EnvSource,
 }
 
 impl fmt::Debug for ServiceOptions {
-    /// Names only: `resume_env` may carry `agent.env` secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let names: Vec<_> = self.resume_env.iter().map(|(name, _)| name).collect();
         f.debug_struct("ServiceOptions")
             .field("run_timeout", &self.run_timeout)
             .field("idle_exit", &self.idle_exit)
             .field("service_pid", &self.service_pid)
-            .field("resume_env", &names)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-/// A request to start a run. The server resolves the record key, the working
-/// directory, and the child environment (service env overlaid with
-/// `agent.env`); the supervisor never reads `agent.env` itself.
+/// A request to start a run. The server resolves the record key and the
+/// working directory; the child environment comes from
+/// [`ServiceOptions::run_env`] when the run starts, so the supervisor never
+/// reads `agent.env` itself.
 #[derive(Debug, Clone)]
 pub struct StartRun {
     pub url: String,
@@ -164,7 +167,6 @@ pub struct StartRun {
     pub record_key: RecordKey,
     pub requested_at: String,
     pub cwd: PathBuf,
-    pub env: Vec<(OsString, OsString)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,7 +185,6 @@ struct StopState {
 /// What the worker needs that is not in `status.json`.
 struct Launch {
     cwd: PathBuf,
-    env: Vec<(OsString, OsString)>,
 }
 
 /// The in-memory side of one queued or running run.
@@ -305,10 +306,7 @@ impl Supervisor {
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
-                    let control = RunControl::new(Launch {
-                        cwd,
-                        env: inner.options.resume_env.clone(),
-                    });
+                    let control = RunControl::new(Launch { cwd });
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
                 Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
@@ -374,10 +372,7 @@ impl Supervisor {
                     "The run could not be recorded.".to_string(),
                 ));
             }
-            let control = RunControl::new(Launch {
-                cwd: req.cwd,
-                env: req.env,
-            });
+            let control = RunControl::new(Launch { cwd: req.cwd });
             lock(&inner.runs).insert(id, Arc::new(control));
         }
         Inner::pump(inner);
@@ -603,6 +598,19 @@ impl Inner {
             return;
         };
         let launch = lock(&control.launch).take();
+        // agent.env as it is now, not as it was when the run was queued.
+        let env = match (this.options.run_env)() {
+            Ok(env) => env,
+            Err(reason) => {
+                control.end_turn();
+                this.finish_with(&control, id, |status| {
+                    status.state = RunState::Failed;
+                    status.error_kind = Some(RunErrorKind::HarnessFailed);
+                    status.error = Some(reason);
+                });
+                return;
+            }
+        };
         let started = now_timestamp();
         let status = this.update(id, |status| {
             status.state = RunState::Running;
@@ -637,7 +645,7 @@ impl Inner {
             eprintln!("brauser service: no watchdog for run {id}: {error}");
         }
 
-        let outcome = this.drive(id, &control, &status, launch);
+        let outcome = this.drive(id, &control, &status, launch, env);
         let stopped = control.end_turn();
         let finished = match (stopped, outcome) {
             (Some(Stop::Cancel), _) => Finish::fail(RunErrorKind::Canceled, None),
@@ -662,6 +670,7 @@ impl Inner {
         control: &RunControl,
         status: &RunStatusFile,
         launch: Launch,
+        env: Vec<(OsString, OsString)>,
     ) -> Result<String, String> {
         let Some(runner) = self.registry.get(Some(status.harness)) else {
             return Err("The AI harness is no longer set up.".to_string());
@@ -674,7 +683,7 @@ impl Inner {
             cwd: launch.cwd,
             prompt: draft_prompt(&page_path),
             page_path,
-            env: launch.env,
+            env,
         };
         let mut session = runner
             .start(&spec, &control.slot)
@@ -952,11 +961,24 @@ mod tests {
         }
     }
 
+    type SharedEnv = Arc<Mutex<Result<Vec<(OsString, OsString)>, String>>>;
+
     struct Fixture {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
         fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
+        /// What the run environment source returns when a run starts.
+        env: SharedEnv,
+    }
+
+    /// The environment every fixture run gets unless a test changes it.
+    fn default_env(dir: &Path) -> Vec<(OsString, OsString)> {
+        vec![
+            ("PATH".into(), "/bin:/usr/bin".into()),
+            ("RELEASE".into(), dir.join("release").into_os_string()),
+            ("COUNT".into(), dir.join("count").into_os_string()),
+        ]
     }
 
     impl Fixture {
@@ -971,6 +993,17 @@ mod tests {
         /// Seed `runs/` before the supervisor starts, as a previous service
         /// process would have left it.
         fn seeded(body: &str, run_timeout: Duration, seed: impl FnOnce(&RunStore, &Path)) -> Self {
+            Self::seeded_with_env(body, run_timeout, None, seed)
+        }
+
+        /// As [`Fixture::seeded`], with the environment source failing with
+        /// `env_error` from the start, when given.
+        fn seeded_with_env(
+            body: &str,
+            run_timeout: Duration,
+            env_error: Option<&str>,
+            seed: impl FnOnce(&RunStore, &Path),
+        ) -> Self {
             let dir = tempfile::tempdir().unwrap();
             seed(
                 &RunStore::open(dir.path().join("runs")).unwrap(),
@@ -982,7 +1015,7 @@ mod tests {
             let registry = HarnessRegistry::from_lookup(|name| {
                 (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
             });
-            Self::build(dir, registry, run_timeout)
+            Self::build(dir, registry, run_timeout, env_error)
         }
 
         fn without_runner() -> Self {
@@ -990,10 +1023,16 @@ mod tests {
                 tempfile::tempdir().unwrap(),
                 HarnessRegistry::default(),
                 DEFAULT_RUN_TIMEOUT,
+                None,
             )
         }
 
-        fn build(dir: tempfile::TempDir, registry: HarnessRegistry, run_timeout: Duration) -> Self {
+        fn build(
+            dir: tempfile::TempDir,
+            registry: HarnessRegistry,
+            run_timeout: Duration,
+            env_error: Option<&str>,
+        ) -> Self {
             let store = RunStore::open(dir.path().join("runs")).unwrap();
             let fail_saves = Arc::new(AtomicUsize::new(0));
             let saves = Arc::new(AtomicUsize::new(0));
@@ -1001,6 +1040,11 @@ mod tests {
                 fail_saves: fail_saves.clone(),
                 saves: saves.clone(),
             };
+            let env: SharedEnv = Arc::new(Mutex::new(match env_error {
+                Some(error) => Err(error.to_string()),
+                None => Ok(default_env(dir.path())),
+            }));
+            let source = env.clone();
             let supervisor = Supervisor::new(
                 store,
                 registry,
@@ -1009,7 +1053,7 @@ mod tests {
                     run_timeout,
                     idle_exit: Duration::from_secs(600),
                     service_pid: std::process::id(),
-                    resume_env: Vec::new(),
+                    run_env: Arc::new(move || source.lock().unwrap().clone()),
                 },
             );
             Self {
@@ -1017,6 +1061,7 @@ mod tests {
                 supervisor,
                 fail_saves,
                 saves,
+                env,
             }
         }
 
@@ -1024,12 +1069,8 @@ mod tests {
             self.dir.path().join(name)
         }
 
-        fn env(&self) -> Vec<(OsString, OsString)> {
-            vec![
-                ("PATH".into(), "/bin:/usr/bin".into()),
-                ("RELEASE".into(), self.path("release").into_os_string()),
-                ("COUNT".into(), self.path("count").into_os_string()),
-            ]
+        fn set_env(&self, env: Result<Vec<(OsString, OsString)>, String>) {
+            *self.env.lock().unwrap() = env;
         }
 
         fn request(&self, key: &str) -> StartRun {
@@ -1045,7 +1086,6 @@ mod tests {
                 },
                 requested_at: "2026-10-26T10:00:00Z".to_string(),
                 cwd: self.dir.path().to_path_buf(),
-                env: self.env(),
             }
         }
 
@@ -1357,15 +1397,32 @@ mod tests {
     }
 
     #[test]
-    fn start_run_env_reaches_the_harness() {
-        let fixture = Fixture::new("echo \"{\\\"foo\\\": \\\"$FOO\\\"}\"\n");
-        let mut request = fixture.request("a");
-        request.env = vec![("FOO".into(), "bar".into())];
-        let (view, _) = fixture.supervisor.start_run(request).unwrap();
-        let id = Uuid::parse_str(&view.run_id).unwrap();
-        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
-        let stream = fixture.stream(id);
-        assert!(stream.contains("bar"), "{stream}");
+    fn run_env_is_read_when_the_run_starts() {
+        let fixture = Fixture::new(
+            "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho \"{\\\"foo\\\": \\\"$FOO\\\"}\"\n",
+        );
+        let with_foo = |value: &str| {
+            let mut env = default_env(fixture.dir.path());
+            env.push(("FOO".into(), value.into()));
+            Ok(env)
+        };
+        fixture.set_env(with_foo("at-queue-time"));
+        // Two blocked runs hold both slots, so the third waits in the queue.
+        let first = fixture.start("a");
+        let second = fixture.start("b");
+        let queued = fixture.start("c");
+        fixture.wait_for(first, |view| view.state == RunState::Running);
+        fixture.wait_for(second, |view| view.state == RunState::Running);
+        assert_eq!(fixture.view(queued).state, RunState::Queued);
+        fixture.set_env(with_foo("at-start-time"));
+        fixture.release();
+        for id in [first, second] {
+            assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+            assert!(fixture.stream(id).contains("at-queue-time"));
+        }
+        assert_eq!(fixture.wait_finished(queued).state, RunState::Succeeded);
+        let stream = fixture.stream(queued);
+        assert!(stream.contains("at-start-time"), "{stream}");
     }
 
     #[test]
@@ -1572,15 +1629,52 @@ mod tests {
     }
 
     #[test]
-    fn service_options_debug_hides_resume_env_values() {
+    fn a_queued_run_whose_env_cannot_be_read_fails_before_its_harness() {
+        let fixture = Fixture::new(ANSWER);
+        fixture.set_env(Err("agent.env must have mode 0600".to_string()));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed);
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some("agent.env must have mode 0600"));
+        assert_eq!(view.started_at, None);
+        assert_eq!(view.stream_bytes, 0);
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_resumed_queued_run_fails_when_agent_env_is_unreadable() {
+        let mut queued = None;
+        let fixture = Fixture::seeded_with_env(
+            ANSWER,
+            DEFAULT_RUN_TIMEOUT,
+            Some("agent.env is a symlink"),
+            |store, cwd| {
+                queued = Some(seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                ));
+            },
+        );
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some("agent.env is a symlink"));
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+        assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn service_options_debug_names_no_environment() {
         let options = ServiceOptions {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
-            resume_env: vec![("API_KEY".into(), "secret-value".into())],
+            run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),
         };
         let debug = format!("{options:?}");
-        assert!(debug.contains("API_KEY"), "{debug}");
         assert!(!debug.contains("secret-value"), "{debug}");
     }
 }

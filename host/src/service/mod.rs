@@ -53,19 +53,12 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
 }
 
 fn options(paths: &ServicePaths) -> ServiceOptions {
-    // Queued runs resumed after a restart get the same environment a new
-    // run would; a bad agent.env falls back to the service environment and
-    // each new start_run reports the problem.
-    let resume_env = server::run_env(paths).unwrap_or_else(|error| {
-        eprintln!("{NAMESPACE} service: {error}");
-        std::env::vars_os().collect()
-    });
     #[allow(unused_mut)]
     let mut options = ServiceOptions {
         run_timeout: DEFAULT_RUN_TIMEOUT,
         idle_exit: DEFAULT_IDLE_EXIT,
         service_pid: std::process::id(),
-        resume_env,
+        run_env: server::env_source(paths),
     };
     #[cfg(feature = "scripted-dialogs")]
     {

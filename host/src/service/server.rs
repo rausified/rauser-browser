@@ -24,7 +24,7 @@ use uuid::Uuid;
 use super::agent_env::{AgentEnv, AgentEnvError};
 use super::paths::{self, ServicePaths};
 use super::record::check_start_run;
-use super::supervisor::{ServiceOptions, StartRun, Supervisor};
+use super::supervisor::{EnvSource, ServiceOptions, StartRun, Supervisor};
 use crate::brand::NAMESPACE;
 use crate::config::ConfigStore;
 use crate::frame::{FrameError, read_frame, write_frame};
@@ -47,6 +47,14 @@ pub enum ServeExit {
 /// `agent.env`. The error never carries a value from the file.
 pub fn run_env(paths: &ServicePaths) -> Result<Vec<(OsString, OsString)>, AgentEnvError> {
     Ok(AgentEnv::read(&paths.agent_env())?.overlay(std::env::vars_os()))
+}
+
+/// [`run_env`] for the supervisor to call when each run starts, so a run that
+/// waited in the queue, or was resumed after a restart, uses `agent.env` as
+/// it is then and fails when it cannot be read.
+pub fn env_source(paths: &ServicePaths) -> EnvSource {
+    let paths = paths.clone();
+    Arc::new(move || run_env(&paths).map_err(|error| error.to_string()))
 }
 
 /// Serve the socket until the service is idle.
@@ -261,12 +269,11 @@ impl Server {
                     Ok(cwd) => cwd,
                     Err((code, message)) => return error(&id, code, message),
                 };
-                let env = match run_env(&self.paths) {
-                    Ok(env) => env,
-                    Err(env_error) => {
-                        return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
-                    }
-                };
+                // Checked now so a bad agent.env is reported at the click;
+                // the run reads it again when it leaves the queue.
+                if let Err(env_error) = run_env(&self.paths) {
+                    return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
+                }
                 match self.supervisor.start_run(StartRun {
                     url: value.url,
                     title: value.title,
@@ -276,7 +283,6 @@ impl Server {
                     record_key,
                     requested_at: value.requested_at,
                     cwd,
-                    env,
                 }) {
                     Ok((run, existing)) => Response::RunStarted(RunStarted {
                         protocol_version: PROTOCOL_VERSION,
@@ -471,12 +477,12 @@ mod tests {
             self.paths.socket().unwrap()
         }
 
-        fn options(idle_exit: Duration) -> ServiceOptions {
+        fn options(paths: &ServicePaths, idle_exit: Duration) -> ServiceOptions {
             ServiceOptions {
                 run_timeout: DEFAULT_RUN_TIMEOUT,
                 idle_exit,
                 service_pid: std::process::id(),
-                resume_env: Vec::new(),
+                run_env: env_source(paths),
             }
         }
 
@@ -487,7 +493,7 @@ mod tests {
             let finisher_config = self.config();
             let program = self.program.clone();
             let handle = thread::spawn(move || {
-                let options = Self::options(idle_exit);
+                let options = Self::options(&paths, idle_exit);
                 serve(&paths, config, &options, || {
                     let registry = HarnessRegistry::from_lookup(|name| {
                         (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
@@ -751,7 +757,7 @@ mod tests {
         let exit = serve(
             &world.paths,
             world.config(),
-            &World::options(Duration::from_secs(600)),
+            &World::options(&world.paths, Duration::from_secs(600)),
             || {
                 flag.store(true, Ordering::SeqCst);
                 anyhow::bail!("a second instance must not build a supervisor")
@@ -809,7 +815,7 @@ mod tests {
         let error = serve(
             &world.paths,
             world.config(),
-            &World::options(Duration::from_secs(600)),
+            &World::options(&world.paths, Duration::from_secs(600)),
             || anyhow::bail!("not reached"),
         );
         assert!(error.is_err());
