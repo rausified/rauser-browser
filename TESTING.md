@@ -19,6 +19,33 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Capture Site coverage
+
+`npm run test:extension` builds on the extension build from the development
+checks. `extension/tests/capture-site.test.mjs` exercises the existing starter
+catalog through the new plan builder: real Jira, SharePoint/OneDrive and GitHub
+URL forms, independent PR/issue scopes, current-page misses, all 27 fixed
+probes, invalid inputs, full-document limits and preservation of other sites.
+`extension/tests/panel.test.mjs` loads the shipped panel markup and JavaScript
+with a scripted native client, worker and Chrome APIs. It covers review/save,
+policy publication, cancel, tab/SPA changes, revision conflicts, pauses and
+removals, missing folders, note edits and copy-out across identity changes,
+title refreshes during a held save, and a failure after config commit. It
+asserts no Chrome permission request or native confirmation is sent. The
+worker regression installs policy with pages already open and verifies that
+attention begins immediately, private/non-artifact tabs stay excluded, and no
+cold open is invented; existing expired-lease and upgrade-navigation tests
+keep real opens intact during background renewal. These checks use no real
+accounts, harnesses, network or clipboard.
+
+This proves the composed DOM/client flow with mocks; it does not certify the
+starter URLs against live tools or prove Chrome layout and keyboard focus.
+Those checks remain the existing human starter-certification and interactive
+Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
+Capture Site adds no scripted dialogs (the existing expected count remains
+14). Unknown-site shaping, link extraction and structural drafting need the
+separate DESIGN §12.2 step 7.6 tests when implemented.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
