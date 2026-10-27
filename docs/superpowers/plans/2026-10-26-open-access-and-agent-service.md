@@ -2005,7 +2005,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 - `pub(crate) enum LinkStyle { Relative, Wikilink }` and `pub(crate) fn link_style(profile: &str) -> LinkStyle`
 - `pub(crate) fn relative_link(from_dir: &Path, to: &Path) -> String`: percent-encodes each segment except unreserved characters. No new crate.
 - `pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String`: strips `[ ] | # ^` and control characters.
-- The neutralizer is a **context-free escape** (revised 2026-10-27; it replaced a scanner that turned each construct into a code span and had to mirror each viewer's parser, which three review rounds kept defeating). For every agent-sourced text written into a summary body: every `<` becomes `&lt;` (an entity never creates HTML structure in CommonMark or GFM, so no tag, autolink, comment, CDATA section, processing instruction or declaration can form in any context); every `!` directly before `[` becomes `\!` unless an odd run of backslashes already escapes it (no inline, reference, collapsed or shortcut image, and no `![[embed]]`); a `!` at the end of the input is escaped the same way and a trailing odd run of backslashes gets one more, so neutralized fragments can be joined with each other and with host text; nothing else changes. Inside code the escapes show literally and autolinks show as text, which is accepted. No `regex` crate is added.
+- The neutralizer is a **context-free escape** (revised 2026-10-27; it replaced a scanner that turned each construct into a code span and had to mirror each viewer's parser, which three review rounds kept defeating). For every agent-sourced text written into a summary body: every `<` becomes `&lt;` (an entity never creates HTML structure in CommonMark or GFM, so no tag, autolink, comment, CDATA section, processing instruction or declaration can form in any context); every `!` directly before `[` becomes `\!` unless an odd run of backslashes already escapes it (no inline, reference, collapsed or shortcut image, and no `![[embed]]`); a `!` at the end of the input is escaped the same way and a trailing odd run of backslashes gets one more, so neutralized fragments can be joined with each other and with host text. Revised again 2026-10-27: every backtick, `$` and tab becomes a numeric entity (`&#96;`, `&#36;`, `&#9;`), every `~` in a run of three or more becomes `&#126;`, and every space from the fourth of a run on becomes `&#32;`, so no code span, fence, indented code block or math can form (Obsidian hands those to Mermaid, Dataview and math engines; a backslash escaping a backtick, `$` or `~` is dropped, since the entity already shows the plain character); a trailing run of `~` or spaces is written as entities whatever its length, so joins cannot form a fence or indented code either. Numeric entities, not backslashes, because agent backslashes cannot undo them; every renderer decodes them to the plain characters outside code. Nothing else changes. Agent prose loses code formatting by design (Mermaid, Dataview and math run in Obsidian code spans, fences and `$`), lines indented four or more spaces lose their structure, and autolinks show as text, which is accepted. `markdown::inline` writes backticks, `$` and `~` as the same entities. No `regex` crate is added.
 - `yaml_string` also writes `<` and an image `!` as JSON `\u` escapes, so the raw front matter holds neither while a YAML reader gets the same value. `wikilink` also strips `<` and `>`.
 - The daily-log line and the artifact file's `Summary:` line keep #59's bracketed `[..](<link>)` form. Only the destination changes: it is now encoded, so a `summaries_dir` with a space gives `%20`. `validate_page_summary` keeps rejecting `<`, `>`, `#`, `?` and control characters.
 
@@ -2018,7 +2018,10 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
           ("![x][]", "\\![x][]"), ("![x]", "\\![x]"), ("![[https://e.example/x.png]]", "\\![[https://e.example/x.png]]"),
           ("<IFRAME src=x></IFRAME>", "&lt;IFRAME src=x>&lt;/IFRAME>"),
           ("<!-- c --><img src=u>", "&lt;!-- c -->&lt;img src=u>"),
-          ("```\n<img src=u>\n```", "```\n&lt;img src=u>\n```"),
+          ("```\n<img src=u>\n```", "&#96;&#96;&#96;\n&lt;img src=u>\n&#96;&#96;&#96;"),
+          ("`$= dv.current()` $x$", "&#96;&#36;= dv.current()&#96; &#36;x&#36;"),
+          ("~~~mermaid\nA@{ img: \"u\" }\n~~~", "&#126;&#126;&#126;mermaid\nA@{ img: \"u\" }\n&#126;&#126;&#126;"),
+          ("    = this.file.name", "   &#32;= this.file.name"),
           ("\\\\![x](u)", "\\\\\\![x](u)"),
           // ... every input the earlier scanner's tests used (backticks, multi-line constructs,
           // indented and under-indented fences, table cells, reference definitions, CDATA, PIs).
@@ -2029,10 +2032,14 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
       for text in ["[a](https://x.example)", "- [ ] open\n- [x] done", "| a | b |\n|---|---|\n| 1 | 2 |"] { assert_eq!(neutralize_remote(text), text); }
   }
   // host/src/markdown_corpus.rs: over host/tests/fixtures/markdown-neutralize-corpus.json, no output holds a
-  // raw `<` or an unescaped `![`, and nothing else changes; with BRAUSER_NEUTRALIZE_CORPUS_OUT set it writes
-  // the outputs for scripts/check-markdown-neutralizer.mjs (`npm run test:markdown-neutralizer`, a CI step
-  // after test:extension), which renders them with markdown-it, micromark+GFM and marked and fails on any
-  // element outside an inert allowlist.
+  // raw `<`, an unescaped `![`, a backtick, `$`, tab, run of three `~` or run of four spaces, and nothing
+  // else changes; with BRAUSER_NEUTRALIZE_CORPUS_OUT set it writes the outputs for
+  // scripts/check-markdown-neutralizer.mjs (`npm run test:markdown-neutralizer`, a CI step after
+  // test:extension), which renders them with markdown-it, micromark+GFM and marked and fails on any
+  // element outside an inert allowlist, and on any <code> or <pre> in neutralized body text. The corpus
+  // includes Mermaid `@{ img: … }`, dataview/dataviewjs and math fences (backtick and tilde, indented 1-3
+  // spaces, in lists and quotes), Dataview inline queries, `$x$` / `$$\href{…}$$` math, backslashes before
+  // backticks and `$`, and double-backtick spans.
   #[test] fn relative_links_climb_and_percent_encode() {
       assert_eq!(relative_link(Path::new("summaries"), Path::new("pages/a b.md")), "../pages/a%20b.md");
       assert_eq!(relative_link(Path::new("log/2026/10"), Path::new("summaries/x.summary.md")), "../../../summaries/x.summary.md");
@@ -2041,7 +2048,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
   ```
 - [ ] Change the expectation of `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link` in `capture.rs` to `[summary](<../../../My%20Summaries/hn-item.summary.md>)`. Add `the_artifact_summary_link_is_percent_encoded` in `index.rs`, modeled on `summary_event_appends_once_on_a_page_no_adapter_covers`, with a `summary_path` of `My Summaries/hn-item.summary.md`.
 - [ ] Run `cargo test --locked -p brauser -- markdown:: summary_path_with_a_space artifact_summary_link`. Expect FAIL.
-- [ ] Implement `neutralize_remote` as one pass over chars: `<` becomes `&lt;`; `!` followed by `[`, or at the end of the input, becomes `\!` when the run of backslashes before it is even; a trailing odd run of backslashes gets one more; every other character is copied. The two end-of-input rules make outputs safe to join: neither a following fragment nor host text can re-form `![` or cancel a leading `\!`.
+- [ ] Implement `neutralize_remote` as one pass over chars: `<` becomes `&lt;`; `!` followed by `[`, or at the end of the input, becomes `\!` when the run of backslashes before it is even; backticks, `$` and tabs become `&#96;`, `&#36;`, `&#9;`, a `~` run of three or more (or at the end) becomes `&#126;` each, spaces from the fourth of a run on (or a run at the end) become `&#32;`, and a backslash escaping a backtick, `$` or `~` that becomes an entity is dropped; a trailing odd run of backslashes gets one more; every other character is copied. The two end-of-input rules make outputs safe to join: neither a following fragment nor host text can re-form `![` or cancel a leading `\!`.
 
   Move `yaml_string` and `safe_markdown` (as `inline`) unchanged. Switch both #59 link sites to `relative_link`.
 - [ ] Run `cargo test --locked -p brauser markdown:: && cargo test --locked -p brauser index:: && cargo test --locked -p brauser capture::`. Expect PASS, including #59's `summary_event_appends_once_on_a_page_no_adapter_covers` unchanged (its path has no reserved characters).
@@ -2334,12 +2341,12 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 **Files:**
 - Modify `scripts/smoke-macos.mjs`:
-  - The fake harnesses gain a `summary` mode. It emits a §6.4 answer with `document_type: "specification"`, `category: "technical specification"` and `importance: {level: "high", reason: "Fixture reason"}`, an entity `<img src=https://evil.example/x.png>`, and a description containing `![t](https://evil.example/t.png)` and `<img src=https://evil.example/d.png>`.
+  - The fake harnesses gain a `summary` mode. It emits a §6.4 answer with `document_type: "specification"`, `category: "technical specification"` and `importance: {level: "high", reason: "Fixture reason"}`, an entity `<img src=https://evil.example/x.png>`, and a description containing `![t](https://evil.example/t.png)`, `<img src=https://evil.example/d.png>`, a Mermaid fence (```` ```mermaid ```` with `A@{ img: "https://evil.example/m.png" }`) and a Dataview inline query (`` `$= dv.el("img", "", {attr: {src: "https://evil.example/q.png"}})` ``).
   - `BRAUSER_OPEN_LOG` is already passed (Task 41).
 
 - [ ] Add the steps:
   1. Write a page note on an unrecognized fixture page, then summarize it. Expect `succeeded`, with the page note's bytes unchanged.
-  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. From the description (`neutralize_remote`) it contains `\![t](https://evil.example/t.png)` and `&lt;img src=https://evil.example/d.png>`. The entity is written by `inline` as `\<img src=https://evil.example/x.png\>` in the neutral profile, or by `wikilink` as `[[img src=https://evil.example/x.png]]` in the obsidian profile. No raw `<img` appears anywhere (front matter values write `<` as a JSON `\u` escape).
+  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. From the description (`neutralize_remote`) it contains `\![t](https://evil.example/t.png)` and `&lt;img src=https://evil.example/d.png>`. The entity is written by `inline` as `\<img src=https://evil.example/x.png\>` in the neutral profile, or by `wikilink` as `[[img src=https://evil.example/x.png]]` in the obsidian profile. From the Mermaid fence and Dataview query it contains `&#96;&#96;&#96;mermaid` and `&#96;&#36;= dv.el(`, and the summary body holds no raw backtick fence (no line starting with three backticks) and no raw `` `$= ``. No raw `<img` appears anywhere (front matter values write `<` as a JSON `\u` escape).
   3. Today's daily log has exactly one ` kind=summary ` line, and its payload has `harness: "codex"` and a `url` record key.
   4. `list_artifacts` returns a `web.page` item with `summary.importance === "high"`.
   5. `worklog` contains `Summarized: <fixture title> — specification, high importance`.
