@@ -19,7 +19,10 @@
 // input is also rendered as a single-line field (`markdown::inline`) and as a
 // wikilink (`markdown::wikilink`, as a viewer without wikilinks sees it):
 // those must render with no <code> or <pre> either, and hold no raw backtick
-// or `$`.
+// or `$`. Each input is also rendered as every agent field of a summary file
+// (`summary::render_summary`, both link styles): its body must render with
+// no <code> or <pre> and hold no raw backtick or `$`, and its front matter
+// is checked as front matter.
 //
 //   npm run test:markdown-neutralizer
 //   node scripts/check-markdown-neutralizer.mjs --outputs pairs.json
@@ -283,11 +286,17 @@ function main() {
     // the input as a front matter value, rendered as a viewer without front
     // matter support would; `inline` and `wikilink` (when present) are the
     // input as a single-line field and as a wikilink; each `joinedN` is the
-    // output followed by another neutralized fragment.
+    // output followed by another neutralized fragment; `summary` and
+    // `summaryWikilink` are the body of a summary file (render_summary) with
+    // every agent field set to the input, in each link style, and
+    // `frontmatter_summary*` that file's front matter.
     for (const [kind, document] of Object.entries(documents)) {
       // Everything but front matter must render with no code or math.
-      const body = kind !== "frontmatter";
-      const line = kind === "inline" || kind === "wikilink";
+      const body = !kind.startsWith("frontmatter");
+      // A summary body joins single-line fields and wikilinks, placed after
+      // host text, with neutralized text at line starts: its raw form must
+      // hold no backtick or `$`, and its rendering is checked like the rest.
+      const line = kind === "inline" || kind === "wikilink" || kind.startsWith("summary");
       if (body) {
         const found = line ? lineRawProblems(document, kind === "inline") : rawProblems(document);
         if (found.length > 0) {

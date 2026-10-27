@@ -7,7 +7,12 @@
 //! and `markdown::wikilink`, so it runs unchanged against an older
 //! `markdown.rs`.
 
-use crate::markdown::{inline, neutralize_remote, wikilink, yaml_string};
+use crate::answer::{Entities, Importance, SummaryAnswer};
+use crate::markdown::{LinkStyle, inline, neutralize_remote, wikilink, yaml_string};
+use crate::presentation::plain_line;
+use crate::summary::{SessionLink, SummaryDocument, owned_summary, render_summary};
+use crate::vault::url_record_key;
+use brauser_protocol::{HarnessId, ImportanceLevel};
 
 const CORPUS: &str = include_str!("../tests/fixtures/markdown-neutralize-corpus.json");
 
@@ -168,6 +173,56 @@ struct Case {
     wikilink: String,
     /// The output followed by each neutralized `FOLLOWERS` fragment.
     joined: Vec<String>,
+    /// A summary file with every agent field set to the input, in the
+    /// relative and wikilink styles.
+    summaries: [String; 2],
+}
+
+/// A summary file whose agent fields and title are all `input`.
+fn summary_file(input: &str, style: LinkStyle) -> String {
+    let answer = SummaryAnswer {
+        document_type: input.into(),
+        category: input.into(),
+        entities: Entities {
+            technologies: vec![input.into()],
+            products: vec![input.into(), "Widget".into()],
+            people: vec![input.into()],
+            companies: vec![input.into()],
+        },
+        description: input.into(),
+        importance: Importance {
+            level: ImportanceLevel::Medium,
+            reason: input.into(),
+        },
+        assessment: input.into(),
+        related_notes: vec![input.into(), "projects/widget.md".into()],
+    };
+    let key = url_record_key(SUMMARY_URL).unwrap();
+    let note_link = match style {
+        LinkStyle::Relative => "[Page note](../notes/e-example-a.md)".to_owned(),
+        LinkStyle::Wikilink => wikilink("notes/e-example-a", Some("Page note")),
+    };
+    render_summary(
+        &SummaryDocument {
+            key: &key,
+            canonical_url: SUMMARY_URL,
+            title: input,
+            summarized_at: "2026-10-26T14:05:00-07:00",
+            harness: HarnessId::Codex,
+            session: SessionLink::CodexThread(input.into()),
+            note_link,
+            answer: &answer,
+        },
+        style,
+    )
+}
+
+const SUMMARY_URL: &str = "https://e.example/a";
+
+/// A rendered summary's frontmatter (with its fences) and body.
+fn split_summary(file: &str) -> (&str, &str) {
+    let end = "---\n".len() + file["---\n".len()..].find("\n---\n").unwrap() + "\n---\n".len();
+    file.split_at(end)
 }
 
 #[test]
@@ -183,6 +238,10 @@ fn the_corpus_comes_out_inert() {
                     .collect(),
                 frontmatter: format!("---\ntitle: {}\n---\n", yaml_string(&input)),
                 inline: inline(&input, 2048),
+                summaries: [
+                    summary_file(&input, LinkStyle::Relative),
+                    summary_file(&input, LinkStyle::Wikilink),
+                ],
                 wikilink: wikilink(&input, Some(&input)),
                 output,
                 input,
@@ -205,6 +264,13 @@ fn the_corpus_comes_out_inert() {
                 for (index, joined) in case.joined.iter().enumerate() {
                     pair[format!("joined{index}")] = joined.clone().into();
                 }
+                // The summary body is checked as body text; its frontmatter
+                // as front matter.
+                for (name, file) in ["summary", "summaryWikilink"].iter().zip(&case.summaries) {
+                    let (frontmatter, body) = split_summary(file);
+                    pair[*name] = body.into();
+                    pair[format!("frontmatter_{name}")] = frontmatter.into();
+                }
                 pair
             })
             .collect();
@@ -217,8 +283,38 @@ fn the_corpus_comes_out_inert() {
         inline,
         wikilink,
         joined,
+        summaries,
     } in &cases
     {
+        // A summary file keeps its identity and hands nothing to another
+        // engine, whatever the agent wrote; its frontmatter values read back
+        // as the input's plain line.
+        let key = url_record_key(SUMMARY_URL).unwrap();
+        for file in summaries {
+            assert!(owned_summary(file.as_bytes(), &key), "{file:?}");
+            let (front, body) = split_summary(file);
+            for raw in ["`", "$"] {
+                assert!(
+                    !body.contains(raw),
+                    "raw {raw:?} in {body:?} from {input:?}"
+                );
+            }
+            for (at, _) in body.match_indices("![") {
+                assert!(
+                    escaped(body, at),
+                    "unescaped '![' in {body:?} from {input:?}"
+                );
+            }
+            assert!(!front.contains('<') && !front.contains("!["), "{front:?}");
+            let title = front
+                .lines()
+                .find_map(|line| line.strip_prefix("title: "))
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<String>(title).unwrap(),
+                plain_line(input, 2048)
+            );
+        }
         for text in std::iter::once(output).chain(joined) {
             assert!(!text.contains('<'), "raw '<' in {text:?} from {input:?}");
             // Nothing can open a code span, fence, indented code block or
