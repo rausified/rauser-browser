@@ -225,6 +225,21 @@ pub(crate) fn parse_envelope(body: &[u8]) -> std::result::Result<(String, Reques
     }
 }
 
+fn config_result(config: &mut ConfigStore, request_id: String) -> Response {
+    let adapter_warnings = config.adapter_warnings().to_vec();
+    Response::ConfigResult(ConfigResult {
+        protocol_version: PROTOCOL_VERSION,
+        request_id,
+        config: config.snapshot().clone(),
+        revision: config.revision().to_owned(),
+        config_issue: config.config_issue().map(str::to_owned),
+        agent_status: config.agent_status(),
+        adapter_issue: config.adapter_issue().map(str::to_owned),
+        adapter_warnings,
+        adopted_state: config.adopted_state(),
+    })
+}
+
 fn valid_request_id(id: &str) -> bool {
     !id.is_empty()
         && id.chars().count() <= MAX_REQUEST_ID_CHARS
@@ -288,17 +303,36 @@ fn dispatch(
             // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
             config.migrate_layout_or_warn();
-            let adapter_warnings = config.adapter_warnings().to_vec();
-            Response::ConfigResult(ConfigResult {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: value.request_id,
-                config: config.snapshot().clone(),
-                revision: config.revision().to_owned(),
-                config_issue: config.config_issue().map(str::to_owned),
-                agent_status: config.agent_status(),
-                adapter_issue: config.adapter_issue().map(str::to_owned),
-                adapter_warnings,
-            })
+            // Under the lock, the refresh also records the current adapter
+            // contracts, so `adopted_state` reports this host's own attempt.
+            match config.lock_current() {
+                Ok(_config_lock) => {
+                    let _ = config.refresh();
+                }
+                Err(lock_error) => {
+                    let _ = config.refresh();
+                    config.warn_adopted_unrecorded(&lock_error);
+                }
+            }
+            config_result(config, value.request_id)
+        }
+        Request::ForgetAdoptedContracts(value) => {
+            match config.forget_adopted_contracts(&value.expected_revision) {
+                Ok(true) => config_result(config, value.request_id),
+                Ok(false) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "the record of adopted adapters changed; read the settings again before forgetting it",
+                ),
+                Err(forget_error) => {
+                    eprintln!("{NAMESPACE}: could not forget adopted adapters: {forget_error:#}");
+                    error(
+                        &value.request_id,
+                        ErrorCode::Internal,
+                        "could not back up and replace the record of adopted adapters",
+                    )
+                }
+            }
         }
         Request::UpdateConfig(value) => {
             if config.refresh().is_err() {
@@ -316,6 +350,7 @@ fn dispatch(
                 );
             }
             if let Err(validation_error) = validate_config_update(config.snapshot(), &value.config)
+                .and_then(|()| config.validate_strip_params(&value.config))
             {
                 return error(
                     &value.request_id,
@@ -370,9 +405,15 @@ fn dispatch(
                 ),
                 // Saving the same home folder moves its older folders first;
                 // a refusal says which folder is in the way.
-                Err(save_error) => match save_error.downcast_ref::<crate::layout::Refusal>() {
-                    Some(refusal) => error(&value.request_id, ErrorCode::InvalidConfig, &refusal.0),
-                    None => error(
+                Err(save_error) => match (
+                    save_error.downcast_ref::<crate::layout::Refusal>(),
+                    save_error.downcast_ref::<config::StripParamsRefusal>(),
+                ) {
+                    (Some(crate::layout::Refusal(message)), _)
+                    | (_, Some(config::StripParamsRefusal(message))) => {
+                        error(&value.request_id, ErrorCode::InvalidConfig, message)
+                    }
+                    _ => error(
                         &value.request_id,
                         ErrorCode::Internal,
                         "could not save configuration",
@@ -520,6 +561,17 @@ fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
             "The Brauser service cannot be reached from this configuration folder.",
         );
     };
+    // The service reads frames under the same cap as the extension's, but a
+    // forwarded request can be larger than the one received: start_run gains
+    // its record_key here. Refuse it now, before connecting (which can start
+    // the service), rather than failing the write as a protocol error.
+    if !crate::frame::request_fits(request) {
+        let message = match request {
+            Request::StartRun(_) => "This page is too large to send to the Brauser service.",
+            _ => "This request is too large to send to the Brauser service.",
+        };
+        return error(id, ErrorCode::MessageTooLarge, message);
+    }
     match service.request(request) {
         Ok(response) => response,
         Err(ServiceError::Unavailable(message)) => {
@@ -2350,6 +2402,56 @@ mod tests {
         assert_eq!(config.revision(), revision);
     }
 
+    /// brwr-f4s: a strip_params entry an adapter rule reads is refused as
+    /// invalid_config naming the parameter and the adapter, and the config
+    /// is unchanged.
+    #[test]
+    fn update_config_refuses_stripping_a_parameter_an_adapter_reads() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let mut consent = ConsentAuthority::new();
+        let context = SetupContext::new();
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.push(serde_json::json!({
+            "type": "jira.issue",
+            "origin": "https://acme.atlassian.net",
+            "match": [{"path": "/jira/{*}", "query": {"selectedIssue": "{key:jira_key}"}}],
+            "id": "jira:{host}/{key}",
+        }));
+        let revision = config.revision().to_owned();
+        assert!(matches!(
+            dispatch(
+                update_request(&revision, next),
+                &mut config,
+                &mut consent,
+                &context
+            ),
+            Response::ConfigUpdated(_)
+        ));
+        let revision = config.revision().to_owned();
+        let mut next = config.snapshot().clone();
+        next.strip_params.push("selected*".into());
+        match dispatch(
+            update_request(&revision, next),
+            &mut config,
+            &mut consent,
+            &context,
+        ) {
+            Response::Error(value) => {
+                assert_eq!(value.code, ErrorCode::InvalidConfig);
+                assert!(
+                    value.message.contains("\"selectedIssue\""),
+                    "{}",
+                    value.message
+                );
+                assert!(value.message.contains("jira.issue"), "{}", value.message);
+            }
+            other => panic!("expected invalid_config, got {other:?}"),
+        }
+        assert_eq!(config.revision(), revision);
+        assert!(config.snapshot().strip_params.is_empty());
+    }
+
     fn configured_store(root: &std::path::Path) -> ConfigStore {
         let mut store = ConfigStore::for_test(root.join("config.toml"));
         let snapshot = brauser_protocol::ConfigSnapshot {
@@ -3523,7 +3625,7 @@ id = "jira.board:{host}/{id}"
             let named = |message: &str| {
                 message.starts_with("Notes on this page are paused to protect note identity")
                     && message.contains(&state.display().to_string())
-                    && message.contains("Move adopted-contracts.json aside")
+                    && message.contains("Forget recorded adapters")
             };
             let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal && named(&reply.message));
             let loaded_board = load_note(
@@ -3550,10 +3652,48 @@ id = "jira.board:{host}/{id}"
                 RecordKeyKind::Artifact
             );
 
-            // Moving the file aside, as the message says, forgets the board
-            // contract: the board gets its URL note again, and the artifact
-            // note stays untouched on disk.
-            std::fs::rename(&state, folder.path().join("adopted-contracts.json.bak")).unwrap();
+            // Settings is shown the same problem, and its Forget recorded
+            // adapters repair forgets the board contract: the board gets its
+            // URL note again, and the artifact note stays untouched on disk.
+            let call = |config: &mut ConfigStore, request| {
+                dispatch(
+                    request,
+                    config,
+                    &mut ConsentAuthority::new(),
+                    &SetupContext::new(),
+                )
+            };
+            let get = |config: &mut ConfigStore| match call(
+                config,
+                Request::GetConfig(brauser_protocol::GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "read".into(),
+                }),
+            ) {
+                Response::ConfigResult(result) => result,
+                other => panic!("expected config_result, got {other:?}"),
+            };
+            let forget = |revision: &str| {
+                Request::ForgetAdoptedContracts(brauser_protocol::ForgetAdoptedContractsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "forget".into(),
+                    expected_revision: revision.into(),
+                })
+            };
+            let shown = get(&mut config).adopted_state;
+            let issue = shown.issue.expect("settings names the damaged record");
+            assert!(issue.contains(&state.display().to_string()), "{issue}");
+            assert!(
+                matches!(call(&mut config, forget("sha256:stale")), Response::Error(reply) if reply.code == ErrorCode::Conflict)
+            );
+            assert_eq!(std::fs::read(&state).unwrap(), b"{");
+            match call(&mut config, forget(&shown.revision)) {
+                Response::ConfigResult(result) => {
+                    assert_eq!(result.request_id, "forget");
+                    assert_eq!(result.adopted_state.issue, None);
+                }
+                other => panic!("expected config_result, got {other:?}"),
+            }
             let reloaded = note_load(&mut config, BOARD);
             assert_eq!(reloaded.key, crate::vault::url_record_key(BOARD).unwrap());
             assert!(!reloaded.exists);
@@ -3562,6 +3702,41 @@ id = "jira.board:{host}/{id}"
                 board_bytes
             );
         }
+    }
+
+    /// get_config records adopted contracts under the config lock; when it
+    /// cannot take the lock, settings is told protection is degraded rather
+    /// than shown a healthy record.
+    #[test]
+    fn get_config_warns_when_it_cannot_lock_to_record_adopted_contracts() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(&path, &root, "");
+        std::fs::create_dir(folder.path().join(".config.lock")).unwrap();
+        let mut config = loaded(&path);
+        let response = dispatch(
+            Request::GetConfig(GetConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "read".into(),
+            }),
+            &mut config,
+            &mut ConsentAuthority::new(),
+            &SetupContext::new(),
+        );
+        let Response::ConfigResult(result) = response else {
+            panic!("expected config_result, got {response:?}");
+        };
+        assert_eq!(result.adopted_state.warnings.len(), 1);
+        assert!(
+            result.adopted_state.warnings[0].contains("configuration lock"),
+            "{:?}",
+            result.adopted_state.warnings
+        );
+        // Forgetting needs the same lock, so it is not offered.
+        assert!(!result.adopted_state.full);
+        assert!(!result.adopted_state.warnings[0].contains("Forget"));
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the
@@ -6664,7 +6839,20 @@ id = "work:{host}/{id}"
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
             let link = link(fake::socket_in(&dir), never);
-            for requested_at in ["yesterday", "2026-10-26 00:00:00Z", "2001-01-01T00:00:00Z"] {
+            // A current time with fractional seconds, as new Date().toISOString()
+            // gives, is refused too: the schema's pattern admits whole seconds only.
+            let fractional = time::OffsetDateTime::now_utc()
+                .replace_millisecond(452)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            assert!(fractional.ends_with(".452Z"), "{fractional}");
+            for requested_at in [
+                "yesterday",
+                "2026-10-26 00:00:00Z",
+                "2001-01-01T00:00:00Z",
+                fractional.as_str(),
+            ] {
                 let response = call(
                     &mut config,
                     &link,
@@ -6709,6 +6897,79 @@ id = "work:{host}/{id}"
             }
         }
 
+        /// A start_run whose content brings its serialized size, as the
+        /// forwarded request (with `record_key` set to `key`), to `target`.
+        /// Content uses four-byte characters so a frame-sized request stays
+        /// within MAX_CONTENT_CHARS.
+        fn start_run_sized(url: &str, key: Option<RecordKey>, target: usize) -> StartRunRequest {
+            let Request::StartRun(mut value) = start_run(url, None, &now()) else {
+                unreachable!()
+            };
+            value.content = String::new();
+            let mut measured = value.clone();
+            measured.record_key = key;
+            let base = serde_json::to_vec(&Request::StartRun(measured))
+                .unwrap()
+                .len();
+            let bytes = target - base;
+            value.content = format!("{}{}", "😀".repeat(bytes / 4), "x".repeat(bytes % 4));
+            assert!(
+                value.content.chars().count() <= crate::service::record::MAX_CONTENT_CHARS,
+                "the content must pass check_start_run"
+            );
+            value
+        }
+
+        /// A start_run that fits the extension's frame but not the service's
+        /// once the host adds `record_key` is refused as too large before the
+        /// service is contacted (or started), not reported as a broken reply.
+        #[test]
+        fn start_run_too_large_once_keyed_is_refused_without_connecting() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            use crate::frame::MAX_INBOUND_BYTES;
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a";
+            let key = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+
+            let inbound = start_run_sized(url, None, MAX_INBOUND_BYTES - 20);
+            assert_eq!(
+                serde_json::to_vec(&Request::StartRun(inbound.clone()))
+                    .unwrap()
+                    .len(),
+                MAX_INBOUND_BYTES - 20
+            );
+            let one_over = start_run_sized(url, Some(key.clone()), MAX_INBOUND_BYTES + 1);
+            for request in [inbound, one_over] {
+                let response = call(&mut config, &link, Request::StartRun(request));
+                let (code, message) = refused(&response);
+                assert_eq!(code, ErrorCode::MessageTooLarge, "{message}");
+                assert!(message.contains("too large"), "{message}");
+                assert_eq!(response.request_id(), "run-1");
+            }
+            assert!(
+                service.requests().is_empty(),
+                "the service was contacted: {:?}",
+                service.requests().len()
+            );
+
+            // Exactly at the cap once keyed, it is forwarded.
+            let at_cap = start_run_sized(url, Some(key.clone()), MAX_INBOUND_BYTES);
+            match call(&mut config, &link, Request::StartRun(at_cap)) {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, key),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(requests[0], Request::ServiceHello(_)));
+            assert!(matches!(requests[1], Request::StartRun(_)));
+        }
+
         #[test]
         fn start_run_key_errors_are_reported_without_connecting() {
             let empty = tempfile::tempdir().unwrap();
@@ -6724,6 +6985,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn not_installed_service_gives_service_unavailable() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();

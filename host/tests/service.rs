@@ -455,6 +455,9 @@ fn service_exits_when_idle() {
 
 #[test]
 fn without_spawn_seam_host_reports_service_unavailable() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let mut world = World::new();
     world.spawn = false;
     let reply = world.call_once(json!({"type": "list_runs"}));

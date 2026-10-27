@@ -16,6 +16,7 @@ import {
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
+import { AdoptedStateControls } from "./adopted-state-settings.js";
 import { hostBuildText } from "./build-info.js";
 import {
   SETUP_WARNING,
@@ -34,6 +35,7 @@ import {
   overlapText,
   parseAdapterJson,
   previewDocument,
+  stripParamConflicts,
   validateAdapterDocument,
   type AdapterObject,
 } from "./adapter-review.js";
@@ -62,6 +64,7 @@ const pauseButton = element<HTMLButtonElement>("pause-capture");
 const resumeButton = element<HTMLButtonElement>("resume-capture");
 const sitesList = element<HTMLUListElement>("sites-list");
 const adapterOverlaps = element<HTMLDivElement>("adapter-overlaps");
+const stripConflicts = element<HTMLDivElement>("strip-conflicts");
 const adapterList = element<HTMLDivElement>("adapter-list");
 const newAdapterButton = element<HTMLButtonElement>("new-adapter");
 const resetAdaptersButton = element<HTMLButtonElement>("reset-adapters");
@@ -124,6 +127,9 @@ const SKIPS_UNLINKABLE_RULES = "Some existing pull request or issue rules can't 
 const session = new ConfigSession(renderConfig, () => {
   picker = null;
 });
+// Assigned once the session exists; the session's first change can come first.
+let adoptedState: AdoptedStateControls | null = null;
+adoptedState = new AdoptedStateControls(session, show);
 
 // The header names the host process that answered. Another one, possibly
 // from a rebuilt binary, starts on the next call after it exits.
@@ -153,11 +159,18 @@ function showConfigState(): void {
   const config = session.config;
   const policyIssue = session.configIssue ?? session.adapterIssue;
   const problem = setupProblem(config, policyIssue);
+  const stripCount = config ? stripParamConflicts(config.strip_params, config.adapters).length : 0;
   if (policyIssue) show(problem!, true);
   else if (problem) show(`${problem} Choose a folder, then add an adapter for each site you want logged.`);
   else if (!config) return;
   else if (!siteOrigins(config.adapters).length) {
     show("No site has an adapter yet. Enter a site address, then save a starter or add an adapter to start capturing.");
+  }
+  else if (stripCount) {
+    show(
+      `${captureStateText(config)} ${stripCount} tracking-parameter entr${stripCount === 1 ? "y strips a parameter" : "ies strip parameters"} an adapter reads; see Artifact adapters.`,
+      true,
+    );
   }
   else if (session.adapterWarnings.length) {
     const count = session.adapterWarnings.length;
@@ -206,6 +219,9 @@ function updateControls(): void {
   newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters;
   resetAdaptersButton.disabled = !connected || busy || repairing || !repairingAdapters;
   refreshArtifactsButton.disabled = !connected || busy || repairing || !session.config?.storage;
+  for (const button of stripConflicts.querySelectorAll("button")) {
+    button.disabled = !connected || busy || repairing;
+  }
   for (const button of adapterList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters || button.dataset.boundary === "true";
   }
@@ -464,6 +480,23 @@ function renderAdapters(): void {
   adapterOverlaps.replaceChildren();
   for (const warning of session.adapterWarnings) {
     addText(adapterOverlaps, "p", overlapText(warning, adapters));
+  }
+
+  stripConflicts.replaceChildren();
+  for (const conflict of session.config
+    ? stripParamConflicts(session.config.strip_params, session.config.adapters)
+    : []) {
+    const notice = document.createElement("p");
+    notice.textContent = `Tracking-parameter entry ${conflict.entry} strips ${conflict.params.join(", ")}, ` +
+      `which ${conflict.adapters.join(" and ")} reads to tell pages apart. Their stored addresses look the same, ` +
+      "so notes on them can mix. Saves that add entries like this are refused.";
+    const fix = document.createElement("button");
+    fix.type = "button";
+    fix.className = "secondary compact";
+    fix.textContent = `Stop stripping ${conflict.entry}`;
+    fix.addEventListener("click", () => void stopStripping(conflict.entry));
+    notice.append(" ", fix);
+    stripConflicts.append(notice);
   }
 
   adapterList.replaceChildren();
@@ -776,6 +809,27 @@ function misordered(adapters: AdapterDocument["artifacts"]): boolean {
   return orderContainedFirst(adapters).some((adapter, at) => adapter !== adapters[at]);
 }
 
+/** Remove one strip_params entry an adapter reads, leaving everything else
+ * as the host last returned it, in one revision-checked save. */
+async function stopStripping(entry: string): Promise<void> {
+  if (busy || !session.config || session.configIssue) return;
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      strip_params: session.config!.strip_params.filter((value) => value !== entry),
+    }, null));
+    show(`${captureStateText(session.config!)} ${APP_NAME} no longer strips ${entry} from stored addresses.`);
+  } catch (error) {
+    show(`Could not stop stripping ${entry}: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
 async function moveAdapter(index: number, offset: -1 | 1): Promise<void> {
   const config = session.config;
   const target = index + offset;
@@ -820,6 +874,7 @@ function renderConfig(): void {
   }
   renderStarterGallery();
   renderAdapters();
+  adoptedState?.render();
   renderAgent();
   if (adapterEdit === null) updateControls();
   else refreshAdapterEditor();

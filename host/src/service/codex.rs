@@ -501,6 +501,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let bin = dir.path().join("bin");
             std::fs::create_dir(&bin).unwrap();
+            // Explicit modes: the harness checks reject a group-writable
+            // directory, and the default umask is 002 on some Linux setups.
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
             std::fs::create_dir(dir.path().join("kb")).unwrap();
             let log = dir.path().display();
             let script = format!(

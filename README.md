@@ -41,7 +41,7 @@ npm run test:scripts
 3. Register the development host for that ID: run `node scripts/register-dev-host.mjs YOUR_EXTENSION_ID "$(pwd)/target/debug/brauser"` after replacing `YOUR_EXTENSION_ID`. On macOS this also registers the development Brauser service as a per-user LaunchAgent (`~/Library/LaunchAgents/com.rauser.brauser.service.plist`, logging to `~/Library/Logs/Brauser/service.log`) for the same binary. Run it again after a rebuild: it boots out the registered service and bootstraps it again, replacing it. Add `--no-service` to register only the native host, and run `node scripts/register-dev-host.mjs --unregister-service` to remove the development service. The service starts only when the host asks for it.
 4. Open the Brauser side panel (the toolbar button opens it). Until setup is complete it warns that Brauser isn't set up; click the gear icon or **Open settings** to open settings in a tab and choose a home folder. Brauser writes only inside it, in fixed folders it creates as needed (`notes/`, `logs/`, `artifacts/`, `summaries/`, and `later/`); its settings, index, and recovery files stay in the OS application folders. An install from before this layout is moved once, automatically: `pages/` becomes `notes/` and `log/` becomes `logs/`. If one of the fixed folders already exists beside the older one, nothing moves and settings says which folder to move out of the way (DESIGN.md §6.1).
 5. On a Jira Cloud, SharePoint/OneDrive, or GitHub page, return to the panel and click **Capture Site**. Review what it remembers, whether the current page matches, and the safety-check results, then save without opening JSON. GitHub asks separately for the work organizations whose pull requests and issues to remember; uncheck a kind you do not need. The first site starts capture; adding a site while capture is paused keeps it paused. These are development starter drafts pending live-tool certification.
-6. Manage existing site rules in settings. Unknown-site automatic drafting is still in development; for other tools, enter a site URL and save an adapter in settings. A site is on exactly when it has an adapter. Settings also offers the same starter drafts in its advanced rule editor, with a match and safety-probe preview before saving.
+6. Manage existing site rules in settings. Unknown-site automatic drafting is still in development; for other tools, enter a site URL and save an adapter in settings. A site is on exactly when it has an adapter. Settings also offers the same starter drafts in its advanced rule editor, with a match and safety-probe preview before saving. A tracking-parameter entry (`strip_params` in config.toml) may not strip a query parameter an adapter reads: Brauser refuses a save that would add one, and if config.toml already has one, settings names it and offers **Stop stripping**, which removes just that entry.
 
 ### Set up a summary harness and Summarize & log
 
@@ -93,10 +93,15 @@ too: the host records every adapter it has used in `adopted-contracts.json`
 beside config.toml and reads removed ones from there. Settings will not add an
 adapter that gives a removed one's pages a different artifact ID or type.
 If that file is damaged, notes on pages no current adapter recognizes refuse
-to load or save, and settings refuses to add adapters, until it is fixed or
-moved aside; the panel's message names the file. Moving it aside forgets
-those adapters, so notes from adapters removed by hand may need **Use as
-artifact note** again. Notes alone do not turn capture back on.
+to load or save, and settings refuses to add adapters, until it is repaired.
+Settings names the file and offers **Forget recorded adapters**, which asks
+in the page, backs the file up beside it, and starts a fresh record; the
+panel's message points there. Forgetting drops those adapters, so notes
+from adapters removed by hand may need **Use as artifact note** again. If
+Brauser cannot record an adapter (the record is full or cannot be written),
+settings shows a warning; nothing is blocked. For a full record it also
+offers **Forget recorded adapters**. Notes alone do not turn
+capture back on.
 
 Expand **Page patterns** in the panel and choose **Review page patterns** to
 inspect the current address and same-site link patterns, including on sites

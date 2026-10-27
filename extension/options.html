@@ -60,6 +60,17 @@
         </div>
 
         <div id="adapter-overlaps" class="adapter-notices" role="status"></div>
+        <div id="strip-conflicts" class="adapter-notices" role="status"></div>
+        <div id="adopted-state" class="adapter-notices" role="status" hidden>
+          <p id="adopted-issue"></p>
+          <ul id="adopted-warnings" class="plain-list"></ul>
+          <button id="forget-adopted" type="button" class="secondary" hidden>Forget recorded adapters…</button>
+          <div id="forget-adopted-confirm" hidden>
+            <p>{{APP_NAME}} will back the record up beside it and start a fresh one from the adapters you have now. Notes on pages those adapters do not recognize work again. Adapters you removed from config.toml by hand are forgotten, so their notes may need <strong>Use as artifact note</strong> again.</p>
+            <button id="forget-adopted-yes" type="button">Forget and keep a backup</button>
+            <button id="forget-adopted-no" type="button" class="secondary">Keep the record</button>
+          </div>
+        </div>
         <div id="adapter-list" class="adapter-list"><p>No adapters configured.</p></div>
         <button id="new-adapter" type="button" class="secondary" disabled>Add adapter…</button>
         <button id="reset-adapters" type="button" class="secondary" hidden disabled>Remove all adapter rules</button>

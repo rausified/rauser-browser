@@ -343,11 +343,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let empty = dir.path().join("bin");
         std::fs::create_dir(&empty).unwrap();
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o755)).unwrap();
         // `claude` is found only under the run's $HOME/.local/bin, so a
         // found claude proves that HOME was searched. It is never run.
         let home = dir.path().join("home");
         let local_bin = home.join(".local").join("bin");
         std::fs::create_dir_all(&local_bin).unwrap();
+        // Explicit mode: a umask of 002 would leave it group-writable.
+        std::fs::set_permissions(&local_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         let claude = local_bin.join("claude");
         std::fs::write(&claude, "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -418,6 +421,8 @@ mod tests {
     /// records that it was started, then exits.
     fn marking_fake(dir: &Path, program: &str, version: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
+        // Explicit mode: a umask of 002 would leave it group-writable.
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = dir.join(program);
         let mark = dir.join("started");
         std::fs::write(

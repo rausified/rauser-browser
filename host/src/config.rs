@@ -2,6 +2,7 @@
 //! An update is validated in full before the old file is atomically replaced.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -54,6 +55,8 @@ pub(crate) const DEFAULT_SUMMARIES_DIR: &str = "summaries";
 const MISSING_REVISION: &str = "missing";
 /// Never a real revision, so no update can be based on an unreadable file.
 const UNREADABLE_REVISION: &str = "unreadable";
+/// The adopted-contract state's revision when its path is not a regular file.
+const NOT_A_FILE_REVISION: &str = "not-a-file";
 /// Hash at most this much of an oversized config. Past it, the revision
 /// also covers the length so a growing file still changes revision.
 const MAX_HASHED_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
@@ -66,7 +69,7 @@ const MAX_ADOPTED_CONTRACTS_BYTES: usize = 1024 * 1024;
 const ADOPTED_CONTRACTS_FORMAT: u32 = 1;
 /// How the user repairs an adopted-contract state file the host cannot use.
 /// Moving it aside forgets its contracts, like a config repair.
-const ADOPTED_CONTRACTS_REPAIR: &str = "Move adopted-contracts.json aside (rename it, keeping a backup) or fix it to restore notes on pages the current adapters do not recognize; once it is moved aside, notes from adapters removed by hand may need Use as artifact note again.";
+const ADOPTED_CONTRACTS_REPAIR: &str = "Choose Forget recorded adapters in Brauser settings, which backs the file up and starts a fresh record, or fix the file, to restore notes on pages the current adapters do not recognize; once it is forgotten, notes from adapters removed by hand may need Use as artifact note again.";
 
 /// The host-owned record of every adapter contract a host has adopted under
 /// the config lock (see `AdoptedContracts`). It lives beside config.toml in
@@ -130,6 +133,11 @@ pub struct ConfigStore {
     /// This revision's contracts in recordable form, computed on the first
     /// refresh under the lock.
     recordable: Option<Vec<serde_json::Value>>,
+    /// Why the last attempt under the lock to record them failed, until one
+    /// succeeds; reported in `adopted_state().warnings`.
+    adopted_warning: Option<String>,
+    /// That failure was the record's bound, which forgetting repairs.
+    adopted_full: bool,
 }
 
 /// The config lock from `ConfigStore::lock_current`. While it is alive,
@@ -470,6 +478,8 @@ impl ConfigStore {
             // Never equal to a read state, so the first adopt compiles rules.
             adopted: AdoptedContracts::Unread,
             recordable: None,
+            adopted_warning: None,
+            adopted_full: false,
         }
     }
 
@@ -507,14 +517,34 @@ impl ConfigStore {
                 .recordable
                 .get_or_insert_with(|| individually_valid_adapter_contracts(&self.config));
             match record_adopted_contracts(&path, recordable) {
-                Ok(adopted) => adopted,
+                Ok(adopted) => {
+                    self.adopted_warning = None;
+                    self.adopted_full = false;
+                    adopted
+                }
                 // The contracts stay current, so a later refresh retries.
                 // Until then a hand removal of one leaves its pages on URL
-                // keys (DESIGN.md §6.2).
+                // keys (DESIGN.md §6.2), which settings reports.
                 Err(error) => {
                     eprintln!(
                         "{NAMESPACE}: warning: could not record adopted adapter contracts: {error:#}"
                     );
+                    let state = path.display();
+                    self.adopted_full = error.downcast_ref::<RecordFull>().is_some();
+                    self.adopted_warning = Some(match error.downcast_ref::<RecordFull>() {
+                        Some(full) => format!(
+                            "Brauser's record of the adapters it has used ({state}) is full (1,024 adapters or 1 MiB), so {} in use {} not recorded. If one of them is removed from config.toml by hand, its pages fall back to URL notes. Forget recorded adapters starts a fresh record.",
+                            if full.unrecorded == 1 {
+                                "1 adapter".to_owned()
+                            } else {
+                                format!("{} adapters", full.unrecorded)
+                            },
+                            if full.unrecorded == 1 { "is" } else { "are" },
+                        ),
+                        None => format!(
+                            "Brauser's record of the adapters it has used ({state}) could not be updated: {error:#}. Until it can be, an adapter removed from config.toml by hand leaves its pages on URL notes."
+                        ),
+                    });
                     read_adopted_contracts(&path)
                 }
             }
@@ -610,6 +640,119 @@ impl ConfigStore {
         format!(
             "Notes on this page are paused to protect note identity: Brauser's record of the adapters it has used ({state}) cannot be read. {ADOPTED_CONTRACTS_REPAIR}"
         )
+    }
+
+    /// The adopted-contract record as settings shows it: an issue while it
+    /// cannot be used (notes on pages the current adapters do not recognize
+    /// are paused), warnings while recording fails, and its revision for
+    /// `forget_adopted_contracts`.
+    pub(crate) fn adopted_state(&self) -> brauser_protocol::AdoptedState {
+        let state = self.adopted_contracts_display();
+        let paused = "Notes on pages the current adapters do not recognize are paused to protect note identity. Forget recorded adapters backs the file up and starts a fresh record; notes from adapters removed by hand may then need Use as artifact note again.";
+        let (revision, issue) = match &self.adopted {
+            AdoptedContracts::Unread => (MISSING_REVISION.to_owned(), None),
+            AdoptedContracts::Unreadable { revision, reason } => (
+                revision.clone(),
+                Some(format!(
+                    "Brauser's record of the adapters it has used ({state}) {reason}. {paused}"
+                )),
+            ),
+            AdoptedContracts::Read { revision, .. } => {
+                let by_hand =
+                    retired_by_hand(&self.adopted, &self.config, &self.retired_adapter_contracts);
+                let issue = if by_hand.unreadable {
+                    Some(format!(
+                        "Brauser's record of the adapters it has used ({state}) has an entry it cannot read. {paused}"
+                    ))
+                } else if !by_hand.damaged_origins.is_empty() {
+                    // The record can be nearly 1 MiB, so name a bounded few
+                    // origins and keep config_result within one message.
+                    const SHOWN: usize = 5;
+                    const ORIGIN_CHARS: usize = 200;
+                    let mut origins: Vec<String> = by_hand
+                        .damaged_origins
+                        .iter()
+                        .take(SHOWN)
+                        .map(|origin| match origin.char_indices().nth(ORIGIN_CHARS) {
+                            Some((end, _)) => format!("{}…", &origin[..end]),
+                            None => origin.clone(),
+                        })
+                        .collect();
+                    let more = by_hand.damaged_origins.len().saturating_sub(SHOWN);
+                    if more > 0 {
+                        origins.push(format!("{more} more"));
+                    }
+                    Some(format!(
+                        "Brauser's record of the adapters it has used ({state}) has entries it cannot read for {}. {paused}",
+                        origins.join(", ")
+                    ))
+                } else {
+                    None
+                };
+                (revision.clone(), issue)
+            }
+        };
+        brauser_protocol::AdoptedState {
+            issue,
+            revision,
+            warnings: self.adopted_warning.iter().cloned().collect(),
+            full: self.adopted_full,
+        }
+    }
+
+    /// A refresh that could not take the config lock records nothing; say
+    /// so until a locked attempt succeeds.
+    pub(crate) fn warn_adopted_unrecorded(&mut self, error: &anyhow::Error) {
+        // Forgetting needs the same lock, so it cannot help here.
+        self.adopted_full = false;
+        self.adopted_warning = Some(format!(
+            "Brauser could not take its configuration lock to record the adapters it uses in {}: {error:#}. Until it can, an adapter removed from config.toml by hand leaves its pages on URL notes.",
+            self.adopted_contracts_display()
+        ));
+    }
+
+    fn adopted_contracts_display(&self) -> String {
+        self.path.parent().map_or_else(
+            || "adopted-contracts.json".to_owned(),
+            |dir| adopted_contracts_path(dir).display().to_string(),
+        )
+    }
+
+    /// Forget the adopted-contract record the user was shown at
+    /// `expected_revision`: under the config lock, move it aside to
+    /// `adopted-contracts.json.<timestamp>.bak` (never replacing a backup),
+    /// then record the current contracts afresh. Returns false, changing
+    /// nothing, when the record has changed since. Forgetting drops the
+    /// note keys of contracts removed from config.toml by hand, like a
+    /// config repair.
+    pub(crate) fn forget_adopted_contracts(&mut self, expected_revision: &str) -> Result<bool> {
+        let parent = self.dir()?.to_path_buf();
+        let path = adopted_contracts_path(&parent);
+        let _config_lock = self.lock_current()?;
+        let found = read_adopted_contracts(&path);
+        let revision = match &found {
+            AdoptedContracts::Unread => MISSING_REVISION,
+            AdoptedContracts::Read { revision, .. }
+            | AdoptedContracts::Unreadable { revision, .. } => revision.as_str(),
+        };
+        if revision != expected_revision {
+            self.adopted = found;
+            self.set_note_key_rules();
+            return Ok(false);
+        }
+        if revision != MISSING_REVISION {
+            let backup = adopted_contracts_backup_path(&parent)?;
+            fs::rename(&path, &backup).with_context(|| {
+                format!("moving {} aside to {}", path.display(), backup.display())
+            })?;
+            sync_parent(&parent).context("syncing config directory after backup")?;
+        }
+        self.adopted = AdoptedContracts::Unread;
+        self.adopted_warning = None;
+        self.adopted_full = false;
+        // Still under the lock: the refresh records the current contracts.
+        self.refresh()?;
+        Ok(true)
     }
 
     /// A malformed or newer config is shown to setup, never used for capture.
@@ -891,6 +1034,20 @@ impl ConfigStore {
             return Ok(None);
         }
         validate_update(&current.config, &next)?;
+        // Another host may have recorded contracts since this one last read
+        // the state file.
+        let adopted = read_adopted_contracts(&adopted_contracts_path(&parent));
+        validate_strip_params_readers(
+            &current.config,
+            &next,
+            &recorded_readers(
+                &current.retired_adapter_contracts,
+                &adopted,
+                &current.config,
+                &next,
+                &adopted_contracts_path(&parent),
+            )?,
+        )?;
         let adapters_unchanged = current.config.adapters == next.adapters;
         let empty_adapter_document = AdapterDocument {
             format: 1,
@@ -1586,6 +1743,23 @@ fn sweep_config_temporaries(parent: &Path) -> Result<usize> {
     Ok(removed)
 }
 
+/// `revision_for` of a whole file, read in chunks.
+fn streamed_revision(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = RevisionHasher::new();
+    let mut total = 0u64;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let count = file.read(&mut chunk)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&chunk[..count]);
+        total += count as u64;
+    }
+    Ok(hasher.finish(total))
+}
+
 fn revision_for(contents: &[u8]) -> String {
     let mut hasher = RevisionHasher::new();
     hasher.update(contents);
@@ -1712,6 +1886,230 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
         validate_storage(storage)?;
     }
     Ok(())
+}
+
+/// A save refused because a `strip_params` entry would remove a query
+/// parameter an adapter rule reads. Native dispatch reports it as
+/// `invalid_config` with this message.
+#[derive(Debug)]
+pub(crate) struct StripParamsRefusal(pub String);
+
+impl fmt::Display for StripParamsRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StripParamsRefusal {}
+
+/// A `strip_params` entry that removes a query parameter an adapter rule
+/// reads: a key in a rule's `query` table or `absent` list
+/// (adapter-templates.md §5.3). Path, title, alias, and ref templates never
+/// read the query. Stripped canonical URLs of the pages that rule tells
+/// apart are equal, so recorded URLs and note candidates stop naming one
+/// artifact (DESIGN.md §6.2).
+///
+/// A conflict is one reading rule, so a save that keeps an existing one is
+/// not refused, but a new or changed rule reading the same parameter is.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct StripParamConflict {
+    pub entry: String,
+    pub param: String,
+    pub origin: String,
+    pub artifact_type: String,
+    /// The adapter's `id` template and the reading rule, as JSON.
+    pub reader: String,
+}
+
+/// The query keys an adapter's rules read, each with its rule. Read from
+/// the raw document, so an inert or individually invalid adapter still
+/// counts.
+fn query_keys_read(adapter: &serde_json::Value) -> Vec<(&serde_json::Value, &str)> {
+    let mut keys = Vec::new();
+    for rule in adapter
+        .get("match")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(query) = rule.get("query").and_then(serde_json::Value::as_object) {
+            keys.extend(query.keys().map(|key| (rule, key.as_str())));
+        }
+        keys.extend(
+            rule.get("absent")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(|key| (rule, key)),
+        );
+    }
+    keys
+}
+
+/// Every conflict between `strip_params` and `readers`, keyed with whether
+/// each reader is current (`false`) or recorded only (`true`). A reader
+/// that is both counts as current.
+fn conflicts_with<'a>(
+    strip_params: &[String],
+    readers: impl IntoIterator<Item = (&'a serde_json::Value, bool)>,
+) -> BTreeMap<StripParamConflict, bool> {
+    let mut found = BTreeMap::new();
+    for (adapter, recorded) in readers {
+        let origin = adapter.get("origin").and_then(serde_json::Value::as_str);
+        let artifact_type = adapter.get("type").and_then(serde_json::Value::as_str);
+        let id = adapter.get("id").cloned().unwrap_or_default();
+        for (rule, param) in query_keys_read(adapter) {
+            for entry in strip_params {
+                if crate::capture::matches_param(param, entry) {
+                    let conflict = StripParamConflict {
+                        entry: entry.clone(),
+                        param: param.to_owned(),
+                        origin: origin.unwrap_or("an unknown origin").to_owned(),
+                        artifact_type: artifact_type.unwrap_or("unnamed").to_owned(),
+                        reader: serde_json::json!([id, rule]).to_string(),
+                    };
+                    let slot = found.entry(conflict).or_insert(recorded);
+                    *slot &= recorded;
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The conflicts between `strip_params` and the current adapter document,
+/// as settings shows them (it sees no recorded contracts).
+#[cfg(test)]
+pub(crate) fn strip_param_conflicts(config: &ConfigSnapshot) -> Vec<StripParamConflict> {
+    conflicts_with(
+        &config.strip_params,
+        config
+            .adapters
+            .artifacts
+            .iter()
+            .map(|adapter| (adapter, false)),
+    )
+    .into_keys()
+    .collect()
+}
+
+/// Refuse a save that adds a `strip_params` conflict: a new or changed
+/// entry that removes a parameter some adapter rule reads, or a new or
+/// changed rule reading a parameter an entry removes. `recorded` holds the
+/// contracts that still name note keys without being current
+/// (`[[adapter_id_history]]` and hand-removed adopted contracts); they read
+/// too. A conflict the current config already has is left alone, so an
+/// existing config keeps loading and saving; settings offers to remove the
+/// entry instead (brwr-f4s).
+pub(crate) fn validate_strip_params_readers(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+    recorded: &[serde_json::Value],
+) -> Result<()> {
+    if current.strip_params == next.strip_params && current.adapters == next.adapters {
+        return Ok(());
+    }
+    let recorded = || recorded.iter().map(|contract| (contract, true));
+    let before = conflicts_with(
+        &current.strip_params,
+        current
+            .adapters
+            .artifacts
+            .iter()
+            .map(|adapter| (adapter, false))
+            .chain(recorded()),
+    );
+    // An adapter this save removes moves to [[adapter_id_history]], so it
+    // still reads.
+    let after = conflicts_with(
+        &next.strip_params,
+        next.adapters
+            .artifacts
+            .iter()
+            .map(|adapter| (adapter, false))
+            .chain(
+                current
+                    .adapters
+                    .artifacts
+                    .iter()
+                    .map(|adapter| (adapter, true)),
+            )
+            .chain(recorded()),
+    );
+    let Some((conflict, recorded)) = after
+        .into_iter()
+        .find(|(conflict, _)| !before.contains_key(conflict))
+    else {
+        return Ok(());
+    };
+    let adapter = if recorded {
+        "removed adapter"
+    } else {
+        "adapter"
+    };
+    Err(StripParamsRefusal(format!(
+        "{adapter} {:?} on {} reads the query parameter {:?}, so strip_params cannot remove it with {:?}: pages the adapter tells apart would share one stripped address. Remove {:?} from strip_params or change the adapter.",
+        conflict.artifact_type, conflict.origin, conflict.param, conflict.entry, conflict.entry,
+    ))
+    .into())
+}
+
+impl ConfigStore {
+    /// `validate_strip_params_readers` against this store's last read.
+    pub(crate) fn validate_strip_params(&self, next: &ConfigSnapshot) -> Result<()> {
+        let state = self
+            .path
+            .parent()
+            .map(adopted_contracts_path)
+            .unwrap_or_default();
+        validate_strip_params_readers(
+            &self.config,
+            next,
+            &recorded_readers(
+                &self.retired_adapter_contracts,
+                &self.adopted,
+                &self.config,
+                next,
+                &state,
+            )?,
+        )
+    }
+}
+
+/// The recorded contracts `validate_strip_params_readers` counts. While the
+/// adopted-contract state at `state` is unreadable, a hand-removed reader
+/// cannot be checked, so a save that adds or changes a `strip_params` entry
+/// is refused, as adapter additions are (brwr-hrr): accepting it would let a
+/// collision back in once the file is restored. Removing or reordering
+/// entries strips less and still saves.
+fn recorded_readers(
+    retired: &[serde_json::Value],
+    adopted: &AdoptedContracts,
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+    state: &Path,
+) -> Result<Vec<serde_json::Value>> {
+    let mut readers = retired.to_vec();
+    match adopted {
+        AdoptedContracts::Read { contracts, .. } => readers.extend(contracts.iter().cloned()),
+        AdoptedContracts::Unreadable { .. } => {
+            if let Some(entry) = next
+                .strip_params
+                .iter()
+                .find(|entry| !current.strip_params.contains(entry))
+            {
+                return Err(StripParamsRefusal(format!(
+                    "strip_params cannot add {entry:?} while Brauser's record of the adapters it has used ({}) cannot be read: an adapter removed by hand may read that parameter. Move adopted-contracts.json aside (keeping a backup) or fix it, then save again.",
+                    state.display(),
+                ))
+                .into());
+            }
+        }
+        // The locked recheck rereads the state before writing.
+        AdoptedContracts::Unread => {}
+    }
+    Ok(readers)
 }
 
 /// Whether both lists of `vocabulary` pass the checks a saved
@@ -1904,7 +2302,7 @@ fn retired_by_hand(
                 }
             }
         }
-        AdoptedContracts::Unreadable => by_hand.unreadable = true,
+        AdoptedContracts::Unreadable { .. } => by_hand.unreadable = true,
         AdoptedContracts::Unread => {}
     }
     by_hand
@@ -1937,9 +2335,56 @@ enum AdoptedContracts {
         contracts: Vec<serde_json::Value>,
     },
     /// Unreadable, not a regular file, over a bound, malformed, or from a
-    /// newer host.
-    Unreadable,
+    /// newer host. `reason` completes "the file …" for settings, and
+    /// `revision` identifies what the user was shown when they forget it.
+    Unreadable {
+        revision: String,
+        reason: &'static str,
+    },
 }
+
+/// An unused `adopted-contracts.json.<UTC timestamp>[-n].bak` beside it.
+/// Callers hold the config lock, so no other host picks the same name.
+fn adopted_contracts_backup_path(parent: &Path) -> Result<PathBuf> {
+    let now = time::OffsetDateTime::now_utc();
+    let stamp = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    );
+    for attempt in 0..1000u32 {
+        let name = if attempt == 0 {
+            format!("adopted-contracts.json.{stamp}.bak")
+        } else {
+            format!("adopted-contracts.json.{stamp}-{attempt}.bak")
+        };
+        let candidate = parent.join(name);
+        match fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(error).context("checking backup name"),
+            Ok(_) => {}
+        }
+    }
+    bail!("too many adopted-contract backups this second")
+}
+
+/// A record write skipped because it would pass a bound.
+#[derive(Debug)]
+struct RecordFull {
+    unrecorded: usize,
+}
+
+impl std::fmt::Display for RecordFull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the adopted-contract record is full")
+    }
+}
+
+impl std::error::Error for RecordFull {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1949,6 +2394,7 @@ struct StoredAdoptedContracts {
 }
 
 fn read_adopted_contracts(path: &Path) -> AdoptedContracts {
+    let unreadable = |revision: String, reason| AdoptedContracts::Unreadable { revision, reason };
     // As for config.toml, opening a FIFO would block under the lock.
     match fs::metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1958,27 +2404,41 @@ fn read_adopted_contracts(path: &Path) -> AdoptedContracts {
             };
         }
         Ok(metadata) if metadata.is_file() => {}
-        _ => return AdoptedContracts::Unreadable,
+        Ok(_) => return unreadable(NOT_A_FILE_REVISION.into(), "is not a regular file"),
+        Err(_) => return unreadable(UNREADABLE_REVISION.into(), "cannot be read"),
     }
     let mut bytes = Vec::new();
     let read = File::open(path).and_then(|file| {
         file.take(MAX_ADOPTED_CONTRACTS_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
     });
-    if read.is_err() || bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
-        return AdoptedContracts::Unreadable;
+    if read.is_err() {
+        return unreadable(UNREADABLE_REVISION.into(), "cannot be read");
+    }
+    if bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
+        // The prefix alone would not change when later bytes do, and the
+        // revision is what a forget is checked against.
+        let revision = streamed_revision(path).unwrap_or_else(|_| UNREADABLE_REVISION.into());
+        return unreadable(revision, "is larger than 1 MiB");
+    }
+    let revision = revision_for(&bytes);
+    let format = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| value.get("format").and_then(serde_json::Value::as_u64));
+    if format.is_some_and(|format| format > u64::from(ADOPTED_CONTRACTS_FORMAT)) {
+        return unreadable(revision, "was written by a newer version of Brauser");
     }
     match serde_json::from_slice::<StoredAdoptedContracts>(&bytes) {
-        Ok(stored)
-            if stored.format == ADOPTED_CONTRACTS_FORMAT
-                && stored.contracts.len() <= MAX_ADOPTED_CONTRACTS =>
-        {
+        Ok(stored) if stored.format == ADOPTED_CONTRACTS_FORMAT => {
+            if stored.contracts.len() > MAX_ADOPTED_CONTRACTS {
+                return unreadable(revision, "holds more than 1,024 adapters");
+            }
             AdoptedContracts::Read {
-                revision: revision_for(&bytes),
+                revision,
                 contracts: stored.contracts,
             }
         }
-        _ => AdoptedContracts::Unreadable,
+        _ => unreadable(revision, "is malformed"),
     }
 }
 
@@ -2012,7 +2472,10 @@ fn record_adopted_contracts(
     })
     .context("serializing adopted adapter contracts")?;
     if next.len() > MAX_ADOPTED_CONTRACTS || bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
-        bail!("{} is full", path.display());
+        return Err(RecordFull {
+            unrecorded: next.len() - recorded.len(),
+        }
+        .into());
     }
     let parent = path.parent().context("state path has no parent")?;
     // The config directory's startup sweep removes this name if a killed
@@ -3366,10 +3829,7 @@ mod tests {
             let error = save_adding(&mut store, elsewhere).unwrap_err();
             let message = format!("{error:#}");
             assert!(message.contains("adopted-contracts.json"), "{message}");
-            assert!(
-                message.contains("Move adopted-contracts.json aside"),
-                "{message}"
-            );
+            assert!(message.contains("Forget recorded adapters"), "{message}");
 
             let mut next = store.snapshot().clone();
             next.adapters
@@ -3422,6 +3882,314 @@ mod tests {
                 ),
             )
             .unwrap();
+        }
+
+        /// The `adopted-contracts.json.<timestamp>.bak` files beside config.
+        fn backups(folder: &Path) -> Vec<PathBuf> {
+            let mut found: Vec<_> = fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                    name.starts_with("adopted-contracts.json.") && name.ends_with(".bak")
+                })
+                .collect();
+            found.sort();
+            found
+        }
+
+        /// Settings names each way the record can be unusable, with the
+        /// file's path and what it pauses; a healthy record has no issue.
+        #[test]
+        fn adopted_state_names_each_kind_of_damage() {
+            let oversized = format!(
+                "{{\"format\":1,\"contracts\":[],\"pad\":\"{}\"}}",
+                "x".repeat(MAX_ADOPTED_CONTRACTS_BYTES)
+            );
+            let too_many = serde_json::to_vec(&json!({
+                "format": 1,
+                "contracts": vec![json!({}); MAX_ADOPTED_CONTRACTS + 1],
+            }))
+            .unwrap();
+            for (damage, bytes, reason) in [
+                (
+                    "garbage",
+                    Some(b"{\"format\":1,\"contr".to_vec()),
+                    "malformed",
+                ),
+                (
+                    "newer format",
+                    Some(b"{\"format\":2,\"contracts\":[]}".to_vec()),
+                    "newer version of Brauser",
+                ),
+                (
+                    "unknown key",
+                    Some(b"{\"format\":1,\"contracts\":[],\"x\":1}".to_vec()),
+                    "malformed",
+                ),
+                (
+                    "oversized",
+                    Some(oversized.into_bytes()),
+                    "larger than 1 MiB",
+                ),
+                ("too many", Some(too_many), "more than 1,024"),
+                ("directory", None, "not a regular file"),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = write_by_hand(folder.path(), &[ITEM]);
+                let state = state_path(folder.path());
+                match &bytes {
+                    Some(bytes) => fs::write(&state, bytes).unwrap(),
+                    None => fs::create_dir(&state).unwrap(),
+                }
+                let adopted = adopted(&path).adopted_state();
+                let issue = adopted
+                    .issue
+                    .unwrap_or_else(|| panic!("{damage}: no issue"));
+                assert!(
+                    issue.contains(&state.display().to_string()),
+                    "{damage}: {issue}"
+                );
+                assert!(issue.contains(reason), "{damage}: {issue}");
+                assert!(issue.contains("paused"), "{damage}: {issue}");
+                assert!(
+                    issue.contains("Forget recorded adapters"),
+                    "{damage}: {issue}"
+                );
+                assert!(!adopted.revision.is_empty(), "{damage}");
+            }
+
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let adopted = adopted(&path).adopted_state();
+            assert_eq!(adopted.issue, None);
+            assert!(adopted.warnings.is_empty());
+            assert_eq!(
+                adopted.revision,
+                revision_for(&fs::read(state_path(folder.path())).unwrap())
+            );
+        }
+
+        #[test]
+        fn adopted_state_names_the_origin_of_a_damaged_entry() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let damaged = json!({
+                "type": "work.other",
+                "origin": "https://work.example",
+                "match": [{"path": "/items/{n:nope}"}],
+                "id": "other:{host}/{n}",
+            });
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": [damaged]})).unwrap(),
+            )
+            .unwrap();
+            let issue = adopted(&path).adopted_state().issue.unwrap();
+            assert!(issue.contains("https://work.example"), "{issue}");
+            assert!(issue.contains("Forget recorded adapters"), "{issue}");
+        }
+
+        /// Forgetting backs the damaged file up under its own name, then
+        /// records the current contracts afresh, so notes come back.
+        #[test]
+        fn forgetting_backs_up_the_record_and_starts_afresh() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            adopted(&path);
+            write_by_hand(folder.path(), &[ITEM]);
+            let state = state_path(folder.path());
+            fs::write(&state, b"{").unwrap();
+            let mut store = adopted(&path);
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::StateUnavailable);
+            let revision = store.adopted_state().revision;
+
+            assert!(store.forget_adopted_contracts(&revision).unwrap());
+            let backed_up = backups(folder.path());
+            assert_eq!(backed_up.len(), 1);
+            assert_eq!(fs::read(&backed_up[0]).unwrap(), b"{");
+            // A fresh record holds only what config.toml now adopts.
+            assert_eq!(entries(folder.path()).len(), 1);
+            let adopted = store.adopted_state();
+            assert_eq!(adopted.issue, None);
+            assert_ne!(adopted.revision, revision);
+            // The hand-removed DOC contract is forgotten, like a config repair.
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
+            assert!(store.adapter_matches(ITEM_7, None).unwrap());
+            // Another host sees the fresh record too.
+            assert_eq!(
+                loaded(&path).note_key_rule(DOC_8),
+                NoteKeyRule::Unrecognized
+            );
+        }
+
+        #[test]
+        fn forgetting_a_directory_moves_it_aside() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            fs::create_dir(state_path(folder.path())).unwrap();
+            let mut store = adopted(&path);
+            let revision = store.adopted_state().revision;
+            assert!(store.forget_adopted_contracts(&revision).unwrap());
+            assert!(backups(folder.path())[0].is_dir());
+            assert_eq!(entries(folder.path()).len(), 1);
+        }
+
+        /// The user confirmed forgetting the file they were shown; a file
+        /// that changed since then is a conflict and stays as it is.
+        #[test]
+        fn forgetting_a_changed_record_is_a_conflict() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let state = state_path(folder.path());
+            fs::write(&state, b"{").unwrap();
+            let mut store = adopted(&path);
+            let revision = store.adopted_state().revision;
+            fs::write(&state, b"{\"format\":9}").unwrap();
+            assert!(!store.forget_adopted_contracts(&revision).unwrap());
+            assert_eq!(fs::read(&state).unwrap(), b"{\"format\":9}");
+            assert!(backups(folder.path()).is_empty());
+            // The refusal also refreshed what settings is shown.
+            assert!(
+                store
+                    .adopted_state()
+                    .issue
+                    .unwrap()
+                    .contains("newer version")
+            );
+        }
+
+        /// An oversized record's revision covers every byte, so a change
+        /// past the first MiB is still a conflict for a forget.
+        #[test]
+        fn an_oversized_records_revision_tracks_its_tail() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let state = state_path(folder.path());
+            let mut bytes = vec![b'x'; MAX_ADOPTED_CONTRACTS_BYTES + 10];
+            fs::write(&state, &bytes).unwrap();
+            let mut store = adopted(&path);
+            let revision = store.adopted_state().revision;
+            *bytes.last_mut().unwrap() = b'y';
+            fs::write(&state, &bytes).unwrap();
+            assert!(!store.forget_adopted_contracts(&revision).unwrap());
+            assert!(backups(folder.path()).is_empty());
+        }
+
+        /// The record can be nearly 1 MiB of origins; the issue names a
+        /// bounded few so config_result still fits one native message.
+        #[test]
+        fn a_damaged_records_issue_stays_small() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let damaged = |host: String| {
+                json!({
+                    "type": "work.other",
+                    "origin": format!("https://{host}.example"),
+                    "match": [{"path": "/items/{n:nope}"}],
+                    "id": "other:{host}/{n}",
+                })
+            };
+            let mut contracts = vec![damaged("a".repeat(60).repeat(10))];
+            contracts.extend((0..20).map(|n| damaged(format!("site{n}"))));
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": contracts})).unwrap(),
+            )
+            .unwrap();
+            let issue = adopted(&path).adopted_state().issue.unwrap();
+            assert!(issue.len() < 4096, "{} bytes", issue.len());
+            assert!(issue.contains("16 more"), "{issue}");
+        }
+
+        /// Backups never replace one another, even within one second.
+        #[test]
+        fn repeated_forgets_keep_every_backup() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let state = state_path(folder.path());
+            let mut store = adopted(&path);
+            for bytes in [b"{1".as_slice(), b"{2", b"{3"] {
+                fs::write(&state, bytes).unwrap();
+                let revision = adopted(&path).adopted_state().revision;
+                assert!(store.forget_adopted_contracts(&revision).unwrap());
+            }
+            let mut kept: Vec<_> = backups(folder.path())
+                .iter()
+                .map(|backup| fs::read(backup).unwrap())
+                .collect();
+            kept.sort();
+            assert_eq!(kept, vec![b"{1".to_vec(), b"{2".to_vec(), b"{3".to_vec()]);
+        }
+
+        /// A full record keeps working but can no longer protect new
+        /// adapters from a hand removal; settings says so without blocking.
+        #[test]
+        fn a_full_record_is_reported_as_a_warning() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let full: Vec<_> = (0..MAX_ADOPTED_CONTRACTS)
+                .map(|n| {
+                    adapter(
+                        &format!("https://site{n}.example"),
+                        "work.item",
+                        "/items/{id:int}",
+                        "work:{host}/{id}",
+                    )
+                })
+                .collect();
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": full})).unwrap(),
+            )
+            .unwrap();
+            let adopted = adopted(&path).adopted_state();
+            assert_eq!(adopted.issue, None);
+            assert_eq!(adopted.warnings.len(), 1, "{:?}", adopted.warnings);
+            assert!(
+                adopted.warnings[0].contains("1,024"),
+                "{:?}",
+                adopted.warnings
+            );
+            assert!(
+                adopted.warnings[0].contains("removed from config.toml by hand"),
+                "{:?}",
+                adopted.warnings
+            );
+            // Forgetting starts a fresh record, so settings offers it.
+            assert!(adopted.full);
+            assert!(adopted.warnings[0].contains("Forget recorded adapters"));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_failed_record_write_is_a_warning_until_a_write_succeeds() {
+            use std::os::unix::fs::PermissionsExt;
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[]);
+            let mut store = adopted(&path);
+            write_by_hand(folder.path(), &[ITEM]);
+            let mode = fs::metadata(folder.path()).unwrap().permissions().mode();
+            fs::set_permissions(folder.path(), fs::Permissions::from_mode(0o500)).unwrap();
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            fs::set_permissions(folder.path(), fs::Permissions::from_mode(mode)).unwrap();
+            let warnings = store.adopted_state().warnings;
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(warnings[0].contains("could not be updated"), "{warnings:?}");
+            // Forgetting cannot fix a write failure, so it is not offered.
+            assert!(!warnings[0].contains("Forget"), "{warnings:?}");
+            assert!(!store.adopted_state().full);
+            // An unlocked refresh does not retry, so the warning stays.
+            store.refresh().unwrap();
+            assert_eq!(store.adopted_state().warnings.len(), 1);
+
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            assert!(store.adopted_state().warnings.is_empty());
+            assert_eq!(entries(folder.path()).len(), 1);
         }
     }
 
@@ -5632,6 +6400,299 @@ mod tests {
         assert!(!stale.exists());
         for path in [&fresh, &other, &config] {
             assert!(path.exists(), "{} was removed", path.display());
+        }
+    }
+
+    /// `strip_params` entries that remove a query parameter an adapter rule
+    /// reads (brwr-f4s). Stripping it would give distinct artifacts, such as
+    /// a Jira board and every issue modal on it, one canonical URL.
+    mod strip_params_readers {
+        use super::*;
+
+        const JIRA: &str = "[[artifacts]]\ntype = \"jira.issue\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/browse/{key:jira_key}\" }, { path = \"/jira/{*}\", query = { selectedIssue = \"{key:jira_key}\" } }]\nid = \"jira:{host}/{key}\"\n";
+        const SEARCH: &str = "[[artifacts]]\ntype = \"work.list\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/lists/{id:int}\", absent = [\"q\"] }]\nid = \"list:{host}/{id}\"\n";
+
+        fn jira_adapter() -> serde_json::Value {
+            json!({
+                "type": "jira.issue",
+                "origin": "https://acme.atlassian.net",
+                "match": [
+                    { "path": "/browse/{key:jira_key}" },
+                    { "path": "/jira/{*}", "query": { "selectedIssue": "{key:jira_key}" } },
+                ],
+                "id": "jira:{host}/{key}",
+            })
+        }
+
+        /// config.toml with `keys` at the top level and `adapters` after it.
+        fn written(folder: &Path, keys: &str, adapters: &[&str]) -> PathBuf {
+            let root = folder.join("notes");
+            fs::create_dir_all(&root).unwrap();
+            let path = folder.join("config.toml");
+            fixtures::write(
+                &path,
+                &root,
+                "",
+                keys,
+                &format!("[adapters]\nformat = 1\n\n{}", adapters.join("\n")),
+            );
+            path
+        }
+
+        fn refused(store: &mut ConfigStore, next: ConfigSnapshot) -> String {
+            let path = store.path.clone();
+            let before = fs::read(&path).unwrap();
+            let revision = store.revision().to_owned();
+            let error = match store.update(next, &revision) {
+                Err(error) => error,
+                Ok(result) => panic!("a conflicting save was accepted: {result:?}"),
+            };
+            assert!(
+                error.downcast_ref::<StripParamsRefusal>().is_some(),
+                "{error:#}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), before, "a refusal wrote config");
+            error.to_string()
+        }
+
+        fn with_strip(store: &ConfigStore, entry: &str) -> ConfigSnapshot {
+            let mut next = store.snapshot().clone();
+            next.strip_params.push(entry.into());
+            next
+        }
+
+        #[test]
+        fn adding_an_entry_an_adapter_reads_is_refused() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA]);
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none(), "{:?}", store.config_issue());
+            let next = with_strip(&store, "selectedIssue");
+            let message = refused(&mut store, next);
+            assert!(message.contains("\"selectedIssue\""), "{message}");
+            assert!(message.contains("jira.issue"), "{message}");
+            assert!(message.contains("https://acme.atlassian.net"), "{message}");
+        }
+
+        #[test]
+        fn prefix_and_case_variants_of_a_read_parameter_are_refused() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA, SEARCH]);
+            let mut store = loaded(&path);
+            // Stripping compares keys ASCII case-insensitively, by prefix
+            // for a trailing *.
+            for entry in ["selected*", "SELECTEDISSUE", "selectedissue", "q", "Q*"] {
+                let next = with_strip(&store, entry);
+                let message = refused(&mut store, next);
+                assert!(message.contains(&format!("{entry:?}")), "{message}");
+            }
+            // An absent key is read too: stripping it would merge the list
+            // with its filtered views.
+            let next = with_strip(&store, "q");
+            assert!(refused(&mut store, next).contains("work.list"));
+            // Entries no rule reads still save.
+            for entry in ["campaign", "selectedIssues", "sel", "q_*"] {
+                let next = with_strip(&store, entry);
+                let revision = store.revision().to_owned();
+                store.update(next, &revision).unwrap().unwrap();
+            }
+        }
+
+        #[test]
+        fn adding_an_adapter_that_reads_a_stripped_parameter_is_refused() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"selected*\"]",
+                &[],
+            );
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none(), "{:?}", store.config_issue());
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(jira_adapter());
+            let message = refused(&mut store, next);
+            assert!(message.contains("\"selectedIssue\""), "{message}");
+            assert!(message.contains("\"selected*\""), "{message}");
+            assert!(message.contains("jira.issue"), "{message}");
+
+            // Adding a reader of that parameter to an existing adapter is
+            // refused the same way.
+            let path = written(
+                folder.path(),
+                "strip_params = [\"selectedIssue\"]",
+                &[
+                    "[[artifacts]]\ntype = \"jira.issue\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/browse/{key:jira_key}\" }]\nid = \"jira:{host}/{key}\"\n",
+                ],
+            );
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts[0] = jira_adapter();
+            refused(&mut store, next);
+        }
+
+        #[test]
+        fn an_existing_conflict_still_loads_saves_and_is_reported() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "capture_enabled = true\nstrip_params = [\"utm_*\", \"selectedIssue\", \"fbclid\"]",
+                &[JIRA],
+            );
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none(), "{:?}", store.config_issue());
+            assert!(
+                store.adapter_issue().is_none(),
+                "{:?}",
+                store.adapter_issue()
+            );
+            assert_eq!(store.capture_origins(), vec!["https://acme.atlassian.net"]);
+            let conflicts = strip_param_conflicts(store.snapshot());
+            assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+            assert_eq!(conflicts[0].entry, "selectedIssue");
+            assert_eq!(conflicts[0].param, "selectedIssue");
+            assert_eq!(conflicts[0].artifact_type, "jira.issue");
+
+            // A new rule reading the same parameter is a new conflict, even
+            // beside an existing one on the same adapter.
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts[0]["match"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "path": "/projects/{*}", "query": { "selectedIssue": "{key:jira_key}" } }));
+            let message = refused(&mut store, next);
+            assert!(message.contains("\"selectedIssue\""), "{message}");
+
+            // Unrelated saves keep working: the capture switch, a new
+            // unrelated entry, reordering, and an edit to the conflicting
+            // adapter that reads nothing new.
+            let mut next = store.snapshot().clone();
+            next.capture_enabled = false;
+            next.strip_params.push("campaign".into());
+            next.strip_params.swap(0, 1);
+            next.adapters.artifacts[0]["title"] = json!("[{key:jira_key}] {title} - Jira");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let store = loaded(&path);
+            assert_eq!(
+                store.snapshot().strip_params,
+                ["selectedIssue", "utm_*", "fbclid", "campaign"]
+            );
+            assert_eq!(strip_param_conflicts(store.snapshot()).len(), 1);
+        }
+
+        #[test]
+        fn stopping_stripping_removes_only_that_entry_and_clears_the_conflict() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"selectedIssue\", \"fbclid\"]",
+                &[JIRA],
+            );
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.strip_params.retain(|entry| entry != "selectedIssue");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let store = loaded(&path);
+            assert_eq!(store.snapshot().strip_params, ["utm_*", "fbclid"]);
+            assert_eq!(store.snapshot().adapters.artifacts.len(), 1);
+            assert!(strip_param_conflicts(store.snapshot()).is_empty());
+        }
+
+        #[test]
+        fn retired_contracts_count_as_readers() {
+            // Removed through settings: kept in [[adapter_id_history]].
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA]);
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.clear();
+            next.capture_enabled = false;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(store.retired_adapter_contracts.len(), 1);
+            let mut store = loaded(&path);
+            let next = with_strip(&store, "selectedIssue");
+            let message = refused(&mut store, next);
+            assert!(message.contains("removed adapter"), "{message}");
+            assert!(message.contains("jira.issue"), "{message}");
+
+            // Removed from config.toml by hand: kept in the adopted state.
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA, SEARCH]);
+            let mut store = ConfigStore::for_test(path.clone());
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            written(folder.path(), "", &[SEARCH]);
+            let mut store = loaded(&path);
+            assert!(store.retired_adapter_contracts.is_empty());
+            let next = with_strip(&store, "selected*");
+            let message = refused(&mut store, next);
+            assert!(message.contains("removed adapter"), "{message}");
+        }
+
+        /// While adopted-contracts.json is unreadable, a hand-removed reader
+        /// cannot be checked, so a new or changed entry is refused rather
+        /// than letting a collision back in once the file is restored.
+        #[test]
+        fn unreadable_adopted_state_refuses_new_entries_but_not_removals() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"fbclid\"]",
+                &[JIRA, SEARCH],
+            );
+            let mut store = ConfigStore::for_test(path.clone());
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"fbclid\"]",
+                &[SEARCH],
+            );
+            let state = adopted_contracts_path(folder.path());
+            fs::write(&state, b"{").unwrap();
+            let mut store = loaded(&path);
+
+            for entry in ["selectedIssue", "gclid"] {
+                let next = with_strip(&store, entry);
+                let message = refused(&mut store, next);
+                assert!(message.contains("adopted-contracts.json"), "{message}");
+            }
+            let mut next = store.snapshot().clone();
+            next.strip_params[0] = "utm_source".into();
+            refused(&mut store, next);
+
+            // Removing or reordering entries strips less; it still saves.
+            let mut next = store.snapshot().clone();
+            next.strip_params.reverse();
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let mut next = store.snapshot().clone();
+            next.strip_params.retain(|entry| entry != "fbclid");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(fs::read(&state).unwrap(), b"{");
+        }
+
+        #[test]
+        fn removing_a_conflicting_adapter_is_not_a_new_conflict() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "strip_params = [\"selectedIssue\"]", &[JIRA]);
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.clear();
+            next.capture_enabled = false;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            // Restoring the same contract from history reads nothing new.
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(jira_adapter());
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
         }
     }
 

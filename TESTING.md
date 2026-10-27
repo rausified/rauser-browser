@@ -79,6 +79,16 @@ smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
 claim that it passed here. Structural drafting and unknown-site enabling are
 still unbuilt, so these tests do not certify any machine-drafted rule.
 
+## Capture Site attention across an hour boundary
+
+The worker's already-open-tab policy-install test uses fixed local times,
+covering both a mid-hour interval and the last ten seconds of an hour. After
+15 seconds, `get_status` freezes completed hours into delivery: the boundary
+case must retain 10 seconds in the queue and 5 seconds in live totals, with
+zero opens across both. Queued activity uses seconds; live totals use
+milliseconds. Checking only live totals against 15 seconds made the old test
+fail whenever the real wall clock happened to cross an hour boundary.
+
 ## Dialog reply fixture
 
 `dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
@@ -125,6 +135,12 @@ with the guard (`if crate::ipc_test_guard::ipc_denied() { return; }`, or
 `if (await ipcDenied(t, "socket")) return;`); without it, it fails in the
 sandbox like the 32 to 47 tests that kept Cookie's gate red before `brwr-rq5`.
 
+This includes connections to a missing listener: a restricted runner can
+return EPERM before the client sees the expected missing-socket error, so
+missing-service, failed-launch and launch-timeout tests need the guard too.
+A boundary test that proves rejection without connecting but also verifies
+successful forwarding at the limit needs it for that forwarding step.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
@@ -140,6 +156,25 @@ sandbox like the 32 to 47 tests that kept Cookie's gate red before `brwr-rq5`.
 - Put the native-messaging host manifest in `<profile>/NativeMessagingHosts/` so the normal registration is untouched.
 - Drive pages with real input events (`Input.dispatchMouseEvent`) so the browser treats them as user gestures. Use `Runtime.evaluate` with `userGesture: true` for APIs that need a gesture, such as `chrome.sidePanel.open`.
 - Assert on real state (files written, host config, `chrome.permissions.contains`, page text) rather than on the fact that a click happened.
+
+### Waiting for state, not time
+
+The required CI check runs the headless smoke on a shared runner, sometimes the slower `macos-15-intel` fallback, so every wait must hold up when the machine is loaded. `scripts/smoke-macos.mjs` has one helper for this, and new steps should use it:
+
+```js
+const state = await waitUntil("what the step waits for", observe, accept, { timeout, interval, signal: abort.signal });
+```
+
+`observe()` reads the current state (anything `JSON.stringify` can show: host config, worker storage, run cards, files). `accept(state)` says whether that state is the one wanted. The accepted state is returned. On timeout it throws `Timed out after <s> waiting for <what>; last observed <state>` plus the last error, so a stop shows what the run saw, not just "found []". An error marked `fatal` (`Object.assign(new Error(...), { fatal: true })`) stops the wait at once. Use that for states that can never recover, such as a blocked page that was measured. The older `waitFor(check)` (the check throws until it passes) is still fine for simple UI polls whose error message already names the state.
+
+Rules learned from the stops fixed in `brwr-smk`:
+
+- **Wait for the state the next step depends on, not for something that usually comes with it.** The worker judges a navigation by the lease it holds when the navigation commits, and never looks at it again. So before a step navigates and expects capture, call `workerHoldsHostPolicy()`, which waits until the worker's stored lease has the host's current revision. "Settings is connected" is not proof of that.
+- **`Page.reload` can return while the old document still answers.** Use `reloadSettings()`. It marks the old document and waits for an unmarked, connected one.
+- **Identify a new item by excluding everything that already existed, not by what the page showed a moment earlier.** A new panel enables **Summarize & log** before it restores earlier runs' cards from `list_runs`, so `summarizeFromPanel(harness)` treats every run the service already lists as old, and checks the new run's harness.
+- **A cold Chrome can take far longer than one CDP request's timeout to start reading its pipe.** The runner waits for `Browser.getVersion` before `Extensions.loadUnpacked`. It never retries a non-idempotent request. Chrome writes `Preferences` on a delay of about ten seconds, so the wait for the profile to record the extension needs room well beyond that. The runner logs each of these times.
+- **Retry only what is safe to repeat, and check the result before asking again.** `openPanel()` looks for the panel target before each new `chrome.sidePanel.open` request. Opening a panel that is already open changes nothing.
+- **To check a wait, run the smoke under full CPU load** (one `yes > /dev/null` per core, from `sysctl -n hw.ncpu`, killed afterwards), not just on an idle machine. Every stop fixed in `brwr-smk` passed when idle.
 
 ### Native dialogs (the folder picker)
 
@@ -241,6 +276,23 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).
+  Failing-first host tests (`config::tests::strip_params_readers`,
+  `native::tests::update_config_refuses_stripping_a_parameter_an_adapter_reads`)
+  showed `update` accepting a `strip_params` entry a Jira modal rule reads,
+  including prefix, case, `absent`, and retired-contract variants. A refusal
+  raised inside `update_with_grants` reaches the extension as `internal`
+  ("could not save configuration") unless native dispatch downcasts its
+  error type, so a new under-the-lock refusal needs its own type
+  (`StripParamsRefusal`) as well as the pre-lock check against the store's
+  last read. Settings tests cover the warning and the one-click fix with the
+  fake DOM; the headless smoke run does not cover it, because it never edits
+  config.toml by hand. Codex review then reproduced an existing conflict
+  masking a new rule on the same adapter that read the same parameter,
+  because conflicts were compared by entry, parameter, origin, and type
+  only; they now include the reading rule and `id` template, and the
+  existing-conflict test adds such a rule first. No browser or native
+  dialog is involved.
 - 2026-10-27: Branch `feat/agent-runners-pr3`. The page extractor caps text in encoded bytes, not characters: it truncates until the JSON-encoded, UTF-8 length of the content plus the selection fits 3 MiB (the selection alone 64 KiB). CJK text is three bytes a character, and quotes and control characters grow under JSON escaping (`\u0001` is six bytes), so a character cap can push a `start_run` frame past the host's 4 MiB `MAX_INBOUND_BYTES`. `maximal extraction stays under the host frame cap` builds the full `start_run` JSON from 1,000,000 CJK characters with interleaved `"` and `\u0001` and checks it.
 - 2026-10-27: Salvage review of Cookie cycle 2 reproduced three page-pattern
   gaps with failing-first tests: unreadable pending-removal state on a
@@ -403,3 +455,6 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-27: Branch `fix/retired-hand-removed-contracts`. Rewriting config.toml in a test no longer simulates lost adapter contracts by itself: any refresh under the config lock (every note request, and `ConfigStore::update`) records adopted contracts in `adopted-contracts.json` beside the test's config, so a later hand edit keeps their note keys. A fixture that means "no contract recorded anywhere" must also remove `config::adopted_contracts_path(dir)`, and tolerate its absence, since a contract removed through settings before any locked refresh is only in `[[adapter_id_history]]`. A plain `loaded()` store refreshes without the lock and records nothing.
 - 2026-10-27: Branch `fix/adopted-contract-repair`. `ConfigStore::update` now reads `adopted-contracts.json` for the frozen-ID check, so a test that adds adapters after damaging or hand-editing that file gets a refusal it did not before: either restore the file or assert the refusal. Checking a refusal's wording against a constant was not enough once the message carried the runtime state path; the native test matches the stable prefix plus `adopted_contracts_path(dir)`, then renames the file aside and checks that notes come back, which is the repair the message promises.
 - 2026-10-27: Branch `fix/sandbox-aware-ipc-tests` (`brwr-rq5`). Cookie's health gate had failed every Unix-socket test inside Codex's `workspace-write` sandbox since the service landed, and Cookie read that as a blocked gate for 20+ cycles. The socket tests now probe once and skip on EPERM/EACCES unless `BRAUSER_REQUIRE_IPC_TESTS=1` ("Local IPC in sandboxes"). Checked on macOS: a normal run skips nothing. Under `sandbox-exec` with Unix-socket bind and connect denied, and separately with `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, the 47 guarded Rust tests (38 unit, 9 `scripted-dialogs` integration) skip with the reason and both Cargo runs pass; with `BRAUSER_REQUIRE_IPC_TESTS=1` the same runs fail exactly those 47. In `test:scripts` the simulated denial skips the 2 guarded child-pipe tests and the probe self-test, and fails them with the flag; Seatbelt leaves child pipes alone, so there only the socket probe self-test skips.
+- 2026-10-27: Branch `feat/adopted-state-repair`. `get_config` now refreshes under the config lock, so it records adopted contracts like a note request; a test that wants "never recorded" must avoid `get_config` as well as locked refreshes. Recording warnings come from the reporting host's own last locked attempt, so a host test injects a write failure by making the config directory read-only (0500) after `.config.lock` exists, and an unlocked refresh must leave the warning in place. Settings' confirmation text lives in `options.html`, which the fake DOM does not parse, so the options test checks the markup between `forget-adopted-confirm` and `forget-adopted-yes`. The headless smoke forgets a damaged record through the real page and checks the `.bak` bytes and that no native dialog appeared.
+- 2026-10-27: Branch `fix/forget-for-full-record`. Settings decides whether to offer Forget from `adopted_state.full`, not from warning text, so the tests assert both the flag and the wording: a full record's warning mentions Forget recorded adapters, and write-failure and lock-failure warnings must not mention Forget at all.
+- 2026-10-27: Branch `fix/smoke-macos-flakes` (`brwr-smk`). Since #98, main's required macOS smoke had stopped three ways, each passing on rerun. The fixes are in "Waiting for state, not time". (1) `Extensions.loadUnpacked timed out` on the `macos-15-intel` fallback: the first CDP request had 15 s to cover Chrome's whole cold start. Reproduced locally with the old runner under 3x CPU load. On the arm64 CI runners, loading plus the profile check already took 12.9 s, and Chrome writes `Preferences` about ten seconds late, so the old 12 s profile wait was nearly as tight. (2) `Expected exactly two claude runs; got []`: a reopened panel enables **Summarize & log** before `restore()` adds earlier cards, so the earlier, already-summarized Codex card was taken for the new run, and the check ran before Claude Code started. Reproduced 2 of 5 under full load, where the fake's log showed both Claude turns starting after the check. (3) `Expected one open of the allowed page in the hourly totals; found []`: never reproduced locally (0 of 8 before the fix, including 4 old runs at 3x load). The step went on once settings looked connected, not once the worker held the new lease. The lease the worker held before matches only `/items/{id:int}`, which gives exactly an empty total. Probes found settings enables its controls only after its lease install, and showed no stale document after `Page.reload`, so this cause is inferred, not shown. The new waits record the worker's lease in the timeout message, so a recurrence will tell a late lease from a product fault. A fourth stop appeared under load: `openPanel()` gave up when one `chrome.sidePanel.open` evaluate timed out. Results: before the fix, 3 of 3 idle and 3 of 5 under full load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load). No product race was found.

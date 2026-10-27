@@ -60,14 +60,14 @@ function statusFor(overrides = {}) {
 }
 
 // A site is on while it has an adapter, so capture defaults to on with one.
-function configWith(adapters, captureEnabled) {
+function configWith(adapters, captureEnabled, stripParams = []) {
   return {
     storage: {
       root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: "summaries", knowledge_base_dir: null,
     },
     capture_enabled: captureEnabled ?? adapters.length > 0,
-    strip_params: [],
+    strip_params: stripParams,
     agent: null,
     summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
@@ -75,14 +75,15 @@ function configWith(adapters, captureEnabled) {
 }
 
 function install({
-  adapters = [], captureEnabled, storage = {}, host = {}, worker = {}, workerStatus = {},
+  adapters = [], captureEnabled, stripParams = [], storage = {}, host = {}, worker = {}, workerStatus = {},
 } = {}) {
   const elements = new Map();
   const state = {
     storage: new Map(Object.entries(storage)),
-    config: { ...configWith(adapters, captureEnabled), adapters: { format: 1, artifacts: adapters } },
+    config: { ...configWith(adapters, captureEnabled, stripParams), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
+    adoptedState: { issue: null, revision: "missing", warnings: [], full: false },
     storageChanged: [],
     requests: [],
     workerRequests: [],
@@ -101,7 +102,7 @@ function install({
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-origin", "input"],
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
-    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
+    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
@@ -113,10 +114,14 @@ function install({
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
     ["build-id", "span"], ["host-build", "span"],
+    ["adopted-state", "div"], ["adopted-issue", "p"], ["adopted-warnings", "ul"],
+    ["forget-adopted", "button"], ["forget-adopted-confirm", "div"],
+    ["forget-adopted-yes", "button"], ["forget-adopted-no", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
   elements.get("adapter-editor").hidden = true;
+  for (const id of ["adopted-state", "forget-adopted", "forget-adopted-confirm"]) elements.get(id).hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
   elements.get("build-id").textContent = "abc1234def56";
 
@@ -131,8 +136,11 @@ function install({
         return {
           type: "config_result", revision: String(state.revision), config: state.config,
           config_issue: state.configIssue, agent_status: AGENT_STATUS,
-          adapter_issue: null, adapter_warnings: [],
+          adapter_issue: null, adapter_warnings: [], adopted_state: state.adoptedState,
         };
+      case "forget_adopted_contracts":
+        state.adoptedState = { issue: null, revision: "sha256:fresh", warnings: [], full: false };
+        return hostReply({ ...request, type: "get_config" });
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
       case "update_config":
@@ -453,6 +461,7 @@ test("Resume capture waits for an invalid adapter policy to be repaired", async 
         type: "config_result", revision: String(current.revision), config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -497,6 +506,7 @@ test("a settings load failure after hello is not reported as a missing host", as
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "config.json is unreadable",
         agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -548,6 +558,7 @@ test("pending removals leave an adapter document that needs repair as it is", as
         config: { ...current.config, adapters: futureAdapters }, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -579,6 +590,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -593,11 +605,71 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: null,
         adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
+});
+
+const JIRA_MODAL = {
+  type: "jira.issue",
+  origin: "https://acme.atlassian.net",
+  match: [
+    { path: "/browse/{key:jira_key}" },
+    { path: "/jira/{*}", query: { selectedIssue: "{key:jira_key}" } },
+  ],
+  id: "jira:{host}/{key}",
+};
+
+test("a strip_params entry an adapter reads is shown with a one-click fix", async () => {
+  install({ adapters: [JIRA_MODAL], stripParams: ["utm_*", "selectedIssue", "fbclid"] });
+  await openSettings();
+  const notices = env.elements.get("strip-conflicts");
+  assert.match(nodeText(notices), /selectedIssue/);
+  assert.match(nodeText(notices), /jira\.issue on https:\/\/acme\.atlassian\.net/);
+  assert.match(statusText(), /tracking-parameter entr/i);
+  const [fix] = notices.querySelectorAll("button");
+  assert.equal(fix.textContent, "Stop stripping selectedIssue");
+  assert.equal(fix.disabled, false);
+
+  const before = env.requests.filter((request) => request.type === "update_config").length;
+  fix.click();
+  await until(() => env.revision > 1 && idle(), "the fix to save");
+  const updates = env.requests.filter((request) => request.type === "update_config");
+  assert.equal(updates.length, before + 1);
+  // A revision-checked save that removes only that entry.
+  assert.equal(lastUpdate().expected_revision, "1");
+  assert.deepEqual(lastUpdate().config.strip_params, ["utm_*", "fbclid"]);
+  assert.deepEqual(lastUpdate().config.adapters, { format: 1, artifacts: [JIRA_MODAL] });
+  assert.equal(lastUpdate().config.capture_enabled, true);
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(notices.querySelectorAll("button").length, 0);
+  assert.doesNotMatch(nodeText(notices), /selectedIssue/);
+  assert.match(statusText(), /no longer strips selectedIssue/);
+});
+
+test("no strip_params notice without a conflict, and the fix waits for repair", async () => {
+  install({ adapters: [JIRA_MODAL], stripParams: ["utm_*", "fbclid"] });
+  await openSettings();
+  assert.equal(env.elements.get("strip-conflicts").children.length, 0);
+
+  install({
+    adapters: [JIRA_MODAL],
+    stripParams: ["selected*"],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: "choose the folder again",
+        agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
+      }),
+    },
+  });
+  await openSettings();
+  const [fix] = env.elements.get("strip-conflicts").querySelectorAll("button");
+  assert.equal(fix.textContent, "Stop stripping selected*");
+  assert.equal(fix.disabled, true);
 });
 
 test("an unsupported adapter document can be removed without blocking unrelated controls", async () => {
@@ -614,6 +686,7 @@ test("an unsupported adapter document can be removed without blocking unrelated 
           ? "unsupported adapter format 2"
           : null,
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -649,6 +722,7 @@ test("resetting a host-only adapter key on an empty document clears the key befo
         type: "config_result", revision: String(current.revision), config: current.config,
         config_issue: null, agent_status: AGENT_STATUS, adapter_issue: issue(),
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
       update_config: (request, current) => {
         const empty = request.config.adapters.format === 1 && request.config.adapters.artifacts.length === 0;
@@ -682,6 +756,7 @@ test("an adapter reset that leaves the issue in place does not report success", 
         type: "config_result", revision: String(current.revision), config: current.config,
         config_issue: null, agent_status: AGENT_STATUS,
         adapter_issue: "unsupported adapter-table key future_mode", adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -793,6 +868,7 @@ test("adapter workspace names overlaps and highlights a matching safety probe", 
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: null,
         adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -1154,6 +1230,7 @@ function opaqueRevision(state) {
   return {
     type: "config_result", revision: `r${state.revision}`, config: state.config,
     config_issue: null, agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
   };
 }
 
@@ -1469,4 +1546,116 @@ test("pre-filling organizations and rendering the gallery saves nothing", async 
   assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "a, b");
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+});
+
+const DAMAGED_RECORD = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) is malformed. " +
+  "Notes on pages the current adapters do not recognize are paused to protect note identity.";
+
+test("settings names a damaged adopted-adapter record and offers to forget it", async () => {
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-state").hidden, false);
+  assert.equal(el("adopted-issue").textContent, DAMAGED_RECORD);
+  assert.equal(el("forget-adopted").hidden, false);
+  assert.equal(el("forget-adopted").disabled, false);
+  // The rest of settings keeps working; this record only pauses some notes.
+  assert.equal(el("new-adapter").disabled, false);
+  assert.equal(el("pause-capture").disabled, false);
+});
+
+test("forgetting recorded adapters asks in the page first, then sends the shown revision", async () => {
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  const forgets = () => env.requests.filter((request) => request.type === "forget_adopted_contracts");
+
+  el("forget-adopted").click();
+  assert.equal(el("forget-adopted-confirm").hidden, false);
+  // The confirmation is in the page (no native dialog) and says what is lost.
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const confirmation = html.slice(html.indexOf('id="forget-adopted-confirm"'), html.indexOf('id="forget-adopted-yes"'));
+  assert.match(confirmation, /back the record up/);
+  assert.match(confirmation, /removed from config\.toml by hand/);
+  assert.match(confirmation, /Use as artifact note/);
+  assert.equal(forgets().length, 0, "nothing is forgotten before the in-page confirmation");
+  el("forget-adopted-no").click();
+  assert.equal(el("forget-adopted-confirm").hidden, true);
+  assert.equal(forgets().length, 0);
+
+  el("forget-adopted").click();
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-state").hidden, "the repaired record");
+  assert.equal(forgets().length, 1);
+  assert.equal(forgets()[0].expected_revision, "sha256:damaged");
+  assert.equal(el("forget-adopted-confirm").hidden, true);
+  assert.match(statusText(), /Recorded adapters forgotten/);
+  assert.equal(env.requests.filter((request) => request.type === "update_config").length, 0);
+  assert.deepEqual(env.permissionCalls, []);
+});
+
+test("a record that changed before forgetting is reread and shown, not forgotten", async () => {
+  const changed = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) " +
+    "was written by a newer version of Brauser.";
+  install({
+    adapters: [artifactFor("https://work.example")],
+    host: {
+      forget_adopted_contracts: (_request, state) => {
+        state.adoptedState = { issue: changed, revision: "sha256:newer", warnings: [], full: false };
+        return { type: "error", code: "conflict", message: "the record of adopted adapters changed" };
+      },
+    },
+  });
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  el("forget-adopted").click();
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-issue").textContent === changed, "the reread record");
+  assert.match(statusText(), /changed/);
+  assert.equal(el("forget-adopted-confirm").hidden, true);
+  assert.equal(el("forget-adopted").hidden, false);
+  // A second confirmation uses the revision the user is now shown.
+  el("forget-adopted").click();
+  el("forget-adopted-yes").click();
+  await until(() => env.requests.filter((request) => request.type === "forget_adopted_contracts").length === 2,
+    "the second forget");
+  assert.equal(env.requests.findLast((request) => request.type === "forget_adopted_contracts").expected_revision,
+    "sha256:newer");
+});
+
+test("a full record's warning offers the forget repair with the same confirmation", async () => {
+  const full = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) is full " +
+    "(1,024 adapters or 1 MiB), so 1 adapter in use is not recorded. Forget recorded adapters starts a fresh record.";
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full], full: true };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-issue").hidden, true);
+  assert.deepEqual(el("adopted-warnings").children.map((item) => item.textContent), [full]);
+  assert.equal(el("forget-adopted").hidden, false);
+  el("forget-adopted").click();
+  assert.equal(el("forget-adopted-confirm").hidden, false);
+  assert.equal(env.requests.filter((request) => request.type === "forget_adopted_contracts").length, 0);
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-state").hidden, "the fresh record");
+  const forgets = env.requests.filter((request) => request.type === "forget_adopted_contracts");
+  assert.equal(forgets.length, 1);
+  assert.equal(forgets[0].expected_revision, "sha256:full");
+});
+
+test("recording warnings Forget cannot fix are shown as notices without the forget repair", async () => {
+  const full = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) could not be " +
+    "updated: permission denied.";
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-state").hidden, false);
+  assert.equal(el("adopted-issue").hidden, true);
+  assert.deepEqual(el("adopted-warnings").children.map((item) => item.textContent), [full]);
+  assert.equal(el("forget-adopted").hidden, true);
+  assert.equal(el("new-adapter").disabled, false);
 });
