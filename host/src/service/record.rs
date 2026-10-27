@@ -139,6 +139,11 @@ pub struct RunStatusFile {
     pub run_timeout_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vocabulary: Option<SummaryVocabulary>,
+    /// When the validated answer was kept, stamped once before its first
+    /// save, so every save of the run (a retry included) writes the same
+    /// event time. An older record gets it on its first retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<String>,
 }
 
 impl RunStatusFile {
@@ -555,6 +560,7 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
         }
     }
 

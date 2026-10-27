@@ -429,6 +429,7 @@ impl Supervisor {
                 stream_truncated: false,
                 run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
                 vocabulary: Some(req.vocabulary.clone()),
+                answered_at: None,
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
@@ -567,6 +568,18 @@ impl Supervisor {
                 "This run has no failed save to retry.".to_string(),
             ));
         };
+        // A record kept before answers were stamped gets its stamp now,
+        // before the save, so later retries reuse it.
+        if status.answered_at.is_none() {
+            status.answered_at = Some(now_timestamp());
+            inner.store.write_status(&status).map_err(|error| {
+                eprintln!("brauser service: stamping run {id} answer: {error:#}");
+                (
+                    ErrorCode::Internal,
+                    "The run could not be updated.".to_string(),
+                )
+            })?;
+        }
         match inner.finisher.save(&status, &result) {
             Ok(saved) => {
                 status.state = RunState::Succeeded;
@@ -787,7 +800,7 @@ impl Inner {
             (None, Driven::Invalid(reason)) => {
                 Finish::fail(RunErrorKind::InvalidOutput, Some(reason))
             }
-            (None, Driven::Accepted(result)) => this.conclude(id, &status, &result),
+            (None, Driven::Accepted(result)) => this.conclude(id, &result),
         };
         this.finish_with(&control, id, |status| finished.apply(status));
         let _ = watchdog.join();
@@ -898,16 +911,27 @@ impl Inner {
         driven
     }
 
-    /// Keep and save a validated answer.
-    fn conclude(&self, id: Uuid, status: &RunStatusFile, result: &serde_json::Value) -> Finish {
+    /// Keep and save a validated answer. The record is stamped with the
+    /// answer's time before the save, and the save gets the record as it
+    /// is now (with the session the harness reported), so a retry writes
+    /// the same event as this save would have.
+    fn conclude(&self, id: Uuid, result: &serde_json::Value) -> Finish {
+        const NOT_KEPT: &str = "The answer could not be kept for saving.";
         if let Err(error) = self.store.write_result(id, result) {
             eprintln!("brauser service: keeping run {id} result: {error:#}");
-            return Finish::fail(
-                RunErrorKind::SaveFailed,
-                Some("The answer could not be kept for saving.".to_string()),
-            );
+            return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
         }
-        match self.finisher.save(status, result) {
+        let answered = now_timestamp();
+        let status = match self.update(id, |status| {
+            status.answered_at.get_or_insert(answered);
+        }) {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("brauser service: stamping run {id} answer: {error:#}");
+                return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
+            }
+        };
+        match self.finisher.save(&status, result) {
             Ok(saved) => Finish::Succeeded(saved),
             Err(reason) => Finish::fail(RunErrorKind::SaveFailed, Some(reason)),
         }
@@ -1138,10 +1162,14 @@ mod tests {
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::record::{RunStatusFile, RunStore};
 
-    /// Accepts a §6.4 answer and saves nothing, counting its saves.
+    /// Accepts a §6.4 answer and saves nothing, counting its saves and
+    /// keeping the record the last one was given.
     struct TestFinisher {
         saves: Arc<AtomicUsize>,
+        seen: SeenRun,
     }
+
+    type SeenRun = Arc<Mutex<Option<RunStatusFile>>>;
 
     impl RunFinisher for TestFinisher {
         fn accept(
@@ -1158,6 +1186,7 @@ mod tests {
             _result: &serde_json::Value,
         ) -> Result<SavedRun, String> {
             self.saves.fetch_add(1, Ordering::SeqCst);
+            *self.seen.lock().unwrap() = Some(run.clone());
             Ok(SavedRun {
                 written_key: run.start_key.clone(),
                 summary_path: Some("summaries/a.summary.md".to_string()),
@@ -1179,6 +1208,8 @@ mod tests {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
         saves: Arc<AtomicUsize>,
+        /// The record the [`TestFinisher`]'s last save was given.
+        seen: SeenRun,
         /// What the run environment source returns when a run starts.
         env: SharedEnv,
     }
@@ -1294,10 +1325,12 @@ mod tests {
         ) -> Self {
             let store = RunStore::open(dir.path().join("runs")).unwrap();
             let saves = Arc::new(AtomicUsize::new(0));
+            let seen = SeenRun::default();
             let finisher: Box<dyn RunFinisher> = match finisher {
                 Some(build) => build(dir.path()),
                 None => Box::new(TestFinisher {
                     saves: saves.clone(),
+                    seen: seen.clone(),
                 }),
             };
             let env: SharedEnv = Arc::new(Mutex::new(match env_error {
@@ -1330,6 +1363,7 @@ mod tests {
                 dir,
                 supervisor,
                 saves,
+                seen,
                 env,
             }
         }
@@ -1976,19 +2010,11 @@ mod tests {
         );
         let page = fixture.request("a").url;
         let key = crate::vault::url_record_key(&page).unwrap();
-        let relative = crate::vault::Vault::open(&brauser_protocol::StorageConfig {
-            root: fixture.path("home").to_string_lossy().into_owned(),
-            profile: "neutral".into(),
-            log_dir: "logs".into(),
-            pages_dir: "notes".into(),
-            later_dir: "later".into(),
-            artifacts_dir: "artifacts".into(),
-            summaries_dir: Some("summaries".into()),
-            knowledge_base_dir: None,
-        })
-        .unwrap()
-        .summary_relative_path(&key, &page)
-        .unwrap();
+        let config = crate::config::ConfigStore::load_from(fixture.path("config.toml"));
+        let relative = crate::vault::Vault::open(config.snapshot().storage.as_ref().unwrap())
+            .unwrap()
+            .summary_relative_path(&key, &page)
+            .unwrap();
         let summary = fixture.path("home").join(&relative);
         std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
         std::fs::write(&summary, "my own file\n").unwrap();
@@ -2006,6 +2032,8 @@ mod tests {
         );
         assert!(view.can_retry_save);
         assert_eq!(read(&summary), "my own file\n");
+        let failed = fixture.supervisor.store().status(id).unwrap();
+        let answered_at = failed.answered_at.clone().expect("stamped before the save");
 
         std::fs::remove_file(&summary).unwrap();
         let retried = fixture.supervisor.retry_save(id).unwrap();
@@ -2014,12 +2042,90 @@ mod tests {
         assert_eq!(retried.error_kind, None);
         assert_eq!(retried.summary_path.as_deref(), Some(shown.as_str()));
         assert!(!retried.can_retry_save);
-        assert!(read(&summary).starts_with("---\nbrauser:\n  kind: summary\n"));
+        let written = read(&summary);
+        assert!(written.starts_with("---\nbrauser:\n  kind: summary\n"));
+        // The retry writes the answer's time, not its own.
+        let stamped = crate::service::finisher::summarized_at(
+            OffsetDateTime::parse(&answered_at, &Rfc3339).unwrap(),
+            &failed.requested_at,
+        );
+        assert!(
+            written.contains(&format!("summarized_at: \"{stamped}\"")),
+            "{written}"
+        );
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(stored.answered_at.as_deref(), Some(answered_at.as_str()));
         assert_eq!(
             read(&fixture.path("count")),
             "ran\n",
             "the harness ran once"
         );
+        // The failed first save logged nothing; the retry logged once.
+        assert_eq!(summary_lines(&fixture.path("home").join("logs")), 1);
+    }
+
+    /// The `kind=summary` lines in every daily log under `dir`.
+    fn summary_lines(dir: &Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .map(|entry| entry.unwrap().path())
+            .map(|path| {
+                if path.is_dir() {
+                    summary_lines(&path)
+                } else {
+                    read(&path).matches(" kind=summary data=").count()
+                }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn the_first_save_gets_the_record_stamped_with_its_answer_time() {
+        let fixture = Fixture::new(ANSWER);
+        let id = fixture.start("a");
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert!(seen.answered_at.is_some(), "{seen:?}");
+        assert_eq!(seen.answered_at, stored.answered_at);
+        // The record as it is now, with the session the harness reported.
+        assert_eq!(seen.session_id.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
+    fn a_retry_of_an_unstamped_record_stamps_it_before_saving() {
+        let mut seeded = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            let id = seed_record(
+                store,
+                cwd,
+                RunState::Failed,
+                "2026-10-26T09:00:01.000000000Z",
+            );
+            let mut status = store.status(id).unwrap();
+            status.error_kind = Some(RunErrorKind::SaveFailed);
+            status.error = Some("The summary file could not be written. Retry save.".into());
+            store.write_status(&status).unwrap();
+            store
+                .write_result(id, &serde_json::from_str(TEST_ANSWER).unwrap())
+                .unwrap();
+            seeded = Some(id);
+        });
+        let id = seeded.unwrap();
+        assert_eq!(
+            fixture.supervisor.store().status(id).unwrap().answered_at,
+            None
+        );
+
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        assert!(seen.answered_at.is_some());
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(stored.answered_at, seen.answered_at);
     }
 
     #[test]
@@ -2241,6 +2347,7 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
         }
     }
 
@@ -2310,6 +2417,7 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id

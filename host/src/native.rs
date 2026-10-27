@@ -1249,6 +1249,10 @@ struct KeyParts {
     key: RecordKey,
 }
 
+/// `resolve_record_key`'s reason when the home folder is missing or was
+/// replaced; callers that map it to their own message match on this.
+pub(crate) const HOME_UNAVAILABLE: &str = "home folder is unavailable";
+
 fn resolve_key_parts(
     config: &mut ConfigStore,
     url: &str,
@@ -1265,7 +1269,7 @@ fn resolve_key_parts(
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable"))?;
+        .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule

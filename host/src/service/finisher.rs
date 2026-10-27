@@ -7,8 +7,11 @@
 //! artifact index has no lock of its own (`brwr-7vf`). Every failure is a
 //! user-facing reason that ends in what to do, then Retry save; a retry
 //! re-reads the kept answer, so the agent never runs again. A retry is
-//! idempotent: the run ID is the log event's ID, so its line is written
-//! once, and an identical summary file is left unchanged.
+//! idempotent: the event time is the run's `answered_at` stamp, not the
+//! clock, so every save builds the same entry and file; the run ID is the
+//! log event's ID, so its line is written once (and an entry rolled back
+//! after its intent was journaled replays), and the identical summary
+//! file is left unchanged.
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +28,7 @@ use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url}
 use crate::config::ConfigStore;
 use crate::index::ArtifactIndex;
 use crate::markdown::link_style;
-use crate::native::resolve_record_key;
+use crate::native::{HOME_UNAVAILABLE, resolve_record_key};
 use crate::summary::{
     MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, WEB_PAGE_TYPE, render_summary,
 };
@@ -104,7 +107,14 @@ impl RunFinisher for SummaryFinisher {
         let note_link = vault
             .note_link(&key, &canonical, style)
             .map_err(|error| unwritable(&error))?;
-        let occurred_at = summarized_at((self.now)(), &run.requested_at);
+        // The answer's stamp, so every save of the run builds the same log
+        // entry; the clock only for a record that has none.
+        let now = run
+            .answered_at
+            .as_deref()
+            .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok())
+            .unwrap_or_else(self.now);
+        let occurred_at = summarized_at(now, &run.requested_at);
         let title = event_title(&run.title, &canonical);
         let document = SummaryDocument {
             key: &key,
@@ -200,7 +210,7 @@ fn key_error((code, message): (ErrorCode, &'static str)) -> String {
     match code {
         ErrorCode::InvalidConfig => NEEDS_REPAIR.into(),
         ErrorCode::NotConfigured => NO_STORAGE.into(),
-        ErrorCode::Internal if message == "home folder is unavailable" => FOLDER_UNAVAILABLE.into(),
+        ErrorCode::Internal if message == HOME_UNAVAILABLE => FOLDER_UNAVAILABLE.into(),
         _ => format!("This page's notes record could not be found ({message}). Retry save."),
     }
 }
@@ -318,6 +328,14 @@ mod tests {
         OffsetDateTime::parse("2026-10-26T21:05:00Z", &Rfc3339).unwrap()
     }
 
+    /// A minute after [`fixed_now`], as the clock reads on a later retry.
+    fn later_now() -> OffsetDateTime {
+        OffsetDateTime::parse("2026-10-26T21:06:00Z", &Rfc3339).unwrap()
+    }
+
+    /// The record stamp the supervisor writes when it keeps the answer.
+    const ANSWERED_AT: &str = "2026-10-26T21:04:30.250000000Z";
+
     /// A home folder and a config.toml naming it, in a temp directory.
     struct World {
         dir: tempfile::TempDir,
@@ -356,6 +374,28 @@ mod tests {
 
         fn finisher(&self) -> SummaryFinisher {
             SummaryFinisher::with_clock(self.config_path(), fixed_now)
+        }
+
+        fn later_finisher(&self) -> SummaryFinisher {
+            SummaryFinisher::with_clock(self.config_path(), later_now)
+        }
+
+        /// The one daily log file under `logs/`.
+        fn log_file(&self) -> PathBuf {
+            fn find(dir: &Path) -> Option<PathBuf> {
+                for entry in fs::read_dir(dir).ok()? {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        if let Some(found) = find(&path) {
+                            return Some(found);
+                        }
+                    } else if path.extension().is_some_and(|ext| ext == "md") {
+                        return Some(path);
+                    }
+                }
+                None
+            }
+            find(&self.root.join("logs")).expect("a daily log")
         }
 
         fn config(&self) -> ConfigStore {
@@ -445,6 +485,7 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
         }
     }
 
@@ -644,6 +685,95 @@ mod tests {
         assert!(!world.root.join(&relative).exists());
         assert!(!world.root.join("logs").exists());
         assert!(moved.join("logs").is_dir());
+    }
+
+    /// The plan's "summaries_dir changed mid-run" case: the layout is
+    /// fixed now, so a different `summaries_dir` is a folder move still in
+    /// progress. Nothing is written until it finishes.
+    #[test]
+    fn a_summaries_dir_changed_mid_run_waits_for_the_layout_move() {
+        let world = World::new();
+        let run = run(&world, PAGE, HarnessId::Codex);
+        fixtures::write(
+            &world.config_path(),
+            &world.root,
+            "summaries_dir = \"other\"\n",
+            "",
+            "",
+        );
+
+        let error = world.finisher().save(&run, &answer()).unwrap_err();
+
+        assert_eq!(error, NEEDS_REPAIR);
+        assert!(!world.root.join("other").exists());
+        assert!(!world.root.join("summaries").exists());
+        assert!(world.summary_events().is_empty());
+    }
+
+    #[test]
+    fn a_stamped_run_uses_its_answer_time_not_the_clock() {
+        let world = World::new();
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        run.answered_at = Some(ANSWERED_AT.into());
+
+        world.later_finisher().save(&run, &answer()).unwrap();
+
+        let file = fs::read_to_string(world.root.join(world.summary_path(PAGE))).unwrap();
+        assert!(
+            file.contains("summarized_at: \"2026-10-26T14:04:30-07:00\""),
+            "{file}"
+        );
+        assert_eq!(
+            world.summary_events()[0].occurred_at,
+            "2026-10-26T14:04:30-07:00"
+        );
+    }
+
+    /// Review Focus 4: an append that failed and was rolled back leaves its
+    /// intent behind, so the retry must rebuild the identical entry even
+    /// though the clock has moved on.
+    #[test]
+    fn a_retry_after_a_rolled_back_log_append_succeeds_with_a_later_clock() {
+        let world = World::new();
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        run.answered_at = Some(ANSWERED_AT.into());
+        world.finisher().save(&run, &answer()).unwrap();
+        let log = world.log_file();
+        let text = fs::read_to_string(&log).unwrap();
+        let cut = text.rfind("\n- ").unwrap();
+        fs::write(&log, &text[..cut]).unwrap();
+        assert!(world.summary_events().is_empty());
+
+        world.later_finisher().save(&run, &answer()).unwrap();
+
+        let events = world.summary_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].occurred_at, "2026-10-26T14:04:30-07:00");
+    }
+
+    #[test]
+    fn a_retry_after_success_with_a_later_clock_leaves_the_file_unchanged() {
+        let world = World::new();
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        run.answered_at = Some(ANSWERED_AT.into());
+        world.finisher().save(&run, &answer()).unwrap();
+        let path = world.root.join(world.summary_path(PAGE));
+        let written = fs::read(&path).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        world.later_finisher().save(&run, &answer()).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), written);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        assert_eq!(world.summary_events().len(), 1);
+    }
+
+    #[test]
+    fn an_unavailable_home_folder_refusal_names_the_fix() {
+        assert_eq!(
+            key_error((ErrorCode::Internal, crate::native::HOME_UNAVAILABLE)),
+            FOLDER_UNAVAILABLE
+        );
     }
 
     #[test]
