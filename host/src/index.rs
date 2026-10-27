@@ -4646,9 +4646,11 @@ print(json.dumps([tables,row]))"#;
 
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
-        let config = storage(root.path());
+        // #82 fixed the folder names, so the reserved character sits in the
+        // file name inside the fixed summaries folder.
+        let config = crate::layout::fixed(&storage(root.path()));
         let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
-        let index = index(&root, &cache);
+        let index = ArtifactIndex::open_in(&config, None, cache.path()).unwrap();
         let policy = CapturePolicy {
             enabled: true,
             origins: &[],
@@ -4656,7 +4658,7 @@ print(json.dumps([tables,row]))"#;
         };
         let url = "https://news.ycombinator.com/item?id=50251344";
         let mut summary = page_summary(url, &rfc3339_seconds_ago(5));
-        summary.summary_path = "My Summaries/hn-item.summary.md".into();
+        summary.summary_path = format!("{}/hn item.summary.md", crate::layout::SUMMARIES_DIR);
 
         assert!(matches!(
             capture.record_summary(policy, &summary),
@@ -4666,7 +4668,7 @@ print(json.dumps([tables,row]))"#;
 
         let file = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
         assert!(file.contains(
-            "Summary: [discussion, high importance](<../../../My%20Summaries/hn-item.summary.md>)"
+            "Summary: [discussion, high importance](<../../../summaries/hn%20item.summary.md>)"
         ));
     }
 
