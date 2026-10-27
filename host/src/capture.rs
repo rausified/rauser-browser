@@ -94,6 +94,7 @@ struct BatchEntry {
     event_hash: String,
     timestamp: OffsetDateTime,
     entry: String,
+    legacy_entry: Option<String>,
     overflow: bool,
 }
 
@@ -591,11 +592,13 @@ impl CaptureStore {
             "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
             event.occurred_at, marker_metadata
         );
+        let legacy_entry = pre_sanitizer_entry(&entry, event, false);
         Ok(BatchEntry {
             event_id,
             event_hash,
             timestamp,
             entry,
+            legacy_entry,
             overflow,
         })
     }
@@ -827,7 +830,19 @@ impl CaptureStore {
         );
         let journal_path = self.journal_path(&event_hash);
         if let Some(intent) = read_intent(&journal_path)? {
-            return self.replay_intent(&intent, &event_hash, entry.as_bytes());
+            let legacy_entry = pre_sanitizer_entry(
+                &entry,
+                event,
+                rendering
+                    .marker_metadata
+                    .is_some_and(|value| value.starts_with(" kind=why ")),
+            );
+            return self.replay_intent(
+                &intent,
+                &event_hash,
+                entry.as_bytes(),
+                legacy_entry.as_deref(),
+            );
         }
 
         let (relative_dir, filename) = self.log_parts(timestamp);
@@ -943,6 +958,7 @@ impl CaptureStore {
         intent: &VisitIntent,
         event_hash: &str,
         entry: &[u8],
+        legacy_entry: Option<&str>,
     ) -> Result<CaptureOutcome> {
         if intent.version != 1 || intent.entry_hash.len() != 64 || intent.offset > MAX_LOG_BYTES {
             bail!("visit intent is invalid; manual repair is required");
@@ -990,9 +1006,19 @@ impl CaptureStore {
         if self.root_identity != intent.root_identity {
             bail!("visit belongs to a previously selected notes folder; do not append there");
         }
-        if intent.entry_hash != sha256_hex(entry) {
+        // V1 intents hash presentation bytes. For an interrupted pre-sanitizer
+        // append, accept only the exact older rendering whose complete hash
+        // matches the durable intent. Complete markers above still dedupe,
+        // and the tail check below must match this same historical entry.
+        let entry = if intent.entry_hash == sha256_hex(entry) {
+            entry
+        } else if let Some(legacy) = legacy_entry
+            && intent.entry_hash == sha256_hex(legacy.as_bytes())
+        {
+            legacy.as_bytes()
+        } else {
             bail!("queued visit changed after a partial write; manual repair is required");
-        }
+        };
         if metadata.len() < intent.offset {
             bail!("original daily log changed after visit intent; manual repair is required");
         }
@@ -1050,8 +1076,12 @@ impl CaptureStore {
         for (index, entry) in entries.iter().enumerate() {
             let journal_path = self.journal_path(&entry.event_hash);
             if let Some(intent) = read_intent(&journal_path)? {
-                outcomes[index] =
-                    Some(self.replay_intent(&intent, &entry.event_hash, entry.entry.as_bytes())?);
+                outcomes[index] = Some(self.replay_intent(
+                    &intent,
+                    &entry.event_hash,
+                    entry.entry.as_bytes(),
+                    entry.legacy_entry.as_deref(),
+                )?);
             }
         }
         if outcomes.iter().all(Option::is_some) {
@@ -1733,6 +1763,45 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
     Some((id, url, at))
 }
 
+/// Reconstruct only the text prefix changed by the sanitizer upgrade, keeping
+/// the URL, measurements, and encoded marker payload byte-exact. The caller
+/// must verify the hash of this entire candidate against a durable v1 intent;
+/// it is never used for a new append. This also permits completion of old text
+/// containing formatting characters, just as compact batch recovery retains
+/// its original prepared bytes. Do not use this frozen renderer for display.
+fn pre_sanitizer_entry(entry: &str, event: &VisitEvent, why: bool) -> Option<String> {
+    let limit = if why { 500 } else { 300 };
+    let label = if why { "Why: " } else { "" };
+    let prefix = format!("\n- {} — {label}", event.occurred_at);
+    let current = format!(
+        "{prefix}{}",
+        safe_markdown_line(event.title.as_deref(), limit)
+    );
+    let suffix = entry.strip_prefix(&current)?;
+    let mut text = String::new();
+    for ch in event
+        .title
+        .as_deref()
+        .unwrap_or("Untitled")
+        .trim()
+        .chars()
+        .take(limit)
+    {
+        if ch.is_control() {
+            text.push(' ');
+        } else {
+            if matches!(ch, '\\' | '[' | ']' | '<' | '>' | '*' | '_' | '`' | '|') {
+                text.push('\\');
+            }
+            text.push(ch);
+        }
+    }
+    if text.trim().is_empty() {
+        text = "Untitled".into();
+    }
+    Some(format!("{prefix}{text}{suffix}"))
+}
+
 fn safe_title(value: Option<&str>) -> String {
     safe_markdown_line(value, 300)
 }
@@ -2022,6 +2091,157 @@ mod tests {
 
         let error = store.recover_batch_intent().unwrap_err().to_string();
         assert!(error.contains("capture batch intent is invalid"));
+    }
+
+    #[test]
+    fn pre_sanitizer_activity_and_why_recovery_keeps_exact_marker_payloads() {
+        for why in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let mut activity = activity();
+            activity.title = Some("Draft #tag %%comment%%".into());
+            let context = WhyEvent {
+                event_id: activity.event_id.clone(),
+                artifact_id: activity.artifact_id.clone(),
+                url: activity.url.clone(),
+                occurred_at: activity.occurred_at.clone(),
+                incognito: false,
+                text: activity.title.clone().unwrap(),
+            };
+            let deliver = || {
+                if why {
+                    let sites = [SiteConfig {
+                        origin: "https://example.com".into(),
+                        path_prefix: "/".into(),
+                    }];
+                    store.record_why(
+                        CapturePolicy {
+                            enabled: true,
+                            sites: &sites,
+                            strip_params: &[],
+                        },
+                        &context,
+                    )
+                } else {
+                    record_activity(&store, &activity)
+                }
+            };
+            let CaptureOutcome::Persisted { relative_path } = deliver() else {
+                panic!("expected fixture event");
+            };
+            let hash = sha256_hex(activity.event_id.as_bytes());
+            let journal = store.journal_path(&hash);
+            let mut intent = read_intent(&journal).unwrap().unwrap();
+            let log = root.path().join(relative_path);
+            let current = fs::read_to_string(&log).unwrap();
+            // Only the rendered prose changes; the hex payload is retained.
+            let previous =
+                current.replace(r"Draft \#tag \%\%comment\%\%", "Draft #tag %%comment%%");
+            assert_ne!(previous, current);
+            let entry = &previous[intent.offset as usize..];
+            intent.entry_hash = sha256_hex(entry.as_bytes());
+            fs::write(journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+            fs::write(&log, &previous.as_bytes()[..previous.len() - 8]).unwrap();
+            let outcome = deliver();
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            assert_eq!(fs::read_to_string(&log).unwrap(), previous);
+            assert!(matches!(deliver(), CaptureOutcome::Suppressed { .. }));
+        }
+    }
+
+    #[test]
+    fn pre_sanitizer_intents_recover_through_single_and_batch_delivery() {
+        for batched in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let earlier = event();
+            let CaptureOutcome::Persisted { relative_path } = record(&store, &earlier) else {
+                panic!("expected fixture visit");
+            };
+            let log = root.path().join(relative_path);
+            let unrelated = fs::read(&log).unwrap();
+            let mut visit = event();
+            visit.title = Some("Report\u{202e}draft %%comment%% #tag ![embed]".into());
+            visit.occurred_at = earlier.occurred_at.clone();
+            let hash = sha256_hex(visit.event_id.as_bytes());
+            // Exact pre-upgrade renderer output, independent of the current
+            // sanitizer. Its durable v1 intent contains only a hash.
+            let old_entry = format!(
+                "\n- {} — Report\u{202e}draft %%comment%% #tag !\\[embed\\] — <{}>\n{MARKER_PREFIX}{hash} url={} at={} -->\n",
+                visit.occurred_at,
+                visit.url,
+                sha256_hex(visit.url.as_bytes()),
+                visit.occurred_at
+            );
+            let intent = store
+                .intent(
+                    log.strip_prefix(root.path()).unwrap(),
+                    &old_entry,
+                    unrelated.len() as u64,
+                )
+                .unwrap();
+            publish_intent(&store.journal_path(&hash), &intent).unwrap();
+            let deliver = |value: &VisitEvent| {
+                if batched {
+                    let sites = [SiteConfig {
+                        origin: "https://example.com".into(),
+                        path_prefix: "/".into(),
+                    }];
+                    store
+                        .record_batch(
+                            CapturePolicy {
+                                enabled: true,
+                                sites: &sites,
+                                strip_params: &[],
+                            },
+                            &Uuid::new_v4().to_string(),
+                            &[CaptureBatchEvent::Visit(value)],
+                            None,
+                        )
+                        .events
+                        .remove(0)
+                        .1
+                } else {
+                    record(&store, value)
+                }
+            };
+            // Cut inside the old renderer's multibyte format character.
+            let cut = old_entry.find('\u{202e}').unwrap() + 1;
+            let mut torn = unrelated.clone();
+            torn.extend_from_slice(&old_entry.as_bytes()[..cut]);
+            fs::write(&log, &torn).unwrap();
+            let mut changed = visit.clone();
+            changed.url.push_str("&different=1");
+            assert!(matches!(
+                deliver(&changed),
+                CaptureOutcome::Retryable { .. }
+            ));
+            assert_eq!(fs::read(&log).unwrap(), torn);
+            // Even with a valid intent/hash, an edited tail must be preserved.
+            let mut edited = torn.clone();
+            *edited.last_mut().unwrap() ^= 1;
+            fs::write(&log, &edited).unwrap();
+            assert!(matches!(deliver(&visit), CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&log).unwrap(), edited);
+            fs::write(&log, &torn).unwrap();
+            let outcome = deliver(&visit);
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            let mut expected = unrelated;
+            expected.extend_from_slice(old_entry.as_bytes());
+            assert_eq!(fs::read(&log).unwrap(), expected);
+            assert!(matches!(deliver(&visit), CaptureOutcome::Suppressed { .. }));
+            assert_eq!(fs::read(&log).unwrap(), expected);
+        }
     }
 
     #[test]

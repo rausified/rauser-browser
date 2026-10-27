@@ -330,10 +330,10 @@ Their line numbers predate step 6.6, so re-check them.
   dated as-built and probe records to `docs/history.md`, and make AGENTS.md
   "Current state" a short table.
 - [ ] `brwr-3cc` **Preserve single-event recovery across presentation changes.**
-  Legacy intents retain a rendered-entry hash rather than prepared bytes, so
-  an interrupted pre-upgrade entry can require manual repair when escaping
-  changes. Keep exact-byte integrity checks while making future recovery
-  independent of the renderer; compact batches already retain their bytes.
+  Legacy intents retain a rendered-entry hash rather than prepared bytes.
+  Independent review added exact-hash compatibility for this sanitizer
+  upgrade; future rendering changes still need recovery independent of the
+  renderer, with the same integrity checks. Compact batches retain their bytes.
 
 ### Cookie's own proposals (only after the plan work above)
 

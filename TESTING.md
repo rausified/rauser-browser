@@ -115,6 +115,7 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced a sanitizer-upgrade recovery failure with a pre-upgrade v1 intent and a log torn inside a Unicode format character. Exact-hash compatibility now resumes that original entry through both single and batch delivery, preserves unrelated bytes, refuses changed payloads and edited tails, and deduplicates a complete marker. A second regression covers activity and context payloads. Future renderer-independent single-entry intent storage remains tracked as `brwr-3cc`; no macOS execution is claimed.
 - 2026-10-27: Unicode-spoofing regressions first failed in daily rows and
   generated artifact files, then passed with the shared host presentation
   sanitizer. Tests exercise single and batch activity/legacy delivery, explicit
