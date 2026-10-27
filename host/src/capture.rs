@@ -10,9 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{
-    ActivityEvent, OverflowMarker, SiteConfig, StorageConfig, VisitEvent, WhyEvent,
-};
+use brauser_protocol::{ActivityEvent, OverflowMarker, StorageConfig, VisitEvent, WhyEvent};
 use cap_std::fs::{Dir, OpenOptions};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -101,7 +99,8 @@ struct BatchEntry {
 #[derive(Clone, Copy)]
 pub struct CapturePolicy<'a> {
     pub enabled: bool,
-    pub sites: &'a [SiteConfig],
+    /// Exact origins automatic capture may record: the adapter origins.
+    pub origins: &'a [String],
     pub strip_params: &'a [String],
 }
 
@@ -288,14 +287,10 @@ impl CaptureStore {
                 Ok(source) => source,
                 Err(reason) => return CaptureOutcome::Rejected { reason },
             };
-            match is_authorized(&source, policy.sites) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return CaptureOutcome::Rejected {
-                        reason: "mode_site_not_allowed".into(),
-                    };
-                }
-                Err(message) => return CaptureOutcome::Retryable { message },
+            if !is_authorized(&source, policy.origins) {
+                return CaptureOutcome::Rejected {
+                    reason: "mode_site_not_allowed".into(),
+                };
             }
             mode.url = match normalize_url(source, policy.strip_params) {
                 Ok(normalized) => normalized,
@@ -310,14 +305,10 @@ impl CaptureStore {
                 Ok(source) => source,
                 Err(reason) => return CaptureOutcome::Rejected { reason },
             };
-            match is_authorized(&source, policy.sites) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return CaptureOutcome::Rejected {
-                        reason: "trail_site_not_allowed".into(),
-                    };
-                }
-                Err(message) => return CaptureOutcome::Retryable { message },
+            if !is_authorized(&source, policy.origins) {
+                return CaptureOutcome::Rejected {
+                    reason: "trail_site_not_allowed".into(),
+                };
             }
             trail.from_url = match normalize_url(source, policy.strip_params) {
                 Ok(normalized) => Some(normalized),
@@ -649,14 +640,10 @@ impl CaptureStore {
         }
         let original =
             parse_page_url(&event.url).map_err(|reason| CaptureOutcome::Rejected { reason })?;
-        match is_authorized(&original, policy.sites) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(CaptureOutcome::Rejected {
-                    reason: "site_not_allowed".into(),
-                });
-            }
-            Err(message) => return Err(CaptureOutcome::Retryable { message }),
+        if !is_authorized(&original, policy.origins) {
+            return Err(CaptureOutcome::Rejected {
+                reason: "site_not_allowed".into(),
+            });
         }
         let normalized = normalize_url(original, policy.strip_params)
             .map_err(|message| CaptureOutcome::Retryable { message })?;
@@ -732,14 +719,10 @@ impl CaptureStore {
         for mode in &mut payload.modes {
             let source =
                 parse_page_url(&mode.url).map_err(|reason| CaptureOutcome::Rejected { reason })?;
-            match is_authorized(&source, policy.sites) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return Err(CaptureOutcome::Rejected {
-                        reason: "mode_site_not_allowed".into(),
-                    });
-                }
-                Err(message) => return Err(CaptureOutcome::Retryable { message }),
+            if !is_authorized(&source, policy.origins) {
+                return Err(CaptureOutcome::Rejected {
+                    reason: "mode_site_not_allowed".into(),
+                });
             }
             mode.url = normalize_url(source, policy.strip_params)
                 .map_err(|message| CaptureOutcome::Retryable { message })?;
@@ -750,14 +733,10 @@ impl CaptureStore {
             };
             let source =
                 parse_page_url(raw_source).map_err(|reason| CaptureOutcome::Rejected { reason })?;
-            match is_authorized(&source, policy.sites) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return Err(CaptureOutcome::Rejected {
-                        reason: "trail_site_not_allowed".into(),
-                    });
-                }
-                Err(message) => return Err(CaptureOutcome::Retryable { message }),
+            if !is_authorized(&source, policy.origins) {
+                return Err(CaptureOutcome::Rejected {
+                    reason: "trail_site_not_allowed".into(),
+                });
             }
             trail.from_url = Some(
                 normalize_url(source, policy.strip_params)
@@ -839,10 +818,7 @@ impl CaptureStore {
             Err(reason) => return CaptureOutcome::Rejected { reason },
         };
         let allowed = match gate {
-            EntryGate::SiteAllowlist => match is_authorized(&original, policy.sites) {
-                Ok(value) => value,
-                Err(message) => return CaptureOutcome::Retryable { message },
-            },
+            EntryGate::SiteAllowlist => is_authorized(&original, policy.origins),
             // `original` already passed `parse_page_url` above, so it is
             // already restricted to a credential-free HTTP(S) origin.
             EntryGate::AnyHttpPage => true,
@@ -1476,62 +1452,18 @@ fn parse_page_url(value: &str) -> std::result::Result<Url, String> {
     Ok(url)
 }
 
-/// Check the original URL against confirmed host rules. Call this before
-/// normalization; dropping query parameters must never widen authorization.
-pub fn url_allowed(raw: &str, sites: &[SiteConfig]) -> Result<bool> {
-    let url = parse_page_url(raw).map_err(anyhow::Error::msg)?;
-    is_authorized(&url, sites).map_err(anyhow::Error::msg)
-}
-
 /// Return a canonical page URL. Callers must authorize `raw` first.
 pub fn canonical_url(raw: &str, strip_params: &[String]) -> Result<String> {
     let url = parse_page_url(raw).map_err(anyhow::Error::msg)?;
     normalize_url(url, strip_params).map_err(anyhow::Error::msg)
 }
 
-fn is_authorized(url: &Url, sites: &[SiteConfig]) -> std::result::Result<bool, String> {
-    if sites.len() > 256 {
-        return Err("site policy has too many rules".into());
-    }
-    for site in sites {
-        let rule = Url::parse(&site.origin).map_err(|_| "invalid site origin".to_owned())?;
-        if !matches!(rule.scheme(), "http" | "https")
-            || rule.host_str().is_none()
-            || !rule.username().is_empty()
-            || rule.password().is_some()
-            || rule.path() != "/"
-            || rule.query().is_some()
-            || rule.fragment().is_some()
-            || site.origin.ends_with('/')
-        {
-            return Err("site policy must use an exact HTTP(S) origin".into());
-        }
-        let prefix = site.path_prefix.as_str();
-        if !prefix.starts_with('/')
-            || prefix.contains('?')
-            || prefix.contains('#')
-            || prefix.split('/').any(|part| matches!(part, "." | ".."))
-        {
-            return Err("invalid site path prefix".into());
-        }
-        let matches_path = if prefix == "/" {
-            true
-        } else if prefix.ends_with('/') {
-            // A slash-terminated rule matches descendants only. In
-            // particular, "//" must never collapse into a rule for all paths.
-            url.path().starts_with(prefix)
-        } else {
-            url.path() == prefix
-                || url
-                    .path()
-                    .strip_prefix(prefix)
-                    .is_some_and(|tail| tail.starts_with('/'))
-        };
-        if rule.origin() == url.origin() && matches_path {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+/// Check the original URL's exact origin against the capture origins. Call
+/// this before normalization; dropping query parameters must never widen
+/// authorization.
+fn is_authorized(url: &Url, origins: &[String]) -> bool {
+    let origin = url.origin().ascii_serialization();
+    origins.iter().any(|allowed| allowed == &origin)
 }
 
 fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<String, String> {
@@ -1946,6 +1878,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         }
     }
 
@@ -1963,15 +1896,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn capture_origins_authorize_exact_origins_only() {
+        let origins = ["https://example.com".to_owned()];
+        for (raw, expected) in [
+            ("https://example.com/any/path?q=1", true),
+            ("https://example.com:443/", true),
+            ("http://example.com/", false),
+            ("https://example.com:8443/", false),
+            ("https://sub.example.com/", false),
+            ("https://example.com.evil.test/", false),
+        ] {
+            let url = parse_page_url(raw).unwrap();
+            assert_eq!(is_authorized(&url, &origins), expected, "{raw}");
+        }
+        let url = parse_page_url("https://example.com/").unwrap();
+        assert!(!is_authorized(&url, &[]));
+    }
+
     fn record(store: &CaptureStore, event: &VisitEvent) -> CaptureOutcome {
-        let sites = [SiteConfig {
-            origin: "https://example.com".into(),
-            path_prefix: "/".into(),
-        }];
+        let origins = ["https://example.com".to_owned()];
         store.record(
             CapturePolicy {
                 enabled: true,
-                sites: &sites,
+                origins: &origins,
                 strip_params: &[],
             },
             event,
@@ -2021,14 +1969,11 @@ mod tests {
     }
 
     fn record_activity(store: &CaptureStore, event: &ActivityEvent) -> CaptureOutcome {
-        let sites = [SiteConfig {
-            origin: "https://example.com".into(),
-            path_prefix: "/".into(),
-        }];
+        let origins = ["https://example.com".to_owned()];
         store.record_activity(
             CapturePolicy {
                 enabled: true,
-                sites: &sites,
+                origins: &origins,
                 strip_params: &["secret".into()],
             },
             event,
@@ -2113,13 +2058,10 @@ mod tests {
             first_occurred_at: first.occurred_at.clone(),
             last_occurred_at: second.occurred_at.clone(),
         };
-        let sites = [SiteConfig {
-            origin: "https://example.com".into(),
-            path_prefix: "/".into(),
-        }];
+        let origins = ["https://example.com".to_owned()];
         let policy = || CapturePolicy {
             enabled: true,
-            sites: &sites,
+            origins: &origins,
             strip_params: &[],
         };
         let batch_id = Uuid::new_v4().to_string();
@@ -2234,14 +2176,11 @@ mod tests {
             };
             let deliver = || {
                 if why {
-                    let sites = [SiteConfig {
-                        origin: "https://example.com".into(),
-                        path_prefix: "/".into(),
-                    }];
+                    let origins = ["https://example.com".to_owned()];
                     store.record_why(
                         CapturePolicy {
                             enabled: true,
-                            sites: &sites,
+                            origins: &origins,
                             strip_params: &[],
                         },
                         &context,
@@ -2312,15 +2251,12 @@ mod tests {
             publish_intent(&store.journal_path(&hash), &intent).unwrap();
             let deliver = |value: &VisitEvent| {
                 if batched {
-                    let sites = [SiteConfig {
-                        origin: "https://example.com".into(),
-                        path_prefix: "/".into(),
-                    }];
+                    let origins = ["https://example.com".to_owned()];
                     store
                         .record_batch(
                             CapturePolicy {
                                 enabled: true,
-                                sites: &sites,
+                                origins: &origins,
                                 strip_params: &[],
                             },
                             &Uuid::new_v4().to_string(),
@@ -2381,14 +2317,11 @@ mod tests {
         let current =
             CaptureStore::open_at(&storage(root.path(), "other-log"), None, state.path()).unwrap();
         let batch_id = Uuid::new_v4().to_string();
-        let sites = [SiteConfig {
-            origin: "https://example.com".into(),
-            path_prefix: "/".into(),
-        }];
+        let origins = ["https://example.com".to_owned()];
         let outcome = current.record_batch(
             CapturePolicy {
                 enabled: true,
-                sites: &sites,
+                origins: &origins,
                 strip_params: &[],
             },
             &batch_id,
@@ -2411,14 +2344,11 @@ mod tests {
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
         let first = event();
         let batch_id = Uuid::new_v4().to_string();
-        let sites = [SiteConfig {
-            origin: "https://example.com".into(),
-            path_prefix: "/".into(),
-        }];
+        let origins = ["https://example.com".to_owned()];
         let outcome = store.record_batch(
             CapturePolicy {
                 enabled: true,
-                sites: &sites,
+                origins: &origins,
                 strip_params: &[],
             },
             &batch_id,
@@ -2532,13 +2462,10 @@ mod tests {
             incognito: false,
             text: "Fix [release] blocker".into(),
         };
-        let sites = [SiteConfig {
-            origin: "https://example.com".into(),
-            path_prefix: "/".into(),
-        }];
+        let origins = ["https://example.com".to_owned()];
         let policy = || CapturePolicy {
             enabled: true,
-            sites: &sites,
+            origins: &origins,
             strip_params: &[],
         };
         let CaptureOutcome::Persisted { relative_path } = store.record_why(policy(), &why) else {
@@ -2581,7 +2508,7 @@ mod tests {
         // No sites at all: a summary must not need the allowlist a visit does.
         let policy = CapturePolicy {
             enabled: true,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
@@ -2608,7 +2535,7 @@ mod tests {
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
         let policy = CapturePolicy {
             enabled: false,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
@@ -2626,7 +2553,7 @@ mod tests {
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
         let policy = CapturePolicy {
             enabled: true,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
@@ -2647,7 +2574,7 @@ mod tests {
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
         let policy = CapturePolicy {
             enabled: true,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let summary = page_summary("https://user:pass@news.ycombinator.com/item?id=1");
@@ -2671,7 +2598,7 @@ mod tests {
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
         let policy = CapturePolicy {
             enabled: true,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let canonical = Uuid::new_v4().hyphenated().to_string();
@@ -2706,7 +2633,7 @@ mod tests {
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
         let policy = CapturePolicy {
             enabled: true,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");

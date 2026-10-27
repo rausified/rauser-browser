@@ -15,37 +15,24 @@
 //! dialog, as soon as that pipe closes, which happens however the parent
 //! ends, including when Chrome kills it on disconnect. The parent also kills
 //! a child still open at `DIALOG_TIMEOUT`.
-//!
-//! On macOS the confirmation is drawn by the system UserNotificationCenter,
-//! not by the child, so killing the child would leave it on screen. The child
-//! gives it a timeout shorter than `DIALOG_TIMEOUT` and cancels it before
-//! exiting, and the parent closes the child's stdin and waits briefly before
-//! it resorts to a kill.
 
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::brand::APP_NAME;
 use anyhow::{Context, Result, bail};
 use rfd::FileDialog;
-#[cfg(not(target_os = "macos"))]
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 
-/// Internal subcommand names. They are not a supported CLI surface.
+/// Internal subcommand name. It is not a supported CLI surface.
 pub const PICK_FOLDER_COMMAND: &str = "__dialog-pick-folder";
-pub const CONFIRM_COMMAND: &str = "__dialog-confirm";
 
 /// How long a dialog may stay open. The extension waits five minutes for a
 /// dialog reply, so the host closes the dialog and answers first; an answer
 /// the extension has stopped waiting for would authorize nothing.
 const DIALOG_TIMEOUT: Duration = Duration::from_secs(270);
-/// How long a dialog the child shows itself may stay open. Shorter than
-/// `DIALOG_TIMEOUT`, so the dialog closes before the parent gives up.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const CHILD_DIALOG_TIMEOUT: Duration = Duration::from_secs(260);
 /// How long the parent waits, after closing a child's stdin, for the child to
 /// close its dialog and exit before killing it.
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
@@ -54,12 +41,6 @@ const MAX_LENGTH_LINE_BYTES: u64 = 16;
 const MAX_CHILD_OUTPUT_BYTES: u64 = 64 * 1024;
 const PICKED_PREFIX: &str = "picked:";
 const CANCELED: &str = "canceled";
-const CONFIRMED: &str = "confirmed";
-
-pub struct DialogText<'a> {
-    pub title: &'a str,
-    pub description: &'a str,
-}
 
 /// Show the folder picker in a child process. `None` means canceled.
 pub fn pick_folder(title: &str) -> Result<Option<PathBuf>> {
@@ -67,17 +48,10 @@ pub fn pick_folder(title: &str) -> Result<Option<PathBuf>> {
     parse_pick_reply(&reply)
 }
 
-/// Show a Yes/No warning in a child process. `false` means declined.
-pub fn confirm(text: DialogText<'_>) -> Result<bool> {
-    let input = format!("{}\n{}", text.title, text.description);
-    let reply = run_child(CONFIRM_COMMAND, &input)?;
-    parse_confirm_reply(&reply)
-}
-
 /// Entry point for the child process. Reads its request from stdin and
 /// writes a single-line reply to stdout.
 pub fn run_child_command(command: &str) -> Result<()> {
-    if command != PICK_FOLDER_COMMAND && command != CONFIRM_COMMAND {
+    if command != PICK_FOLDER_COMMAND {
         bail!("unknown dialog command: {command}");
     }
     let input = read_request(&mut std::io::stdin().lock())?;
@@ -87,27 +61,15 @@ pub fn run_child_command(command: &str) -> Result<()> {
         let reply = scripted::answer(&directory, command, &input, scripted::ANSWER_TIMEOUT)?;
         return write_reply(&reply);
     }
-    let reply = match command {
-        PICK_FOLDER_COMMAND => match FileDialog::new().set_title(input.trim()).pick_folder() {
-            Some(path) => {
-                let path = path
-                    .into_os_string()
-                    .into_string()
-                    .map_err(|_| anyhow::anyhow!("selected folder path is not valid UTF-8"))?;
-                format!("{PICKED_PREFIX}{path}")
-            }
-            None => CANCELED.to_owned(),
-        },
-        CONFIRM_COMMAND => {
-            let (title, description) = input.split_once('\n').unwrap_or((input.as_str(), ""));
-            if confirm_in_child(title, description)? {
-                CONFIRMED
-            } else {
-                CANCELED
-            }
-            .to_owned()
+    let reply = match FileDialog::new().set_title(input.trim()).pick_folder() {
+        Some(path) => {
+            let path = path
+                .into_os_string()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("selected folder path is not valid UTF-8"))?;
+            format!("{PICKED_PREFIX}{path}")
         }
-        other => bail!("unknown dialog command: {other}"),
+        None => CANCELED.to_owned(),
     };
     write_reply(&reply)
 }
@@ -136,19 +98,6 @@ fn read_request(input: &mut impl BufRead) -> Result<String> {
     String::from_utf8(text).context("dialog request is not UTF-8")
 }
 
-/// A dialog drawn outside this process, which exiting would not close.
-/// Guarded with whether the parent has gone, so such a dialog is either never
-/// shown or is canceled before this process exits.
-struct ExternalDialog {
-    parent_gone: bool,
-    cancel: Option<Box<dyn FnOnce() + Send>>,
-}
-
-static EXTERNAL_DIALOG: Mutex<ExternalDialog> = Mutex::new(ExternalDialog {
-    parent_gone: false,
-    cancel: None,
-});
-
 /// End this process, and with it the dialog, once the parent's end of stdin
 /// closes. The parent sends nothing more after the request, so any read that
 /// returns means the parent is gone or has given up on the dialog.
@@ -164,67 +113,12 @@ fn exit_when_parent_goes_away() {
                 Err(_) => break,
             }
         }
-        // Held until exit, so no external dialog can open after this point.
-        let mut external = EXTERNAL_DIALOG
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        external.parent_gone = true;
-        if let Some(cancel) = external.cancel.take() {
-            cancel();
-        }
         eprintln!(
             "{}: dialog closed because its request ended",
             crate::brand::NAMESPACE
         );
         std::process::exit(1);
     });
-}
-
-/// Show the Yes/No confirmation. On macOS the system draws it, so it is shown
-/// as an alert that can time out and be canceled.
-#[cfg(target_os = "macos")]
-fn confirm_in_child(title: &str, description: &str) -> Result<bool> {
-    use brauser_macos_alert::{Alert, AlertText};
-    use std::sync::Arc;
-
-    let alert = {
-        let mut external = EXTERNAL_DIALOG
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if external.parent_gone {
-            bail!("the dialog request ended before the dialog opened");
-        }
-        let text = AlertText {
-            title,
-            message: description,
-            yes: "Yes",
-            no: "No",
-        };
-        let alert =
-            Arc::new(Alert::show(text, CHILD_DIALOG_TIMEOUT).map_err(|code| {
-                anyhow::anyhow!("showing the macOS confirmation failed ({code})")
-            })?);
-        let shared = Arc::clone(&alert);
-        external.cancel = Some(Box::new(move || shared.cancel()));
-        alert
-    };
-    let accepted = alert.wait();
-    EXTERNAL_DIALOG
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .cancel = None;
-    Ok(accepted)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn confirm_in_child(title: &str, description: &str) -> Result<bool> {
-    Ok(MessageDialog::new()
-        .set_title(title)
-        .set_description(description)
-        .set_level(MessageLevel::Warning)
-        .set_buttons(MessageButtons::YesNo)
-        .show()
-        == MessageDialogResult::Yes)
 }
 
 fn write_reply(reply: &str) -> Result<()> {
@@ -258,9 +152,9 @@ fn run_dialog_process(mut command: Command, input: &str, timeout: Duration) -> R
     let result = wait_for_reply(&mut child, input, timeout);
     if result.is_err() {
         // A child that failed or ran out of time may still be showing its
-        // dialog. Its stdin is closed now, so give it a moment to close the
-        // dialog itself, which a kill cannot do for one drawn elsewhere.
-        // Killing a child that already exited is harmless.
+        // dialog. Its stdin is closed now, so give it a moment to exit on its
+        // own before killing it. Killing a child that already exited is
+        // harmless.
         let deadline = Instant::now() + CHILD_EXIT_GRACE;
         while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
@@ -312,14 +206,6 @@ fn parse_pick_reply(reply: &str) -> Result<Option<PathBuf>> {
     }
 }
 
-fn parse_confirm_reply(reply: &str) -> Result<bool> {
-    match reply {
-        CONFIRMED => Ok(true),
-        CANCELED => Ok(false),
-        _ => bail!("native confirmation returned an unexpected reply"),
-    }
-}
-
 /// Test-only replacement for the dialog UI, compiled only into debug builds
 /// with the `scripted-dialogs` feature. Only the child changes: the parent
 /// still spawns it, parses its reply, and mints and checks every grant, so a
@@ -340,7 +226,7 @@ pub mod scripted {
     use anyhow::{Context, Result, bail};
     use serde::{Deserialize, Serialize};
 
-    use super::{CONFIRM_COMMAND, PICK_FOLDER_COMMAND, parse_confirm_reply, parse_pick_reply};
+    use super::{PICK_FOLDER_COMMAND, parse_pick_reply};
     use crate::brand::SCRIPTED_DIALOGS_ENV;
 
     pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -391,7 +277,6 @@ pub mod scripted {
     fn dialog_name(command: &str) -> Result<&'static str> {
         match command {
             PICK_FOLDER_COMMAND => Ok("pick-folder"),
-            CONFIRM_COMMAND => Ok("confirm"),
             other => bail!("unknown dialog command: {other}"),
         }
     }
@@ -443,12 +328,7 @@ pub mod scripted {
                 answer.dialog
             );
         }
-        let valid = if command == PICK_FOLDER_COMMAND {
-            parse_pick_reply(&answer.reply).is_ok()
-        } else {
-            parse_confirm_reply(&answer.reply).is_ok()
-        };
-        if !valid {
+        if parse_pick_reply(&answer.reply).is_err() {
             bail!("scripted answer is not a valid {dialog} reply");
         }
         Ok(answer.reply)
@@ -469,14 +349,6 @@ mod tests {
         assert!(parse_pick_reply("picked:").is_err());
         assert!(parse_pick_reply("").is_err());
         assert!(parse_pick_reply("/tmp/notes").is_err());
-    }
-
-    #[test]
-    fn confirm_reply_fails_closed_on_unexpected_output() {
-        assert!(parse_confirm_reply("confirmed").unwrap());
-        assert!(!parse_confirm_reply("canceled").unwrap());
-        assert!(parse_confirm_reply("").is_err());
-        assert!(parse_confirm_reply("confirmed\n").is_err());
     }
 
     #[test]
@@ -516,8 +388,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_timed_out_dialog_may_close_itself_before_it_is_killed() {
-        // Like the macOS confirmation child, this one closes its dialog when
-        // its stdin ends, which a kill would not give it the chance to do.
+        // Like the dialog child, this one closes its dialog when its stdin
+        // ends, which a kill would not give it the chance to do.
         let directory = tempfile::tempdir().unwrap();
         let closed = directory.path().join("closed");
         let mut command = Command::new("/bin/sh");
@@ -544,8 +416,8 @@ mod tests {
 
     #[cfg(feature = "scripted-dialogs")]
     mod scripted_answers {
+        use super::super::PICK_FOLDER_COMMAND;
         use super::super::scripted::{ANSWER_FILE, SHOWN_FILE, answer, validate_directory};
-        use super::super::{CONFIRM_COMMAND, PICK_FOLDER_COMMAND};
         use std::time::Duration;
 
         const SHORT: Duration = Duration::from_millis(300);
@@ -569,20 +441,21 @@ mod tests {
 
         #[test]
         fn consumes_a_matching_answer_and_records_the_dialog_text() {
-            let directory = with_answer(r#"{"dialog":"confirm","reply":"confirmed"}"#);
-            let reply = answer(directory.path(), CONFIRM_COMMAND, "Title\nBody", SHORT).unwrap();
-            assert_eq!(reply, "confirmed");
+            let directory = with_answer(r#"{"dialog":"pick-folder","reply":"picked:/tmp/notes"}"#);
+            let reply =
+                answer(directory.path(), PICK_FOLDER_COMMAND, "Pick\nfolder", SHORT).unwrap();
+            assert_eq!(reply, "picked:/tmp/notes");
             assert!(!directory.path().join(ANSWER_FILE).exists());
             let shown = std::fs::read_to_string(directory.path().join(SHOWN_FILE)).unwrap();
             assert_eq!(
                 shown,
-                "{\"dialog\":\"confirm\",\"text\":\"Title\\nBody\"}\n"
+                "{\"dialog\":\"pick-folder\",\"text\":\"Pick\\nfolder\"}\n"
             );
         }
 
         #[test]
         fn rejects_an_answer_for_another_dialog() {
-            let directory = with_answer(r#"{"dialog":"confirm","reply":"confirmed"}"#);
+            let directory = with_answer(r#"{"dialog":"confirm","reply":"canceled"}"#);
             assert!(answer(directory.path(), PICK_FOLDER_COMMAND, "Pick", SHORT).is_err());
         }
 
@@ -591,18 +464,13 @@ mod tests {
             for contents in [
                 r#"{"dialog":"pick-folder","reply":"picked:"}"#,
                 r#"{"dialog":"pick-folder","reply":"confirmed"}"#,
-                r#"{"dialog":"confirm","reply":"yes"}"#,
-                r#"{"dialog":"confirm","reply":"confirmed","extra":1}"#,
-                "confirmed",
+                r#"{"dialog":"pick-folder","reply":"/tmp/notes"}"#,
+                r#"{"dialog":"pick-folder","reply":"canceled","extra":1}"#,
+                "canceled",
             ] {
                 let directory = with_answer(contents);
-                let command = if contents.contains("pick-folder") {
-                    PICK_FOLDER_COMMAND
-                } else {
-                    CONFIRM_COMMAND
-                };
                 assert!(
-                    answer(directory.path(), command, "", SHORT).is_err(),
+                    answer(directory.path(), PICK_FOLDER_COMMAND, "", SHORT).is_err(),
                     "{contents}"
                 );
             }
@@ -632,7 +500,7 @@ mod tests {
         #[test]
         fn fails_closed_when_no_answer_arrives() {
             let directory = private_tempdir();
-            assert!(answer(directory.path(), CONFIRM_COMMAND, "", SHORT).is_err());
+            assert!(answer(directory.path(), PICK_FOLDER_COMMAND, "", SHORT).is_err());
         }
     }
 }

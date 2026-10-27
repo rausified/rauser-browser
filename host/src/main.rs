@@ -37,9 +37,7 @@ fn run() -> Result<()> {
         // Developer and test tooling: evaluates adapter templates without
         // reading the config (adapter-templates.md §12).
         Some(adapters::COMMAND) => adapters::run(args),
-        Some(command @ (dialog::PICK_FOLDER_COMMAND | dialog::CONFIRM_COMMAND)) => {
-            dialog::run_child_command(command)
-        }
+        Some(command @ dialog::PICK_FOLDER_COMMAND) => dialog::run_child_command(command),
         Some(origin) if origin.starts_with("chrome-extension://") => serve(),
         Some(other) => bail!("unknown command or browser origin: {other}"),
     }
