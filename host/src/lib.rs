@@ -11,6 +11,7 @@ pub mod capture;
 pub mod config;
 pub mod consent;
 pub mod dialog;
+pub mod frame;
 pub mod harness;
 pub mod harness_setup;
 pub mod index;

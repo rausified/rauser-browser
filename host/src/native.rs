@@ -1,5 +1,5 @@
-//! Chrome native messaging uses a four-byte, native-endian length prefix
-//! followed by one UTF-8 JSON value. Stdout contains frames only.
+//! Chrome native messaging with the extension. Framing lives in
+//! `crate::frame`; stdout contains frames only.
 
 use std::io::{self, Read, Write};
 
@@ -16,17 +16,13 @@ use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore};
 use crate::consent::ConsentAuthority;
+use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::harness_setup;
 use crate::index::ArtifactIndex;
 use crate::note;
 use crate::vault::Vault;
 
-const MAX_INBOUND_BYTES: usize = 4 * 1024 * 1024;
-// Chrome limits host-to-extension messages to 1 MiB. Leave room for the
-// framing prefix and future envelope fields. Note limits (`note.rs`) are
-// derived from this so a saved note can always be loaded again.
-pub(crate) const MAX_OUTBOUND_BYTES: usize = 900 * 1024;
 const MAX_REQUEST_ID_CHARS: usize = 128;
 
 pub fn serve(config: ConfigStore) -> Result<()> {
@@ -1761,55 +1757,10 @@ fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
     })
 }
 
-#[derive(Debug)]
-enum FrameError {
-    TooLarge,
-    InvalidLength,
-    Io(io::Error),
-}
-
-fn read_frame<R: Read>(input: &mut R) -> std::result::Result<Option<Vec<u8>>, FrameError> {
-    let mut prefix = [0u8; 4];
-    let received = input.read(&mut prefix[..1]).map_err(FrameError::Io)?;
-    if received == 0 {
-        return Ok(None);
-    }
-    input.read_exact(&mut prefix[1..]).map_err(FrameError::Io)?;
-    let size = u32::from_ne_bytes(prefix) as usize;
-    if size == 0 {
-        return Err(FrameError::InvalidLength);
-    }
-    if size > MAX_INBOUND_BYTES {
-        return Err(FrameError::TooLarge);
-    }
-    let mut body = vec![0u8; size];
-    input.read_exact(&mut body).map_err(FrameError::Io)?;
-    Ok(Some(body))
-}
-
-fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
-    let mut body = serde_json::to_vec(response).context("serializing native response")?;
-    if body.len() > MAX_OUTBOUND_BYTES {
-        // One oversized answer must not end the connection: that would drop
-        // every other in-flight request and show the extension only a
-        // disconnect. Answer the same request with a small error instead.
-        let fallback = error(
-            response.request_id(),
-            ErrorCode::MessageTooLarge,
-            "response exceeds the host-to-extension size limit",
-        );
-        body = serde_json::to_vec(&fallback).context("serializing native response")?;
-    }
-    let size = u32::try_from(body.len()).context("native response length overflow")?;
-    output.write_all(&size.to_ne_bytes())?;
-    output.write_all(&body)?;
-    output.flush()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::{MAX_INBOUND_BYTES, MAX_OUTBOUND_BYTES};
     use brauser_protocol::{
         ActivityEvent, ActivityMode, ActivityTrail, CaptureBatchItem, ConfigSnapshot,
         GetConfigRequest, HelloRequest, RecordActivityRequest, RecordBatchRequest,
