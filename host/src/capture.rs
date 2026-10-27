@@ -402,6 +402,14 @@ impl CaptureStore {
                 reason: reason.into(),
             };
         }
+        // Canonicalize now: the marker payload below must carry the exact
+        // spelling `record_entry` hashes into `id_hash`, or a valid but
+        // noncanonical UUID (uppercase, no hyphens) replays as a hash
+        // mismatch and the summary silently vanishes on reindex/restart.
+        let event_id = match parse_event_id(&summary.event_id) {
+            Ok(value) => value,
+            Err(reason) => return CaptureOutcome::Rejected { reason },
+        };
         let timestamp = match parse_event_time(&summary.occurred_at) {
             Ok(value) => value,
             Err(reason) => return CaptureOutcome::Rejected { reason },
@@ -415,14 +423,14 @@ impl CaptureStore {
             summary.occurred_at, title, document_type, summary.importance
         );
         let visit = VisitEvent {
-            event_id: summary.event_id.clone(),
+            event_id: event_id.clone(),
             url: summary.url.clone(),
             title: Some(summary.title.clone()),
             occurred_at: summary.occurred_at.clone(),
             incognito: false,
         };
         let marker = serde_json::json!({
-            "event_id": summary.event_id,
+            "event_id": event_id,
             "title": summary.title,
             "occurred_at": summary.occurred_at,
             "document_type": summary.document_type,
@@ -2649,6 +2657,66 @@ mod tests {
                 reason: "url_contains_credentials".into()
             }
         );
+    }
+
+    #[test]
+    fn a_noncanonical_uuid_summary_hashes_and_serializes_the_same_spelling() {
+        // A valid but noncanonical spelling (uppercase, unhyphenated) must
+        // not disappear on replay: `id_hash` is computed from the canonical
+        // form, so the embedded JSON payload must carry that same canonical
+        // spelling, not whatever the caller originally wrote.
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let policy = CapturePolicy {
+            enabled: true,
+            sites: &[],
+            strip_params: &[],
+        };
+        let canonical = Uuid::new_v4().hyphenated().to_string();
+        let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        summary.event_id = canonical.to_uppercase().replace('-', "");
+        let CaptureOutcome::Persisted { relative_path } = store.record_summary(policy, &summary)
+        else {
+            panic!("expected persisted summary event");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        let marker_line = markdown
+            .lines()
+            .find(|line| line.contains(MARKER_PREFIX))
+            .expect("marker line present");
+        let (id_hash, _, _) = parse_marker(marker_line).expect("marker parses");
+        assert_eq!(id_hash, sha256_hex(canonical.as_bytes()));
+        let data = marker_line
+            .split(" data=")
+            .nth(1)
+            .and_then(|rest| rest.strip_suffix(" -->"))
+            .expect("data field present");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&hex::decode(data).unwrap()).unwrap();
+        assert_eq!(payload["event_id"], canonical);
+    }
+
+    #[test]
+    fn a_summary_path_with_a_space_still_produces_a_bracket_delimited_link() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let policy = CapturePolicy {
+            enabled: true,
+            sites: &[],
+            strip_params: &[],
+        };
+        let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        summary.summary_path = "My Summaries/hn-item.summary.md".into();
+        let CaptureOutcome::Persisted { relative_path } = store.record_summary(policy, &summary)
+        else {
+            panic!("expected persisted summary event");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        assert!(markdown.contains("[summary](<../../../My Summaries/hn-item.summary.md>)"));
     }
 
     #[test]

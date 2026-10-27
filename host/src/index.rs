@@ -1422,7 +1422,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     if let Some(summary) = artifact.summaries.last() {
         let link = relative_artifact_link(artifacts_dir, artifact, &summary.summary_path);
         out.push_str(&format!(
-            "Summary: [{}, {} importance]({link})\n\n",
+            "Summary: [{}, {} importance](<{link}>)\n\n",
             safe_markdown(&summary.document_type),
             safe_markdown(&summary.importance),
         ));
@@ -2832,11 +2832,9 @@ print(json.dumps([tables,row]))"#;
             path.strip_prefix(root.path()).unwrap().components().count() == 4,
             "expected artifacts/<type>/<site>/<file>.md, got {path:?}"
         );
-        assert!(
-            file.contains(
-                "Summary: [discussion, high importance](../../../pages/hn-item.summary.md)"
-            )
-        );
+        assert!(file.contains(
+            "Summary: [discussion, high importance](<../../../pages/hn-item.summary.md>)"
+        ));
         assert!(file.contains("Summarized: A good discussion"));
 
         // Re-summarizing the same URL updates the one artifact, not a second.
