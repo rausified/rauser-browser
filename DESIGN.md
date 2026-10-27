@@ -742,6 +742,42 @@ contracts the file held, like a config repair, so notes from adapters
 removed by hand may need **Use as artifact note** again; fixing or moving
 the file by hand does the same.
 
+**Stripped parameters an adapter reads (2026-10-27, `brwr-f4s`).** The
+collisions above start when `strip_params` (§7.3) removes a query parameter
+an adapter rule reads, so the host refuses that at the source. A rule reads
+a parameter when it names it as a key of its `query` table (a capture,
+literal, or presence condition) or in its `absent` list (adapter-templates.md
+§5.3); path, title, alias, and ref templates never read the query. An entry
+strips a parameter by the same rule URL normalization uses: ASCII
+case-insensitively, by prefix for a trailing `*`, so `selected*` and
+`SELECTEDISSUE` both strip `selectedIssue`. The host and the settings page
+each implement that rule, and both are tested against the shared cases in
+`protocol/strip-params/vectors.json`. Readers are the current adapter
+document (valid or inert, read as written), `[[adapter_id_history]]`, and
+the adopted contracts, since each of them still names note keys; an adapter
+a save removes counts as well, because it moves to history. A settings save
+(`update_config`, which Capture Site also uses) that adds a conflict, either a
+new or changed entry stripping a parameter some reader reads or a new or
+changed rule reading a parameter an entry strips, is refused as
+`invalid_config` with a message naming the adapter, its origin, the
+parameter, and the entry; the host checks before the update and again
+under the config lock. While `adopted-contracts.json` is unreadable, a hand-removed reader cannot be checked, so any new or changed entry is refused (naming the file) until it is fixed or moved aside, as adapter additions are; removing or reordering entries still saves. A conflict is one reading rule (with its adapter's
+origin, type, and `id` template) and the entry that strips its parameter, so
+a save that keeps an existing one (reordering entries, pausing capture,
+editing the adapter's other fields, or removing or restoring that adapter)
+is not refused, while a new or changed rule reading the same parameter is.
+A config.toml that already has one therefore keeps loading and saving, and no install is locked out.
+Settings derives the warning from the `strip_params` and adapter document
+`get_config` already returns (no protocol change), names each entry with the
+parameters and adapters involved, and offers a **Stop stripping**
+button for the entry, which removes only that entry through the normal
+revision-checked save. A conflict whose only reader is a retired or adopted
+contract is refused on add but is not shown, because those contracts never
+reach the extension; a known gap, accepted to avoid a protocol change, so
+such a config.toml keeps its colliding stripped URLs until the entry is
+removed by hand. Stored URLs do not record which parameters were
+stripped from them.
+
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing; since PR 4 a changed key is followed, not refused, and the run records the key it wrote (§5.2 step 7).
 
 ### 6.3 Profiles
@@ -922,7 +958,7 @@ An agent is optional. Without one, logging, notes, read later, and related pages
 
 > **Rewritten for open access PR 3 (2026-10-26).** Agents run in the Brauser service with full access (§4.5, §14). The M2 step 1 lockdown this section used to describe (per-harness argument templates with no tools and a read-only sandbox, `--help` and `codex features list` flag checks, reviewed Codex feature tables, an emptied environment with an allowlist, a host-owned work directory per run, the Codex event allowlist, the §7.1 canary, and the native setup confirmation and harness token) is gone from the code and from this section.
 
-**Setup: detect and probe, in the service.** Settings sends `discover_harnesses` and `set_up_harness`; the host forwards both to the service, so setup sees exactly the `PATH` and environment a run gets (launchd's plist environment plus `agent.env`, §14). Detection looks for `codex` and `claude` on the service's absolute `PATH` entries plus `$HOME/.local/bin`, Codex first, and reports each as found (with its version), not found, or found with a problem. The resolved binary and its directory, the `PATH` directory it was found in, and the directory of every symlink hop between them must be owned by the user or root and not group- or world-writable, and `--version` must parse (`codex-cli N.N.N`, `N.N.N (Claude Code)`); any well-formed version is accepted. Every run resolves its program the same way, on its own environment, and applies the same owner and permission check before starting it, so a run starts only what setup could have found. `set_up_harness` names only a `HarnessId`, a timeout, and optionally `summaries_dir`. The service detects that harness again and probes it with no lock held: one fixed prompt ("Reply with the single word OK.", never page content) through the real runner in the knowledge base folder, with a 90-second cap, passing only when the answer contains "ok". It then takes the config lock, checks the revision, and commits `[summarizer]` (`harness`, `binary`, `version`, `timeout_secs`, `probed_at`; wire `ConfigSnapshot.agent`) with `summaries_dir` (the request's, else the existing one, else `summaries`). A failed probe changes nothing and names the harness and the reason. `timeout_secs` is 60–3600 and defaults to 600; settings shows it in minutes. `update_config` may only echo `agent` unchanged or clear it. A v5 file's `[agent]` and `[harness_record]` tables load as not set up and are dropped on the next save.
+**Setup: detect and probe, in the service.** Settings sends `discover_harnesses` and `set_up_harness`; the host forwards both to the service, so setup sees exactly the `PATH` and environment a run gets (launchd's plist environment plus `agent.env`, §14). Detection looks for `codex` and `claude` on the service's absolute `PATH` entries plus `$HOME/.local/bin`, Codex first, and reports each as found (with its version), not found, or found with a problem. The resolved binary and its directory, the `PATH` directory it was found in, and the directory of every symlink hop between them must be owned by the user or root and not group- or world-writable (group write is refused even for a user-private group, as on Ubuntu with umask 002; the error names the path and says to run `chmod go-w` on it), and `--version` must parse (`codex-cli N.N.N`, `N.N.N (Claude Code)`); any well-formed version is accepted. Every run resolves its program the same way, on its own environment, and applies the same owner and permission check before starting it, so a run starts only what setup could have found. `set_up_harness` names only a `HarnessId`, a timeout, and optionally `summaries_dir`. The service detects that harness again and probes it with no lock held: one fixed prompt ("Reply with the single word OK.", never page content) through the real runner in the knowledge base folder, with a 90-second cap, passing only when the answer contains "ok". It then takes the config lock, checks the revision, and commits `[summarizer]` (`harness`, `binary`, `version`, `timeout_secs`, `probed_at`; wire `ConfigSnapshot.agent`) with `summaries_dir` (the request's, else the existing one, else `summaries`). A failed probe changes nothing and names the harness and the reason. `timeout_secs` is 60–3600 and defaults to 600; settings shows it in minutes. `update_config` may only echo `agent` unchanged or clear it. A v5 file's `[agent]` and `[harness_record]` tables load as not set up and are dropped on the next save.
 
 **Codex runs.** `codex app-server --listen stdio://`, speaking newline-delimited JSON-RPC 2.0, started in the knowledge base folder with the run environment. The service sends `initialize`, then `thread/start` with `cwd`, `approvalPolicy: "never"`, and `sandbox: "danger-full-access"`, then `thread/name/set` to "Brauser: <page title>" (at most 100 characters; a failure there is only a diagnostic), and records the thread ID. Each turn is a `turn/start` with the same `cwd` and approval policy, `sandboxPolicy: {type: "dangerFullAccess"}`, the prompt as text input, and the answer's JSON Schema as `outputSchema`. `item/agentMessage/delta` text streams into the run, the turn's completed `agentMessage` item is its answer, and `turn/completed` ends it; a `failed` turn, or the app-server exiting first, fails the run. A repair turn reuses the thread. Codex uses the user's own `HOME` and `CODEX_HOME`, so its normal login and its user-level instructions and skills apply (§14).
 
@@ -1074,7 +1110,7 @@ re-enabled.
 strip_params = ["utm_*", "fbclid", "gclid"]
 ```
 
-`strip_params` is the only privacy setting left. URL normalization drops fragments and the listed tracking parameters after the host has authorized the original URL (§5.1 M1 mechanics). Incognito windows are never logged: the manifest keeps `"incognito": "not_allowed"`, with no setting to change it.
+`strip_params` is the only privacy setting left. URL normalization drops fragments and the listed tracking parameters after the host has authorized the original URL (§5.1 M1 mechanics). An entry may not strip a query parameter an adapter rule reads; the host refuses a save that adds one, and settings offers to remove one already in config.toml (§6.2, "Stripped parameters an adapter reads"). Incognito windows are never logged: the manifest keeps `"incognito": "not_allowed"`, with no setting to change it.
 
 Protocol v6 (2026-10-26, §14) removed the rest. `log_incognito` (which could only be `false`), the agent denylist, and `agent_denylist_confirmed` are gone from the wire and from new config writes. A v5 `config.toml` that still has them loads, ignores them, and drops them on its next save. The first harness setup no longer reviews a denylist, and no AI command waits for one to be confirmed.
 

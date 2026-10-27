@@ -1594,7 +1594,11 @@ fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<S
     Ok(url.to_string())
 }
 
-fn matches_param(key: &str, pattern: &str) -> bool {
+/// Whether a `strip_params` entry removes the query key `key`. Config
+/// validation uses the same rule to find entries adapter rules read. The
+/// extension's `stripsParam` (extension/adapter-review.ts) must agree; both
+/// are tested against protocol/strip-params/vectors.json.
+pub(crate) fn matches_param(key: &str, pattern: &str) -> bool {
     let key = key.to_ascii_lowercase();
     let pattern = pattern.to_ascii_lowercase();
     match pattern.strip_suffix('*') {
@@ -2070,6 +2074,24 @@ fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
 mod tests {
     use super::*;
     use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
+
+    /// The extension's `stripsParam` reads the same file.
+    #[test]
+    fn strip_entries_match_query_keys_as_the_shared_vectors_say() {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../protocol/strip-params/vectors.json")).unwrap();
+        let cases = vectors["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let entry = case["entry"].as_str().unwrap();
+            let param = case["param"].as_str().unwrap();
+            assert_eq!(
+                matches_param(param, entry),
+                case["strips"].as_bool().unwrap(),
+                "{entry:?} vs {param:?}"
+            );
+        }
+    }
 
     fn storage(root: &Path, log_dir: &str) -> StorageConfig {
         StorageConfig {

@@ -207,7 +207,12 @@ key with no history lookup or note scan: its recorded URLs are stripped forms
 and cannot name an artifact, and its URLs never count as older-note
 candidates. Ambiguous contracts fall back to the URL key, while an
 uncompilable recorded contract refuses loads and saves instead of guessing an
-autosave target.
+autosave target. A save that would make `strip_params` remove a query
+parameter an adapter rule reads (a `query` key or `absent` key of a current,
+history, or adopted contract) is refused as `invalid_config`
+(`config::validate_strip_params_readers`, brwr-f4s); a config.toml that
+already has one still loads and saves, and settings derives the warning from
+the snapshot and offers **Stop stripping**.
 
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
@@ -256,6 +261,7 @@ changes a contract.
 
 - `protocol/schema.json` defines native messages. Run `python3 protocol/generate.py` after changing it and commit the generated Rust and TypeScript files together.
 - `adapter-templates/` is the Rust crate implementing the adapter-template grammar specified in `adapter-templates.md`; `extension/adapter-templates.ts` is its TypeScript twin. Keep both in sync with the shared vectors in `protocol/adapter-templates/vectors.json` — run `npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) after changing either engine; CI also checks `adapter-templates/fuzz` compiles.
+- `protocol/strip-params/vectors.json` pins the `strip_params` matching rule shared by `matches_param` (host/src/capture.rs) and `stripsParam` (extension/adapter-review.ts); both test suites read it.
 - `host/` contains the native host. Keep host policy checks on the privileged side of the messaging boundary. `host/src/consent.rs` holds the purpose-bound folder-picker grants and the `update_config` field checks; `host/src/dialog.rs` runs the native folder picker, the only native dialog. There is no `privacy.rs`, `extension/grants.ts`, or `macos-alert/` crate any more (removed with protocol v6).
 - Every first-party crate is `#![forbid(unsafe_code)]`.
 - `host/src/answer.rs` validates the structured summary answer; `host/src/open.rs` is the platform opener (`/usr/bin/open` on macOS, a log file in test builds). `host/src/service/` holds the service: `child.rs` (line-streaming child processes), `codex.rs` and `claude.rs` (the runners), `prompt.rs` (the §6.4 prompt), `setup.rs` (detect and probe), `open.rs` (`open_path`, `get_agent_env`), and `finisher.rs` (PR 4's `SummaryFinisher`), beside PR 2's server, supervisor, queue, records, and client. There is no `harness_setup.rs` any more. `host/src/markdown.rs` holds the shared Markdown safety helpers (`yaml_string`, `inline`, `wikilink`, `neutralize_remote`, `relative_link`) and `host/src/markdown_corpus.rs` checks them against the shared corpus; `host/src/summary.rs` names, renders, and recognizes summary files and validates summary events.

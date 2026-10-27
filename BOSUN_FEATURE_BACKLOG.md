@@ -278,6 +278,9 @@ PR 3 (real runners, extraction, and the run card) is merged (#98); see Shipped.
 
 ### Focused quality follow-up
 
+- [ ] `brwr-srp` **Record which query parameters were stripped beside stored
+  canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
+  artifacts apart in history; changes the log and index formats.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -334,12 +337,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98); see Shipped.
   so intent-journal recovery (`pre_sanitizer_entry`) still matches lines
   journaled byte-exact in the old form. DESIGN.md §5.2 and spec §7.1 record
   the gap. From Lane E / PR 4; related to `brwr-3cc`.
-- [ ] `brwr-647` **Flaky extension test: Capture Site dwell sum.** On the slow
-  Linux VM, "installing Capture Site policy measures already-open pages
-  without inventing opens" (extension/tests/worker.test.mjs ~2321)
-  intermittently gets `actual: 8519, expected: 15000`. It seeds its clock
-  from the real wall clock; check local-hour boundary splits and unmocked
-  time reads first.
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
@@ -349,8 +346,8 @@ rather than Known Issues, and they wait behind the plan work above. Line
 numbers are on 1c32114; re-check them against current main. For each one,
 write the regression test described in its bead first, show it fails, then
 fix, and keep each fix to one cycle. If the test does not fail on current
-main, check the item off as "not reproduced" and say why. The last item,
-`brwr-f4s`, is a decided P2 note-identity follow-up rather than a defect fix.
+main, check the item off as "not reproduced" and say why. The decided
+strip_params note-identity follow-up has shipped (see Shipped).
 
 - [ ] `brwr-q7e` **Non-canonical event IDs are captured, then dropped on
   rescan.** The marker's `id_hash` hashes `parse_event_id()`'s lowercase
@@ -486,28 +483,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
 
-- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
-  child could exit after printing its reply before the parent wrote the framed
-  request, intermittently producing `EPIPE` even though production dialog
-  children read the request first. The repair (`00dbc75`, in `main` since
-  `728b200`) makes the child read the byte count and complete body before
-  replying; sixty exchanges cover empty, short and 64 KiB UTF-8 requests.
-  It was held open only because the sandbox's IPC denial kept the full gate
-  red, not for any problem with the repair. `brwr-rq5` makes the socket tests
-  skip in that sandbox, and the full gate, socket tests included, passed
-  outside it on the `brwr-rq5` PR (#125). The next cycle should rerun the gate and
-  close this bead (its queue status still says `blocked`).
-
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
-  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
-  stripping a query key that an adapter rule matches on (Jira's
-  `selectedIssue`) is accepted and collapses artifact identity. Decided
-  2026-10-27: a save that adds or changes such an entry is refused with a clear
-  message; an existing config with the conflict still loads and saves, shows a
-  warning, and offers a one-click "Stop stripping <param>" fix. Also record
-  which params were stripped. P2; in progress in the Columbus session (builds
-  on #85).
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
@@ -571,9 +547,13 @@ were folded into `brwr-q7e` above rather than given their own item.
 - **Category:** New Feature. `brwr-t43`, `brwr-t44`, `brwr-t45`, `brwr-t46`, `brwr-t47`, `brwr-t48`, `brwr-t49`, `brwr-t50`, `brwr-t51`, `brwr-t52`, `brwr-t54` **Open access PR 4: summary files, the summary log event, and summaries in the index and panel (2026-10-27).** Built on `feat/summary-outputs-pr4`, not yet merged; its headless smoke (`brwr-t53`) is still in progress, so the parent `brwr-so4` stays open. The service's `SummaryFinisher` saves a validated answer under the configuration current at finish, following a key changed mid-run, with the answer's `answered_at` stamp (re-stamped when the daily log's window would refuse it) in the click's `requested_at` offset, so Retry save is idempotent; failures are plain reasons that say what to do. Summary files are rendered from the answer, written through the shared ownership-checked replace and never adopted; body text goes through a context-free escape (`&lt;`, `\!`, and backticks, `$`, tabs, `~~~` runs and code-length space runs as numeric entities) with wikilink and single-line rules, front matter is JSON-quoted YAML with no entities, and `npm run test:markdown-neutralizer` (a new CI step) renders the shared corpus with markdown-it, micromark and marked. The `summary` event gains `record_key`, `artifact_type` and `harness` and attaches to the adapter's artifact on recognized pages; the index cache is format 6 with an in-place format-5 migration, summaries never count as opens or opened days, artifact files gain a Summary line and date-ordered Timeline summary lines, and Recent rows, `get_artifact` (unrecognized pages too, quietly null on failure) and the worklog carry them. `open_summary` opens only the owned file with PR 3's opener; the panel shows the page's saved summary, summarized Recent rows, and the run card's saved line with one retried lookup. **[human]**: the neutralized corpus in Obsidian and VS Code preview (TESTING.md "Real-UI acceptance").
 - [x] `brwr-hnr` **Summary-only days no longer count as opened days (2026-10-27, open access PR 4).** Fixed by PR 4 Task 47 (697e515): the Summary arm of `derive` no longer inserts a day opened, so a summary never adds to `opens` or `days_opened` (it can still move first and last seen). Covered by Task 48's day-A/day-B regression `index::tests::an_m1_visit_and_a_later_summary_open_the_page_on_one_day` (an M1 legacy visit on day A plus a summary on day B is one open on one day, in the index, the artifact file and the worklog) and by `index::tests::a_summary_on_an_adapter_artifact_without_activity_creates_that_row` (a summary-only artifact shows `opens: 0` and `days_opened: 0`).
 - [x] `brwr-deo` **M2 step 8.5, `/summarize` in the panel: superseded by open access PRs 3-4 (2026-10-27).** The tracking pointer is closed: Summarize & log, extraction and the run card shipped in PR 3 (`brwr-sr3`, #98), and the summary file, log event and index/panel integration in PR 4 (`brwr-so4`), with no denylist check.
+- [x] `brwr-smk` **The macOS headless smoke waits for state, not time (2026-10-27).** Since #98, main's required smoke had stopped three ways, each passing on rerun. `Extensions.loadUnpacked` had 15 s to cover Chrome's whole cold start. A reopened panel's restored Codex card was taken for the new Claude Code run. The capture step navigated before the worker was shown to hold the new lease. A fourth stop showed up under load: one timed-out `chrome.sidePanel.open` ended the run. `scripts/smoke-macos.mjs` now has one helper, `waitUntil(what, observe, accept)`, whose timeout reports the last state observed. It is used to wait for Chrome before loading the extension, for the worker's lease (`workerHoldsHostPolicy`, `reloadSettings`), for a new run card that the service did not already list (`summarizeFromPanel(harness)`), and to retry opening the panel safely. TESTING.md "Waiting for state, not time" documents it for later smoke steps. No product race was found, and no step asserts less. **Metrics:** before, 3 of 3 idle and 3 of 5 under full CPU load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load).
+- **Category:** Testing & Verification. **Guard missing-service tests when a sandbox denies IPC (2026-10-27).** Six service/proxy tests now use the existing permission-denial guard, including missing-listener connections and the keyed-frame forwarding boundary. Assertions stay intact; simulated denial skips locally and fails when CI requires IPC. This closes `brwr-elx` and verifies the already-merged 60-exchange dialog fixture (`brwr-4vb`, `00dbc75`). **Metrics:** Full required gate green; workspace 567 exercised/43 IPC skips; scripted-dialogs 522 exercised/53 IPC skips; six CI-required denial failures verified.
+- **Category:** Testing & Verification. **Verify Capture Site attention across hour boundaries (2026-10-27).** Reproduced `brwr-647` by starting its 15-second interval ten seconds before the hour: status correctly queued 10 seconds and kept 5 seconds live. Fixed local clocks and explicit live-plus-queued assertions now cover both mid-hour and boundary-crossing intervals while retaining zero-open, tab-identity and renewal checks. **Metrics:** 77 worker cases (+1), 20 repeated worker runs, three time zones, and three complete 15-file extension runs green; full required gate and both Clippy configurations pass.
 
 - [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, #125).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
 - [x] `brwr-hrr` **Repair a damaged adopted-adapter record from settings (2026-10-27).** Hand-retired adapter contracts freeze their routes' IDs (#122), and `config_result.adopted_state` (additive protocol v6) now names a damaged `adopted-contracts.json`, why it cannot be used, and that notes on unrecognized pages are paused; settings' **Forget recorded adapters** confirms in the page, sends `forget_adopted_contracts` with the shown revision, and the host backs the file up as `adopted-contracts.json.<timestamp>.bak` and records afresh under the config lock. A full or unwritable record is a non-blocking settings warning. Covered by host, wire, settings and headless smoke tests.
+- **Category:** Bug Fix. `brwr-f4s` **Refuse `strip_params` entries an adapter rule reads (2026-10-27).** A settings save that would make `strip_params` remove a query parameter an adapter rule reads (a `query` key or `absent` entry; current, historical, or hand-removed adapters) is refused with a message naming the adapter, origin, parameter and entry, because the pages that rule tells apart would share one stripped address. Existing conflicts still load and save; settings shows them with a one-click **Stop stripping** fix. Matching uses the host's strip rule, pinned by shared vectors in `protocol/strip-params/vectors.json`. Recording which parameters were stripped is split out as `brwr-srp`.
 
 - **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Saving summaries landed in PR 4 (`brwr-so4`). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Merged (#98).
 
@@ -816,3 +796,26 @@ stop product work, and no history reset or production IPC change is called for.
   show which example pages selected rules group into one artifact before they
   are enabled, within the existing review; no additional diagnostic view or
   health surface is needed first.
+
+### Cycle observations (2026-10-27 — green health gate)
+
+- The health-only cycle on `349b6ca0` repaired `brwr-elx` and `brwr-647`,
+  verified and closed `brwr-4vb`, and changed no product contract. The full
+  required gate and scripted-dialogs tests now pass under the documented
+  sandbox policy. Do not describe the explicit IPC skips as exercised socket
+  coverage; CI still requires those tests and must verify them outside this
+  sandbox. Logs are in `target/overnight-health/final-repair/` (gitignored).
+- Missing-listener connections need the same IPC guard as listener tests.
+  Attention checks spanning an hour must count both the live totals and the
+  completed events handed to delivery; use fixed local clocks for that case.
+- `brwr-t40` and `brwr-f45` remain reserved for Lane A. The parent
+  `brwr-1hj` stays open. Once health passes next cycle, the next independent
+  assigned user benefit is `brwr-3nq`: retain unsaved page-note drafts across
+  panel close/reopen, with explicit recovery that preserves host revision
+  checks. Reuse the existing note copy-out flow rather than inventing another
+  recovery surface; no duplicate proposal is needed.
+- The local beads export initially carried older notes for `brwr-1hj` and
+  `brwr-4vb` and lacked `brwr-hnr`'s committed assignment. Imported those three
+  committed records before updates/export to preserve the operator's queue.
+  No assignment labels or other sessions' ownership were changed. Export also
+  refreshes `brwr-sr3`'s derived dependent count; its edges are unchanged.

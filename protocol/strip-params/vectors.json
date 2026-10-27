@@ -1,0 +1,25 @@
+{
+  "description": "Shared cases for whether a strip_params entry removes a query key. Both host/src/capture.rs matches_param and extension/adapter-review.ts stripsParam must agree with every case (brwr-f4s, DESIGN.md §6.2). Matching is ASCII case-insensitive, and a trailing * matches by prefix.",
+  "cases": [
+    { "entry": "selectedIssue", "param": "selectedIssue", "strips": true },
+    { "entry": "SELECTEDISSUE", "param": "selectedIssue", "strips": true },
+    { "entry": "selectedissue", "param": "SelectedIssue", "strips": true },
+    { "entry": "selected*", "param": "selectedIssue", "strips": true },
+    { "entry": "selected*", "param": "selected", "strips": true },
+    { "entry": "SELECTED*", "param": "selectedIssue", "strips": true },
+    { "entry": "utm_*", "param": "utm_source", "strips": true },
+    { "entry": "utm_*", "param": "UTM_SOURCE", "strips": true },
+    { "entry": "q", "param": "q", "strips": true },
+    { "entry": "Q", "param": "q", "strips": true },
+    { "entry": "selectedIssue", "param": "selectedIssues", "strips": false },
+    { "entry": "selectedIssues", "param": "selectedIssue", "strips": false },
+    { "entry": "sel", "param": "selectedIssue", "strips": false },
+    { "entry": "q_*", "param": "q", "strips": false },
+    { "entry": "utm_*", "param": "xutm_source", "strips": false },
+    { "entry": "fbclid", "param": "fbclid2", "strips": false },
+    { "entry": "et*", "param": "\u00e9tat", "strips": false },
+    { "entry": "\u00c9tat", "param": "\u00e9tat", "strips": false },
+    { "entry": "k", "param": "K", "strips": true },
+    { "entry": "k", "param": "\u212a", "strips": false, "note": "KELVIN SIGN folds to k only under Unicode rules" }
+  ]
+}

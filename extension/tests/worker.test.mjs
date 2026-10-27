@@ -2340,42 +2340,56 @@ test("pressure coalescing never grows the queue past its byte cap", async () => 
   assert.ok(new TextEncoder().encode(JSON.stringify(after.items)).length <= MAX_QUEUE_BYTES);
 });
 
-test("installing Capture Site policy measures already-open pages without inventing opens", async () => {
-  values.clear();
-  sessionValues.clear();
-  tabs.clear();
-  const origin = "https://capture-site.example";
-  const realNow = Date.now;
-  let now = realNow();
-  Date.now = () => now;
-  try {
-    tabs.set(40, { id: 40, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, title: "Current work", incognito: false });
-    tabs.set(41, { id: 41, windowId: 1, active: false, url: `${origin}/items/private`, title: "Private", incognito: true });
-    tabs.set(42, { id: 42, windowId: 1, active: false, url: `${origin}/dashboard`, incognito: false });
-    tabs.set(43, { id: 43, windowId: 1, active: false, status: "loading", url: `${origin}/items/loading`, title: "Previous page title", incognito: false });
-    const installed = lease(origin);
-    await send({ kind: "install_policy", lease: installed, resume_after_confirmation: false, resume_after_pause_token: null });
-    const session = sessionValues.get(storageKey("activity_session_v1"));
-    assert.equal(session.tabs[40]?.artifact_id, "test:capture-site.example/current");
-    assert.equal(session.tabs[40].title, "Current work");
-    assert.equal(session.active_by_window[1], 40);
-    assert.equal(session.tabs[41], undefined);
-    assert.equal(session.tabs[42], undefined);
-    assert.equal(session.tabs[43].title, null, "a loading tab may still carry its previous title");
-    assert.deepEqual(values.get(storageKey("activity_totals_v1")).totals, []);
-    now += 15_000;
-    await send({ kind: "get_status" });
-    const totals = values.get(storageKey("activity_totals_v1")).totals;
-    assert.equal(totals.reduce((sum, total) => sum + total.focused_ms, 0), 15_000);
-    assert.equal(totals.reduce((sum, total) => sum + total.opens, 0), 0);
-    // Renewal must not remap a tab without its authoritative navigation event.
-    tabs.get(40).url = `${origin}/items/different`;
-    await send({ kind: "install_policy", lease: installed, resume_after_confirmation: false, resume_after_pause_token: null });
-    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[40].artifact_id, "test:capture-site.example/current");
-  } finally {
-    Date.now = realNow;
-  }
-});
+for (const [timing, minute, second, liveMs, queuedMs] of [
+  ["within the hour", 15, 0, 15_000, 0],
+  ["across the hour", 59, 50, 5_000, 10_000],
+]) {
+  test(`installing Capture Site policy measures already-open pages without inventing opens (${timing})`, async () => {
+    values.clear();
+    sessionValues.clear();
+    tabs.clear();
+    const origin = "https://capture-site.example";
+    const realNow = Date.now;
+    let now = new Date(2026, 9, 16, 10, minute, second).getTime();
+    Date.now = () => now;
+    try {
+      tabs.set(40, { id: 40, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, title: "Current work", incognito: false });
+      tabs.set(41, { id: 41, windowId: 1, active: false, url: `${origin}/items/private`, title: "Private", incognito: true });
+      tabs.set(42, { id: 42, windowId: 1, active: false, url: `${origin}/dashboard`, incognito: false });
+      tabs.set(43, { id: 43, windowId: 1, active: false, status: "loading", url: `${origin}/items/loading`, title: "Previous page title", incognito: false });
+      const installed = lease(origin);
+      await send({ kind: "install_policy", lease: installed, resume_after_confirmation: false, resume_after_pause_token: null });
+      const session = sessionValues.get(storageKey("activity_session_v1"));
+      assert.equal(session.tabs[40]?.artifact_id, "test:capture-site.example/current");
+      assert.equal(session.tabs[40].title, "Current work");
+      assert.equal(session.active_by_window[1], 40);
+      assert.equal(session.tabs[41], undefined);
+      assert.equal(session.tabs[42], undefined);
+      assert.equal(session.tabs[43].title, null, "a loading tab may still carry its previous title");
+      assert.deepEqual(values.get(storageKey("activity_totals_v1")).totals, []);
+      now += 15_000;
+      await send({ kind: "get_status" });
+      const totals = values.get(storageKey("activity_totals_v1")).totals;
+      const queued = (values.get(storageKey("queue_v1"))?.items ?? []).map((item) => item.event);
+      // Status hands completed hours to delivery. Both sides of that handoff
+      // count toward the measured interval, even across a local-hour boundary.
+      const liveFocusedMs = totals.reduce((sum, total) => sum + total.focused_ms, 0);
+      const queuedFocusedMs = queued.reduce((sum, event) => sum + event.focused_seconds * 1_000, 0);
+      assert.equal(liveFocusedMs, liveMs);
+      assert.equal(queuedFocusedMs, queuedMs);
+      assert.equal(liveFocusedMs + queuedFocusedMs, 15_000);
+      const all = [...totals, ...queued];
+      assert.equal(all.reduce((sum, total) => sum + total.opens, 0), 0);
+      assert.ok(all.every((total) => total.artifact_id === "test:capture-site.example/current"));
+      // Renewal must not remap a tab without its authoritative navigation event.
+      tabs.get(40).url = `${origin}/items/different`;
+      await send({ kind: "install_policy", lease: installed, resume_after_confirmation: false, resume_after_pause_token: null });
+      assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[40].artifact_id, "test:capture-site.example/current");
+    } finally {
+      Date.now = realNow;
+    }
+  });
+}
 
 // --- Summarize & log (plan Task 39) -----------------------------------------
 
