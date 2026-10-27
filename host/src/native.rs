@@ -5270,7 +5270,6 @@ id = "work:{host}/{id}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
