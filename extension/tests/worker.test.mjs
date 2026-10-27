@@ -933,7 +933,10 @@ test("adapter rules and scope fail closed before buffering", async () => {
     url: `${origin}/teams/personal/items/7`, timeStamp: Date.now(),
   });
   await flush();
-  assert.equal(tabReads, initialReads, "unrecognized URLs never expose tab metadata");
+  assert.equal(tabReads, initialReads + 2, "sampling checks the tab's incognito flag before retaining a shape");
+  const patterns = await send({ kind: "get_site_patterns", origin });
+  assert.deepEqual(patterns.map((row) => row.shape).sort(), ["/search", "/teams/personal/items/{num}"].sort());
+  assert.doesNotMatch(JSON.stringify(patterns), /Personal|Search|items\/7/);
   assert.equal(values.get(storageKey("queue_v1")), undefined);
   assert.equal((await send({ kind: "get_activity" })).length, 0);
 
@@ -944,6 +947,124 @@ test("adapter rules and scope fail closed before buffering", async () => {
   });
   await flush();
   assert.equal((await send({ kind: "get_activity" })).length, 1);
+});
+
+test("private pattern samples include skipped pages but never enter delivery or native messages", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://patterns.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  const navigate = async (url, options = {}) => {
+    tabs.set(51, { id: 51, url, title: "CONFIDENTIAL CUSTOMER TITLE", incognito: false, ...options });
+    onCommitted({ tabId: 51, frameId: 0, documentLifecycle: "active", url, timeStamp: Date.now() });
+    await flush();
+  };
+  await navigate(`${origin}/wiki/pages/123456/Customer-Launch?customer=PrivateValue#private-fragment`);
+  await navigate(`${origin}/wiki/pages/789012/Another-Customer?customer=OtherValue`);
+  assert.deepEqual((await send({ kind: "get_site_patterns", origin })).map(({ shape, count }) => ({ shape, count })), [
+    { shape: "/wiki/pages/{num}/{slug}?customer={slug}", count: 2 },
+  ]);
+  const stored = JSON.stringify(values.get(storageKey("site_patterns_v1")));
+  assert.doesNotMatch(stored, /123456|789012|Customer|PrivateValue|private-fragment|CONFIDENTIAL|https:[^\"]*\/wiki/);
+  assert.equal(values.get(storageKey("queue_v1")), undefined);
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  assert.equal(ports.length, 0, "pattern inspection never starts a native host");
+  // Merely reading a sample doesn't count as another visit.
+  assert.equal((await send({ kind: "get_site_patterns", origin }))[0].count, 2);
+  await send({ kind: "clear_site_patterns", origin });
+  assert.deepEqual(await send({ kind: "get_site_patterns", origin }), []);
+  assert.equal(values.get(storageKey("policy_v1")).capture_enabled, true);
+  await navigate(`${origin}/wiki/pages/123456/Customer-Launch?customer=PrivateValue`);
+  assert.equal((await send({ kind: "get_site_patterns", origin }))[0].count, 1);
+});
+
+test("pattern samples exclude incognito, missing tabs, subframes, inactive documents and unconfigured origins", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://private-patterns.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  const base = { tabId: 52, frameId: 0, documentLifecycle: "active", url: `${origin}/pages/42`, timeStamp: Date.now() };
+  tabs.set(52, { id: 52, url: base.url, incognito: true });
+  onCommitted(base);
+  await flush();
+  tabs.set(52, { id: 52, url: base.url });
+  onCommitted(base);
+  await flush();
+  tabs.delete(52);
+  onCommitted(base);
+  await flush();
+  tabs.set(52, { id: 52, url: base.url, incognito: false });
+  onCommitted({ ...base, frameId: 1 });
+  onCommitted({ ...base, documentLifecycle: "prerender" });
+  onCommitted({ ...base, url: "https://unconfigured.example/pages/42" });
+  await flush();
+  assert.deepEqual(await send({ kind: "get_site_patterns", origin }), []);
+});
+
+test("pattern budgets, expiry, removal, suspension and local/global pauses apply in the worker", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://pattern-budget.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  for (let index = 0; index < 25; index += 1) {
+    const url = `${origin}/route${String.fromCharCode(97 + index)}/123456`;
+    tabs.set(53, { id: 53, url, incognito: false });
+    onHistoryStateUpdated({ tabId: 53, frameId: 0, documentLifecycle: "active", url, timeStamp: Date.now() });
+    await flush();
+  }
+  assert.equal((await send({ kind: "get_site_patterns", origin })).length, 20);
+  const key = storageKey("site_patterns_v1");
+  const now = Date.now();
+  const old = { shape: "/old/{num}", count: 1, last_seen: now - 7 * 24 * 60 * 60_000 };
+  const recent = { shape: "/recent/{num}", count: 1, last_seen: now };
+  values.set(key, { [origin]: [old, recent], "https://removed.example": [recent] });
+  assert.deepEqual((await send({ kind: "get_site_patterns", origin })).map((row) => row.shape), ["/recent/{num}"]);
+  assert.deepEqual(Object.keys(values.get(key)), [origin]);
+  await send({ kind: "install_policy", lease: { ...lease(origin), revision: "patterns-paused", capture_enabled: false }, resume_after_confirmation: true, resume_after_pause_token: null });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  await send({ kind: "pause_capture" });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  await send({ kind: "suspend_policy" });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  values.set(storageKey("pause_pending_v1"), false);
+  values.set(storageKey("pending_site_removals_v1"), [origin]);
+  await send({ kind: "install_policy", lease: { ...lease(origin), revision: "patterns-removal" }, resume_after_confirmation: false, resume_after_pause_token: null });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  values.set(storageKey("policy_v1"), { ...lease(origin), revision: "expired-patterns", expires_at: Date.now() - 1 });
+  assert.deepEqual(await send({ kind: "get_site_patterns", origin }), []);
+  assert.deepEqual(values.get(key), {});
+});
+
+test("sample storage failures leave recognized capture working and invalid origins are refused", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://pattern-failure.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  tabs.set(54, { id: 54, url: `${origin}/items/42`, incognito: false });
+  rejectLocalSet = (items) => Object.hasOwn(items, storageKey("site_patterns_v1"));
+  try {
+    onCommitted({ tabId: 54, frameId: 0, documentLifecycle: "active", url: `${origin}/items/42`, timeStamp: Date.now() });
+    await flush();
+    assert.equal((await send({ kind: "get_activity" })).length, 1);
+    await assert.rejects(send({ kind: "clear_site_patterns", origin }), /quota exceeded/);
+  } finally { rejectLocalSet = null; }
+  for (const invalid of [null, "https://pattern-failure.example/path", "https://user:pw@pattern-failure.example", "file:///tmp"] ) {
+    await assert.rejects(send({ kind: "get_site_patterns", origin: invalid }), /Invalid site pattern origin/);
+  }
+  values.set(storageKey("pending_site_removals_v1"), "unreadable");
+  values.set(storageKey("site_patterns_v1"), { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  await assert.rejects(send({ kind: "get_site_patterns", origin }), /unreadable/);
+  assert.deepEqual(await send({ kind: "clear_site_patterns", origin }), []);
+  assert.deepEqual(values.get(storageKey("site_patterns_v1")), {}, "a local privacy clear works even if policy is unreadable");
 });
 
 test("worker-start map rebuild restores recognized tabs without counting opens", async () => {
@@ -1932,4 +2053,25 @@ test("installing Capture Site policy measures already-open pages without inventi
   } finally {
     Date.now = realNow;
   }
+});
+
+test("worker wake and maintenance alarms expire samples without starting a host", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://pattern-wake.example";
+  const key = storageKey("site_patterns_v1");
+  const fresh = { shape: "/pages/{num}", count: 1, last_seen: Date.now() };
+  const expired = { shape: "/old/{num}", count: 2, last_seen: Date.now() - 7 * 24 * 60 * 60_000 };
+  values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() + 2 * 60 * 60_000 });
+  values.set(key, { [origin]: [expired, fresh], "https://removed.example": [fresh] });
+  await import("../dist/worker.js?pattern-wake");
+  await flush();
+  assert.deepEqual(values.get(key), { [origin]: [fresh] });
+  values.set(key, { [origin]: [expired] });
+  onAlarm({ name: "brauser-sync" });
+  await flush();
+  assert.deepEqual(values.get(key), {});
+  assert.equal(ports.length, 0);
 });

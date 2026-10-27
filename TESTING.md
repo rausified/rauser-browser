@@ -45,9 +45,39 @@ starter URLs against live tools or prove Chrome layout and keyboard focus.
 Those checks remain the existing human starter-certification and interactive
 Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
 Capture Site adds no scripted dialogs; the runner compares answered dialogs
-with its transcript instead of expecting a fixed total. Unknown-site shaping,
-link extraction and structural drafting need the separate DESIGN §12.2
-step 7.6 tests when implemented.
+with its transcript instead of expecting a fixed total. Unknown-site structural
+drafting still needs the separate DESIGN §12.2 step 7.6 safety, grouping,
+scope and identity tests when implemented.
+
+## Page-pattern review coverage
+
+`extension/tests/site-patterns.test.mjs` covers the shared URL shaper against
+the recorded starter vectors and named Confluence, SharePoint, Notion,
+Google Docs, encoded-name and mixed-case forms. Privacy assertions check
+placeholder classes, query-value removal, literal/length limits, corrupt
+stored values and metadata stripping. The link-reader tests serialize the
+bundled function into a fresh VM context with a fake top-frame DOM, catching
+module dependencies that would break Chrome's `scripting` serialization.
+They verify exact URL/origin checks before and after href reads, singleton
+literal generalization even for duplicated planted links, same-origin-only
+results, the 500-anchor scan cap and the 50-shape result cap.
+
+Worker tests exercise recognized and skipped navigations, incognito/missing
+tabs, subframes, SPA events, count/shape caps, expiry, cold worker wake and
+maintenance alarms, pending removals, policy suspension, pause and explicit
+clear. They assert samples reach neither activity/delivery nor a native host,
+and that sample-storage failures leave recognized capture working. Composed
+panel tests assert isolated top-frame injection only after a click, read-only
+results on unknown sites, cancellation/navigation races, collapse cleanup and
+scripting failures. Composed settings tests inspect and clear patterns without
+native messages, including during host repair.
+
+These checks use mocked Chrome APIs and DOM objects; the serialized function
+has been exercised, but real Chrome injection, disclosure layout and keyboard
+focus still need the macOS interactive/headless gates. No scripted dialog or
+smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
+claim that it passed here. Structural drafting and unknown-site enabling are
+still unbuilt, so these tests do not certify any machine-drafted rule.
 
 ## UI-free end-to-end: the recipe
 

@@ -93,6 +93,8 @@ export type WorkerRequest =
   | { kind: "discard_pending"; event_ids: string[] }
   | { kind: "get_pending" }
   | { kind: "get_activity" }
+  | { kind: "get_site_patterns"; origin: string }
+  | { kind: "clear_site_patterns"; origin: string }
   | { kind: "ack_visit"; event_id: string; outcome: VisitOutcome; reason: string | null }
   | { kind: "get_status" }
   | { kind: "sync_now" }

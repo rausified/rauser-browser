@@ -23,6 +23,7 @@ import { evaluate, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
+import { httpOrigin, inspectSitePatterns, prunePatternSamples, samplePattern } from "./site-patterns.js";
 import {
   activateTab, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
   recordNavigation, removeTab, replaceTab, setIdle, settleActivity,
@@ -51,6 +52,7 @@ const HOST_ERROR_KEY = storageKey("host_error_v1");
 const DELIVERED_KEY = storageKey("delivered_batches_v1");
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const ACTIVITY_SESSION_KEY = storageKey("activity_session_v1");
+const SITE_PATTERNS_KEY = storageKey("site_patterns_v1");
 // Matches MAX_URL_BYTES in host/src/capture.rs, so the host never rejects a
 // visit the worker chose to buffer.
 const MAX_VISIT_URL_BYTES = 8_192;
@@ -75,6 +77,23 @@ let sequence: Promise<unknown> = Promise.resolve();
 // received lease shows what the host config holds.
 let receivedLease: PolicyLease | null = null;
 const policyLeases = new PolicyLeaseCache();
+
+// These bounded shapes stay in trusted extension storage, wholly separate
+// from activity and delivery. Sampling failures must not interrupt capture.
+async function patternSamples(lease: PolicyLease | null) {
+  const stored = await chrome.storage.local.get(SITE_PATTERNS_KEY);
+  const origins = lease && leaseActive(lease)
+    ? lease.adapters.artifacts.map((adapter) => String(adapter.origin)) : [];
+  return prunePatternSamples(stored[SITE_PATTERNS_KEY], origins, Date.now());
+}
+
+async function pruneSitePatterns(lease: PolicyLease | null): Promise<void> {
+  await chrome.storage.local.set({ [SITE_PATTERNS_KEY]: await patternSamples(lease) });
+}
+
+function patternFailure(): void {
+  console.warn(`${APP_NAME} site patterns unavailable`);
+}
 
 function activitySessionStorage(): ChromeStorageArea {
   return chrome.storage.session;
@@ -537,13 +556,12 @@ async function captureNavigation(
     return false;
   };
   const cached = await readPolicy();
-  const cachedMatch = cached ? matchingArtifact(cached, details.url) : null;
-  if (!cached || !cachedMatch) return navigatedAway();
+  const url = captureUrl(details.url);
+  if (!cached || !url || !leaseCoversOrigin(cached, url)) return navigatedAway();
   // The stored lease is the host's as sent, so it can still hold adapters on
   // pending-removal origins that activeLease() filters out.
   const lease = await activeLease();
-  const match = lease ? matchingArtifact(lease, details.url) : null;
-  if (!lease || !match) return navigatedAway();
+  if (!lease || !leaseActive(lease) || !leaseCoversOrigin(lease, url)) return navigatedAway();
   if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return false;
 
   let tab: ChromeTab;
@@ -553,6 +571,19 @@ async function captureNavigation(
     return false;
   }
   if (tab.incognito !== false) return false;
+
+  // Sample only a live public top-frame navigation on an enabled origin.
+  // Shape before storing; neither the URL nor its title enters this table.
+  const shape = inspectSitePatterns(details.url).current;
+  if (shape) {
+    try {
+      const samples = await patternSamples(lease);
+      samplePattern(samples, url.origin, shape, Date.now());
+      await chrome.storage.local.set({ [SITE_PATTERNS_KEY]: samples });
+    } catch { patternFailure(); }
+  }
+  const match = matchingArtifact(lease, details.url);
+  if (!match) return navigatedAway();
 
   const visitedAt = new Date(details.timeStamp);
   if (!Number.isFinite(visitedAt.getTime())) return false;
@@ -672,6 +703,7 @@ async function installPolicy(
     [QUEUE_KEY]: queue,
   });
   await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
+  await pruneSitePatterns(effectiveLease.capture_enabled ? effectiveLease : null).catch(patternFailure);
   // A page installing policy may have just enabled capture on an open tab.
   // Background renewal must leave its in-flight navigation unmapped until
   // captureNavigation records the real open after renewal completes.
@@ -876,6 +908,7 @@ async function suspendPolicy(): Promise<WorkerStatus> {
   // capture lease immediately, but leave queued visits and an explicit
   // local pause untouched until a valid host policy can reconcile them.
   await chrome.storage.local.set({ [POLICY_KEY]: null });
+  await pruneSitePatterns(null).catch(patternFailure);
   return currentStatus();
 }
 
@@ -1039,6 +1072,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
         [POLICY_KEY]: null, [QUEUE_KEY]: queue,
       });
       await narrowActivity(null);
+      await pruneSitePatterns(null).catch(patternFailure);
       return currentStatus(null, queue);
     }
     case "get_pending_ids":
@@ -1060,6 +1094,19 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
     case "get_activity": {
       await freezeActivity();
       return (await readActivity()).totals;
+    }
+    case "get_site_patterns":
+    case "clear_site_patterns": {
+      if (typeof message.origin !== "string" || httpOrigin(message.origin) !== message.origin) {
+        throw new Error("Invalid site pattern origin");
+      }
+      // Clearing is local deletion, so even unreadable pause/removal state
+      // cannot prevent it. Reading still reports that policy failure.
+      const lease = message.kind === "clear_site_patterns" ? await activeLease().catch(() => null) : await activeLease();
+      const samples = await patternSamples(lease);
+      if (message.kind === "clear_site_patterns") delete samples[message.origin];
+      await chrome.storage.local.set({ [SITE_PATTERNS_KEY]: samples });
+      return samples[message.origin] ?? [];
     }
     case "ack_visit":
       return ackVisit(message.event_id, message.outcome, message.reason);
@@ -1220,7 +1267,10 @@ chrome.idle?.onStateChanged.addListener((state) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) void syncWithHost();
+  if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) {
+    void syncWithHost();
+    void serialize(pruneCurrentSitePatterns).catch(patternFailure);
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => void syncWithHost());
@@ -1306,3 +1356,11 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 // Once per worker start, in case the update event was missed.
 void runMigration();
+
+async function pruneCurrentSitePatterns(): Promise<void> {
+  await ensureTrustedStorage();
+  await pruneSitePatterns(await activeLease());
+}
+
+// Expiry and policy removals apply on a cold worker start, too.
+void serialize(pruneCurrentSitePatterns).catch(patternFailure);

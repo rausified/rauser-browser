@@ -121,14 +121,16 @@ function hostReply(request) {
   }
 }
 
-async function install({ tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null, intercept = () => null }) {
+async function install({ tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null, intercept = () => null,
+  script = async () => ({ current: "/items/{num}", links: [] }), patterns = [],
+}) {
   const elements = pageElements();
   const state = {
     tab: tab === undefined ? undefined : { incognito: false, ...tab },
     contains,
     config: structuredClone(config), revision: "1", configIssue, adapterIssue,
     workerStatus: { ...statusFor(), ...workerStatus }, requests: [], workerRequests: [],
-    created: [],
+    created: [], scripts: [],
     counts: new Map(),
     added: [],
     removed: [],
@@ -153,6 +155,12 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
   const tabActivated = listeners();
   const tabUpdated = listeners();
   globalThis.chrome = {
+    scripting: {
+      async executeScript(injection) {
+        state.scripts.push(injection);
+        return [{ frameId: 0, result: await script(injection, state) }];
+      },
+    },
     runtime: {
       id: "test-id",
       lastError: undefined,
@@ -194,6 +202,7 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
       },
       async sendMessage(request) {
         state.workerRequests.push(structuredClone(request));
+        if (request.kind === "get_site_patterns") return { ok: true, value: structuredClone(patterns) };
         return { ok: true, value: structuredClone(state.workerStatus) };
       },
     },
@@ -352,6 +361,87 @@ test("the panel markup has no grant button or address-unavailable note", () => {
 
 const JIRA_URL = "https://acme.atlassian.net/browse/PROJ-42";
 const GITHUB_URL = "https://github.com/acme-corp/widget/pull/42/files";
+
+test("page-pattern review on an unknown site reads links only on click without changing capture", async () => {
+  const url = "https://unknown.example/items/123456";
+  const page = await install({ tab: { id: 1, url, title: "Private Customer Title" },
+    script: async () => ({ current: "/items/{num}", links: [{ shape: "/items/{num}/{slug}", count: 2 }] }),
+    patterns: [{ shape: "/documents/{uuid}", count: 3, last_seen: Date.now() }],
+  });
+  await until(() => !page.el("site-pattern-area").hidden && !page.el("site-pattern-review").disabled, "pattern review to be ready");
+  assert.equal(page.state.scripts.length, 0);
+  assert.equal(page.el("capture-site-area").hidden, true, "unknown-site capture is still unavailable");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  const [injection] = page.state.scripts;
+  assert.deepEqual(injection.target, { tabId: 1, frameIds: [0] });
+  assert.equal(injection.world, "ISOLATED");
+  assert.deepEqual(injection.args, [url, true]);
+  assert.equal(typeof injection.func, "function");
+  assert.match(page.el("site-pattern-message").textContent, /Review only/);
+  assert.match(page.el("site-pattern-rows").textContent, /Visited pattern \(3 navigations\)/);
+  assert.doesNotMatch(page.el("site-pattern-rows").textContent, /123456|Private Customer/);
+  assert.equal(page.state.requests.filter((request) => request.type === "update_config").length, 0);
+  assert.equal(page.calls("permissions.request"), 0);
+  page.el("site-pattern-close").click();
+  assert.equal(page.el("site-pattern-result").hidden, true);
+  assert.equal(page.el("site-pattern-rows").textContent, "");
+});
+
+test("navigating or canceling a held pattern read drops its result and allows a fresh review", async () => {
+  for (const cancel of [false, true]) {
+    let finish;
+    const held = new Promise((resolve) => { finish = resolve; });
+    const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1", title: "A" }, script: () => held });
+    await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+    page.el("site-pattern-review").click();
+    await until(() => page.state.scripts.length === 1, "the held script");
+    if (cancel) page.el("site-pattern-close").click();
+    else {
+      page.navigate("https://other.example/pages/2", 2);
+      await until(() => page.el("page-url").textContent.includes("other.example"), "page switch");
+    }
+    finish({ current: "/old/{num}", links: [{ shape: "/stale/{num}", count: 1 }] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(page.el("site-pattern-result").hidden, true);
+    assert.equal(page.el("site-pattern-rows").textContent, "");
+    assert.equal(page.state.workerRequests.filter((request) => request.kind === "get_site_patterns").length, 0);
+    assert.equal(page.state.requests.filter((request) => request.type === "update_config").length, 0);
+  }
+});
+
+test("stale script output and scripting failures show an honest error without enabling capture", async () => {
+  for (const script of [async () => ({ current: null, links: [] }), async () => { throw new Error("Site access withdrawn"); }]) {
+    const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1", title: "A" }, script });
+    await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+    page.el("site-pattern-review").click();
+    await until(() => page.el("site-pattern-message").textContent.startsWith("Could not review"), "inspection error");
+    assert.equal(page.el("site-pattern-rows").textContent, "");
+    assert.equal(page.state.config.capture_enabled, false);
+  }
+});
+
+test("collapsing page patterns clears the review's link shapes", async () => {
+  const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1" } });
+  await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+  page.el("site-pattern-area").open = true;
+  page.el("site-pattern-area").dispatch("toggle");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Current page"), "the pattern review");
+  page.el("site-pattern-area").open = false;
+  page.el("site-pattern-area").dispatch("toggle");
+  assert.equal(page.el("site-pattern-result").hidden, true);
+  assert.equal(page.el("site-pattern-rows").textContent, "");
+});
+
+test("private and nonweb tabs never offer page-pattern inspection", async () => {
+  for (const tab of [{ id: 1, url: "https://unknown.example/items/1", incognito: true }, { id: 1, url: "chrome://settings/" }, { id: 1, url: undefined }]) {
+    const page = await install({ tab });
+    await until(() => page.calls("tabs.query") >= 1 && page.el("status").textContent !== "Connecting", "page state");
+    assert.equal(page.el("site-pattern-area").hidden, true);
+    assert.equal(page.state.scripts.length, 0);
+  }
+});
 const updates = (page) => page.state.requests.filter((request) => request.type === "update_config");
 
 async function captureReview(url = JIRA_URL, options = {}) {
