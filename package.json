@@ -5,7 +5,7 @@
   "description": "Development tooling for the Brauser browser extension and shared protocol",
   "scripts": {
     "build:extension": "node extension/build.mjs",
-    "test:extension": "node --test extension/tests/capture-site.test.mjs extension/tests/worker.test.mjs extension/tests/options.test.mjs extension/tests/note-editor.test.mjs extension/tests/artifact-refresh.test.mjs extension/tests/agent.test.mjs extension/tests/activity.test.mjs extension/tests/adapter-templates.test.mjs extension/tests/adapter-review.test.mjs extension/tests/starter-adapters.test.mjs extension/tests/panel.test.mjs",
+    "test:extension": "node --test extension/tests/capture-site.test.mjs extension/tests/worker.test.mjs extension/tests/options.test.mjs extension/tests/note-editor.test.mjs extension/tests/artifact-refresh.test.mjs extension/tests/agent.test.mjs extension/tests/activity.test.mjs extension/tests/adapter-templates.test.mjs extension/tests/adapter-review.test.mjs extension/tests/starter-adapters.test.mjs extension/tests/panel.test.mjs extension/tests/extract.test.mjs",
     "test:scripts": "node --test scripts/tests/dev-service.test.mjs",
     "test:adapter-diff": "node scripts/adapter-templates-diff.mjs",
     "smoke:macos": "node scripts/smoke-macos.mjs",
