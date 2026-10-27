@@ -164,6 +164,25 @@ Their line numbers predate step 6.6, so re-check them.
 
 ### Plan work (DESIGN.md §12.2, in order)
 
+**Open access and the Brauser service (John, 2026-10-26).** The four PRs of
+`docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` (plan: `docs/superpowers/plans/2026-10-26-open-access-and-agent-service.md`) replace the old M2 steps 8.2-8.5 and come first, in
+order. They supersede the denylist, harness-token, `activeTab`, and per-site
+grant parts of the items below wherever those conflict. PR 1 (open access
+and the protocol v6 removals) is done; see Shipped.
+
+- [ ] `brwr-sv2` **Open access PR 2: the Brauser service skeleton.** `brauser
+  service` on a 0700 Unix socket under launchd, run records, the queue,
+  timeout, cancel, recovery and retention, the host proxy with build-identity
+  check and `service_unavailable`, dev LaunchAgent registration, and `agent.env`,
+  all against a fake harness (spec §5; plan Tasks 12-27).
+- [ ] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
+  card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
+  with a validated structured answer, pinned Readability extraction, the
+  Summarize & log button, and the polling run card (spec §6; plan Tasks 28-42).
+- [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
+  integration.** The owned summary file, the `summary` daily-log event,
+  summaries in the index, Recent, the worklog, and the panel, written under the
+  configuration current at finish (spec §7; plan Tasks 43-54).
 - [x] **M1.5a step 6.4 — Measured artifact activity.** Replaced the temporary
   visit rows with hourly artifact activity: cold opens, focused and background
   seconds, modes, and trail sources in durable worker totals, frozen into one
@@ -209,13 +228,16 @@ Their line numbers predate step 6.6, so re-check them.
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
 - [ ] `brwr-1hj` **Capture Site (step 7.6 moved forward).** A side-panel
-  button, plus the existing context-menu and toolbar entry points for an
-  ungranted tab, that learns the site's artifact pattern with the structural
+  button that learns the site's artifact pattern with the structural
   drafter (no agent) and every step 7.6 safety rule. The native confirmation
   stays, in plain language: what Brauser will remember here, with real example
   pages it matched, and what it won't (search, dashboards, login, sharing).
   The JSON editor becomes an advanced view nobody has to open. Tier 1 is not
   required. Split into ordered sub-items here if it's too big for one cycle.
+  **2026-10-26:** with standing HTTP(S) access (open access PR 1) the
+  ungranted-tab flow and the grant rollback on cancel no longer apply; the
+  button works on any tab, and the native confirmation is gone, so the
+  plain-language review lives in settings.
 - [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
   hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
   existing activity, notes, and index rows through explicit append-only
@@ -232,11 +254,11 @@ Their line numbers predate step 6.6, so re-check them.
 - [ ] `brwr-9yc` **[human] Decide how a Chrome-spawned host authenticates the
   AI harness** (DESIGN §14 open M2 question; it affects John's Bedrock setup).
   Cookie may write an options proposal in §14; John decides. Blocks 8.2.
-- [ ] `brwr-6wz` **M2 step 8.2 — Host invocation.** Start only after 6.4–6.7 are shipped.
-  Allowlisted environment, templated argv, page content on stdin inside the
-  untrusted-data block, host-owned working directory, timeout, output cap,
-  process-tree kill, and the confirmed-install-location check (§7.1), with the
-  fake-harness tests and the §7.1 canary listed in step 8.2.
+- [ ] `brwr-6wz` **M2 step 8.2 — Host invocation, now the Brauser service
+  runners.** Rewritten 2026-10-26: agent runs move to the per-user Brauser
+  service with full-access Codex or Claude Code runs (`docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §5-§6), built
+  as open access PRs 2-3 (`brwr-sv2`, `brwr-sr3`). The allowlisted-environment,
+  templated-argv, and §7.1 canary design it described is replaced.
 - [ ] `brwr-jfe` **Concurrent native message loop (before 8.3).** Refactor
   `serve_with_context` into a stdin reader thread, a worker for long requests,
   and one serialized writer, reusing `run_bounded`'s thread/mpsc pattern. No
@@ -250,15 +272,14 @@ Their line numbers predate step 6.6, so re-check them.
   8.2, the configured harness can refine the structural draft under the same
   isolation, with the same per-rule checks and plain-language confirmation.
   Capture Site must keep working with no agent configured.
-- [ ] `brwr-0ij` **M2 step 8.4 — Content extraction.** Bundled, pinned Readability-style
-  extraction, the `summarize` command, context menu, and toolbar trigger, and
-  the §8 permissions. **[human]** sub-step first (`brwr-rva`): the real-Chrome `activeTab`
-  checks (a)–(d) in step 8.4 need macOS; build the rest behind them only once
-  they are recorded.
-- [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel.** Denylist checks, the §5.2
-  and §4.4 summary write and result contract, the §3.1 extension-page CSP with
-  a manifest test, and the external-editor race, shared summaries directory,
-  and mid-run config-change tests.
+- [ ] `brwr-0ij` **M2 step 8.4 — Content extraction.** Rewritten 2026-10-26:
+  pinned Readability extraction, the Summarize & log button, and the
+  context-menu item, per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §5.3 and §6 (open access PR 3, `brwr-sr3`).
+  With standing access there is no `activeTab` trigger, so the real-Chrome
+  `activeTab` checks in `brwr-rva` no longer gate it.
+- [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel.** Rewritten
+  2026-10-26: the summary file, log event, and panel integration follow
+  `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §7 (open access PR 4, `brwr-so4`); there is no denylist check.
 
 ### Gated plan work (do not start yet)
 
@@ -297,9 +318,6 @@ Their line numbers predate step 6.6, so re-check them.
   lock, refresh, policy, and store setup, and `capture.rs` has twin
   mode/trail authorization loops. Extract the shared steps and set a removal
   release for the legacy paths.
-- [ ] `brwr-ahb` **One adapter identity for consent and transition checks.**
-  `consent.rs` and `config.rs` compute identity separately, so the
-  confirmation text could drift from what is enforced.
 - [ ] `brwr-2iz` **Bound `adapter_id_history` inside the 64 KiB config cap.**
   When it fills, unrelated writes fail with a generic size error. Add a
   budget, a specific error, and a safe prune, or fold it into `brwr-6x2`.
@@ -330,10 +348,11 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## In Progress / This Iteration
 
-- None. The next ready plan item is `brwr-npy` (the optional headless page-load check); `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1`; the next plan item is open access PR 2 (`brwr-sv2`). `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
 
+- **Category:** Security & Privacy. `brwr-oa1` **Open access PR 1: standing HTTP(S) access and protocol v6 (2026-10-26).** Brauser now holds HTTP(S) access from install, so a note can be typed on any page at once, and a site is on exactly when it has an adapter. The native confirmation, the `macos-alert` crate, the AI denylist, `log_incognito`, grant reconciliation, the sync caution, and the harness token are gone; harness setup detects and probes; a knowledge base folder is chosen with the native picker; v5 config files load unchanged. `brwr-ahb` closed as obsolete: the consent identity it would have unified no longer exists.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** New Capability. **Turn durable activity into a local index and bounded artifact records (2026-10-16).** Each accepted activity now updates a standard SQLite `index.db` with artifact, visit, edge, and dirty-set tables while leaving the append-only Markdown log authoritative. Brauser lazily regenerates only dirty, owned artifact files at native connection boundaries, preserves unchanged mtimes, gives case-colliding IDs distinct hash-suffixed paths, replaces external edits only after checking ownership, neutralizes hostile presentation text, and bounds long histories with daily, weekly, then monthly Timeline rollups. `brauser reindex` reconstructs the database and files from bounded owned markers, and older configs receive a non-overlapping `artifacts_dir` default without weakening native consent. **Metrics:** 284 Rust tests and 8 extension suites passing; 13 new index, ownership, delivery-integration, migration, replay-integrity, multi-page SQLite, chronology, rollup, and wire regressions, with full protocol generation, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** Reliability. `brwr-6at` **Ship bounded, crash-recoverable activity batches (2026-10-16).** The service worker now sends up to 64 same-local-day records under a replay-stable batch ID and exact overflow snapshot, while the native host validates every event before publishing the survivors through one compact intent, one append, and one log sync. Queue pressure coalesces only compatible undispatched hours that still fit the hard byte cap, lights the toolbar badge at 80%, and carries dropped-hour count and range into the append-only log; lost acknowledgements cannot erase newer overflow. The retired near-repeat window is gone from protocol, consent, new config writes, and log scanning, so deliberate `/log` actions are never collapsed, while old configs and queues still drain safely. **Metrics:** 271 Rust tests and 8 extension suites passing; 6 durability regressions, with full protocol generation, current-state consistency, build, test, format, both clippy gates, clean npm install, typecheck, lint, extension checks, and queue export green.

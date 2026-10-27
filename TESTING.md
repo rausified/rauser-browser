@@ -16,7 +16,7 @@ Put each check in the lowest layer that can prove it.
 
 1. **Unit tests** for logic: policy, parsing, validation, and state machines.
 2. **Integration tests** across a real process or protocol boundary, such as a native host spawned by a test, or an HTTP server with real requests. No UI.
-3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and browser permission prompts are handled by granting access ahead of time.
+3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
 ## UI-free end-to-end: the recipe
@@ -35,9 +35,9 @@ Put each check in the lowest layer that can prove it.
 - Drive pages with real input events (`Input.dispatchMouseEvent`) so the browser treats them as user gestures. Use `Runtime.evaluate` with `userGesture: true` for APIs that need a gesture, such as `chrome.sidePanel.open`.
 - Assert on real state (files written, host config, `chrome.permissions.contains`, page text) rather than on the fact that a click happened.
 
-### Native dialogs (file pickers, confirmations)
+### Native dialogs (the folder picker)
 
-Add a **test-only seam at the process boundary**:
+Brauser's only native dialog is the folder picker, used for the notes folder and the knowledge base folder. There is no native Yes/No confirmation any more. If a future change adds a native dialog, give it the same seam. Add a **test-only seam at the process boundary**:
 
 - Replace only the code that draws the dialog. Keep the code that decides what the answer authorizes (tokens, grants, validation) real, so a scripted answer has exactly the authority of a person's click.
 - Gate the seam at compile time (a cargo feature or build flag) and make it **impossible in release builds** (for example, `compile_error!` when the feature is on without `debug_assertions`). Build it into a separate output directory so the everyday dev binary never contains it.
@@ -45,22 +45,20 @@ Add a **test-only seam at the process boundary**:
 - Point the seam at a private absolute directory, never a symlink or group- or world-writable path, placed outside anything the code under test can write to.
 - Fail closed: a missing, mismatched, or malformed answer is an error, as a crashed dialog would be.
 - Record each dialog's kind and text to a transcript so the test can check what the user would have been asked, not just the answer.
+- Count dialogs, never hard-code a total: the runner's `dialogsShown` must equal the number of scripted answers it gives, and the final check compares it with the transcript's line count.
 
 Reference implementation: `host/src/dialog.rs` (`scripted` module) and `scripts/smoke-macos.mjs --headless`.
 
 ### Browser permission prompts
 
-**Stock Chrome has no way to answer an extension permission prompt without UI.** Findings as of Chrome 154, 2026-09-28:
+Brauser asks for nothing at run time. Its manifest requests `http://*/*` and `https://*/*` as install-time `host_permissions`, with `webNavigation` and `scripting` required, so loading the extension grants all of it and the UI-free run needs no grant-ahead step. The panel's site-access banner is covered by unit tests with a fake `chrome.permissions`. *Withdrawing and restoring access in headless Chrome (for example with `chrome.developerPrivate` from a `chrome://extensions` tab) has not been exercised here; confirm it and update this line.*
+
+**Stock Chrome has no way to answer an extension permission prompt without UI**, so keep it that way. Findings as of Chrome 154, 2026-09-28, in case a later change brings a runtime request back:
 
 - There is no command-line switch. The auto-confirm hooks (`ScopedTestDialogAutoConfirm`, `PermissionsRequestFunction` dialog actions) are C++ test-only.
 - The DevTools protocol can't reach the prompt: it is native browser UI, not a DevTools target. In headless Chrome it waits forever.
 - Editing the profile prefs does not work. Extension settings are signed, and Chrome discards edited entries (it records `tracked_preferences_reset`).
-
-What works is granting access ahead of time through Chrome's own mechanisms, after which `chrome.permissions.request` resolves without a prompt:
-
-- **Site/host access:** run `chrome.developerPrivate.addHostPermission(extensionId, pattern)` in a `chrome://extensions` tab. This is what the Site access control does.
-- **API permissions (for example `webNavigation`):** load the extension once with the permission listed as required, then reload it with the real manifest. Chrome keeps the permission active, and `permissions.remove` still revokes it.
-- Chrome skips its prompt for permissions it recorded as granted, even after `permissions.remove`. Expect silent re-grants and write assertions accordingly.
+- What worked was granting access ahead of time through Chrome's own mechanisms: `chrome.developerPrivate.addHostPermission(extensionId, pattern)` in a `chrome://extensions` tab for site access, and loading the extension once with an API permission listed as required before reloading it with the real manifest. Chrome skips its prompt for permissions it recorded as granted, even after `permissions.remove`.
 
 For **ordinary websites** (not extensions), DevTools `Browser.grantPermissions` covers web permissions such as notifications, geolocation, and clipboard. *This has not yet been exercised in this repo; confirm it and update this line.*
 
@@ -82,11 +80,10 @@ Don't just assume headless means invisible; check it. List on-screen windows (`C
 ## What the UI-free run cannot prove
 
 - The real native dialogs appear, look right, and return the user's choice.
-- The browser's real permission prompt appears, and a first-time grant works.
-- Behavior that happens only after a genuine first grant (for example, the extension restart).
+- Chrome's install-time permission warning, and what a real user sees after withdrawing and restoring site access in Chrome's own UI.
 - Browser-startup ordering for an installed extension: whether Chrome loads it, with its listeners, before restored tabs commit, and `runtime.onStartup` (see the `--load-extension` and Chrome for Testing notes above). A loaded extension with a stopped worker does get restored tabs' commits; one loaded during startup misses the active tab's.
 - Real idle and screen-lock transitions: the headless run has no way to drive them, and `chrome.idle.queryState` reported `active` throughout.
-- Visual or OS-level effects such as focus, cursors, and window lifetime (for example, the macOS busy cursor, or whether the real confirmation closes when the host goes away or it times out).
+- Visual or OS-level effects such as focus, cursors, and window lifetime (for example, the macOS busy cursor, or whether the real folder picker closes when the host goes away).
 
 Cover these in real-UI acceptance, and don't claim them from a headless pass.
 
@@ -101,7 +98,7 @@ Real-UI checks run on a desktop, so:
 
 Checks of this kind in this repo:
 
-- `npm run smoke:macos -- --auto`: the full flow with the real picker, alert, and Chrome prompt, answered through UI scripting. It takes keyboard focus.
+- `npm run smoke:macos -- --auto`: the full flow with the real folder picker, answered through UI scripting. It takes keyboard focus.
 
 ## Changing this document
 
@@ -125,3 +122,4 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-16: Branch `feat/overnight-cookie-loop-20261016`. A Linux run with umask `0002` found that fake harness directories created with inherited modes were correctly rejected as unsafe, obscuring the behavior each process test meant to exercise; fixtures now set their secure modes explicitly and still test unsafe modes deliberately. The same run found that `cap-std` directory capabilities may be Linux `O_PATH` handles, so durability tests must sync a readable self-opened directory handle rather than the lookup capability itself. GNU `stat -f` also succeeds with filesystem output instead of rejecting BSD syntax, so cross-platform shell fixtures must select syntax explicitly instead of relying on `||` fallback.
 - 2026-10-16: Branch `ship-overnight-20261016`. Overnight cycle 3 added the fixture-adapter confirmation (dialog 14) without updating the runner's dialog count, and nothing caught it: the overnight gate runs on Linux, where the smoke runner refuses to start, and CI did not run it. CI's macOS build job now builds the scripted-dialogs host and runs `npm run smoke:macos:headless`, so a change that breaks the end-to-end run fails its PR. *Not yet confirmed on a GitHub-hosted runner.*
 - 2026-10-26: Branch `feat/open-access-pr1`. The native Yes/No confirmation is gone; the folder picker is the only native dialog. Removed the `macos-alert` crate and `scripts/check-macos-alert.mjs`.
+- 2026-10-26: Branch `feat/open-access-pr1`. Install-time HTTP(S) access means the UI-free run no longer grants anything ahead of time, and the folder picker (notes and knowledge base) is the only dialog left. The dialog-counter rule is now explicit: `dialogsShown` must equal the scripted answers the runner gives, and the last check compares it with the dialog log's line count, never a hard-coded total, because overnight cycle 3 once added a dialog without updating a fixed count.
