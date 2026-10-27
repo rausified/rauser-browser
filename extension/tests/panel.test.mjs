@@ -99,13 +99,13 @@ test.afterEach(() => {
   teardown = [];
 });
 
-function hostReply(request) {
+function hostReply(request, config = CONFIG) {
   switch (request.type) {
     case "hello":
       return { type: "hello_result", host_version: "0.0.0", configured: true, config_issue: null };
     case "get_config":
       return {
-        type: "config_result", revision: "1", config: CONFIG, config_issue: null,
+        type: "config_result", revision: "1", config, config_issue: null,
         agent_status: { state: "not_set_up", harness_version: null, message: "Set up an AI harness." },
         adapter_issue: null, adapter_warnings: [],
       };
@@ -116,12 +116,23 @@ function hostReply(request) {
       };
     case "get_artifact":
       return { type: "artifact_result", recognized: false, artifact: null };
+    case "record_why":
+      return {
+        type: "why_recorded", event_id: request.event.event_id, outcome: "persisted", reason: null,
+        relative_path: "log/2026-10-27.md",
+      };
     default:
       return { type: "error", code: "internal", message: `Unexpected host request ${request.type}` };
   }
 }
 
-async function install({ tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null, intercept = () => null,
+// `intercept(request, state)` may answer a host request (or return a Promise
+// to hold it); a falsy result falls back to the default reply. `workerReply`
+// does the same for messages to the worker. With `state.hostDead`, a new host
+// process closes its port without answering, as one that cannot start does.
+async function install({
+  tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null,
+  intercept = () => null, workerReply = () => undefined,
   script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
 }) {
   const elements = pageElements();
@@ -134,6 +145,8 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
     counts: new Map(),
     added: [],
     removed: [],
+    ports: [],
+    hostDead: false,
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
@@ -168,11 +181,19 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
       openOptionsPage: async () => undefined,
       connectNative() {
         const messageListeners = [];
-        return {
+        const disconnectListeners = [];
+        const port = {
           onMessage: { addListener(listener) { messageListeners.push(listener); } },
-          onDisconnect: { addListener() {} },
+          onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
+          fireDisconnect() {
+            for (const listener of disconnectListeners) listener();
+          },
           postMessage(request) {
             state.requests.push(structuredClone(request));
+            if (state.hostDead) {
+              setTimeout(() => port.fireDisconnect(), 0);
+              return;
+            }
             setTimeout(async () => {
               let reply = await intercept(request, state);
               if (!reply && request.type === "get_config") {
@@ -199,13 +220,15 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
           },
           disconnect() {},
         };
+        state.ports.push(port);
+        return port;
       },
       async sendMessage(request) {
         state.workerRequests.push(structuredClone(request));
         if (request.kind === "get_site_patterns") {
           return patternsError ? { ok: false, error: patternsError } : { ok: true, value: structuredClone(patterns) };
         }
-        return { ok: true, value: structuredClone(state.workerStatus) };
+        return (await workerReply(request)) ?? { ok: true, value: structuredClone(state.workerStatus) };
       },
     },
     storage: {
@@ -271,6 +294,23 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
       return found;
     },
     calls: (name) => state.counts.get(name) ?? 0,
+    sent: (type) => state.requests.filter((request) => request.type === type),
+    // The followed tab moves to another address in place.
+    followLink(url, title) {
+      state.tab.url = url;
+      state.tab.title = title;
+      for (const listener of tabUpdated.registered) listener(state.tab.id, { url, title }, state.tab);
+    },
+    titleChanged(title) {
+      state.tab.title = title;
+      for (const listener of tabUpdated.registered) listener(state.tab.id, { title }, state.tab);
+    },
+    // The running host process exits after having answered.
+    hostExits() {
+      chrome.runtime.lastError = { message: "Native host has exited." };
+      state.ports.at(-1).fireDisconnect();
+      chrome.runtime.lastError = undefined;
+    },
     // Chrome fires these after the user changes site access.
     grant() {
       state.contains = true;
@@ -778,4 +818,227 @@ test("a policy update makes an open review stale before it can be saved", async 
   await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "policy revision refresh");
   assert.equal(page.el("capture-site-save").disabled, true);
   assert.equal(updates(page).length, 0);
+});
+
+// --- Artifact card: "Why I'm here" -------------------------------------------
+
+const CAPTURING = { ...CONFIG, capture_enabled: true };
+
+function artifact(id, title, why = null) {
+  return {
+    artifact_id: id, artifact_type: "doc", title, url: `https://docs.example/${id}`,
+    first_seen: "2026-10-01", last_seen: "2026-10-27", focused_seconds: 60,
+    background_seconds: 0, opens: 1, days_opened: 1, last_mode: null, why, linked_count: 0,
+  };
+}
+
+const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value });
+const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function typeWhy(page, text) {
+  page.el("artifact-why").value = text;
+  page.el("artifact-why").dispatch("input");
+}
+
+async function noteLoaded(page) {
+  await until(() => page.sent("load_note").length > 0 && page.el("note-body").disabled === false,
+    "the note to load");
+}
+
+test("Save why waits for the opening capture replay, then records", async () => {
+  let finishReplay;
+  const replay = new Promise((resolve) => { finishReplay = resolve; });
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+    workerReply: async (request) => {
+      if (request.kind === "sync_now") await replay;
+      return undefined;
+    },
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "reviewing for launch");
+  // The replay is still running, so the click would be ignored: Save says so
+  // by being disabled rather than doing nothing.
+  assert.equal(page.el("save-why").disabled, true);
+
+  finishReplay();
+  await until(() => page.el("save-why").disabled === false, "Save to enable after the replay");
+  page.el("save-why").click();
+  await until(() => page.sent("record_why").length === 1, "record_why");
+  const [request] = page.sent("record_why");
+  assert.equal(request.event.artifact_id, "doc:a");
+  assert.equal(request.event.url, "https://docs.example/a");
+  assert.equal(request.event.text, "reviewing for launch");
+  await settle(200);
+  assert.equal(page.el("status").textContent, "Artifact context saved.");
+});
+
+test("Save why is disabled until there is text to save", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  assert.equal(page.el("save-why").disabled, true);
+  typeWhy(page, "  ");
+  assert.equal(page.el("save-why").disabled, true);
+  typeWhy(page, "context");
+  assert.equal(page.el("save-why").disabled, false);
+  typeWhy(page, "");
+  assert.equal(page.el("save-why").disabled, true);
+});
+
+test("a failed artifact lookup for a new page clears the previous page's card", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => {
+      if (request.type !== "get_artifact") return undefined;
+      return request.url.endsWith("/a")
+        ? recognized(artifact("doc:a", "Doc A"))
+        : { type: "error", code: "internal", message: "index busy" };
+    },
+  });
+  await until(() => page.el("artifact-heading").textContent === "Doc A", "page A's card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "context for A");
+
+  page.followLink("https://other.example/b", "B");
+  await until(() => page.sent("get_artifact").some((request) => request.url.endsWith("/b")), "B's lookup");
+  await until(() => /unavailable: index busy/.test(page.el("artifact-status").textContent), "the lookup error");
+  assert.equal(page.el("artifact-card").hidden, true, "page B still shows page A's card");
+  assert.equal(page.el("save-why").disabled, true);
+  // Nothing can attach page B's URL to page A's artifact.
+  page.el("save-why").dispatch("click");
+  await settle();
+  assert.equal(page.sent("record_why").length, 0);
+  assert.notEqual(page.el("status").textContent, "Artifact context saved.");
+});
+
+test("a failed artifact lookup for the same page keeps its card and draft", async () => {
+  let fail = false;
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => {
+      if (request.type !== "get_artifact") return undefined;
+      return fail
+        ? { type: "error", code: "internal", message: "index busy" }
+        : recognized(artifact("doc:a", "Doc A", "old reason"));
+    },
+  });
+  await until(() => page.el("artifact-why").value === "old reason", "the stored why");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "my draft");
+  fail = true;
+  page.titleChanged("A (1)");
+  await until(() => /unavailable: index busy/.test(page.el("artifact-status").textContent), "the lookup error");
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-why").value, "my draft");
+  assert.equal(page.el("save-why").disabled, false);
+});
+
+async function outageWithDraft(page) {
+  await until(() => page.el("artifact-why").value === "old reason", "the stored why");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "my unsaved draft");
+  // The host process exits, and the next start fails.
+  page.hostExits();
+  page.state.hostDead = true;
+  page.titleChanged("A (1)"); // get_artifact cannot start the host
+  await settle();
+  page.titleChanged("A (2)"); // the panel now knows the host is unreachable
+  await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
+}
+
+const withStoredWhy = (request) => request.type === "get_artifact"
+  ? recognized(artifact("doc:a", "Doc A", "old reason"))
+  : undefined;
+
+test("an unsaved Why draft survives a host outage", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING, intercept: withStoredWhy,
+  });
+  await outageWithDraft(page);
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-why").value, "my unsaved draft");
+
+  // The host is back; the user follows a link to another URL of the same artifact.
+  page.state.hostDead = false;
+  page.followLink("https://docs.example/a?view=1", "A");
+  await until(() => page.el("artifact-status").textContent === "● Artifact recognized", "the lookup to succeed");
+  await settle();
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-why").value, "my unsaved draft",
+    "the unsaved Why draft was replaced after the host outage");
+});
+
+test("Save why reports a host outage and records once the host is back", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING, intercept: withStoredWhy,
+  });
+  await outageWithDraft(page);
+  // The click itself restarts the host, so Save stays available.
+  assert.equal(page.el("save-why").disabled, false);
+  page.el("save-why").click();
+  await until(() => /Could not save artifact context/.test(page.el("status").textContent), "the save failure");
+  assert.equal(page.el("artifact-why").value, "my unsaved draft");
+
+  page.state.hostDead = false;
+  await until(() => page.el("save-why").disabled === false, "Save to enable again");
+  page.el("save-why").click();
+  await until(() => page.el("status").textContent === "Artifact context saved.", "the saved status");
+  const recorded = page.sent("record_why");
+  assert.equal(recorded.at(-1).event.text, "my unsaved draft");
+  assert.equal(recorded.at(-1).event.url, "https://docs.example/a");
+});
+
+test("Save why is disabled while capture is paused, keeps the draft, and points to Resume capture", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: { ...CONFIG, capture_enabled: false },
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "a draft while paused");
+  assert.equal(page.el("save-why").disabled, true);
+  assert.equal(page.el("artifact-why").value, "a draft while paused");
+  const hint = page.el("why-paused-hint");
+  assert.equal(hint.hidden, false);
+  assert.match(hint.textContent, /Use Resume capture in settings to turn it back on\./);
+  assert.equal(page.sent("record_why").length, 0);
+});
+
+test("Save why stays disabled while a local pause waits for the host", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+    // The worker paused, but the host still has capture on.
+    workerReply: () => ({ ok: true, value: { ...statusFor(), pause_pending: true } }),
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "a draft while paused");
+  assert.equal(page.el("save-why").disabled, true);
+  assert.equal(page.el("why-paused-hint").hidden, false);
+  // Resume capture is not offered until the host confirms the pause.
+  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture to finish saving this setting in the host\./);
+  page.el("save-why").dispatch("click");
+  await settle();
+  assert.equal(page.sent("record_why").length, 0);
+  assert.match(page.el("status").textContent, /Use Pause capture to finish/);
 });
