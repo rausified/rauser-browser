@@ -115,11 +115,20 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 
 /// Agent Markdown with every remote-resource construct made inert: images
 /// (`![..](..)`, `![..][..]`, `![..]`), link reference definitions (with a
-/// destination on the next line, both lines), and raw
+/// destination on the next line, both lines; only at a line start, so one
+/// inside a block quote or list item stays, harmless since every image that
+/// uses it is wrapped), and raw
 /// HTML (`<` followed by a letter, `/`, `!` or `?`) become code spans, so the
 /// URL stays visible but nothing is fetched. URI autolinks fetch nothing and
 /// stay links. Column-0 fenced code blocks and inline code spans that close
-/// on their own line are left alone.
+/// on their own line are left alone. A fence closer indented less than its
+/// opener may end a list item and open a fence instead, so after one no
+/// later fence is trusted.
+///
+/// Each line is neutralized one GFM table cell at a time (split on every
+/// unescaped `|`), since a table viewer splits cells before it finds code
+/// spans; a code span holding a `|` therefore shows its backticks, and an
+/// autolink holding one is wrapped.
 ///
 /// The scan is per line, so whatever could pair across lines in a viewer is
 /// made literal instead: a backtick run with no closer on its line is
@@ -203,11 +212,17 @@ impl Scan {
             // The destination of the definition above, plus any title.
             let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
             self.out.push_str(&line[..indent]);
-            push_code(&mut self.out, &code_span(&line[indent..]));
+            push_code_cells(&mut self.out, &line[indent..]);
             return;
         }
         if let Some(open) = self.fence {
             if closes_fence(line, open) {
+                // A closer indented less than its opener may instead end a
+                // list item and open a new fence in a viewer, so from here
+                // on no fence marker is trusted.
+                if leading_spaces(line) < open.indent {
+                    self.trust_fences = false;
+                }
                 self.fence = None;
                 self.out.push_str(line);
                 return;
@@ -244,7 +259,7 @@ impl Scan {
             escape_text(line, &mut self.out);
         } else if let Some((indent, pending)) = reference_definition(line) {
             self.out.push_str(&line[..indent]);
-            push_code(&mut self.out, &code_span(&line[indent..]));
+            push_code_cells(&mut self.out, &line[indent..]);
             // Inside an indented fence the line is code to the viewer, and
             // the next line may be the closer, which must stay intact.
             self.definition_pending = pending && self.fence.is_none();
@@ -438,7 +453,8 @@ fn autolink_length(text: &str) -> Option<usize> {
     for (offset, ch) in body[colon + 1..].char_indices() {
         match ch {
             '>' => return Some(1 + colon + 1 + offset + 1),
-            '<' | '`' | ' ' => return None,
+            // A `|` could split it across GFM table cells.
+            '<' | '`' | ' ' | '|' => return None,
             ch if ch.is_ascii_control() => return None,
             _ => {}
         }
@@ -605,7 +621,51 @@ fn push_code(out: &mut String, code: &str) {
     out.push_str(code);
 }
 
+/// `line` split on every `|` a GFM viewer may split a table row on: each
+/// one not backslash-escaped. A viewer splits before it finds code spans, so
+/// nothing generated may cross a `|`. Splitting where a viewer does not
+/// costs only a code span that holds a `|` showing its backticks.
+fn cells(line: &str) -> impl Iterator<Item = &str> {
+    let mut start = 0;
+    let mut escaped = false;
+    let mut pieces = Vec::new();
+    for (offset, ch) in line.char_indices() {
+        if ch == '|' && !escaped {
+            pieces.push(&line[start..offset]);
+            start = offset + 1;
+        }
+        escaped = !escaped && ch == '\\';
+    }
+    pieces.push(&line[start..]);
+    pieces.into_iter()
+}
+
+/// `content` as code spans, one per table cell, joined by the `|`s.
+fn push_code_cells(out: &mut String, content: &str) {
+    for (index, cell) in cells(content).enumerate() {
+        if index > 0 {
+            out.push('|');
+        }
+        if !cell.is_empty() {
+            push_code(out, &code_span(cell));
+        }
+    }
+}
+
 fn neutralize_line(line: &str, out: &mut String, escape: &mut bool) {
+    for (index, cell) in cells(line).enumerate() {
+        if index > 0 {
+            out.push('|');
+        }
+        if *escape {
+            escape_text(cell, out);
+        } else {
+            neutralize_cell(cell, out, escape);
+        }
+    }
+}
+
+fn neutralize_cell(line: &str, out: &mut String, escape: &mut bool) {
     let tables = LineTables::new(line);
     // Adjacent constructs share one span.
     let mut pending = String::new();
@@ -844,50 +904,121 @@ mod tests {
         );
     }
 
+    /// The text a viewer parses as inline content: each fenced line becomes
+    /// blank. With `list_items`, an indented fence ends at a line indented
+    /// less than its opener (a list item ends there), and that line is
+    /// looked at again; without, only a closer ends it.
+    fn outside_fences(output: &str, list_items: bool) -> String {
+        let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
+        let mut fence: Option<Fence> = None;
+        let mut kept = Vec::new();
+        for line in normalized.split('\n') {
+            if let Some(open) = fence {
+                let early =
+                    list_items && !line.trim().is_empty() && leading_spaces(line) < open.indent;
+                if !early {
+                    if closes_fence(line, open) {
+                        fence = None;
+                    }
+                    kept.push("");
+                    continue;
+                }
+                fence = None;
+            }
+            if let Some(open) = opens_fence(line) {
+                fence = Some(open);
+                kept.push("");
+            } else {
+                kept.push(line);
+            }
+        }
+        kept.join("\n")
+    }
+
+    /// The cells of a GFM table row, split the way cmark-gfm does (every
+    /// `|` not escaped) and the way markdown-it does (every `|` not right
+    /// after a backslash).
+    fn cells(line: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for markdown_it in [false, true] {
+            let (mut cell, mut escaped, mut previous) = (String::new(), false, ' ');
+            for ch in line.chars() {
+                let split = ch == '|'
+                    && if markdown_it {
+                        previous != '\\'
+                    } else {
+                        !escaped
+                    };
+                if split {
+                    found.push(std::mem::take(&mut cell));
+                } else {
+                    cell.push(ch);
+                }
+                escaped = !escaped && ch == '\\';
+                previous = ch;
+            }
+            found.push(cell);
+        }
+        found
+    }
+
     /// Panics if a raw-HTML or image opener survives outside a code span.
     /// Code spans are matched over whole paragraphs, as CommonMark does, so
     /// a span the neutralizer meant to close on one line but that a viewer
-    /// pairs differently is caught. Fences and link titles are not modelled;
-    /// those cases have hand-checked expectations below.
+    /// pairs differently is caught. Fences are modelled both inside and
+    /// outside list items, and every line is also checked as GFM table
+    /// cells. Link titles are not modelled; those cases have hand-checked
+    /// expectations below.
     fn assert_inert(output: &str) {
-        let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
-        for paragraph in normalized.split("\n\n") {
-            let chars: Vec<char> = paragraph.chars().collect();
-            let run_at = |at: usize| chars[at..].iter().take_while(|ch| **ch == '`').count();
-            let mut at = 0;
-            while at < chars.len() {
-                match chars[at] {
-                    '\\' if chars.get(at + 1).is_some_and(char::is_ascii_punctuation) => at += 2,
-                    '`' => {
-                        let run = run_at(at);
-                        let mut close = at + run;
-                        let mut found = None;
-                        while close < chars.len() {
-                            if chars[close] == '`' {
-                                let length = run_at(close);
-                                if length == run {
-                                    found = Some(close + length);
-                                    break;
-                                }
-                                close += length;
-                            } else {
-                                close += 1;
-                            }
-                        }
-                        at = found.unwrap_or(at + run);
+        for list_items in [false, true] {
+            let text = outside_fences(output, list_items);
+            for paragraph in text.split("\n\n") {
+                assert_inert_inline(paragraph, output);
+                for line in paragraph.lines() {
+                    for cell in cells(line) {
+                        assert_inert_inline(&cell, output);
                     }
-                    '<' if chars.get(at + 1).is_some_and(|next| {
-                        next.is_ascii_alphabetic() || matches!(next, '/' | '!' | '?')
-                    }) =>
-                    {
-                        let rest: String = chars[at..].iter().collect();
-                        let length = autolink_length(&rest)
-                            .unwrap_or_else(|| panic!("live tag in {output:?}"));
-                        at += rest[..length].chars().count();
-                    }
-                    '!' if chars.get(at + 1) == Some(&'[') => panic!("live image in {output:?}"),
-                    _ => at += 1,
                 }
+            }
+        }
+    }
+
+    fn assert_inert_inline(paragraph: &str, output: &str) {
+        let chars: Vec<char> = paragraph.chars().collect();
+        let run_at = |at: usize| chars[at..].iter().take_while(|ch| **ch == '`').count();
+        let mut at = 0;
+        while at < chars.len() {
+            match chars[at] {
+                '\\' if chars.get(at + 1).is_some_and(char::is_ascii_punctuation) => at += 2,
+                '`' => {
+                    let run = run_at(at);
+                    let mut close = at + run;
+                    let mut found = None;
+                    while close < chars.len() {
+                        if chars[close] == '`' {
+                            let length = run_at(close);
+                            if length == run {
+                                found = Some(close + length);
+                                break;
+                            }
+                            close += length;
+                        } else {
+                            close += 1;
+                        }
+                    }
+                    at = found.unwrap_or(at + run);
+                }
+                '<' if chars.get(at + 1).is_some_and(|next| {
+                    next.is_ascii_alphabetic() || matches!(next, '/' | '!' | '?')
+                }) =>
+                {
+                    let rest: String = chars[at..].iter().collect();
+                    let length =
+                        autolink_length(&rest).unwrap_or_else(|| panic!("live tag in {output:?}"));
+                    at += rest[..length].chars().count();
+                }
+                '!' if chars.get(at + 1) == Some(&'[') => panic!("live image in {output:?}"),
+                _ => at += 1,
             }
         }
     }
@@ -916,6 +1047,23 @@ mod tests {
             "![[a]](u)",
             "[![a](u)](v)",
             "a\r<img src=u>\r`b",
+            // A closer indented less than its list item's fence: a viewer
+            // ends the item there and opens a new fence on the same line.
+            "- a\n  ```\n  x\n```\n<img src=y>\n```\n<img src=z>\n",
+            "1. a\n   ```\n   x\n```\n<img src=y>\n```\n<img src=z>\n",
+            "- a\n  ~~~\n  x\n~~~\n<img src=y>\n~~~\n<img src=z>\n",
+            "- a\n  ```\n  x\n ```\n<img src=y>\n```\n<img src=z>\n",
+            "- a\n  ```\n  x\n```\n<img src=y>\n```\n<!--\n",
+            // GFM splits a table row on `|` before it finds code spans.
+            "| a | b |\n|---|---|\n| <b|<img src=x> | c |",
+            "| a | b |\n|---|---|\n| <x |![a](https://e/x.png) |",
+            "| a | b |\n|---|---|\n| `x|y` ![a](https://e/x.png) |",
+            "| a | b |\n|---|---|\n| `x|` <img src=x> `|` |",
+            "[r]: <img src=x>|y",
+            "[r]:\n<img src=x>|y",
+            "<https://a|<img src=x>`",
+            "a\\\\|<img src=x>`|`",
+            "a\\|<img src=x>`|`",
         ] {
             assert_inert(&neutralize_remote(input));
         }
@@ -976,6 +1124,41 @@ mod tests {
                 "```\n```\r`<img src=https://e/a.png>`",
             ),
             ("```\r<img src=u>\r```", "```\r<img src=u>\r```"),
+            // A closer indented less than the fence it closes may open a new
+            // fence in a viewer that ended the list item, so later fences
+            // are no longer trusted.
+            (
+                "- a\n  ```\n  x\n```\n<img src=y>\n```\n<img src=z>\n",
+                "- a\n  ```\n  x\n```\n`<img src=y>`\n\\`\\`\\`\n`<img src=z>`\n",
+            ),
+            (
+                "1. a\n   ```\n   x\n```\n<!--\n```\n<img src=z>",
+                "1. a\n   ```\n   x\n```\n`<!--`\n\\`\\`\\`\n`<img src=z>`",
+            ),
+        ] {
+            assert_eq!(neutralize_remote(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn every_table_cell_is_neutralized_on_its_own() {
+        for (input, expected) in [
+            ("| <b|<img src=x> | c |", "| `<b`|`<img src=x>` | c |"),
+            (
+                "| <x |![a](https://e/x.png) |",
+                "| `<x `|`![a](https://e/x.png)` |",
+            ),
+            (
+                "| `x|y` ![a](https://e/x.png) |",
+                "| \\`x|y\\` `![a](https://e/x.png)` |",
+            ),
+            ("| `x|` <img src=x> `|` |", "| \\`x|` <img src=x> `|\\` |"),
+            // An escaped pipe splits no cell.
+            ("`a\\|b` <img>", "`a\\|b` `<img>`"),
+            // A wrapped definition is wrapped cell by cell.
+            ("[r]: <img src=x>|y", "`[r]: <img src=x>`|`y`"),
+            // An autolink holding a pipe is not one.
+            ("<https://a|b>", "`<https://a`|b>"),
         ] {
             assert_eq!(neutralize_remote(input), expected, "{input:?}");
         }

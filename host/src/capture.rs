@@ -419,8 +419,8 @@ impl CaptureStore {
         };
         let (day_dir, _) = self.log_parts(timestamp);
         let link = crate::markdown::relative_link(&day_dir, Path::new(&summary.summary_path));
-        let title = safe_markdown_line(Some(&summary.title), MAX_TITLE_BYTES);
-        let document_type = safe_markdown_line(Some(&summary.document_type), 64);
+        let title = crate::markdown::inline(&summary.title, MAX_TITLE_BYTES);
+        let document_type = crate::markdown::inline(&summary.document_type, 64);
         let body = format!(
             "{} — Summarized: {} — {}, {} importance — [summary](<{link}>)",
             summary.occurred_at, title, document_type, summary.importance
@@ -1991,6 +1991,8 @@ fn safe_title(value: Option<&str>) -> String {
     safe_markdown_line(value, 300)
 }
 
+/// An optional visit field as one escaped line, `Untitled` when absent;
+/// present-only fields go straight through `markdown::inline`.
 fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
     crate::presentation::markdown_line(value.unwrap_or("Untitled"), limit)
 }
