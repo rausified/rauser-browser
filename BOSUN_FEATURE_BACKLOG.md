@@ -517,8 +517,9 @@ were folded into `brwr-q7e` above rather than given their own item.
   child can exit after printing its reply before the parent writes the framed
   request, intermittently producing `EPIPE` even though production dialog
   children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly. The earlier cycle-6 fix never merged; the repair
-  is now committed as `00dbc75` and included in `728b200`.
+  and exercise it repeatedly. The repair is committed as `00dbc75` and
+  included in `728b200`;
+  the bead is blocked on full verification in a runner that permits local IPC.
 
   Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
   request, make the reply fixture consume exactly the framed byte count, and
@@ -531,7 +532,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, health recheck on clean `7706276`):
+  Latest verification (2026-10-27, health recheck on clean `382bf29`):
   no quarantine failure file or incomplete changes were present.
   Protocol generation, workspace build, format, both Clippy configurations,
   npm ci, typecheck, lint, extension build, all 13 extension
@@ -541,9 +542,9 @@ were folded into `brwr-q7e` above rather than given their own item.
   Independent workspace Unix bind and JSON-only Node `spawnSync` probes both
   return EPERM. The script gate fails; disabling Node test isolation exposes
   8 passes, 1 failure and 1 platform skip. No product or test changes, skipped
-  coverage, feature work or history reset. Keep this bead open until a runner
-  permitting local IPC verifies the complete gate. The current run reproduced
-  both denials independently; earlier raw logs remain under ignored
+  coverage, feature work or history reset. The bead is now marked blocked until
+  a runner permitting local IPC verifies the complete gate. The current run
+  reproduced both denials independently; earlier raw logs remain under ignored
   `target/overnight-health/cycle-6-*.log`. The commit message is prepared.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
@@ -903,11 +904,13 @@ were folded into `brwr-q7e` above rather than given their own item.
   `brwr-t40` blocker. The next useful product increment remains host drafting
   with selectable rules and example artifact grouping, using the existing
   private pattern inputs; additional pattern diagnostics do not complete it.
-- Rechecked clean `7706276`: the same 32 service failures and independent
+- Rechecked clean `382bf29`: the same 32 service failures and independent
   AF_UNIX/Node EPERM probes persist. Build, lint, protocol and extension gates
   pass, including all 13 extension test files. No feature or test changes were made. The driver
   should preserve its external full-gate result in the next handoff: the
   absence of a quarantine file alone does not establish a passing baseline.
+  `brwr-4vb` is now explicitly blocked on this external verification; its
+  implemented fixture repair remains intact, with no acceptance claim.
 - No further product idea is needed while this gate blocks the assigned queue.
   The useful next action is an unfiltered external gate with its baseline SHA
   and results carried into the next prompt. Repeating the same denied tests
