@@ -60,6 +60,7 @@ pub struct ConfigStore {
     revision: String,
     issue: Option<String>,
     root_identity: Option<String>,
+    knowledge_base_identity: Option<String>,
     agent: AgentView,
     adapter_extensions: BTreeMap<String, toml::Value>,
     adapter_issue: Option<String>,
@@ -73,6 +74,7 @@ struct DiskState {
     issue: Option<String>,
     needs_backup: bool,
     root_identity: Option<String>,
+    knowledge_base_identity: Option<String>,
     agent: AgentView,
     adapter_extensions: BTreeMap<String, toml::Value>,
     retired_adapter_contracts: Vec<serde_json::Value>,
@@ -251,6 +253,7 @@ impl ConfigStore {
         self.revision = UNREADABLE_REVISION.into();
         self.issue = Some("The configuration file cannot be read or is not a regular file. Fix or remove it, then reload this page.".into());
         self.root_identity = None;
+        self.knowledge_base_identity = None;
         self.agent = AgentView::default();
         self.adapter_extensions.clear();
         self.adapter_issue = None;
@@ -296,6 +299,7 @@ impl ConfigStore {
             revision: MISSING_REVISION.into(),
             issue: None,
             root_identity: None,
+            knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
             adapter_issue: None,
@@ -310,6 +314,7 @@ impl ConfigStore {
         self.revision = state.revision;
         self.issue = state.issue;
         self.root_identity = state.root_identity;
+        self.knowledge_base_identity = state.knowledge_base_identity;
         self.agent = state.agent;
         self.adapter_extensions = state.adapter_extensions;
         if revision_changed {
@@ -346,6 +351,28 @@ impl ConfigStore {
 
     pub fn root_identity(&self) -> Option<&str> {
         self.root_identity.as_deref()
+    }
+
+    /// The folder the summary agent reads: the chosen knowledge base folder,
+    /// or the notes folder while none is chosen. The host never writes here.
+    pub fn knowledge_base_dir(&self) -> Option<PathBuf> {
+        let storage = self.config.storage.as_ref()?;
+        Some(PathBuf::from(
+            storage
+                .knowledge_base_dir
+                .as_deref()
+                .unwrap_or(&storage.root),
+        ))
+    }
+
+    /// The picker-confirmed identity of `knowledge_base_dir()`.
+    pub fn knowledge_base_identity(&self) -> Option<&str> {
+        let storage = self.config.storage.as_ref()?;
+        if storage.knowledge_base_dir.is_some() {
+            self.knowledge_base_identity.as_deref()
+        } else {
+            self.root_identity()
+        }
     }
 
     /// Hold this lock from the policy refresh through a privileged write.
@@ -601,7 +628,7 @@ impl ConfigStore {
         next: ConfigSnapshot,
         expected_revision: &str,
     ) -> Result<Option<String>> {
-        self.update_with_grants(next, expected_revision, None, None)
+        self.update_with_grants(next, expected_revision, None, None, None)
     }
 
     #[cfg(test)]
@@ -611,7 +638,7 @@ impl ConfigStore {
         expected_revision: &str,
         selected_identity: Option<&str>,
     ) -> Result<Option<String>> {
-        self.update_with_grants(next, expected_revision, selected_identity, None)
+        self.update_with_grants(next, expected_revision, selected_identity, None, None)
     }
 
     /// Native dispatch calls this only after `ConsentAuthority` has checked
@@ -623,6 +650,7 @@ impl ConfigStore {
         next: ConfigSnapshot,
         expected_revision: &str,
         selected_identity: Option<&str>,
+        knowledge_base_identity: Option<&str>,
         harness_commit: Option<HarnessCommit>,
     ) -> Result<Option<String>> {
         let json = serde_json::to_vec(&next).context("serializing config JSON")?;
@@ -730,9 +758,37 @@ impl ConfigStore {
                 Some(actual)
             }
         };
+        let next_knowledge_base_identity = match next
+            .storage
+            .as_ref()
+            .and_then(|storage| storage.knowledge_base_dir.as_deref())
+        {
+            None => None,
+            Some(knowledge_base) => {
+                let unchanged = current
+                    .config
+                    .storage
+                    .as_ref()
+                    .and_then(|old| old.knowledge_base_dir.as_deref())
+                    == Some(knowledge_base);
+                let expected = knowledge_base_identity
+                    .or_else(|| {
+                        unchanged
+                            .then_some(current.knowledge_base_identity.as_deref())
+                            .flatten()
+                    })
+                    .context("a fresh native selection of the knowledge base folder is required")?;
+                let actual = selected_root_identity(Path::new(knowledge_base))?;
+                if actual != expected {
+                    bail!("selected knowledge base folder changed; choose it again");
+                }
+                Some(actual)
+            }
+        };
         let serialized = toml::to_string_pretty(&StoredConfig::from_snapshot(
             &next,
             next_identity.clone(),
+            next_knowledge_base_identity.clone(),
             &agent,
             retired_adapter_contracts,
             adapter_extensions.clone(),
@@ -773,6 +829,7 @@ impl ConfigStore {
         self.revision = revision.clone();
         self.issue = None;
         self.root_identity = next_identity;
+        self.knowledge_base_identity = next_knowledge_base_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
         self.set_adapter_policy(true);
@@ -799,6 +856,10 @@ struct StoredConfig {
     root_picker_confirmed: bool,
     #[serde(default)]
     root_identity: Option<String>,
+    /// Host-only: the identity of the picker-selected knowledge base folder.
+    /// Absent while the knowledge base follows `root`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    knowledge_base_identity: Option<String>,
     #[serde(default)]
     capture_enabled: bool,
     // Accept and ignore the retired v5 site allowlist. Capture origins now
@@ -862,6 +923,9 @@ struct StoredStorage {
     artifacts_dir: Option<String>,
     #[serde(default)]
     summaries_dir: Option<String>,
+    // Added in v6. A missing key means the knowledge base follows `root`.
+    #[serde(default)]
+    knowledge_base_dir: Option<String>,
 }
 
 impl From<StorageConfig> for StoredStorage {
@@ -874,6 +938,7 @@ impl From<StorageConfig> for StoredStorage {
             later_dir: value.later_dir,
             artifacts_dir: Some(value.artifacts_dir),
             summaries_dir: value.summaries_dir,
+            knowledge_base_dir: value.knowledge_base_dir,
         }
     }
 }
@@ -899,6 +964,7 @@ impl From<StoredStorage> for StorageConfig {
             later_dir: value.later_dir,
             artifacts_dir,
             summaries_dir: value.summaries_dir,
+            knowledge_base_dir: value.knowledge_base_dir,
         }
     }
 }
@@ -980,6 +1046,7 @@ impl StoredConfig {
     fn from_snapshot(
         value: &ConfigSnapshot,
         root_identity: Option<String>,
+        knowledge_base_identity: Option<String>,
         agent: &AgentView,
         retired_adapter_contracts: Vec<serde_json::Value>,
         adapter_extensions: BTreeMap<String, toml::Value>,
@@ -990,6 +1057,7 @@ impl StoredConfig {
             // the picker grant for a new root. This marks the root's M1 origin.
             root_picker_confirmed: value.storage.is_some(),
             root_identity,
+            knowledge_base_identity,
             capture_enabled: value.capture_enabled,
             _sites: None,
             strip_params: value.strip_params.clone(),
@@ -1044,6 +1112,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 issue: None,
                 needs_backup: false,
                 root_identity: None,
+                knowledge_base_identity: None,
                 agent: AgentView::default(),
                 adapter_extensions: BTreeMap::new(),
                 retired_adapter_contracts: Vec::new(),
@@ -1084,6 +1153,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             issue: Some("Configuration exceeds 64 KiB. Choose a notes folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
+            knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
@@ -1095,6 +1165,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
     match parsed {
         Ok(mut stored) => {
             let root_identity = stored.root_identity.clone();
+            let knowledge_base_identity = stored.knowledge_base_identity.clone();
             let retired_adapter_contracts = std::mem::take(&mut stored.adapter_id_history);
             let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
             let root_unconfirmed = stored.storage.is_some()
@@ -1114,6 +1185,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     issue: Some(issue.to_owned()),
                     needs_backup: true,
                     root_identity: None,
+                    knowledge_base_identity: None,
                     agent,
                     adapter_extensions: BTreeMap::new(),
                     retired_adapter_contracts: Vec::new(),
@@ -1137,6 +1209,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 issue: folder_changed.then(|| "The selected notes folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned()),
                 needs_backup: false,
                 root_identity,
+                knowledge_base_identity,
                 agent,
                 adapter_extensions,
                 retired_adapter_contracts,
@@ -1148,6 +1221,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             issue: Some("Configuration is invalid or from a newer version. Choose a notes folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
+            knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
@@ -1691,6 +1765,23 @@ fn validate_storage(storage: &StorageConfig) -> Result<()> {
     if !root.is_absolute() {
         bail!("storage.root must be an existing absolute folder selected by the user");
     }
+    // The knowledge base is its own user-selected folder, read only by the
+    // summary agent. It may hold or sit inside the notes folder.
+    if let Some(knowledge_base) = &storage.knowledge_base_dir {
+        if knowledge_base.len() > MAX_ROOT_PATH_BYTES {
+            bail!("storage.knowledge_base_dir exceeds the 4096-byte path limit");
+        }
+        if has_unsafe_display_chars(knowledge_base) {
+            bail!(
+                "knowledge base folder path contains control or bidirectional formatting characters"
+            );
+        }
+        if !Path::new(knowledge_base).is_absolute() {
+            bail!(
+                "storage.knowledge_base_dir must be an existing absolute folder selected by the user"
+            );
+        }
+    }
     if storage.profile != "neutral" {
         bail!("storage.profile must be neutral until the Obsidian preset is implemented");
     }
@@ -2006,6 +2097,109 @@ mod tests {
             );
             assert_eq!(store.agent_status().state, AgentState::HarnessProblem);
         }
+    }
+
+    #[test]
+    fn v5_storage_without_knowledge_base_dir_loads_as_null_and_follows_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert_eq!(
+            store
+                .snapshot()
+                .storage
+                .as_ref()
+                .unwrap()
+                .knowledge_base_dir,
+            None
+        );
+        assert_eq!(store.knowledge_base_dir().unwrap(), root);
+        assert_eq!(store.knowledge_base_identity(), store.root_identity());
+    }
+
+    #[test]
+    fn relative_knowledge_base_dir_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ConfigSnapshot {
+            storage: Some(StorageConfig {
+                root: dir.path().to_string_lossy().into_owned(),
+                profile: "neutral".into(),
+                log_dir: "log".into(),
+                pages_dir: "pages".into(),
+                later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
+                summaries_dir: None,
+                knowledge_base_dir: Some("kb".into()),
+            }),
+            ..empty_config()
+        };
+        assert!(validate_base(&config).is_err());
+        let storage = config.storage.as_mut().unwrap();
+        storage.knowledge_base_dir = Some(format!("/{}", "k".repeat(MAX_ROOT_PATH_BYTES)));
+        assert!(validate_base(&config).is_err());
+        let storage = config.storage.as_mut().unwrap();
+        storage.knowledge_base_dir = Some("/kb\u{202e}".into());
+        assert!(validate_base(&config).is_err());
+        let storage = config.storage.as_mut().unwrap();
+        // The knowledge base may be, hold, or sit inside the notes folder.
+        storage.knowledge_base_dir = Some(storage.root.clone());
+        validate_base(&config).unwrap();
+    }
+
+    #[test]
+    fn knowledge_base_dir_needs_its_own_picker_identity_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        let knowledge_base = dir.path().join("kb");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&knowledge_base).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        next.storage.as_mut().unwrap().knowledge_base_dir =
+            Some(knowledge_base.to_string_lossy().into_owned());
+        let revision = store.revision().to_owned();
+        // The notes folder's identity does not vouch for another folder.
+        let root_identity = store.root_identity().unwrap().to_owned();
+        assert!(
+            store
+                .update_with_grants(next.clone(), &revision, None, Some(&root_identity), None)
+                .is_err()
+        );
+        assert!(store.update(next.clone(), &revision).is_err());
+
+        let identity = selected_root_identity(&knowledge_base).unwrap();
+        store
+            .update_with_grants(next.clone(), &revision, None, Some(&identity), None)
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("knowledge_base_identity"), "{text}");
+        let mut reloaded = loaded(&path);
+        assert_eq!(reloaded.snapshot(), &next);
+        assert_eq!(reloaded.knowledge_base_dir().unwrap(), knowledge_base);
+        assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
+
+        // An unrelated save keeps the stored identity without a new grant.
+        let mut unrelated = next.clone();
+        unrelated.capture_enabled = true;
+        let revision = reloaded.revision().to_owned();
+        reloaded.update(unrelated, &revision).unwrap().unwrap();
+        assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
+
+        // Following the notes folder again drops the host-only identity.
+        let mut follow = reloaded.snapshot().clone();
+        follow.storage.as_mut().unwrap().knowledge_base_dir = None;
+        let revision = reloaded.revision().to_owned();
+        reloaded.update(follow, &revision).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("knowledge_base"), "{text}");
+        assert_eq!(reloaded.knowledge_base_dir().unwrap(), root);
     }
 
     #[test]
@@ -2630,6 +2824,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         });
         let identity = selected_root_identity(&root).unwrap();
         store
@@ -2709,6 +2904,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         };
         let enabled = ConfigSnapshot {
             storage: Some(storage),
@@ -2801,6 +2997,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: Some("pages/summaries".into()),
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
         storage.summaries_dir = Some("log".into());
@@ -2824,6 +3021,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: Some("Pages".into()),
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
     }
@@ -2841,6 +3039,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: Some("ασ".into()),
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
         storage.pages_dir = "pages".into();
@@ -3177,7 +3376,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
         assert!(
             store
-                .update_with_grants(next.clone(), &revision, None, Some(stale))
+                .update_with_grants(next.clone(), &revision, None, None, Some(stale))
                 .is_err()
         );
         assert_eq!(fs::read(&path).unwrap(), before);
@@ -3187,7 +3386,7 @@ mod tests {
             record,
         };
         store
-            .update_with_grants(next, &revision, None, Some(commit))
+            .update_with_grants(next, &revision, None, None, Some(commit))
             .unwrap()
             .unwrap();
         let store = loaded(&path);
@@ -3213,7 +3412,7 @@ mod tests {
         };
         let revision = store.revision().to_owned();
         let revision = store
-            .update_with_grants(next, &revision, None, Some(commit))
+            .update_with_grants(next, &revision, None, None, Some(commit))
             .unwrap()
             .unwrap();
         (path, binary, revision)
@@ -3333,6 +3532,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             ..empty_config()
@@ -3399,6 +3599,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             ..empty_config()
@@ -3427,6 +3628,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             ..empty_config()
         };
@@ -3435,6 +3637,7 @@ mod tests {
             &path,
             toml::to_string(&StoredConfig::from_snapshot(
                 &next,
+                None,
                 None,
                 &AgentView::default(),
                 Vec::new(),
@@ -3476,6 +3679,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             ..empty_config()
         };
@@ -3526,6 +3730,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: true,
             ..empty_config()
@@ -3646,6 +3851,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             ..empty_config()
@@ -3665,6 +3871,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         };
         assert!(validate_storage(&storage).is_err());
     }

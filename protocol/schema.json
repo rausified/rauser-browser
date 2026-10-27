@@ -186,7 +186,8 @@
         "request_id",
         "expected_revision",
         "config",
-        "picker_token"
+        "picker_token",
+        "knowledge_base_token"
       ],
       "properties": {
         "type": {
@@ -210,6 +211,19 @@
           "$ref": "#/$defs/ConfigSnapshot"
         },
         "picker_token": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "knowledge_base_token": {
+          "description": "The folder selection token for a new or reconfirmed storage.knowledge_base_dir; null otherwise.",
           "oneOf": [
             {
               "type": "string",
@@ -519,7 +533,8 @@
         "pages_dir",
         "later_dir",
         "artifacts_dir",
-        "summaries_dir"
+        "summaries_dir",
+        "knowledge_base_dir"
       ],
       "properties": {
         "root": {
@@ -553,6 +568,19 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "knowledge_base_dir": {
+          "description": "The absolute folder the summary agent reads as its knowledge base. Null means use root.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
             },
             {
               "type": "null"
@@ -668,7 +696,8 @@
       "required": [
         "type",
         "protocol_version",
-        "request_id"
+        "request_id",
+        "purpose"
       ],
       "properties": {
         "type": {
@@ -682,8 +711,19 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "purpose": {
+          "$ref": "#/$defs/FolderPurpose"
         }
       }
+    },
+    "FolderPurpose": {
+      "type": "string",
+      "description": "Which setting a folder selection token may authorize.",
+      "enum": [
+        "notes_folder",
+        "knowledge_base"
+      ]
     },
     "RecordVisitRequest": {
       "type": "object",

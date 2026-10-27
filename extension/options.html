@@ -104,6 +104,14 @@
           <small>A folder inside the notes folder, separate from the visit log, page notes, and read-later folders.</small>
         </div>
 
+        <div class="field">
+          <label>Knowledge base folder</label>
+          <output id="kb-path">Same as the notes folder</output>
+          <button id="choose-kb" type="button" class="secondary" disabled>Choose…</button>
+          <button id="kb-use-notes" type="button" class="secondary" disabled>Use notes folder</button>
+          <small>The folder a summary agent reads to judge how a page fits what you already know. {{APP_NAME}} never writes there.</small>
+        </div>
+
         <p id="harness-warning">Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.</p>
         <button id="setup-harness" type="button" disabled>Set up harness</button>
         <button id="remove-harness" type="button" class="secondary" disabled>Remove harness</button>

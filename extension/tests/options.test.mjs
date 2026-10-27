@@ -64,7 +64,7 @@ function configWith(adapters, captureEnabled) {
   return {
     storage: {
       root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-      summaries_dir: null,
+      summaries_dir: null, knowledge_base_dir: null,
     },
     capture_enabled: captureEnabled ?? adapters.length > 0,
     strip_params: [],
@@ -107,7 +107,7 @@ function install({
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
-    ["summaries-dir", "input"],
+    ["summaries-dir", "input"], ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
     ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
@@ -781,6 +781,8 @@ test("choosing a folder saves it at once, leaving adapters and capture as they w
   await until(() => state.config.storage?.root === "/vault" && idle(), "the folder to be saved");
   assert.equal(saves.length, 1);
   assert.equal(saves[0].picker_token, "picker-1");
+  assert.equal(saves[0].knowledge_base_token, null);
+  assert.equal(env.requests.find((request) => request.type === "choose_folder").purpose, "notes_folder");
   assert.equal("consent_token" in saves[0], false);
   assert.equal(state.config.capture_enabled, false);
   assert.deepEqual(state.config.adapters.artifacts, []);
@@ -836,6 +838,67 @@ test("a folder selection the host did not save is saved with the next adapter", 
   assert.equal(lastUpdate().picker_token, "picker-1");
   assert.equal(state.config.storage?.root, "/vault");
   assert.equal(state.config.capture_enabled, true);
+});
+
+test("choosing a knowledge base folder saves it with its own token", async () => {
+  const state = install({
+    host: {
+      choose_folder: (request) => request.purpose === "knowledge_base"
+        ? { type: "folder_chosen", path: "/kb", picker_token: "t" }
+        : null,
+    },
+  });
+  await openSettings();
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder (/vault)");
+  assert.equal(env.elements.get("kb-use-notes").disabled, true);
+  env.elements.get("choose-kb").click();
+  await until(() => state.config.storage?.knowledge_base_dir === "/kb" && idle(), "the knowledge base to be saved");
+  const lastChoose = env.requests.findLast((request) => request.type === "choose_folder");
+  assert.equal(lastChoose.purpose, "knowledge_base");
+  assert.equal(lastUpdate().config.storage.knowledge_base_dir, "/kb");
+  assert.equal(lastUpdate().config.storage.root, "/vault");
+  assert.equal(lastUpdate().knowledge_base_token, "t");
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(env.elements.get("kb-path").textContent, "/kb");
+  assert.match(statusText(), /^Knowledge base folder saved\./);
+});
+
+test("Use notes folder clears the knowledge base folder without a token", async () => {
+  const state = install();
+  state.config.storage.knowledge_base_dir = "/kb";
+  await openSettings();
+  assert.equal(env.elements.get("kb-path").textContent, "/kb");
+  const button = env.elements.get("kb-use-notes");
+  assert.equal(button.disabled, false);
+  button.click();
+  await until(() => state.config.storage?.knowledge_base_dir === null && idle(), "the knowledge base to follow the notes folder");
+  assert.equal(lastUpdate().knowledge_base_token, null);
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(env.requests.some((request) => request.type === "choose_folder"), false);
+});
+
+test("a knowledge base folder needs a notes folder first", async () => {
+  const state = install();
+  state.config = { ...state.config, storage: null };
+  await openSettings();
+  assert.equal(env.elements.get("choose-kb").disabled, true);
+  assert.equal(env.elements.get("kb-use-notes").disabled, true);
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder");
+});
+
+test("a notes folder change keeps the chosen knowledge base folder", async () => {
+  const state = install({
+    host: {
+      choose_folder: () => ({ type: "folder_chosen", path: "/other", picker_token: "notes" }),
+    },
+  });
+  state.config.storage.knowledge_base_dir = "/kb";
+  await openSettings();
+  env.elements.get("choose-folder").click();
+  await until(() => state.config.storage?.root === "/other" && idle(), "the notes folder to be saved");
+  assert.equal(lastUpdate().config.storage.knowledge_base_dir, "/kb");
+  assert.equal(lastUpdate().knowledge_base_token, null);
+  assert.equal(lastUpdate().picker_token, "notes");
 });
 
 const CLAUDE_OFFER = {

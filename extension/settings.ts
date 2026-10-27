@@ -202,6 +202,7 @@ export class ConfigSession {
   async saveConfig(
     next: ConfigSnapshot,
     pickerToken: string | null,
+    knowledgeBaseToken: string | null = null,
     onCommitted?: () => void,
     resumeAfterConfirmation = false,
     resumeAfterPauseToken: string | null = null,
@@ -215,6 +216,7 @@ export class ConfigSession {
       expected_revision: this.revision,
       config: next,
       picker_token: pickerToken,
+      knowledge_base_token: knowledgeBaseToken,
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);

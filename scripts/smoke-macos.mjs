@@ -713,6 +713,7 @@ async function run() {
   const testHome = path.join(runDir, "home");
   const profile = path.join(runDir, "chrome-profile");
   const notes = path.join(runDir, "notes");
+  const knowledgeBase = path.join(runDir, "knowledge-base");
   const wrapper = path.join(runDir, `${BINARY_NAME}-host-wrapper`);
   const windowCheck = path.join(runDir, "smoke-macos-windows");
   const dialogs = path.join(runDir, "dialogs");
@@ -935,7 +936,7 @@ async function run() {
   }
 
   try {
-    await Promise.all([mkdir(testHome), mkdir(notes), mkdir(profile)]);
+    await Promise.all([mkdir(testHome), mkdir(notes), mkdir(knowledgeBase), mkdir(profile)]);
     if (options.headless) {
       await mkdir(dialogs, { mode: 0o700 });
       await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-windows.swift"), "-o", windowCheck]);
@@ -1089,6 +1090,33 @@ async function run() {
         requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")));
     });
 
+    await step("Knowledge base folder is chosen with the native picker", async () => {
+      if (!options.headless) await commandOutput("/bin/sh", ["-c", `printf %s ${shellQuote(knowledgeBase)} | pbcopy`]);
+      const expected = await realpath(knowledgeBase);
+      let title = null;
+      await inSettings(async (page) => {
+        await page.evaluate('document.getElementById("status").textContent = ""');
+        await page.click("#choose-kb");
+      });
+      await userAction(`In the folder picker titled "Choose ${APP_NAME} knowledge base folder", choose the suggested folder. Its path is on the clipboard: press Cmd+Shift+G, clear the box, paste, press Return, then click Open.\n  Path: ${knowledgeBase}`,
+        async () => {
+          const reply = await hostConfig(wrapper);
+          const saved = reply.config.storage?.knowledge_base_dir;
+          requireCondition(saved, "The host has no knowledge base folder yet");
+          requireCondition(await realpath(saved) === expected, `The host saved ${saved} as the knowledge base`);
+          requireCondition(await sameFolder(reply.config.storage.root), "Choosing the knowledge base changed the notes folder");
+          const status = await settingsStatus();
+          requireCondition(status?.startsWith("Knowledge base folder saved."), `Settings page says: ${status}`);
+          const shown = await onSettings((page) => page.text("#kb-path"));
+          requireCondition(shown === saved, `The settings page shows the knowledge base as ${shown}`);
+        }, async () => { title = await pickFolder(knowledgeBase); });
+      if (options.headless) {
+        requireCondition(title === `Choose ${APP_NAME} knowledge base folder`, `The picker was titled ${title}`);
+      }
+      const written = (await readdir(knowledgeBase)).filter((name) => name !== ".DS_Store");
+      requireCondition(written.length === 0, `The host wrote into the knowledge base folder: ${written.join(", ")}`);
+    });
+
     // Standing HTTP(S) access: with no site enabled and nothing granted during
     // the run, the panel still sees a page it has never shown before.
     await step("Panel shows URL and title on a never-visited page", async () => {
@@ -1184,7 +1212,7 @@ async function run() {
         });
         port.postMessage({
           type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
-          expected_revision: expectedRevision, config, picker_token: null,
+          expected_revision: expectedRevision, config, picker_token: null, knowledge_base_token: null,
         });
       }))()`));
       await saving;

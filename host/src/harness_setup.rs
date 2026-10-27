@@ -222,7 +222,7 @@ pub(crate) fn set_up(
             probe_passed_at,
         },
     };
-    match config.update_with_grants(after, &request.expected_revision, None, Some(commit)) {
+    match config.update_with_grants(after, &request.expected_revision, None, None, Some(commit)) {
         Ok(Some(revision)) => Ok(revision),
         Ok(None) => Err(SetupError::new(
             ErrorCode::Conflict,

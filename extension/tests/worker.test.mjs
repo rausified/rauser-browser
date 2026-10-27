@@ -1157,7 +1157,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   const config = {
     storage: {
       root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-      summaries_dir: null,
+      summaries_dir: null, knowledge_base_dir: null,
     },
     capture_enabled: false, strip_params: [],
     agent: null,
@@ -1182,6 +1182,11 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
   assert.equal(isConfig({ ...config, storage: { ...m1Storage, summaries_dir: 7 } }), false);
+  // knowledge_base_dir is required too, as null while it follows the root.
+  const { knowledge_base_dir: _kb, ...v5Storage } = config.storage;
+  assert.equal(isConfig({ ...config, storage: v5Storage }), false);
+  assert.equal(isConfig({ ...config, storage: { ...config.storage, knowledge_base_dir: "/kb" } }), true);
+  assert.equal(isConfig({ ...config, storage: { ...config.storage, knowledge_base_dir: 7 } }), false);
 
   const result = {
     type: "config_result", revision: "missing", config, config_issue: null,
@@ -1264,7 +1269,7 @@ function configResult(request, origin, overrides = {}) {
     config: {
       storage: {
         root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-        summaries_dir: null,
+        summaries_dir: null, knowledge_base_dir: null,
       },
       capture_enabled: true, strip_params: [],
       agent: null,

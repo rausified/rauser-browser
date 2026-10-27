@@ -125,7 +125,7 @@ export function isConfig(value: unknown): boolean {
     const record = storage as Record<string, unknown>;
     if (!["root", "profile", "log_dir", "pages_dir", "later_dir", "artifacts_dir"]
       .every((key) => typeof record[key] === "string")) return false;
-    if (!stringOrNull(record.summaries_dir)) return false;
+    if (!stringOrNull(record.summaries_dir) || !stringOrNull(record.knowledge_base_dir)) return false;
   }
   return typeof config.capture_enabled === "boolean" &&
     isStringArray(config.strip_params) &&

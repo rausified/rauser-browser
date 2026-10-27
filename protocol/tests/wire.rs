@@ -11,7 +11,7 @@ fn config(storage: &str) -> String {
 
 fn update(config: &str) -> String {
     format!(
-        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"config":{config}}}"#
+        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"knowledge_base_token":null,"config":{config}}}"#
     )
 }
 
@@ -20,7 +20,7 @@ fn storage(summaries: Option<&str>) -> String {
         format!(r#","summaries_dir":{value}"#)
     });
     format!(
-        r#""storage":{{"root":"/tmp/notes","profile":"neutral","log_dir":"log","pages_dir":"pages","later_dir":"later","artifacts_dir":"artifacts"{summaries}}},"#
+        r#""storage":{{"root":"/tmp/notes","profile":"neutral","log_dir":"log","pages_dir":"pages","later_dir":"later","artifacts_dir":"artifacts"{summaries},"knowledge_base_dir":null}},"#
     )
 }
 
@@ -81,6 +81,46 @@ fn v6_config_requires_summaries_dir_key() {
     assert!(
         serde_json::from_str::<Request>(&update(&config(&storage(Some(r#""summaries""#))))).is_ok()
     );
+}
+
+#[test]
+fn v6_config_requires_knowledge_base_dir_key() {
+    let complete = storage(Some("null"));
+    assert!(serde_json::from_str::<Request>(&update(&config(&complete))).is_ok());
+    let chosen = complete.replace(
+        r#""knowledge_base_dir":null"#,
+        r#""knowledge_base_dir":"/tmp/kb""#,
+    );
+    assert!(serde_json::from_str::<Request>(&update(&config(&chosen))).is_ok());
+    let omitted = complete.replace(r#","knowledge_base_dir":null"#, "");
+    assert!(serde_json::from_str::<Request>(&update(&config(&omitted))).is_err());
+}
+
+#[test]
+fn update_config_requires_knowledge_base_token_key() {
+    let plain = update(&config(r#""storage":null,"#));
+    let omitted = plain.replace(r#","knowledge_base_token":null"#, "");
+    assert!(serde_json::from_str::<Request>(&omitted).is_err());
+    let with_token = plain.replace(
+        r#""knowledge_base_token":null"#,
+        r#""knowledge_base_token":"t""#,
+    );
+    assert!(serde_json::from_str::<Request>(&with_token).is_ok());
+}
+
+#[test]
+fn choose_folder_requires_purpose() {
+    let base = r#"{"type":"choose_folder","protocol_version":6,"request_id":"r1""#;
+    assert!(serde_json::from_str::<Request>(&format!("{base}}}")).is_err());
+    for purpose in ["notes_folder", "knowledge_base"] {
+        let request = format!(r#"{base},"purpose":"{purpose}"}}"#);
+        assert!(
+            serde_json::from_str::<Request>(&request).is_ok(),
+            "{purpose} was refused"
+        );
+    }
+    let unknown = format!(r#"{base},"purpose":"summaries"}}"#);
+    assert!(serde_json::from_str::<Request>(&unknown).is_err());
 }
 
 #[test]

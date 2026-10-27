@@ -1,7 +1,9 @@
 //! Short-lived, process-local grants for folder selection. Only the native
 //! host can mint these grants; the extension cannot authorize a path or
-//! redirect writes by sending an arbitrary config. Other config changes need
-//! only the revision check, and only harness setup sets a harness entry.
+//! redirect writes by sending an arbitrary config. Each grant names the
+//! setting it was chosen for, so a notes-folder selection cannot set the
+//! knowledge base folder or the reverse. Other config changes need only the
+//! revision check, and only harness setup sets a harness entry.
 
 use std::collections::HashMap;
 use std::fs;
@@ -9,7 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::ConfigSnapshot;
+use brauser_protocol::{ConfigSnapshot, FolderPurpose};
 use uuid::Uuid;
 
 use crate::brand::APP_NAME;
@@ -26,6 +28,7 @@ pub struct FolderSelection {
 }
 
 struct PickerGrant {
+    purpose: FolderPurpose,
     root: String,
     identity: String,
     revision: String,
@@ -36,6 +39,7 @@ struct PickerGrant {
 #[derive(Debug, Default)]
 pub struct Authorized {
     pub selected_identity: Option<String>,
+    pub knowledge_base_identity: Option<String>,
 }
 
 #[derive(Default)]
@@ -50,22 +54,26 @@ impl ConsentAuthority {
 
     /// Blocks this connection until the user closes the picker, which runs
     /// in a child process (see `dialog`).
-    pub fn choose_folder(&mut self, revision: &str) -> Result<Option<FolderSelection>> {
-        let Some(selected) = dialog::pick_folder(&format!("Choose {APP_NAME} notes folder"))?
-        else {
+    pub fn choose_folder(
+        &mut self,
+        revision: &str,
+        purpose: FolderPurpose,
+    ) -> Result<Option<FolderSelection>> {
+        let noun = folder_noun(purpose);
+        let Some(selected) = dialog::pick_folder(&format!("Choose {APP_NAME} {noun}"))? else {
             return Ok(None);
         };
         let canonical = fs::canonicalize(&selected)
             .with_context(|| format!("resolving selected folder {}", selected.display()))?;
         if !canonical.is_dir() {
-            bail!("selected notes folder is not a directory");
+            bail!("selected {noun} is not a directory");
         }
         let root = canonical
             .to_str()
-            .context("selected notes folder path cannot be represented as UTF-8")?
+            .with_context(|| format!("selected {noun} path cannot be represented as UTF-8"))?
             .to_owned();
         let identity = selected_root_identity(Path::new(&root))?;
-        let picker_token = self.mint_picker(root.clone(), identity, revision);
+        let picker_token = self.mint_picker(purpose, root.clone(), identity, revision);
         Ok(Some(FolderSelection {
             path: root,
             picker_token,
@@ -80,11 +88,17 @@ impl ConsentAuthority {
         revision: &str,
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
+        knowledge_base_token: Option<&str>,
     ) -> Result<Authorized> {
         config::validate_update(current, next)?;
         let selected_identity = self.check_picker(current, revision, next, picker_token)?;
+        let knowledge_base_identity =
+            self.check_knowledge_base(current, revision, next, knowledge_base_token)?;
         check_agent_fields(current, next)?;
-        Ok(Authorized { selected_identity })
+        Ok(Authorized {
+            selected_identity,
+            knowledge_base_identity,
+        })
     }
 
     /// Call only after ConfigStore::update returns a committed revision.
@@ -94,8 +108,9 @@ impl ConsentAuthority {
         _revision: &str,
         _next: &ConfigSnapshot,
         picker_token: Option<&str>,
+        knowledge_base_token: Option<&str>,
     ) {
-        if let Some(token) = picker_token {
+        for token in [picker_token, knowledge_base_token].into_iter().flatten() {
             self.picker_grants.remove(token);
         }
     }
@@ -117,24 +132,74 @@ impl ConsentAuthority {
         }
         let root = new_root.expect("checked above");
         let token = picker_token.context("a native folder selection is required")?;
+        self.check_grant(FolderPurpose::NotesFolder, token, revision, root)
+            .map(Some)
+    }
+
+    /// The knowledge base folder needs a grant minted for that purpose,
+    /// unless it is unset (it follows the notes folder) or unchanged.
+    pub(crate) fn check_knowledge_base(
+        &self,
+        current: &ConfigSnapshot,
+        revision: &str,
+        next: &ConfigSnapshot,
+        token: Option<&str>,
+    ) -> Result<Option<String>> {
+        let knowledge_base = |config: &ConfigSnapshot| {
+            config
+                .storage
+                .as_ref()
+                .and_then(|storage| storage.knowledge_base_dir.as_deref())
+                .map(str::to_owned)
+        };
+        let old = knowledge_base(current);
+        let Some(new) = knowledge_base(next) else {
+            return Ok(None);
+        };
+        if Some(&new) == old.as_ref() && token.is_none() {
+            return Ok(None);
+        }
+        let token = token.context("a native selection of the knowledge base folder is required")?;
+        self.check_grant(FolderPurpose::KnowledgeBase, token, revision, &new)
+            .map(Some)
+    }
+
+    fn check_grant(
+        &self,
+        purpose: FolderPurpose,
+        token: &str,
+        revision: &str,
+        path: &str,
+    ) -> Result<String> {
+        let noun = folder_noun(purpose);
         let Some(grant) = self.picker_grants.get(token) else {
             bail!("folder selection token is unknown or already used");
         };
-        if grant.expires_at <= Instant::now() || grant.revision != revision || grant.root != root {
-            bail!("folder selection is stale or does not match the proposed notes folder");
+        if grant.purpose != purpose {
+            bail!("this folder selection was not made for the {noun}");
         }
-        if selected_root_identity(Path::new(root))? != grant.identity {
-            bail!("selected notes folder changed; choose it again");
+        if grant.expires_at <= Instant::now() || grant.revision != revision || grant.root != path {
+            bail!("folder selection is stale or does not match the proposed {noun}");
         }
-        Ok(Some(grant.identity.clone()))
+        if selected_root_identity(Path::new(path))? != grant.identity {
+            bail!("selected {noun} changed; choose it again");
+        }
+        Ok(grant.identity.clone())
     }
 
-    fn mint_picker(&mut self, root: String, identity: String, revision: &str) -> String {
+    fn mint_picker(
+        &mut self,
+        purpose: FolderPurpose,
+        root: String,
+        identity: String,
+        revision: &str,
+    ) -> String {
         self.prune();
         let token = Uuid::new_v4().to_string();
         self.picker_grants.insert(
             token.clone(),
             PickerGrant {
+                purpose,
                 root,
                 identity,
                 revision: revision.to_owned(),
@@ -150,6 +215,13 @@ impl ConsentAuthority {
         if self.picker_grants.len() >= MAX_PENDING_GRANTS {
             self.picker_grants.clear();
         }
+    }
+}
+
+fn folder_noun(purpose: FolderPurpose) -> &'static str {
+    match purpose {
+        FolderPurpose::NotesFolder => "notes folder",
+        FolderPurpose::KnowledgeBase => "knowledge base folder",
     }
 }
 
@@ -179,6 +251,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         };
         let snapshot = ConfigSnapshot {
             storage: Some(storage.clone()),
@@ -188,7 +261,12 @@ mod tests {
         };
         let mut authority = ConsentAuthority::new();
         let identity = selected_root_identity(folder.path()).unwrap();
-        let token = authority.mint_picker(storage.root, identity.clone(), "revision");
+        let token = authority.mint_picker(
+            FolderPurpose::NotesFolder,
+            storage.root,
+            identity.clone(),
+            "revision",
+        );
         assert_eq!(
             authority
                 .check_picker(&snapshot, "revision", &snapshot, Some(&token))
@@ -218,7 +296,7 @@ mod tests {
 
     fn authorize(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<Option<String>> {
         ConsentAuthority::new()
-            .authorize_update(current, "revision", next, None)
+            .authorize_update(current, "revision", next, None, None)
             .map(|authorized| authorized.selected_identity)
     }
 
@@ -299,6 +377,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: summaries.map(str::to_owned),
+            knowledge_base_dir: None,
         }
     }
 
@@ -317,5 +396,124 @@ mod tests {
             authorize(&with(Some("summaries")), &with(Some("ai"))).unwrap(),
             None
         );
+    }
+
+    fn with_knowledge_base(root: &Path, knowledge_base: Option<&Path>) -> ConfigSnapshot {
+        let mut storage = storage_at(root, None);
+        storage.knowledge_base_dir = knowledge_base.map(|path| path.to_string_lossy().into_owned());
+        ConfigSnapshot {
+            storage: Some(storage),
+            ..crate::config::empty_config()
+        }
+    }
+
+    fn mint(authority: &mut ConsentAuthority, purpose: FolderPurpose, path: &Path) -> String {
+        let identity = selected_root_identity(path).unwrap();
+        authority.mint_picker(
+            purpose,
+            path.to_string_lossy().into_owned(),
+            identity,
+            "revision",
+        )
+    }
+
+    #[test]
+    fn notes_folder_token_cannot_authorize_the_knowledge_base() {
+        let root = tempfile::tempdir().unwrap();
+        let knowledge_base = tempfile::tempdir().unwrap();
+        let current = with_knowledge_base(root.path(), None);
+        let next = with_knowledge_base(root.path(), Some(knowledge_base.path()));
+        let mut authority = ConsentAuthority::new();
+        let token = mint(
+            &mut authority,
+            FolderPurpose::NotesFolder,
+            knowledge_base.path(),
+        );
+        let error = authority
+            .authorize_update(&current, "revision", &next, None, Some(&token))
+            .unwrap_err();
+        assert!(error.to_string().contains("knowledge base"), "{error:#}");
+        assert!(
+            authority
+                .authorize_update(&current, "revision", &next, None, None)
+                .is_err()
+        );
+
+        let token = mint(
+            &mut authority,
+            FolderPurpose::KnowledgeBase,
+            knowledge_base.path(),
+        );
+        let authorized = authority
+            .authorize_update(&current, "revision", &next, None, Some(&token))
+            .unwrap();
+        assert_eq!(
+            authorized.knowledge_base_identity,
+            Some(selected_root_identity(knowledge_base.path()).unwrap())
+        );
+        assert_eq!(authorized.selected_identity, None);
+    }
+
+    #[test]
+    fn knowledge_base_token_cannot_change_the_notes_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let current = with_knowledge_base(root.path(), None);
+        let next = with_knowledge_base(other.path(), None);
+        let mut authority = ConsentAuthority::new();
+        let token = mint(&mut authority, FolderPurpose::KnowledgeBase, other.path());
+        let error = authority
+            .authorize_update(&current, "revision", &next, Some(&token), None)
+            .unwrap_err();
+        assert!(error.to_string().contains("notes folder"), "{error:#}");
+        // A knowledge base token sent in its own slot authorizes nothing else.
+        assert!(
+            authority
+                .authorize_update(&current, "revision", &next, None, Some(&token))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stale_or_changed_knowledge_base_selection_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let knowledge_base = parent.path().join("kb");
+        fs::create_dir(&knowledge_base).unwrap();
+        let current = with_knowledge_base(root.path(), None);
+        let next = with_knowledge_base(root.path(), Some(&knowledge_base));
+        let mut authority = ConsentAuthority::new();
+        let token = mint(
+            &mut authority,
+            FolderPurpose::KnowledgeBase,
+            &knowledge_base,
+        );
+
+        let stale = authority
+            .authorize_update(&current, "other-revision", &next, None, Some(&token))
+            .unwrap_err();
+        assert!(stale.to_string().contains("stale"), "{stale:#}");
+
+        // Keep the original directory alive so the replacement gets a new inode.
+        fs::rename(&knowledge_base, parent.path().join("kb-old")).unwrap();
+        fs::create_dir(&knowledge_base).unwrap();
+        let changed = authority
+            .authorize_update(&current, "revision", &next, None, Some(&token))
+            .unwrap_err();
+        assert!(
+            changed.to_string().contains("choose it again"),
+            "{changed:#}"
+        );
+    }
+
+    #[test]
+    fn unchanged_or_unset_knowledge_base_needs_no_token() {
+        let root = tempfile::tempdir().unwrap();
+        let knowledge_base = tempfile::tempdir().unwrap();
+        let set = with_knowledge_base(root.path(), Some(knowledge_base.path()));
+        let unset = with_knowledge_base(root.path(), None);
+        assert_eq!(authorize(&set, &set).unwrap(), None);
+        assert_eq!(authorize(&set, &unset).unwrap(), None);
+        assert_eq!(authorize(&unset, &unset).unwrap(), None);
     }
 }

@@ -1,5 +1,5 @@
 import type {
-  AdapterDocument, HarnessAdapter, HarnessOffer, StorageConfig,
+  AdapterDocument, FolderPurpose, HarnessAdapter, HarnessOffer, StorageConfig,
 } from "../protocol/ts/generated.js";
 import { isHttpUrl, type WorkerStatus } from "./model.js";
 import {
@@ -64,6 +64,9 @@ const detectButton = element<HTMLButtonElement>("detect-harnesses");
 const offersList = element<HTMLUListElement>("harness-offers");
 const envList = element<HTMLUListElement>("harness-env");
 const summariesInput = element<HTMLInputElement>("summaries-dir");
+const knowledgeBasePath = element<HTMLOutputElement>("kb-path");
+const chooseKnowledgeBaseButton = element<HTMLButtonElement>("choose-kb");
+const knowledgeBaseUseNotesButton = element<HTMLButtonElement>("kb-use-notes");
 const setupButton = element<HTMLButtonElement>("setup-harness");
 const harnessWarning = element<HTMLParagraphElement>("harness-warning");
 const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
@@ -173,6 +176,10 @@ function updateControls(): void {
   detectButton.disabled = !idle || session.configIssue !== null;
   setupButton.disabled = !idle || !session.config?.storage || selectedOffer() === null;
   removeHarnessButton.disabled = !idle || !session.config?.agent;
+  // The knowledge base is stored with the notes folder, so it needs one.
+  const folderReady = idle && !repairing && !!session.config?.storage;
+  chooseKnowledgeBaseButton.disabled = !folderReady;
+  knowledgeBaseUseNotesButton.disabled = !folderReady || !session.config?.storage?.knowledge_base_dir;
   for (const input of offersList.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
@@ -209,6 +216,9 @@ function renderAgent(): void {
   if (config?.storage?.summaries_dir) state.push(`Summaries folder: ${config.storage.summaries_dir}.`);
   agentState.textContent = state.join(" ");
   if (!summariesEdited) summariesInput.value = config?.storage?.summaries_dir ?? "summaries";
+  const storage = config?.storage ?? null;
+  knowledgeBasePath.textContent = storage?.knowledge_base_dir ??
+    (storage ? `Same as the notes folder (${storage.root})` : "Same as the notes folder");
 
   offersList.replaceChildren();
   if (!offers.length) {
@@ -753,16 +763,22 @@ function storageFor(root: string, current: StorageConfig | null): StorageConfig 
     later_dir: current?.later_dir ?? "later",
     artifacts_dir: current?.artifacts_dir ?? "artifacts",
     summaries_dir: current?.summaries_dir ?? null,
+    knowledge_base_dir: current?.knowledge_base_dir ?? null,
   };
+}
+
+/** Ask the host to show its native folder picker for one setting. */
+function pickFolder(purpose: FolderPurpose) {
+  return session.host.call({
+    type: "choose_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), purpose,
+  }, "folder_chosen", 5 * 60_000);
 }
 
 async function chooseFolder(): Promise<void> {
   busy = true;
   updateControls();
   try {
-    const response = await session.host.call({
-      type: "choose_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-    }, "folder_chosen", 5 * 60_000);
+    const response = await pickFolder("notes_folder");
     picker = { path: response.path, token: response.picker_token };
     folderPath.textContent = response.path;
     updateControls();
@@ -787,6 +803,50 @@ async function chooseFolder(): Promise<void> {
   }
 }
 
+/**
+ * Choose the folder the summary agent reads, with its own native picker and
+ * token, and save it at once. Only the knowledge base setting changes.
+ */
+async function chooseKnowledgeBase(): Promise<void> {
+  if (busy || !session.config?.storage || session.configIssue) return;
+  busy = true;
+  updateControls();
+  try {
+    const response = await pickFolder("knowledge_base");
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      storage: { ...session.config!.storage!, knowledge_base_dir: response.path },
+    }, null, response.picker_token));
+    show(`Knowledge base folder saved. Summary agents will read ${response.path}.`);
+  } catch (error) {
+    show(`Could not set the knowledge base folder: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
+/** Let the knowledge base follow the notes folder again. */
+async function useNotesFolderAsKnowledgeBase(): Promise<void> {
+  if (busy || !session.config?.storage?.knowledge_base_dir || session.configIssue) return;
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      storage: { ...session.config!.storage!, knowledge_base_dir: null },
+    }, null));
+    show("Summary agents will read the notes folder as the knowledge base.");
+  } catch (error) {
+    show(`Could not change the knowledge base folder: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
 async function resumeCapture(): Promise<void> {
   if (busy || !session.config || session.configIssue) return;
   busy = true;
@@ -796,7 +856,7 @@ async function resumeCapture(): Promise<void> {
       // An explicit resume also clears a local pause, unless another page
       // paused again after this status was read.
       const state = await worker<WorkerStatus>({ kind: "get_status" });
-      await session.saveConfig({ ...session.config!, capture_enabled: true }, null, undefined, true, state.pause_token);
+      await session.saveConfig({ ...session.config!, capture_enabled: true }, null, null, undefined, true, state.pause_token);
     });
     showConfigState();
   } catch (error) {
@@ -943,6 +1003,8 @@ setupButton.addEventListener("click", () => void setupHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
 summariesInput.addEventListener("input", () => { summariesEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
+chooseKnowledgeBaseButton.addEventListener("click", () => void chooseKnowledgeBase());
+knowledgeBaseUseNotesButton.addEventListener("click", () => void useNotesFolderAsKnowledgeBase());
 pauseButton.addEventListener("click", () => void pauseCapture());
 resumeButton.addEventListener("click", () => void resumeCapture());
 siteOrigin.addEventListener("input", () => {

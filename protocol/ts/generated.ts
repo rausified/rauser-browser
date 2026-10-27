@@ -20,6 +20,7 @@ export interface UpdateConfigRequest {
   expected_revision: string;
   config: ConfigSnapshot;
   picker_token: string | null;
+  knowledge_base_token: string | null;
 }
 
 export interface HelloResult {
@@ -89,6 +90,7 @@ export interface StorageConfig {
   later_dir: string;
   artifacts_dir: string;
   summaries_dir: string | null;
+  knowledge_base_dir: string | null;
 }
 
 export interface AgentConfig {
@@ -114,7 +116,10 @@ export interface ChooseFolderRequest {
   type: "choose_folder";
   protocol_version: 6;
   request_id: string;
+  purpose: FolderPurpose;
 }
+
+export type FolderPurpose = "notes_folder" | "knowledge_base";
 
 export interface RecordVisitRequest {
   type: "record_visit";

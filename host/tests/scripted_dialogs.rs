@@ -178,7 +178,7 @@ fn killing_the_host_closes_its_open_dialog() {
         .spawn()
         .unwrap();
     let request = format!(
-        r#"{{"type":"choose_folder","protocol_version":{},"request_id":"pick"}}"#,
+        r#"{{"type":"choose_folder","protocol_version":{},"request_id":"pick","purpose":"notes_folder"}}"#,
         brauser_protocol::PROTOCOL_VERSION
     );
     let mut stdin = host.stdin.take().unwrap();
@@ -208,4 +208,56 @@ fn killing_the_host_closes_its_open_dialog() {
     std::thread::sleep(Duration::from_millis(1000));
     assert!(answer.exists(), "the dialog outlived the host");
     drop(stdin);
+}
+
+#[test]
+fn knowledge_base_picker_uses_its_own_title() {
+    let home = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
+    let knowledge_base = tempfile::tempdir().unwrap();
+    let canonical = std::fs::canonicalize(knowledge_base.path()).unwrap();
+    std::fs::write(
+        directory.path().join("answer"),
+        serde_json::json!({
+            "dialog": "pick-folder",
+            "reply": format!("picked:{}", canonical.display()),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut host = Command::new(HOST)
+        .arg("serve")
+        .env("HOME", home.path())
+        .env("BRAUSER_SCRIPTED_DIALOGS", directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let request = format!(
+        r#"{{"type":"choose_folder","protocol_version":{},"request_id":"kb","purpose":"knowledge_base"}}"#,
+        brauser_protocol::PROTOCOL_VERSION
+    );
+    let mut stdin = host.stdin.take().unwrap();
+    stdin
+        .write_all(&(request.len() as u32).to_ne_bytes())
+        .unwrap();
+    stdin.write_all(request.as_bytes()).unwrap();
+    stdin.flush().unwrap();
+    let mut stdout = host.stdout.take().unwrap();
+    let mut length = [0u8; 4];
+    stdout.read_exact(&mut length).unwrap();
+    let mut body = vec![0u8; u32::from_ne_bytes(length) as usize];
+    stdout.read_exact(&mut body).unwrap();
+    drop(stdin);
+    host.wait().unwrap();
+
+    let reply: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(reply["type"], "folder_chosen", "{reply}");
+    assert_eq!(reply["path"], canonical.to_string_lossy().as_ref());
+    let shown = std::fs::read_to_string(directory.path().join("shown.jsonl")).unwrap();
+    assert!(
+        shown.contains(r#""dialog":"pick-folder","text":"Choose Brauser knowledge base folder""#),
+        "{shown}"
+    );
 }

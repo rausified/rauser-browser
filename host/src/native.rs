@@ -243,6 +243,7 @@ fn dispatch(
                 &previous_revision,
                 &value.config,
                 value.picker_token.as_deref(),
+                value.knowledge_base_token.as_deref(),
             ) {
                 Ok(authorized) => authorized,
                 Err(authority_error) => {
@@ -257,6 +258,7 @@ fn dispatch(
                 value.config.clone(),
                 &value.expected_revision,
                 authorized.selected_identity.as_deref(),
+                authorized.knowledge_base_identity.as_deref(),
                 None,
             ) {
                 Ok(Some(revision)) => {
@@ -265,6 +267,7 @@ fn dispatch(
                         &previous_revision,
                         &value.config,
                         value.picker_token.as_deref(),
+                        value.knowledge_base_token.as_deref(),
                     );
                     Response::ConfigUpdated(ConfigUpdated {
                         protocol_version: PROTOCOL_VERSION,
@@ -293,7 +296,7 @@ fn dispatch(
                     "configuration file is unavailable",
                 );
             }
-            match consent.choose_folder(config.revision()) {
+            match consent.choose_folder(config.revision(), value.purpose) {
                 Ok(Some(chosen)) => Response::FolderChosen(FolderChosen {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: value.request_id,
@@ -1843,6 +1846,7 @@ mod tests {
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
+                knowledge_base_token: None,
             }),
         ];
         let input: Vec<u8> = requests.into_iter().flat_map(encoded_request).collect();
@@ -1895,6 +1899,7 @@ mod tests {
                 expected_revision: "missing".into(),
                 config: snapshot.clone(),
                 picker_token: None,
+                knowledge_base_token: None,
             }),
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -1906,6 +1911,7 @@ mod tests {
                 expected_revision: "missing".into(),
                 config: snapshot,
                 picker_token: None,
+                knowledge_base_token: None,
             }),
         ];
         let input: Vec<u8> = requests.into_iter().flat_map(encoded_request).collect();
@@ -1967,6 +1973,7 @@ mod tests {
                 expected_revision: revision,
                 config: next,
                 picker_token: None,
+                knowledge_base_token: None,
             }),
             &mut config,
             &mut consent,
@@ -2060,6 +2067,7 @@ mod tests {
                     later_dir: "later".into(),
                     artifacts_dir: "artifacts".into(),
                     summaries_dir: None,
+                    knowledge_base_dir: None,
                 }),
                 capture_enabled: false,
                 strip_params: Vec::new(),
@@ -2073,6 +2081,7 @@ mod tests {
                     expected_revision: "missing".into(),
                     config: snapshot,
                     picker_token: None,
+                    knowledge_base_token: None,
                 }),
                 &mut config,
                 &mut consent,
@@ -2098,6 +2107,7 @@ mod tests {
             expected_revision: revision.into(),
             config,
             picker_token: None,
+            knowledge_base_token: None,
         })
     }
 
@@ -2178,6 +2188,7 @@ mod tests {
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
+                knowledge_base_dir: None,
             }),
             capture_enabled: false,
             strip_params: Vec::new(),
@@ -3734,6 +3745,7 @@ id = "work:{host}/{id}"
                     expected_revision: revision,
                     config: next,
                     picker_token: None,
+                    knowledge_base_token: None,
                 }))
             }
 

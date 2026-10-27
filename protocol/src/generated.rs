@@ -36,6 +36,8 @@ pub struct UpdateConfigRequest {
     pub config: ConfigSnapshot,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub picker_token: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub knowledge_base_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +137,8 @@ pub struct StorageConfig {
     pub artifacts_dir: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summaries_dir: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub knowledge_base_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +182,14 @@ pub enum AgentState {
 pub struct ChooseFolderRequest {
     pub protocol_version: u32,
     pub request_id: String,
+    pub purpose: FolderPurpose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderPurpose {
+    NotesFolder,
+    KnowledgeBase,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
