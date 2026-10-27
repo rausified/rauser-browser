@@ -3,6 +3,7 @@
 //! (`client::launchd_kickstart`) is macOS-only. Windows has no service.
 
 pub mod agent_env;
+pub mod child;
 pub mod client;
 pub mod command_runner;
 pub mod harness_api;
