@@ -1875,7 +1875,15 @@ mod tests {
                 "00000000-0000-4000-8000-000000000001",
                 "ABC",
                 hostile,
-                "2026-10-15T12:00:00Z",
+                &time::OffsetDateTime::now_utc()
+                    .replace_minute(0)
+                    .unwrap()
+                    .replace_second(0)
+                    .unwrap()
+                    .replace_nanosecond(0)
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
             );
             let visit = VisitEvent {
                 event_id: "00000000-0000-4000-8000-000000000002".into(),
@@ -1923,7 +1931,10 @@ mod tests {
                 capture.record_why(policy(), &why),
                 CaptureOutcome::Persisted { .. }
             ));
-            let log = root.path().join("log/2026/10/2026-10-15.md");
+            let day = &event.occurred_at[..10];
+            let log = root
+                .path()
+                .join(format!("log/{}/{}/{day}.md", &day[..4], &day[5..7]));
             let original = fs::read_to_string(&log).unwrap();
             for (kind, payload) in [
                 ("activity", serde_json::to_value(&event).unwrap()),
