@@ -45,6 +45,8 @@ npm run test:scripts
 
 The panel updates when settings change, can send pending activity and pause capture, and follows whichever tab is active. On any HTTP(S) page it shows the address and title, loads that page's note (if any), and autosaves what you type. Recognized artifact pages also show measured activity and one-line context; **Recent** combines artifacts across tools and generates a copyable worklog. Brauser holds HTTP(S) site access from install; if you withdraw it in Chrome, the panel shows one banner with a button that opens Brauser's Chrome extension settings so you can turn it back on.
 
+The side panel and settings headers show the extension's build commit, with `-dirty` when tracked files had uncommitted changes, and the host's commit once it answers; a host built from a different commit is flagged, so rebuild both after pulling.
+
 If **Choose folder** is disabled and the settings page says "Native host unavailable," check that the extension ID in the native-host registration matches the ID shown on `chrome://extensions`, rebuild the host at the registered path, then reload the settings page and reopen the panel. The development host registration is per user; the guided macOS smoke run below sets up its own isolated profile automatically.
 
 For a guided macOS Chrome smoke run, build both components as above, then run:

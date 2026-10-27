@@ -7,6 +7,7 @@ import { ConfigSession, describe, element, setupProblem, worker } from "./settin
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME } from "./brand.js";
+import { hostBuildText } from "./build-info.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
@@ -19,6 +20,12 @@ import type {
 } from "../protocol/ts/generated.js";
 
 const status = element<HTMLDivElement>("status");
+const buildId = element<HTMLSpanElement>("build-id");
+const hostBuild = element<HTMLSpanElement>("host-build");
+
+function showHostBuild(hostVersion: string): void {
+  hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
+}
 const settingsButton = element<HTMLButtonElement>("open-settings");
 const setupWarning = element<HTMLDivElement>("setup-warning");
 const setupReason = element<HTMLSpanElement>("setup-reason");
@@ -79,6 +86,13 @@ let captureSite: CaptureSitePanel | null = null;
 // Once the post-save reload starts, tab events must reach NoteEditor's token
 // handling so a slow response cannot bind the editor to a page we have left.
 let changingNoteIdentity = false;
+
+// The header names the host process that answered. Another one, possibly
+// from a rebuilt binary, starts on the next call after it exits.
+session.host.onHostExit(() => { hostBuild.textContent = ""; });
+session.host.onHostRestart(() => {
+  void session.hello().then((hello) => showHostBuild(hello.host_version), () => undefined);
+});
 let busy = false;
 let replaying = false;
 let tickRunning = false;
@@ -925,6 +939,7 @@ void (async () => {
   try {
     const hello = await session.hello();
     reachedHost = true;
+    showHostBuild(hello.host_version);
     await reloadConfig();
     if (hello.config_issue) show(hello.config_issue, true);
     initialized = true;
