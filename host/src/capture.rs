@@ -117,9 +117,19 @@ struct EventRendering<'a> {
     marker_metadata: Option<&'a str>,
 }
 
-/// Check the generated schema's activity caps before any caller iterates
-/// attacker-controlled collections or replays adapter matching for them.
+/// Validate new deliveries before replaying adapter matching or writing them.
 pub(crate) fn activity_shape_is_valid(event: &ActivityEvent) -> bool {
+    activity_shape_is_bounded(event)
+        && event
+            .trails
+            .iter()
+            .all(|trail| trail_transition_is_valid(&trail.transition))
+}
+
+/// The original schema caps also apply to historical log payloads. Those may
+/// contain transitions accepted before the allowlist; retain their activity
+/// and exact replay identity, but never derive an edge of an unknown kind.
+pub(crate) fn activity_shape_is_bounded(event: &ActivityEvent) -> bool {
     event.opens <= 100_000
         && event.focused_seconds <= 7_200
         && event.background_seconds <= 7_200
@@ -152,6 +162,26 @@ pub(crate) fn activity_shape_is_valid(event: &ActivityEvent) -> bool {
                 && !reference.value.is_empty()
                 && reference.value.len() <= 512
         })
+}
+
+pub(crate) fn trail_transition_is_valid(transition: &str) -> bool {
+    matches!(
+        transition,
+        "link"
+            | "typed"
+            | "auto_bookmark"
+            | "auto_subframe"
+            | "manual_subframe"
+            | "generated"
+            | "start_page"
+            | "form_submit"
+            | "reload"
+            | "keyword"
+            | "keyword_generated"
+            // The worker records this qualifier instead of the original type
+            // for back/forward navigations, with no same-tab source.
+            | "forward_back"
+    )
 }
 
 impl CaptureStore {
@@ -1828,6 +1858,28 @@ mod tests {
             },
             event,
         )
+    }
+
+    #[test]
+    fn activity_accepts_browser_transition_types_and_the_worker_back_forward_encoding() {
+        let mut event = activity();
+        for transition in [
+            "link",
+            "typed",
+            "auto_bookmark",
+            "auto_subframe",
+            "manual_subframe",
+            "generated",
+            "start_page",
+            "form_submit",
+            "reload",
+            "keyword",
+            "keyword_generated",
+            "forward_back",
+        ] {
+            event.trails[0].transition = transition.into();
+            assert!(activity_shape_is_valid(&event), "{transition}");
+        }
     }
 
     #[test]

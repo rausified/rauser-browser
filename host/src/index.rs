@@ -22,7 +22,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::brand::{APP_NAME, NAMESPACE};
-use crate::capture::{activity_shape_is_valid, canonical_url};
+use crate::capture::{
+    activity_shape_is_bounded, activity_shape_is_valid, canonical_url, trail_transition_is_valid,
+};
 use crate::vault::{
     TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
 };
@@ -732,7 +734,9 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     url: event.url.clone(),
                 });
                 for trail in &event.trails {
-                    if let Some(source) = &trail.from_artifact_id {
+                    if trail_transition_is_valid(&trail.transition)
+                        && let Some(source) = &trail.from_artifact_id
+                    {
                         add_edge(
                             &mut edges,
                             source,
@@ -932,7 +936,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 return None;
             }
             let event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
-            if !activity_shape_is_valid(&event)
+            if !activity_shape_is_bounded(&event)
                 || Uuid::parse_str(&event.event_id).is_err()
                 || event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
@@ -2307,6 +2311,95 @@ print(json.dumps([tables,row]))"#;
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "365");
+    }
+
+    #[test]
+    fn old_unknown_trail_transitions_preserve_activity_but_never_become_edges() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let source = activity(
+            "00000000-0000-4000-8000-000000000021",
+            "SOURCE",
+            "Source",
+            "2026-10-15T12:00:00Z",
+        );
+        let mut target = activity(
+            "00000000-0000-4000-8000-000000000022",
+            "TARGET",
+            "Target",
+            "2026-10-15T13:00:00Z",
+        );
+        target.trails = ["link", "\u{202e}unknown"]
+            .into_iter()
+            .map(|transition| ActivityTrail {
+                from_artifact_id: Some(source.artifact_id.clone()),
+                from_url: Some(source.url.clone()),
+                transition: transition.into(),
+            })
+            .collect();
+        let marker = |event: &ActivityEvent| {
+            format!(
+                "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
+                sha256_hex(event.event_id.as_bytes()),
+                sha256_hex(event.url.as_bytes()),
+                event.occurred_at,
+                hex::encode(serde_json::to_vec(event).unwrap()),
+            )
+        };
+        let log = format!("{LOG_HEADER}\n{}{}", marker(&source), marker(&target));
+        let logs = root.path().join("log/2026/10");
+        fs::create_dir_all(&logs).unwrap();
+        let log_path = logs.join("2026-10-15.md");
+        fs::write(&log_path, &log).unwrap();
+
+        // Simulate an ingestion cache from before transition validation.
+        let mut state = index.empty_state();
+        for event in [&source, &target] {
+            state
+                .events
+                .insert(event.event_id.clone(), CachedEvent::Activity(event.clone()));
+            state.dirty.insert(event.artifact_id.clone());
+        }
+        index.publish_state_and_database(&state).unwrap();
+        let check = || {
+            let artifact = index.artifact(&target.artifact_id).unwrap().unwrap();
+            assert_eq!(artifact.opens, 1);
+            assert_eq!(artifact.focused_seconds, 125);
+            assert_eq!(artifact.background_seconds, 61);
+            assert_eq!(artifact.linked_count, 1);
+            let output = Command::new("python3")
+                .args([
+                    "-c",
+                    "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from visits').fetchone()[0]); print([r[0] for r in c.execute('select kind from edges')])",
+                ])
+                .arg(index.database_path())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{:?}", output.stderr);
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), "2\n['link']\n");
+            // Do not rewrite historical payloads: their exact content detects
+            // conflicting reuse of an event ID during replay and rebuilding.
+            assert!(
+                index.load_or_rebuild().unwrap().events[&target.event_id]
+                    == CachedEvent::Activity(target.clone())
+            );
+        };
+        check();
+        assert_eq!(index.reindex().unwrap().written, 2);
+        check();
+        assert_eq!(fs::read_to_string(log_path).unwrap(), log);
+
+        // Legacy tolerance must keep the original size and paired-source caps.
+        let mut malformed = target.clone();
+        malformed.trails[0].transition = "x".repeat(65);
+        assert!(parse_log(&marker(&malformed)).is_empty());
+        malformed = target.clone();
+        malformed.trails[0].from_url = None;
+        assert!(parse_log(&marker(&malformed)).is_empty());
+        malformed = target.clone();
+        malformed.trails = vec![target.trails[0].clone(); 11];
+        assert!(parse_log(&marker(&malformed)).is_empty());
     }
 
     #[test]
