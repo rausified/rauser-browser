@@ -441,7 +441,14 @@ fn start_run(
             "requested_at must be a current RFC 3339 timestamp",
         );
     }
-    match resolve_record_key(config, &value.url) {
+    // Resolve under the same lock as note loading so a config update cannot
+    // interleave; release it before forwarding, since the service takes it
+    // too when it reads the run's working directory.
+    let resolved = match config.lock_current() {
+        Ok(_config_lock) => resolve_record_key(config, &value.url),
+        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable")),
+    };
+    match resolved {
         Ok(key) => value.record_key = Some(key),
         Err((code, message)) => return error(&value.request_id, code, message),
     }
@@ -1184,7 +1191,7 @@ struct NoteContext {
 
 /// The key-only part of `note_context`, shared by notes, the run proxy, and
 /// the run finisher, so a run and the page's note always agree on the record
-/// they belong to. It never lists older notes.
+/// they belong to. It never lists older notes. Callers hold `lock_current`.
 // Only the Unix run proxy calls it outside tests.
 #[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn resolve_record_key(
@@ -5497,6 +5504,37 @@ id = "work:{host}/{id}"
                 }
                 other => panic!("expected start_run, got {other:?}"),
             }
+        }
+
+        /// The key is resolved under the same config lock as note loading,
+        /// so a config update cannot interleave with it.
+        #[test]
+        fn start_run_resolves_the_key_under_the_config_lock() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a";
+            let expected = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let held = config.lock_current().unwrap();
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    call(
+                        &mut config,
+                        &link(socket.clone(), never),
+                        start_run(url, None, &now()),
+                    )
+                });
+                std::thread::sleep(Duration::from_millis(300));
+                assert!(!worker.is_finished(), "start_run ran without the lock");
+                assert!(service.requests().is_empty());
+                drop(held);
+                match worker.join().unwrap() {
+                    Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                    other => panic!("expected run_started, got {other:?}"),
+                }
+            });
         }
 
         #[test]
