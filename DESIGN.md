@@ -700,7 +700,10 @@ a key, adds the current revision's contracts the file lacks, so a contract is
 recorded before it can key a note. A recorded contract config.toml no longer
 holds, as a current adapter or a history entry, was removed or reshaped by
 hand; note identity reads it like `[[adapter_id_history]]` (record keys only,
-never capture, and no part in ID-change checks). Deleting `jira.board` in an
+never capture), and so does the frozen-ID transition check (`brwr-hrr`): a
+settings save cannot re-add an overlapping route under a different type or
+ID, whether as a new adapter or by widening an existing one's match, while an
+exact restoration or a disjoint route stays valid. Deleting `jira.board` in an
 editor beside a `jira.issue` rule whose modal route reads the stripped
 `selectedIssue` therefore keeps the board on its artifact note, and its next
 autosave updates that note. Contracts are only added: re-adding one makes it
@@ -714,10 +717,20 @@ removal of an unrecorded contract leaves its pages on URL keys as before. A
 file the host cannot use (unreadable, not a regular file, over a bound,
 malformed, or from a newer host) is never rewritten, and every URL the current
 policy does not recognize has unavailable identity: loads and saves refuse,
-because any origin's deciding contract may be in it. A damaged entry with a
-readable HTTP(S) origin makes only that origin unavailable, as a damaged
-history entry does; one with no such origin counts as an unusable file. Removing the
-file forgets its contracts, like a config repair.
+because any origin's deciding contract may be in it. The refusal names the
+file's path and says that moving it aside restores those notes. For the same
+reason a settings save that adds or reshapes an adapter is refused while the
+file is unusable, since the addition cannot be checked against what it held;
+removals and other edits still save. A damaged entry with a
+readable HTTP(S) origin makes only that origin unavailable, and refuses
+additions only there, as a damaged
+history entry does; one with no such origin counts as an unusable file.
+Moving the file aside forgets its contracts, like a config repair, so notes
+from adapters removed by hand may need **Use as artifact note** again. A
+settings repair ("Forget recorded adapters", backing the file up under the
+config lock) and warnings for a failed or capped state write need new
+`config_result` fields; they follow `brwr-sr3` as an additive protocol
+change (`brwr-hrr`).
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
@@ -1071,7 +1084,7 @@ The layout above is the planned release layout. The repository currently contain
 - **Host:** unit tests, property tests on URL normalization and slug generation, and fuzzing (`cargo-fuzz`) on the message parser, frontmatter parser, and path handling.
 - **Extension:** unit tests, plus Playwright end-to-end tests running the real extension against a real host and a fixture vault.
 - **Round-trip tests:** every profile writes, reads back, and re-writes page notes and summary files with no diff, and user content outside managed blocks survives unchanged.
-- **CI on every PR:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, ESLint, TypeScript strict, dependency review, and the full test suite on macOS and Windows (`macos-15` and `windows-latest`; the headless smoke run and the adapter-template fuzz-target compile check are macOS-only).
+- **CI on every PR:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, ESLint, TypeScript strict, dependency review, and the full test suite on macOS and Windows (`macos-15` and `windows-latest`, with `macos-15-intel` (x64) as a fallback only when GitHub cancels a starved `macos-15` job; the headless smoke run and the adapter-template fuzz-target compile check are macOS-only).
 
 ## 11. Distribution
 

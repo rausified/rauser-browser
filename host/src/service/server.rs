@@ -786,6 +786,9 @@ mod tests {
 
     #[test]
     fn framed_start_and_get_run_over_the_socket() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let run_id = world.started_run_id();
@@ -827,6 +830,9 @@ mod tests {
 
     #[test]
     fn service_hello_reports_this_build() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         match world.call(&Request::ServiceHello(ServiceHelloRequest {
@@ -843,6 +849,9 @@ mod tests {
 
     #[test]
     fn version_5_request_gets_unsupported_protocol_version() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let mut stream = UnixStream::connect(world.socket()).unwrap();
@@ -858,6 +867,9 @@ mod tests {
 
     #[test]
     fn non_service_request_is_invalid_request() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::Hello(HelloRequest {
@@ -870,6 +882,9 @@ mod tests {
 
     #[test]
     fn start_run_without_record_key_is_invalid_request() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, _) = error_of(world.start_run(None));
@@ -885,6 +900,9 @@ mod tests {
 
     #[test]
     fn start_run_over_the_schema_bounds_from_a_socket_peer_is_invalid_request() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
@@ -911,6 +929,9 @@ mod tests {
 
     #[test]
     fn start_run_without_a_notes_folder_is_not_configured() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::unconfigured(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.start_run(Some(url_key())));
@@ -920,6 +941,9 @@ mod tests {
 
     #[test]
     fn start_run_uses_the_knowledge_base_folder_as_cwd() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::unconfigured(&answering("cwd=$(pwd -P)"));
         let knowledge_base = world._temp.path().join("kb");
         std::fs::create_dir(&knowledge_base).unwrap();
@@ -974,6 +998,9 @@ mod tests {
 
     #[test]
     fn a_queued_run_whose_knowledge_base_was_replaced_fails_closed() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::unconfigured(&format!(
             "while [ ! -e \"$0.release\" ]; do sleep 0.05; done\n{}",
             answer()
@@ -1023,6 +1050,9 @@ mod tests {
 
     #[test]
     fn start_run_prompts_with_the_configured_vocabulary() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::unconfigured(&format!("cat > \"$0.prompt\"\n{}", answer()));
         world.configure(
             Some("\n[summary_vocabulary]\ndocument_types = [\"memo\"]\ncategories = [\"legal review\"]\n"),
@@ -1045,6 +1075,9 @@ mod tests {
 
     #[test]
     fn start_run_without_agent_or_harness_is_not_configured() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::unconfigured(&answer());
         world.configure(None, None);
         world.start(Duration::from_secs(600));
@@ -1088,6 +1121,9 @@ mod tests {
     /// another is refused, and one naming the set-up harness gets its entry.
     #[test]
     fn start_run_refuses_a_harness_that_is_not_set_up() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         assert_eq!(
@@ -1110,6 +1146,9 @@ mod tests {
 
     #[test]
     fn replaced_knowledge_base_folder_is_refused() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::unconfigured(&answer());
         let knowledge_base = world._temp.path().join("kb");
         std::fs::create_dir(&knowledge_base).unwrap();
@@ -1146,6 +1185,9 @@ mod tests {
 
     #[test]
     fn agent_timeout_secs_bounds_the_run() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         // The service's own limit is 1 second here; the entry's 10 minutes
         // win, so a 2 second answer finishes.
         let world = World::new(&format!("/bin/sleep 2\n{}", answer()));
@@ -1169,6 +1211,9 @@ mod tests {
 
     #[test]
     fn agent_env_file_reaches_the_harness() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answering("$FOO"));
         world.write_agent_env("FOO=bar\n", 0o600);
         world.start(Duration::from_secs(600));
@@ -1180,6 +1225,9 @@ mod tests {
 
     #[test]
     fn group_readable_agent_env_fails_start_without_values() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.write_agent_env("FOO=secret\n", 0o644);
         world.start(Duration::from_secs(600));
@@ -1191,6 +1239,9 @@ mod tests {
 
     #[test]
     fn second_instance_reports_already_running() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let built = Arc::new(AtomicBool::new(false));
@@ -1228,6 +1279,9 @@ mod tests {
 
     #[test]
     fn idle_service_exits_and_removes_socket() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         let started = Instant::now();
         let handle = world.start(Duration::from_millis(300));
@@ -1245,6 +1299,9 @@ mod tests {
 
     #[test]
     fn socket_is_0600_in_a_0700_dir() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let dir = std::fs::metadata(&world.support).unwrap();
@@ -1256,6 +1313,9 @@ mod tests {
 
     #[test]
     fn open_path_and_get_agent_env_over_the_socket() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         use brauser_protocol::{GetAgentEnvRequest, OpenPathRequest, OpenTarget};
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));

@@ -7,6 +7,7 @@ import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
 import { localTimestamp } from "./model.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
+import { markRunsMayExist } from "./run-card.js";
 
 export const SUMMARIZE_MENU_ID = `${BINARY_NAME}-summarize`;
 export const SUMMARIZE_MENU_TITLE = `Summarize with ${APP_NAME}`;
@@ -21,6 +22,8 @@ const MAX_TITLE_CHARS = 2048;
 export interface SummarizeDeps {
   scripting: typeof chrome.scripting;
   host: Pick<HostClient, "call">;
+  /** Where an accepted run is recorded, so a later panel restores it. */
+  storage: Pick<ChromeStorageArea, "set">;
   now(): Date;
 }
 
@@ -91,5 +94,6 @@ export async function summarizeTab(
     record_key: null,
     requested_at: localTimestamp(deps.now()),
   }, "run_started");
+  await markRunsMayExist(deps.storage, deps.now().getTime());
   return { run: response.run, existing: response.existing };
 }

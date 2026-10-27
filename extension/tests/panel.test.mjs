@@ -408,6 +408,27 @@ test("an HTTP(S) tab shows the note editor and no grant or address warning", asy
   await until(() => page.el("note-body").disabled === false, "the note to load");
 });
 
+test("a note refusal from damaged adopted-contract state shows the host's named repair", async () => {
+  // The host names the state file and its repair; the panel must show it
+  // whole and keep the editor read-only, so nothing autosaves under a guess.
+  const refusal = "Notes on this page are paused to protect note identity: Brauser's record of the " +
+    "adapters it has used (/config/brauser/adopted-contracts.json) cannot be read. Move " +
+    "adopted-contracts.json aside (rename it, keeping a backup) or fix it to restore notes on pages " +
+    "the current adapters do not recognize.";
+  const page = await install({
+    tab: { id: 1, url: "https://work.example/boards/1", title: "Board" },
+    intercept: (request) => request.type === "load_note"
+      ? { type: "error", code: "internal", message: refusal }
+      : undefined,
+  });
+  await until(() => page.el("note-status").textContent.includes("adopted-contracts.json"),
+    "the named refusal");
+  assert.equal(page.el("note-status").textContent, `Could not load this page's note: ${refusal}`);
+  assert.equal(page.el("note-body").disabled, true);
+  await settle();
+  assert.equal(page.sent("save_note").length, 0);
+});
+
 test("an HTTP(S) tab shows the note editor even when Chrome reports access withdrawn", async () => {
   // A URL means Chrome granted this site, whatever the all-sites check says.
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: false });
@@ -1118,6 +1139,7 @@ const RUN_VIEW = {
   stream_bytes: 0, can_retry_save: false, answer: null,
 };
 const WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
+const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
 
 // A page Readability can read: the bundled library loads, then the extractor
 // returns the page.
@@ -1423,6 +1445,44 @@ test("with no summary harness set up, opening the panel does not wake the servic
 
   const ready = await summarizePanel();
   await until(() => ready.sent("list_runs").length === 1, "list_runs");
+});
+
+test("a run still in the service restores with Cancel after the harness is removed", async () => {
+  // The harness was set up, a run started, then the harness was removed:
+  // the service still runs it, so the panel must show it and let it stop.
+  const running = { ...RUN_VIEW, state: "running", started_at: "2026-10-27T09:00:01-07:00" };
+  const local = new Map([[RUNS_MAY_EXIST_KEY, Date.now() - 60_000]]);
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, local,
+    intercept: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs: [running] };
+      if (request.type === "get_run") return { type: "run_fetched", run: running, stream_text: "", next_offset: 0, more: false };
+      return null;
+    },
+  });
+  await until(() => /Running/.test(page.el("run-area").textContent), "the restored card");
+  assert.ok(buttonIn(page.el("run-area"), "Cancel"), "the restored card offers Cancel");
+  assert.equal(page.sent("list_runs").length, 1);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // Once list_runs finds nothing left to show, later opens stop asking.
+  const empty = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
+  await until(() => empty.sent("list_runs").length === 1, "list_runs");
+  await until(() => !local.has(RUNS_MAY_EXIST_KEY), "the record to clear");
+  teardown.splice(0).forEach((listener) => listener());
+  const later = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
+  await until(() => later.el("note-body").disabled === false, "the note to load");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(later.sent("list_runs").length, 0);
+});
+
+test("a started summary records that runs may exist", async () => {
+  const local = new Map([[WARNING_SEEN_KEY, true]]);
+  const page = await summarizePanel({ local });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  await until(() => typeof local.get(RUNS_MAY_EXIST_KEY) === "number", "the record");
 });
 
 test("the panel restores run cards on load and shows a run the shortcut started", async () => {

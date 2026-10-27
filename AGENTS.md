@@ -161,8 +161,12 @@ document is inert, note keys come from the note-only contracts still recorded
 (`[[adapter_id_history]]`, the inert document, and contracts removed from
 config.toml by hand, which the host keeps in its own `adopted-contracts.json`
 state file; never capture), so every route a contract matched keeps one note
-(`ConfigStore::note_key_rule`). An unusable state file makes identity on
-every page the current policy does not recognize unavailable. Those contracts alone decide an origin they
+(`ConfigStore::note_key_rule`). Hand-removed contracts also take part in the
+frozen-ID check (`validate_adapter_transition_with_history`, via
+`retired_by_hand`). An unusable state file makes identity on every page the
+current policy does not recognize unavailable (`NoteKeyRule::StateUnavailable`,
+whose refusal names the file), and refuses adapter additions until it is
+repaired; a damaged entry does both for its origin only. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL
@@ -225,7 +229,7 @@ changes a contract.
 - `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading, including the pinned `vendor/readability.js` it copies from `node_modules` after checking its hash. `extension/extract.ts` is the self-contained page extractor, `extension/summarize.ts` starts a run from a tab, and `extension/run-card.ts` is the panel's polling run card.
 - Product naming (app name, native host ID, storage key, marker, and temp-file prefixes) lives in `extension/brand.ts` (also used by the build and dev scripts) and `host/src/brand.rs`. Page and manifest text use `{{APP_NAME}}`/`{{FULL_NAME}}`, filled in by `extension/build.mjs`. Crate, package, and binary names in `Cargo.toml` and `package.json` still change separately.
 - `scripts/register-dev-host.mjs` registers a per-user development native host for one unpacked extension ID; installers own release registration.
-- `.github/workflows/ci.yml` runs the build and quality checks on a `macos-15` and `windows-latest` matrix, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only; a `Build and check` gate job, the check branch protection requires, passes only when every platform build passes.
+- `.github/workflows/ci.yml` runs the build and quality checks from the reusable `.github/workflows/build-os.yml` on `macos-15` and `windows-latest`, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only, and `BRAUSER_REQUIRE_IPC_TESTS=1` so socket tests never skip. When GitHub cancels a starved `macos-15` job (cancelled with zero steps run, checked through the Actions API), the same steps rerun on `macos-15-intel` (x64; a separate runner pool from the arm64 images); a real failure, timeout or interruption of `macos-15` does not fall back. The `Build and check` gate job, the check branch protection requires, passes only when Windows passes and macOS passes on `macos-15` or, after that cancellation, on the `macos-15-intel` fallback.
 - `TESTING.md` is this repo's own testing strategy (headless end-to-end recipe, dialog seams, what headless cannot prove). It is self-contained; nothing in this repo should point outside it for testing guidance.
 
 ## Local checks
@@ -251,5 +255,6 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - The Brauser service (`host/src/service/`) runs as the user, never root, as a per-user LaunchAgent started on demand. Its support directory must be a real directory owned by the user with mode 0700 (refuse a symlink or another owner, `ServicePaths::ensure_private`), its socket is mode 0600, and the service refuses a support path too long for a Unix socket rather than moving the socket elsewhere. Only the native host talks to it; the host accepts no `service_hello` from the extension and always chooses the run's record key itself.
 - `agent.env` is read at the start of every run and must be a regular, non-symlink file of mode 0600, or the run fails before it starts (host/src/service/agent_env.rs). Never put a value from it in an error, log line, protocol message, or settings view; settings may show its names only.
 - Before forwarding a run message, the host compares the service's `service_hello` `build_id` with its own and restarts a stale service once; a persistent mismatch is `service_unavailable`, never a request sent to old code (host/src/service/client.rs).
+- A test that binds or connects a Unix socket (or reads a Node child's piped output) starts with the IPC guard, `ipc_test_guard::ipc_denied()` in Rust or `ipcDenied(t, kind)` from `scripts/tests/ipc-guard.mjs`, so it skips with a printed reason in a sandbox that denies local IPC and fails there when `BRAUSER_REQUIRE_IPC_TESTS=1` (CI). Never weaken a socket test's assertions instead (TESTING.md "Local IPC in sandboxes").
 - Tests never call `launchctl` or touch the real `~/Library`: they use temp support directories, an injected launch function, and the test-only `BRAUSER_SERVICE_SPAWN` seam (scripted-dialogs builds only) that spawns the service directly. `scripts/register-dev-host.mjs` takes an injectable `run` for the same reason.
 - Do not claim an installer, browser extension, or agent mode works until it has been built and exercised.

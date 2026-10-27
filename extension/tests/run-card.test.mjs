@@ -5,7 +5,7 @@ import test, { mock } from "node:test";
 // and mocked timers, so each poll happens when a test ticks the clock.
 const {
   MAX_RESTORED_FINISHED, POLL_MS, RESTORE_FINISHED_WITHIN_MS, RunCards, answerLine, elapsedText,
-  restorable, resumeCommand, stateText,
+  markRunsMayExist, restorable, resumeCommand, runsMayExist, stateText,
 } = await import("../dist/run-card.js");
 const { HostError } = await import("../dist/native.js");
 const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
@@ -556,5 +556,87 @@ test("a failed get_artifact keeps Open summary and shows no saved line", async (
   const [card] = cards(page.container);
   assert.ok(!card.textContent.includes("importance"));
   assert.ok(buttonTexts(card).includes("Open summary"));
+  page.runCards.dispose();
+});
+
+test("a finished run's multi-page stream keeps fetching through a transient failure", async () => {
+  const done = view({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER });
+  const replies = [
+    { type: "run_fetched", run: done, stream_text: "first ", next_offset: 6, more: true },
+    new HostError("internal", "the host restarted"),
+    { type: "run_fetched", run: done, stream_text: "second", next_offset: 12, more: false },
+  ];
+  const page = setup({ reply: (request) => request.type === "get_run" ? replies.shift() : null });
+  page.runCards.show(done);
+  await settle();
+  const [card] = cards(page.container);
+  assert.match(card.textContent, /Could not refresh this run: the host restarted/);
+  // The terminal page with more stream is not the final fetch: polling goes on.
+  await tick();
+  assert.deepEqual(page.sent("get_run").map((r) => r.since_offset), [0, 6, 6]);
+  let stream = null;
+  walk(card, (child) => { if (child.tagName === "PRE") stream = child; });
+  assert.equal(stream.textContent, "first second");
+  assert.doesNotMatch(card.textContent, /Could not refresh/);
+  await tick(POLL_MS * 4);
+  assert.equal(page.sent("get_run").length, 3);
+  page.runCards.dispose();
+});
+
+test("a shown run records that runs may exist; an empty list_runs clears it", async () => {
+  const storage = storageArea();
+  let runs = [];
+  const page = setup({
+    storage,
+    reply: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs };
+      if (request.type === "get_run") return { type: "run_fetched", run: view(), stream_text: "", next_offset: 0, more: false };
+      return null;
+    },
+  });
+  assert.equal(await runsMayExist(storage), false);
+  await markRunsMayExist(storage, NOW);
+  assert.equal(await runsMayExist(storage), true);
+  // Nothing active or undismissed: the record goes.
+  await page.runCards.restore();
+  await settle();
+  assert.equal(await runsMayExist(storage), false);
+
+  // A restored card keeps it, and so does a card shown in this panel.
+  runs = [view()];
+  await page.runCards.restore();
+  await settle();
+  assert.equal(await runsMayExist(storage), true);
+  page.runCards.dispose();
+
+  const other = setup({
+    storage: storageArea(),
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: view(), stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  other.runCards.show(view());
+  await settle();
+  assert.equal(await runsMayExist(other.storage), true);
+  other.runCards.dispose();
+});
+
+test("a run recorded while list_runs is in flight is not cleared", async () => {
+  const storage = storageArea();
+  let release;
+  const page = setup({
+    storage,
+    reply: (request) => request.type === "list_runs"
+      ? new Promise((resolve) => { release = resolve; })
+      : null,
+  });
+  const restoring = page.runCards.restore();
+  await settle();
+  // The worker's shortcut starts a run after the list was read.
+  await markRunsMayExist(storage, NOW + 1);
+  release({ type: "runs_listed", runs: [] });
+  await restoring;
+  await settle();
+  assert.equal(await runsMayExist(storage), true);
   page.runCards.dispose();
 });

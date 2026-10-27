@@ -234,7 +234,7 @@ impl RunFinisher for SummaryFinisher {
 /// `resolve_record_key`'s refusal as a Retry save reason. Its config and
 /// folder checks already ran above, so these are races with a change made
 /// in between, and get the same messages.
-fn key_error((code, message): (ErrorCode, &'static str)) -> String {
+fn key_error((code, message): crate::native::Refusal) -> String {
     match code {
         ErrorCode::InvalidConfig => NEEDS_REPAIR.into(),
         ErrorCode::NotConfigured => NO_STORAGE.into(),
@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn an_unavailable_home_folder_refusal_names_the_fix() {
         assert_eq!(
-            key_error((ErrorCode::Internal, crate::native::HOME_UNAVAILABLE)),
+            key_error((ErrorCode::Internal, crate::native::HOME_UNAVAILABLE.into())),
             FOLDER_UNAVAILABLE
         );
     }

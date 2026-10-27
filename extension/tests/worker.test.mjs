@@ -2423,6 +2423,8 @@ test("summarize command opens the panel before any await and starts a run", asyn
   assert.equal(notice.run_id, SUMMARY_RUN.run_id);
   assert.equal(notice.tab_id, 7);
   assert.equal(typeof notice.at, "number");
+  // A later panel restores the run even if the harness is removed meanwhile.
+  assert.equal(typeof values.get(storageKey("runs_may_exist_v1")), "number");
   await until(() => broadcasts.length === 1, "the broadcast notice");
   assert.deepEqual(broadcasts[0], notice);
   await until(() => port.closed, "the summary host port to close");

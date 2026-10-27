@@ -9,86 +9,88 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build and check (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
-      - name: Verify generated protocol types
-        run: python protocol/generate.py --check
-      - name: Check contributor status documentation
-        run: python scripts/check_current_state.py
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-      - name: Build Rust workspace
-        run: cargo build --locked --workspace --all-targets
-      - name: Run Rust tests
-        run: cargo test --locked --workspace
-      - name: Check Rust lints
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Test the scripted-dialogs test build
-        run: cargo test --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
-      - name: Lint the scripted-dialogs test build
-        run: cargo clippy --locked -p brauser --all-targets --features scripted-dialogs --target-dir target/scripted-dialogs -- -D warnings
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.14.0"
-          cache: npm
-      - name: Install TypeScript tooling
-        run: npm ci --ignore-scripts
-      - name: Check TypeScript types
-        run: npm run typecheck
-      - name: Lint TypeScript
-        run: npm run lint
-      - name: Build unpacked Chrome extension
-        run: npm run build:extension
-      # The shared adapter-template vectors, including the timed bounds cases,
-      # run in both engines: Rust in `cargo test`, TypeScript here.
-      - name: Run extension worker tests
-        run: npm run test:extension
-      # Renders the host neutralizer's corpus outputs with markdown-it,
-      # micromark (GFM) and marked and fails on any live element.
-      - name: Check the Markdown neutralizer with real renderers
-        run: npm run test:markdown-neutralizer
-      - name: Run development script tests
-        run: npm run test:scripts
-      # Uses the host built by "Build Rust workspace" and the extension build.
-      - name: Compare adapter-template engines on generated cases
-        run: npm run test:adapter-diff -- --cases 5000
-      # End-to-end run in headless Chrome (preinstalled on the runner image)
-      # against the scripted-dialogs host; nothing is shown on screen.
-      - name: Build scripted-dialogs host
-        run: cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
-      - name: Run headless macOS smoke test
-        if: runner.os == 'macOS'
-        run: npm run smoke:macos:headless
-      # The fuzz targets are their own workspace; running them needs nightly
-      # and cargo-fuzz, so CI only keeps them compiling.
-      # Keep this Unix/libFuzzer check on macOS; Windows runs the shared
-      # vectors and differential tests above against its native host.
-      - name: Check adapter-template fuzz targets compile
-        if: runner.os == 'macOS'
-        run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
-      - name: Audit npm lockfile
-        run: npm audit --audit-level=high
+  # Every platform runs the same steps from build-os.yml.
+  build-macos:
+    name: macOS
+    uses: ./.github/workflows/build-os.yml
+    with:
+      os: macos-15
 
-  # Branch protection requires a check named "Build and check"; the matrix
-  # jobs report with a platform suffix, so this job stands for all of them.
+  build-windows:
+    name: Windows
+    uses: ./.github/workflows/build-os.yml
+    with:
+      os: windows-latest
+
+  # GitHub's hosted macos-15 pool is sometimes starved: the job is never
+  # acquired by a runner and GitHub cancels it with zero steps run. The job
+  # shows as cancelled, and `needs.<job>.result` reads 'abandoned' (seen live
+  # on PR #107, run 40552639162). 'cancelled' also covers a job that timed out
+  # or was interrupted after it started, so this job asks the API whether the
+  # macos-15 job ever ran a step; only a zero-step cancellation counts as
+  # starvation. A real macos-15 failure (result 'failure') never falls back.
+  # GitHub has no queue timeout for hosted jobs (job timeout-minutes only
+  # counts time on a runner), so this waits for GitHub's own cancellation.
+  macos-starvation-check:
+    name: Detect macOS runner starvation
+    needs: build-macos
+    if: >-
+      always() &&
+      (needs.build-macos.result == 'cancelled' || needs.build-macos.result == 'abandoned')
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    outputs:
+      starved: ${{ steps.check.outputs.starved }}
+    steps:
+      - name: Check whether the macos-15 job ran any step
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOBS_URL: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
+          # "<caller job name> / <reusable workflow job name>"
+          JOB_NAME: macOS / Build and check (macos-15)
+        run: |
+          steps=$(gh api --paginate "$JOBS_URL" \
+            --jq '.jobs[] | select(.name == env.JOB_NAME) | .steps | length')
+          echo "$JOB_NAME steps run: ${steps:-not found}"
+          if [ "$steps" = 0 ]; then
+            echo "starved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "starved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-macos-fallback:
+    name: macOS fallback
+    needs: macos-starvation-check
+    if: always() && needs.macos-starvation-check.outputs.starved == 'true'
+    uses: ./.github/workflows/build-os.yml
+    with:
+      os: macos-15-intel
+
+  # Branch protection requires a check named exactly "Build and check"; the
+  # per-OS jobs report under their own names, so this job stands for all of
+  # them. Pass needs Windows plus macOS, where macOS is either the macos-15
+  # build or, only when that job was starved of a runner, the macos-15-intel (x64)
+  # fallback.
   build-gate:
     name: Build and check
-    needs: build
+    needs: [build-macos, build-windows, macos-starvation-check, build-macos-fallback]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Require every platform build to pass
-        run: test "${{ needs.build.result }}" = success
+        env:
+          MACOS: ${{ needs.build-macos.result }}
+          WINDOWS: ${{ needs.build-windows.result }}
+          STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
+          FALLBACK: ${{ needs.build-macos-fallback.result }}
+        run: |
+          echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
+          test "$WINDOWS" = success
+          if [ "$MACOS" = success ]; then exit 0; fi
+          case "$MACOS" in cancelled|abandoned) ;; *) exit 1 ;; esac
+          test "$STARVED" = true && test "$FALLBACK" = success
 
   cargo-deny:
     name: Rust dependency policy

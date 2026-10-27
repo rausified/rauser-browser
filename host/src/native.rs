@@ -505,11 +505,11 @@ fn start_run(
     // too when it reads the run's working directory.
     let resolved = match config.lock_current() {
         Ok(_config_lock) => resolve_record_key(config, &value.url),
-        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable")),
+        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable".into())),
     };
     match resolved {
         Ok(key) => value.record_key = Some(key),
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     }
     forward(&Request::StartRun(value), service)
 }
@@ -1234,6 +1234,9 @@ struct NoteContext {
     older_urls: Vec<String>,
 }
 
+/// A request refusal: its code and the message shown to the user.
+pub(crate) type Refusal = (ErrorCode, std::borrow::Cow<'static, str>);
+
 /// The key-only part of `note_context`, shared by notes, the run proxy, and
 /// the run finisher, so a run and the page's note always agree on the record
 /// they belong to. It never lists older notes. Callers hold `lock_current`.
@@ -1242,7 +1245,7 @@ struct NoteContext {
 pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
-) -> Result<RecordKey, (ErrorCode, &'static str)> {
+) -> Result<RecordKey, Refusal> {
     resolve_key_parts(config, url).map(|parts| parts.key)
 }
 
@@ -1258,23 +1261,23 @@ struct KeyParts {
 /// replaced; callers that map it to their own message match on this.
 pub(crate) const HOME_UNAVAILABLE: &str = "home folder is unavailable";
 
-fn resolve_key_parts(
-    config: &mut ConfigStore,
-    url: &str,
-) -> Result<KeyParts, (ErrorCode, &'static str)> {
+fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Refusal> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
             ErrorCode::InvalidConfig,
-            "configuration is unavailable or needs repair",
+            "configuration is unavailable or needs repair".into(),
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
+        return Err((
+            ErrorCode::NotConfigured,
+            "choose a home folder first".into(),
+        ));
     };
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
-        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
+        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE))?;
+        .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule
@@ -1307,7 +1310,13 @@ fn resolve_key_parts(
             NoteKeyRule::Unavailable => {
                 return Err((
                     ErrorCode::Internal,
-                    "note identity is unavailable; an adapter contract cannot be read",
+                    "note identity is unavailable; an adapter contract cannot be read".into(),
+                ));
+            }
+            NoteKeyRule::StateUnavailable => {
+                return Err((
+                    ErrorCode::Internal,
+                    config.adopted_contracts_unavailable().into(),
                 ));
             }
         },
@@ -1323,7 +1332,7 @@ fn note_context(
     config: &mut ConfigStore,
     url: &str,
     include_older_notes: bool,
-) -> Result<NoteContext, (ErrorCode, &'static str)> {
+) -> Result<NoteContext, Refusal> {
     let KeyParts {
         canonical,
         vault,
@@ -1350,6 +1359,7 @@ fn note_context(
             NoteKeyRule::Ambiguous
             | NoteKeyRule::Unrecognized
             | NoteKeyRule::Unavailable
+            | NoteKeyRule::StateUnavailable
             | NoteKeyRule::Uncovered => false,
         }
     };
@@ -1359,7 +1369,10 @@ fn note_context(
     }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
         let Some(storage) = config.snapshot().storage.as_ref() else {
-            return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+            return Err((
+                ErrorCode::NotConfigured,
+                "choose a notes folder first".into(),
+            ));
         };
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = open_index(config, storage, &cache_dir)
@@ -1422,7 +1435,7 @@ fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore)
     };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     match note::load_keyed_note(
         &context.vault,
@@ -1462,7 +1475,7 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
     // loads and explicit migrations, not repeated after each keystroke.
     let context = match note_context(config, &value.url, false) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     if value.expected_key != context.key {
         return match note::load_keyed_note(
@@ -1539,7 +1552,7 @@ fn use_artifact_note(
     };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     if context.key.kind != RecordKeyKind::Artifact {
         return error(
@@ -1611,7 +1624,7 @@ fn view_older_note(
     };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     if context.key.kind != RecordKeyKind::Artifact {
         return error(
@@ -1795,9 +1808,9 @@ fn open_summary(
             parts
                 .vault
                 .find_summary(&parts.key, &parts.canonical)
-                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable"))
+                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
         }),
-        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable")),
+        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable".into())),
     };
     let (relative, linked) = match found {
         Ok(crate::vault::FoundSummary::Owned { relative, linked }) => (relative, linked),
@@ -1815,7 +1828,7 @@ fn open_summary(
                 "The file at the summary path is not a Brauser summary.",
             );
         }
-        Err((code, message)) => return error(&value.request_id, code, message),
+        Err((code, message)) => return error(&value.request_id, code, &message),
     };
     // resolve_key_parts only succeeds with a home folder configured.
     let Some(storage) = config.snapshot().storage.as_ref() else {
@@ -1858,7 +1871,7 @@ fn unrecognized_page_summary(
 ) -> Option<brauser_protocol::SummaryView> {
     let artifact_id = match config.note_key_rule(url) {
         NoteKeyRule::Artifact(artifact_id) => artifact_id,
-        NoteKeyRule::Unavailable => return None,
+        NoteKeyRule::Unavailable | NoteKeyRule::StateUnavailable => return None,
         NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Uncovered => {
             crate::summary::web_page_artifact_id(canonical).ok()?
         }
@@ -3609,10 +3622,18 @@ id = "jira.board:{host}/{id}"
             let root = folder.path().join("notes");
             let board_bytes = std::fs::read(root.join(&board.relative_path)).unwrap();
             hand_remove_board_adapter(&path);
-            std::fs::write(config::adopted_contracts_path(folder.path()), b"{").unwrap();
+            let state = config::adopted_contracts_path(folder.path());
+            std::fs::write(&state, b"{").unwrap();
             config = loaded(&path);
 
-            let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal);
+            // The refusal names the state file and its repair, not just a
+            // contract that cannot be read.
+            let named = |message: &str| {
+                message.starts_with("Notes on this page are paused to protect note identity")
+                    && message.contains(&state.display().to_string())
+                    && message.contains("Move adopted-contracts.json aside")
+            };
+            let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal && named(&reply.message));
             let loaded_board = load_note(
                 brauser_protocol::LoadNoteRequest {
                     protocol_version: PROTOCOL_VERSION,
@@ -3635,6 +3656,18 @@ id = "jira.board:{host}/{id}"
             assert_eq!(
                 note_load(&mut config, BROWSE_123).key.kind,
                 RecordKeyKind::Artifact
+            );
+
+            // Moving the file aside, as the message says, forgets the board
+            // contract: the board gets its URL note again, and the artifact
+            // note stays untouched on disk.
+            std::fs::rename(&state, folder.path().join("adopted-contracts.json.bak")).unwrap();
+            let reloaded = note_load(&mut config, BOARD);
+            assert_eq!(reloaded.key, crate::vault::url_record_key(BOARD).unwrap());
+            assert!(!reloaded.exists);
+            assert_eq!(
+                std::fs::read(root.join(&board.relative_path)).unwrap(),
+                board_bytes
             );
         }
     }
@@ -6895,6 +6928,9 @@ id = "work:{host}/{id}"
         /// they are, and its answers come back unchanged.
         #[test]
         fn discover_harnesses_is_forwarded_to_the_service() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
@@ -6976,6 +7012,9 @@ id = "work:{host}/{id}"
         /// so the host forwards them unchanged.
         #[test]
         fn open_path_and_get_agent_env_are_forwarded_to_the_service() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             use brauser_protocol::{
                 AgentEnvListed, GetAgentEnvRequest, OpenPathRequest, OpenTarget, PathOpened,
             };
@@ -7029,6 +7068,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn start_run_forwards_host_resolved_key() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let url = "https://example.com/a?b=1";
@@ -7061,6 +7103,9 @@ id = "work:{host}/{id}"
         /// so a config update cannot interleave with it.
         #[test]
         fn start_run_resolves_the_key_under_the_config_lock() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let url = "https://example.com/a";
@@ -7202,6 +7247,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn run_messages_other_than_start_are_forwarded_verbatim() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
@@ -7236,6 +7284,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn notes_and_capture_do_not_touch_the_service() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();

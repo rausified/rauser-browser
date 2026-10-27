@@ -576,6 +576,9 @@ mod tests {
 
     #[test]
     fn a_running_matching_service_is_used_without_launching() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         let service = FakeService::listen(&socket, fake::answering(BUILD));
@@ -611,6 +614,9 @@ mod tests {
 
     #[test]
     fn kickstart_then_retry_reaches_a_late_listener() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         let late = socket.clone();
@@ -644,6 +650,9 @@ mod tests {
 
     #[test]
     fn stale_service_build_is_restarted() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         // The service is the old build until it is restarted.
@@ -677,6 +686,9 @@ mod tests {
 
     #[test]
     fn hosts_racing_on_a_stale_service_restart_it_once() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         use std::sync::Barrier;
 
         let dir = fake::short_dir();
@@ -725,6 +737,9 @@ mod tests {
 
     #[test]
     fn persistent_build_mismatch_is_service_unavailable() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         let service = FakeService::listen(&socket, fake::answering("old"));
@@ -745,6 +760,9 @@ mod tests {
 
     #[test]
     fn a_host_older_than_the_binary_on_disk_never_restarts_the_service() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         // The service runs the newer build on disk; this host predates it.
@@ -766,6 +784,9 @@ mod tests {
 
     #[test]
     fn a_hello_cut_off_by_an_exiting_service_is_retried_once() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         use crate::frame::{read_frame, write_frame};
         use std::os::unix::net::UnixListener;
 
@@ -798,6 +819,9 @@ mod tests {
 
     #[test]
     fn a_hello_that_never_answers_is_not_retried_forever() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         use crate::frame::read_frame;
         use std::os::unix::net::UnixListener;
 
@@ -823,6 +847,9 @@ mod tests {
 
     #[test]
     fn a_start_that_finds_the_old_service_still_exiting_is_repeated_once() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         let late = socket.clone();
@@ -848,6 +875,9 @@ mod tests {
 
     #[test]
     fn version_skew_restarts_once() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         let fresh = Arc::new(AtomicBool::new(false));
@@ -877,6 +907,9 @@ mod tests {
 
     #[test]
     fn a_restart_that_is_not_installed_is_service_unavailable() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         FakeService::listen(&socket, fake::answering("old"));
@@ -889,6 +922,9 @@ mod tests {
 
     #[test]
     fn an_uncorrelated_reply_is_a_protocol_error() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
         FakeService::listen(

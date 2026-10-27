@@ -1421,7 +1421,7 @@ async function summaryNotice(tab: ChromeTab, tabId: number): Promise<PanelNotice
   try {
     const { run } = await summarizeTab(
       { id: tabId, url: raw, title: tab.title ?? "" },
-      { scripting: chrome.scripting, host, now: () => new Date() },
+      { scripting: chrome.scripting, host, storage: chrome.storage.local, now: () => new Date() },
     );
     return { kind: "run_started", run_id: run.run_id, tab_id: tabId, at: Date.now() };
   } catch (error) {

@@ -15,7 +15,7 @@ import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
 import { SETUP_WARNING } from "./agent.js";
 import { summarizeFailureText, summarizeTab } from "./summarize.js";
-import { RunCards } from "./run-card.js";
+import { RunCards, runsMayExist } from "./run-card.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import {
@@ -737,7 +737,7 @@ async function summarize(): Promise<void> {
     // (or keeps) the same card.
     const { run } = await summarizeTab(
       { id: tabId, url: page.url, title: page.title },
-      { scripting: chrome.scripting, host: session.host, now: () => new Date() },
+      { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
     );
     // Run cards are not per tab, so the card shows whichever tab is followed
     // now; only this tab's own line goes.
@@ -1187,9 +1187,10 @@ void (async () => {
   }
   await refreshActiveTab();
   // list_runs makes the host start the registered service, which runs on
-  // demand (spec §5), so only a set-up harness, which can have runs, asks.
-  // A run the shortcut started still restores through its notice.
-  if (session.config?.agent) await runCards.restore();
+  // demand (spec §5), so the panel asks only when a harness is set up or a
+  // run may still be there: one started before the harness was removed
+  // still needs its card and Cancel.
+  if (session.config?.agent || await runsMayExist(chrome.storage.local)) await runCards.restore();
   await showStoredNotice(true);
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();
