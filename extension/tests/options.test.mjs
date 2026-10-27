@@ -1205,3 +1205,83 @@ test("manual artifact refresh reports unowned path conflicts", async () => {
   assert.match(statusText(), /artifacts\/work\/item\.md/);
   assert.equal(state.requests.at(-1).type, "refresh_artifacts");
 });
+
+// GitHub PR and issue rules as a user configured them before repositories
+// existed: scoped, with no `within`.
+function existingGitHubRules(prOwners = ["a"], issueOwners = ["b"]) {
+  return [
+    {
+      type: "github.pr", origin: "https://github.com", scope: { owner: prOwners },
+      match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+      id: "github.pr:{host}/{owner}/{repo}/{number}",
+    },
+    {
+      type: "github.issue", origin: "https://github.com", scope: { owner: issueOwners },
+      match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+      id: "github.issue:{host}/{owner}/{repo}/{number}",
+    },
+  ];
+}
+
+const repoButton = () => env.elements.get("starter-gallery").querySelectorAll("button")
+  .find((button) => button.dataset.starterKey === "github.repo");
+
+test("GitHub gallery pre-fills organizations from existing GitHub rules", async () => {
+  install({ adapters: existingGitHubRules(["a"], ["b"]) });
+  await openSettings();
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  assert.equal(scope.value, "a, b");
+
+  // Once the user edits the field, a re-render keeps what they typed.
+  scope.value = "c";
+  scope.dispatch("input");
+  typeSite("https://github.com");
+  assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "c");
+});
+
+test("github.repo is offered when only PR and issue rules exist", async () => {
+  install({ adapters: existingGitHubRules(["acme-corp"], ["acme-corp"]) });
+  await openSettings();
+  const button = repoButton();
+  assert.ok(button);
+  assert.equal(button.textContent, "Review starter…");
+  assert.equal(button.disabled, false);
+});
+
+test("adding repositories links existing PR and issue rules without changing their scope", async () => {
+  const existing = existingGitHubRules(["a"], ["b"]);
+  const saves = [];
+  const state = install({
+    adapters: existing,
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  repoButton().click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.type, "github.repo");
+  assert.deepEqual(draft.scope, { owner: ["a", "b"] });
+  assert.match(env.elements.get("adapter-validation").textContent,
+    /Also links your existing pull request and issue rules to their repositories\./);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository save");
+  assert.equal(saves.length, 1);
+  const [pr, issue, repo] = saves[0].config.adapters.artifacts;
+  assert.deepEqual([pr.type, issue.type, repo.type], ["github.pr", "github.issue", "github.repo"]);
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  assert.deepEqual(pr, { ...existing[0], within });
+  assert.deepEqual(issue, { ...existing[1], within });
+  assert.deepEqual(pr.scope, { owner: ["a"] });
+  assert.deepEqual(issue.scope, { owner: ["b"] });
+});
+
+test("a repository starter with already-linked rules adds no linking line", async () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  install({ adapters: existingGitHubRules().map((adapter) => ({ ...adapter, within })) });
+  await openSettings();
+  repoButton().click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.match(env.elements.get("adapter-validation").textContent, /^Valid here\./);
+  assert.doesNotMatch(env.elements.get("adapter-validation").textContent, /Also links/);
+});

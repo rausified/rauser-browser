@@ -34,10 +34,13 @@ import {
   type AdapterObject,
 } from "./adapter-review.js";
 import {
+  configuredGitHubOrganizations,
   hasAdapter,
+  needsContainerLinks,
   orderContainedFirst,
   parseGitHubOrganizations,
   starterOffers,
+  withContainerLinks,
   type StarterOffer,
 } from "./starter-adapters.js";
 
@@ -89,11 +92,18 @@ let offers: HarnessOffer[] = [];
 let selectedHarnessId: string | null = null;
 const envChoices = new Map<string, boolean>();
 type AdapterEdit =
-  | { kind: "new" }
+  // linkContainers: the GitHub repositories starter, whose save also links
+  // existing pull request and issue rules to it (`withContainerLinks`).
+  | { kind: "new"; linkContainers?: boolean }
   | { kind: "existing"; identity: string; snapshot: string };
 
 let adapterEdit: AdapterEdit | null = null;
 let githubScopeText = "";
+// Until the user types in the organization field, it follows the
+// organizations the configured GitHub rules already name.
+let githubScopeEdited = false;
+
+const LINKS_EXISTING_RULES = "Also links your existing pull request and issue rules to their repositories.";
 
 // The host binds a folder selection to the revision it was made at, so any
 // save, from this page or another, makes it unusable.
@@ -385,6 +395,9 @@ function setStarterButtonState(button: HTMLButtonElement, origin: string, key: s
 
 function renderStarterGallery(): void {
   starterGallery.replaceChildren();
+  if (!githubScopeEdited) {
+    githubScopeText = configuredGitHubOrganizations(session.config?.adapters.artifacts ?? []).join(", ");
+  }
   // The typed site address first, then the sites that already have adapters.
   const typed = typedOrigin();
   const origins = [...new Set([
@@ -420,6 +433,7 @@ function renderStarterGallery(): void {
       guidance.className = parseGitHubOrganizations(githubScopeText) ? "" : "warning";
       input.addEventListener("input", () => {
         githubScopeText = input.value;
+        githubScopeEdited = true;
         const valid = parseGitHubOrganizations(githubScopeText) !== null;
         guidance.className = valid ? "" : "warning";
         for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
@@ -437,7 +451,7 @@ function renderStarterGallery(): void {
     review.addEventListener("click", () => {
       const selected = currentStarterOffer(origin, offer.key);
       if (!selected?.adapter || offerConfigured(selected)) return;
-      beginAdapterDraft(selected.adapter, selected.label);
+      beginAdapterDraft(selected.adapter, selected.label, selected.artifact_type === "github.repo");
     });
     card.append(review);
     starterGallery.append(card);
@@ -532,9 +546,12 @@ function readAdapterCandidate(): CandidateResult {
   }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
-  const artifacts = [...session.config.adapters.artifacts];
-  if (adapterEdit.kind === "new") artifacts.push(parsed.adapter);
-  else {
+  let artifacts = [...session.config.adapters.artifacts];
+  if (adapterEdit.kind === "new") {
+    // Linking adds `within` and leaves every other field, scope included, as it is.
+    if (adapterEdit.linkContainers) artifacts = withContainerLinks(artifacts, parsed.adapter);
+    artifacts.push(parsed.adapter);
+  } else {
     const target = adapterEdit;
     const matches = artifacts
       .map((adapter, index) => adapterIdentity(adapter) === target.identity ? index : -1)
@@ -569,8 +586,10 @@ function refreshAdapterEditor(): void {
   if (adapterEdit === null) return;
   const candidate = readAdapterCandidate();
   adapterValidation.classList.toggle("warning", !candidate.ok);
+  const links = candidate.ok && adapterEdit.kind === "new" && adapterEdit.linkContainers === true &&
+    needsContainerLinks(session.config?.adapters.artifacts ?? [], candidate.adapter);
   adapterValidation.textContent = candidate.ok
-    ? "Valid here. The native host will validate the complete configuration again before saving."
+    ? `Valid here. The native host will validate the complete configuration again before saving.${links ? ` ${LINKS_EXISTING_RULES}` : ""}`
     : candidate.message;
   adapterPreview.replaceChildren();
   if (!candidate.ok) {
@@ -612,9 +631,9 @@ function openAdapterEditor(edit: AdapterEdit, adapter: AdapterObject, heading: s
   refreshAdapterEditor();
 }
 
-function beginAdapterDraft(adapter: AdapterObject, label: string): void {
+function beginAdapterDraft(adapter: AdapterObject, label: string, linkContainers = false): void {
   if (!session.config || busy) return;
-  openAdapterEditor({ kind: "new" }, adapter, `Review ${label} starter`);
+  openAdapterEditor({ kind: "new", linkContainers }, adapter, `Review ${label} starter`);
 }
 
 function beginAdapterEdit(index: number | "new"): void {

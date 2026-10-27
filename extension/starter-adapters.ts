@@ -223,6 +223,47 @@ export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): bool
     adapter.type === offer.artifact_type && adapter.origin === offer.origin);
 }
 
+const LINKABLE_TO_REPOSITORY = new Set(["github.pr", "github.issue"]);
+
+/** The adapters `withContainerLinks` would change: `github.pr` and
+ * `github.issue` rules on the repository's origin that declare no `within`. */
+function unlinked(artifacts: AdapterObject[], repo: AdapterObject): boolean[] {
+  return artifacts.map((adapter) => repo.type === GITHUB_REPOSITORY && typeof repo.id === "string" &&
+    adapter.origin === repo.origin && typeof adapter.type === "string" &&
+    LINKABLE_TO_REPOSITORY.has(adapter.type) && adapter.within === undefined);
+}
+
+/** Whether adding `repo` would link any existing pull request or issue rule. */
+export function needsContainerLinks(artifacts: AdapterObject[], repo: AdapterObject): boolean {
+  return unlinked(artifacts, repo).some(Boolean);
+}
+
+/** `artifacts` with `within` naming `repo` added to each same-origin
+ * `github.pr` and `github.issue` adapter that lacks one. Nothing else about
+ * those adapters changes (their scope in particular), and adapters that
+ * already declare a container are left as they are. */
+export function withContainerLinks(artifacts: AdapterObject[], repo: AdapterObject): AdapterObject[] {
+  const link = unlinked(artifacts, repo);
+  return artifacts.map((adapter, at) => link[at]
+    ? { ...adapter, within: { type: GITHUB_REPOSITORY, id: repo.id as string } }
+    : adapter);
+}
+
+/** The union of `scope.owner` across `https://github.com`
+ * adapters, in adapter order, to pre-fill the organization field. */
+export function configuredGitHubOrganizations(artifacts: AdapterObject[]): string[] {
+  const owners: string[] = [];
+  for (const adapter of artifacts) {
+    if (adapter.origin !== GITHUB_ORIGIN) continue;
+    const scope = adapter.scope;
+    if (!scope || typeof scope !== "object" || Array.isArray(scope)) continue;
+    const owner = (scope as Record<string, unknown>).owner;
+    if (!Array.isArray(owner)) continue;
+    for (const entry of owner) if (typeof entry === "string") owners.push(entry.toLowerCase());
+  }
+  return [...new Set(owners)];
+}
+
 function containerType(adapter: AdapterObject): string | null {
   const within = adapter.within;
   if (!within || typeof within !== "object" || Array.isArray(within)) return null;
