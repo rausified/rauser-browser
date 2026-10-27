@@ -333,6 +333,27 @@ test("an HTTP(S) tab shows the note editor and no grant or address warning", asy
   await until(() => page.el("note-body").disabled === false, "the note to load");
 });
 
+test("a note refusal from damaged adopted-contract state shows the host's named repair", async () => {
+  // The host names the state file and its repair; the panel must show it
+  // whole and keep the editor read-only, so nothing autosaves under a guess.
+  const refusal = "Notes on this page are paused to protect note identity: Brauser's record of the " +
+    "adapters it has used (/config/brauser/adopted-contracts.json) cannot be read. Move " +
+    "adopted-contracts.json aside (rename it, keeping a backup) or fix it to restore notes on pages " +
+    "the current adapters do not recognize.";
+  const page = await install({
+    tab: { id: 1, url: "https://work.example/boards/1", title: "Board" },
+    intercept: (request) => request.type === "load_note"
+      ? { type: "error", code: "internal", message: refusal }
+      : undefined,
+  });
+  await until(() => page.el("note-status").textContent.includes("adopted-contracts.json"),
+    "the named refusal");
+  assert.equal(page.el("note-status").textContent, `Could not load this page's note: ${refusal}`);
+  assert.equal(page.el("note-body").disabled, true);
+  await settle();
+  assert.equal(page.sent("save_note").length, 0);
+});
+
 test("an HTTP(S) tab shows the note editor even when Chrome reports access withdrawn", async () => {
   // A URL means Chrome granted this site, whatever the all-sites check says.
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: false });

@@ -141,8 +141,12 @@ document is inert, note keys come from the note-only contracts still recorded
 (`[[adapter_id_history]]`, the inert document, and contracts removed from
 config.toml by hand, which the host keeps in its own `adopted-contracts.json`
 state file; never capture), so every route a contract matched keeps one note
-(`ConfigStore::note_key_rule`). An unusable state file makes identity on
-every page the current policy does not recognize unavailable. Those contracts alone decide an origin they
+(`ConfigStore::note_key_rule`). Hand-removed contracts also take part in the
+frozen-ID check (`validate_adapter_transition_with_history`, via
+`retired_by_hand`). An unusable state file makes identity on every page the
+current policy does not recognize unavailable (`NoteKeyRule::StateUnavailable`,
+whose refusal names the file), and refuses adapter additions until it is
+repaired; a damaged entry does both for its origin only. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL
