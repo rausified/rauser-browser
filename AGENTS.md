@@ -130,7 +130,8 @@ native host now updates a rebuildable SQLite `index.db` only after durable log
 delivery and lazily regenerates ownership-checked artifact Markdown when the
 panel's connection closes and on the first connection of each local day
 (never on worker-sync or settings connections), checkpointing long passes. `brauser reindex` recreates both from the owned log
-markers. The panel now exposes the current artifact card and one-line context,
+markers; a catch-up or rebuild larger than one pass's 64 MiB read bound saves
+its progress and resumes on the next pass (DESIGN.md §6.7). The panel now exposes the current artifact card and one-line context,
 a cross-tool Recent list, and copyable daily or weekly worklogs. Notes resolve
 to host-derived artifact keys (with guarded migration of older URL-keyed
 notes), and settings can regenerate artifact files while reporting every
