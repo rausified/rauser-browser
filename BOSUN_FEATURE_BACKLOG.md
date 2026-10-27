@@ -510,20 +510,9 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, clean `8b7acd7`): no quarantine file
-  or incomplete changes. Protocol generation, workspace build, format, both
-  Clippy configurations, offline npm ci, typecheck, lint, extension build,
-  all 13 extension test files, current-state and queue checks pass. The
-  unfiltered Rust gate has 26 adapter-template passes, 447 host passes and
-  32 service/IPC failures; later binaries are not reached. Five dialog tests
-  pass, including the repaired 60-exchange fixture. Independent AF_UNIX bind
-  and connect probes both return EPERM. Node spawnSync reports status 0 but
-  error EPERM and empty output; script diagnostics show 8 passes, 1 failure
-  and 1 platform skip. No source changes, disabled tests, feature work or
-  history reset. Raw logs: `target/overnight-health/baseline-8b7acd7/`.
-  Driver action: run the unfiltered gate with local IPC permitted and include
-  the tested baseline SHA and result in the next cycle's handoff. The absence
-  of a quarantine file does not establish green health.
+  Latest verification: see the current health handoff below for clean
+  baseline `46f17b3`. The same IPC restriction remains; the existing repair
+  is retained and this item is not closed.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -846,7 +835,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `1305440`)
+### Current health handoff (2026-10-27 — baseline `21d06c3`)
 
 - Clean workspace; no quarantine failure file. The unfiltered opening gate
   again passes 26 adapter-template tests and 447 host tests, then fails 32
@@ -855,17 +844,17 @@ were folded into `brwr-q7e` above rather than given their own item.
   configurations, npm install, typecheck, lint, extension build, current-state
   validation and queue consistency. The repaired dialog fixture completes its
   60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
-- Independent workspace AF_UNIX bind and connect both return errno 1 EPERM.
+- An independent workspace AF_UNIX bind returns errno 1 EPERM.
   A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
   The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
   and 1 platform skip, with the win32 simulation unable to parse empty output.
   TESTING.md documents that diagnostic and the restriction. Keep all tests
   enabled and do not change production IPC to fit this runner.
-- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29` and
-  `8b7acd7`. No commit among the last five is verified green in this runner,
-  so no history reset was attempted. Earlier quarantine documentation was
-  recovered; this cycle introduces no product or test change and claims no
-  shipped feature.
+- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
+  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4` and `21d06c3`.
+  No commit among the last five is verified green in this runner, so no
+  history reset was attempted. Earlier quarantine recovery is retained; this
+  cycle introduces no product or test change and claims no shipped feature.
 - The driver needs to carry the baseline SHA and an unfiltered external
   gate result into its next handoff, and provide a runner permitting local
   IPC and synchronous child output. Another unchanged restricted cycle will
@@ -876,3 +865,38 @@ were folded into `brwr-q7e` above rather than given their own item.
   (`brwr-gf1`) before claiming its identity cases. The existing proposal to
   preview which example pages share an artifact still belongs in this review;
   no additional diagnostic view or self-directed feature is needed first.
+
+- Baseline `bdbbbb4` was checked again without test exclusions. Raw Rust
+  output is retained locally at
+  `target/overnight-health/baseline-bdbbbb4/cargo-test.log` (gitignored).
+  The script gate and its diagnostic output are beside it as
+  `scripts-test.log` and `scripts-diagnostic.log`.
+  The first denied fixture bind is `host/src/service/client.rs:436`;
+  server fixtures subsequently time out waiting for the unavailable listener.
+  No product or test changes can grant the missing runner capability.
+  Keep the existing product proposals; adding more internal health work
+  would not unblock the assigned Capture Site implementation.
+
+- Rechecks on `21d06c3` and `5231f9e` reproduce those exact counts with no test
+  exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
+  and all 13 extension files passing. The script diagnostic still reports
+  8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
+  required build/quality checks pass. The repaired dialog fixture passes.
+  Independent socket and JSON-only child probes still return EPERM. No
+  quarantine file existed and no code repair or reset would restore these
+  denied operations. `brwr-1hj` stays in progress and `brwr-t40` stays open.
+  Before scheduling another unchanged cycle, the driver should establish
+  whether its own unfiltered gate passes and supply that result in the
+  handoff. Product priority remains selected-rule Capture Site review and
+  example artifact grouping, not another health surface.
+
+- Baseline `5231f9e` evidence is retained in
+  `target/overnight-health/baseline-5231f9e/` (gitignored), including the
+  unfiltered Cargo output and non-isolated script diagnostic. No quarantine
+  file or incomplete diff existed. No preceding commit in the last five has
+  a verified green gate in this restricted runner, so resetting history would
+  discard work without fixing the denied operations. The dialog repair is
+  retained under blocked `brwr-4vb`; no new feature or contract shipped.
+  The existing Capture Site proposals remain sufficient: resume the host
+  drafter and selected-rule preview once the driver supplies an unfiltered
+  green baseline, rather than scheduling repeated unchanged restricted runs.
