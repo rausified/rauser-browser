@@ -26,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-use brauser_protocol::{ErrorCode, HarnessId, RecordKey, RecordKeyKind};
+use brauser_protocol::{ErrorCode, HarnessId};
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
@@ -40,11 +40,9 @@ use crate::config::ConfigStore;
 use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::markdown::link_style;
-use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key};
-use crate::summary::{
-    MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, WEB_PAGE_TYPE, render_summary,
-};
-use crate::vault::{OwnedWrite, Vault, url_record_key};
+use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key, summary_artifact};
+use crate::summary::{MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, render_summary};
+use crate::vault::{OwnedWrite, Vault};
 
 const INVALID_ANSWER: &str = "The stored answer is not a valid summary.";
 const NEEDS_REPAIR: &str = "The configuration needs repair. Fix it in settings, then Retry save.";
@@ -325,49 +323,13 @@ pub(crate) fn summarized_at(now: OffsetDateTime, requested_at: &str) -> String {
     local.format(&Rfc3339).unwrap_or_else(|_| timestamp(now))
 }
 
-/// The record key and artifact type the summary's log event uses:
-/// - a `Url` key is its own `web.page`;
-/// - an `Artifact` key takes the type of the adapter that matches `url` to
-///   it, or, for a key recovered from an older contract, of its indexed row;
-/// - an artifact whose type neither knows falls back to the URL's own key
-///   and `web.page`. The summary file keeps the resolved key.
-pub(crate) fn summary_artifact(
-    config: &ConfigStore,
-    url: &str,
-    key: &RecordKey,
-    index: Option<&ArtifactIndex>,
-) -> (RecordKey, String) {
-    if key.kind == RecordKeyKind::Url {
-        return (key.clone(), WEB_PAGE_TYPE.into());
-    }
-    let matched = config
-        .adapter_match(url, None)
-        .ok()
-        .filter(|found| found.artifact_id == key.value)
-        .map(|found| found.artifact_type);
-    let known = matched.or_else(|| {
-        index
-            .and_then(|index| index.artifact(&key.value).ok().flatten())
-            .map(|artifact| artifact.artifact_type)
-            .filter(|artifact_type| artifact_type != WEB_PAGE_TYPE)
-    });
-    if let Some(artifact_type) = known {
-        return (key.clone(), artifact_type);
-    }
-    let url_key = canonical_url(url, &config.snapshot().strip_params)
-        .ok()
-        .and_then(|canonical| url_record_key(&canonical).ok())
-        .unwrap_or_else(|| key.clone());
-    (url_key, WEB_PAGE_TYPE.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use brauser_protocol::{HarnessId, ImportanceLevel, RecordKeyKind, RunState};
+    use brauser_protocol::{HarnessId, ImportanceLevel, RecordKey, RecordKeyKind, RunState};
     use time::format_description::well_known::Rfc3339;
     use uuid::Uuid;
 

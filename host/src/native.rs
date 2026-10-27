@@ -1859,9 +1859,46 @@ fn open_summary(
     }
 }
 
-/// The latest summary of a page no live adapter recognizes, keyed the way
-/// `resolve_key_parts` keys its note: a recorded contract's artifact (a
-/// removed adapter's page) or else the page's `web.page` identity. Any
+/// The record key and artifact type the summary's log event uses:
+/// - a `Url` key is its own `web.page`;
+/// - an `Artifact` key takes the type of the adapter that matches `url` to
+///   it, or, for a key recovered from an older contract, of its indexed row;
+/// - an artifact whose type neither knows falls back to the URL's own key
+///   and `web.page`. The summary file keeps the resolved key.
+pub(crate) fn summary_artifact(
+    config: &ConfigStore,
+    url: &str,
+    key: &RecordKey,
+    index: Option<&ArtifactIndex>,
+) -> (RecordKey, String) {
+    if key.kind == RecordKeyKind::Url {
+        return (key.clone(), crate::summary::WEB_PAGE_TYPE.into());
+    }
+    let matched = config
+        .adapter_match(url, None)
+        .ok()
+        .filter(|found| found.artifact_id == key.value)
+        .map(|found| found.artifact_type);
+    let known = matched.or_else(|| {
+        index
+            .and_then(|index| index.artifact(&key.value).ok().flatten())
+            .map(|artifact| artifact.artifact_type)
+            .filter(|artifact_type| artifact_type != crate::summary::WEB_PAGE_TYPE)
+    });
+    if let Some(artifact_type) = known {
+        return (key.clone(), artifact_type);
+    }
+    let url_key = crate::capture::canonical_url(url, &config.snapshot().strip_params)
+        .ok()
+        .and_then(|canonical| crate::vault::url_record_key(&canonical).ok())
+        .unwrap_or_else(|| key.clone());
+    (url_key, crate::summary::WEB_PAGE_TYPE.into())
+}
+
+/// The latest summary of a page no live adapter recognizes, under the
+/// artifact the finisher logs it to: a recorded contract's artifact (a
+/// removed adapter's page) when its type is known, else the page's
+/// `web.page` identity (`finisher::summary_artifact` decides both). Any
 /// failure, including a contract this host cannot read, means no summary.
 fn unrecognized_page_summary(
     config: &ConfigStore,
@@ -1869,19 +1906,26 @@ fn unrecognized_page_summary(
     url: &str,
     canonical: &str,
 ) -> Option<brauser_protocol::SummaryView> {
+    let cache_dir = config.cache_dir().ok()?;
+    let index = open_index(config, storage, &cache_dir).ok()?;
     let artifact_id = match config.note_key_rule(url) {
-        NoteKeyRule::Artifact(artifact_id) => artifact_id,
+        NoteKeyRule::Artifact(artifact_id) => {
+            let key = RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: artifact_id,
+            };
+            let (event_key, _) = summary_artifact(config, url, &key, Some(&index));
+            match event_key.kind {
+                RecordKeyKind::Artifact => event_key.value,
+                RecordKeyKind::Url => crate::summary::web_page_artifact_id(canonical).ok()?,
+            }
+        }
         NoteKeyRule::Unavailable | NoteKeyRule::StateUnavailable => return None,
         NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Uncovered => {
             crate::summary::web_page_artifact_id(canonical).ok()?
         }
     };
-    let cache_dir = config.cache_dir().ok()?;
-    open_index(config, storage, &cache_dir)
-        .ok()?
-        .summary_for(&artifact_id)
-        .ok()
-        .flatten()
+    index.summary_for(&artifact_id).ok().flatten()
 }
 
 fn list_artifacts(
@@ -4723,6 +4767,56 @@ id = "work:{host}/{id}"
         assert!(!result.recognized);
         assert_eq!(result.artifact, None);
         assert_eq!(result.summary, Some(expected_summary(&event)));
+    }
+
+    /// A removed adapter's page whose artifact type nothing records: the
+    /// finisher logs its summary under the URL's `web.page` key
+    /// (`summary_artifact`), and get_artifact looks under that same key.
+    #[test]
+    fn get_artifact_finds_a_summary_logged_under_the_web_page_of_an_untyped_artifact() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.clear();
+        let revision = config.revision().to_owned();
+        config.update(next, &revision).unwrap().unwrap();
+        let url = "https://work.example/items/7";
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        assert!(matches!(
+            config.note_key_rule(url),
+            crate::config::NoteKeyRule::Artifact(ref id) if *id == artifact_key.value
+        ));
+        let storage = config.snapshot().storage.clone().unwrap();
+        let index = open_index(&config, &storage, &config.cache_dir().unwrap()).unwrap();
+        let (event_key, artifact_type) =
+            summary_artifact(&config, url, &artifact_key, Some(&index));
+        assert_eq!(event_key, crate::vault::url_record_key(url).unwrap());
+        assert_eq!(artifact_type, crate::summary::WEB_PAGE_TYPE);
+        let event = record_page_summary(&config, url, event_key, &artifact_type);
+
+        let result = artifact_result(&mut config, url);
+        assert!(!result.recognized);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        // Recent lists the same summary.
+        let items = recent_items(&mut config);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].summary, Some(expected_summary(&event)));
     }
 
     #[test]
