@@ -883,7 +883,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `6de061e`)
+### Current health handoff (2026-10-27 — baseline `b4b28e9`)
 
 - Clean workspace; no quarantine failure file. The unfiltered opening gate
   again passes 26 adapter-template tests and 447 host tests, then fails 32
@@ -899,8 +899,8 @@ were folded into `brwr-q7e` above rather than given their own item.
   TESTING.md documents that diagnostic and the restriction. Keep all tests
   enabled and do not change production IPC to fit this runner.
 - The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7` and `1305440`. No commit among the last five is verified green in
-  this runner, so no history reset was attempted. Earlier quarantine recovery
+  `8b7acd7`, `1305440`, `6de061e` and `b4b28e9`. No commit among the last
+  five is verified green in this runner, so no history reset was attempted. Earlier quarantine recovery
   is retained; this cycle introduces no product or test change and claims no
   shipped feature.
 - The driver needs to carry the baseline SHA and an unfiltered external
