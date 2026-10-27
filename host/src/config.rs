@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
@@ -50,6 +52,21 @@ const UNREADABLE_REVISION: &str = "unreadable";
 /// also covers the length so a growing file still changes revision.
 const MAX_HASHED_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
 
+/// At most this many contracts, and this many bytes, in the adopted-contract
+/// state file. A larger file is unreadable; a write that would exceed either
+/// bound is skipped.
+const MAX_ADOPTED_CONTRACTS: usize = 1024;
+const MAX_ADOPTED_CONTRACTS_BYTES: usize = 1024 * 1024;
+const ADOPTED_CONTRACTS_FORMAT: u32 = 1;
+
+/// The host-owned record of every adapter contract a host has adopted under
+/// the config lock (see `AdoptedContracts`). It lives beside config.toml in
+/// the OS config directory, or beside an injected test config. The planned
+/// home folder (bead brwr-hme) repoints this to the home's `state/` folder.
+pub(crate) fn adopted_contracts_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("adopted-contracts.json")
+}
+
 pub(crate) fn default_strip_params() -> Vec<String> {
     vec!["utm_*".into(), "fbclid".into(), "gclid".into()]
 }
@@ -70,6 +87,28 @@ pub struct ConfigStore {
     retired_adapter_contracts: Vec<serde_json::Value>,
     /// Note-only identity rules; see `note_key_rule`.
     note_key_rules: NoteKeyRules,
+    /// Set while a `ConfigLock` from `lock_current` is alive.
+    lock_held: Arc<AtomicBool>,
+    /// The adopted-contract state as last read.
+    adopted: AdoptedContracts,
+    /// This revision's contracts in recordable form, computed on the first
+    /// refresh under the lock.
+    recordable: Option<Vec<serde_json::Value>>,
+}
+
+/// The config lock from `ConfigStore::lock_current`. While it is alive,
+/// that store's refreshes record the contracts they adopt.
+#[must_use]
+pub struct ConfigLock {
+    held: Arc<AtomicBool>,
+    _file: File,
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        // Fields drop after this, so the flag clears before the unlock.
+        self.held.store(false, Ordering::SeqCst);
+    }
 }
 
 struct DiskState {
@@ -265,6 +304,7 @@ impl ConfigStore {
         self.adapter_document = None;
         self.retired_adapter_contracts.clear();
         self.note_key_rules = NoteKeyRules::default();
+        self.recordable = None;
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -313,6 +353,10 @@ impl ConfigStore {
             adapter_document: Some(AdapterTemplates::default()),
             retired_adapter_contracts: Vec::new(),
             note_key_rules: NoteKeyRules::default(),
+            lock_held: Arc::new(AtomicBool::new(false)),
+            // Never equal to a read state, so the first adopt compiles rules.
+            adopted: AdoptedContracts::Unread,
+            recordable: None,
         }
     }
 
@@ -327,8 +371,46 @@ impl ConfigStore {
         self.adapter_extensions = state.adapter_extensions;
         self.retired_adapter_contracts = state.retired_adapter_contracts;
         if revision_changed {
-            self.set_adapter_policy(false);
+            self.recordable = None;
+            self.set_capture_adapter_policy(false);
         }
+        // Another host or an editor can change the state file while
+        // config.toml stays the same.
+        if self.sync_adopted_contracts() || revision_changed {
+            self.set_note_key_rules();
+        }
+    }
+
+    /// Re-read the adopted-contract state and, under the config lock, add
+    /// the current revision's contracts to it. Every note request refreshes
+    /// under the lock before deriving a key, so a contract is recorded
+    /// before it can key a note. Returns whether the state changed.
+    fn sync_adopted_contracts(&mut self) -> bool {
+        let Some(path) = self.path.parent().map(adopted_contracts_path) else {
+            return false;
+        };
+        let adopted = if self.lock_held.load(Ordering::SeqCst) {
+            let recordable = self
+                .recordable
+                .get_or_insert_with(|| individually_valid_adapter_contracts(&self.config));
+            match record_adopted_contracts(&path, recordable) {
+                Ok(adopted) => adopted,
+                // The contracts stay current, so a later refresh retries.
+                // Until then a hand removal of one leaves its pages on URL
+                // keys (DESIGN.md §6.2).
+                Err(error) => {
+                    eprintln!(
+                        "{NAMESPACE}: warning: could not record adopted adapter contracts: {error:#}"
+                    );
+                    read_adopted_contracts(&path)
+                }
+            }
+        } else {
+            read_adopted_contracts(&path)
+        };
+        let changed = adopted != self.adopted;
+        self.adopted = adopted;
+        changed
     }
 
     pub fn snapshot(&self) -> &ConfigSnapshot {
@@ -386,7 +468,7 @@ impl ConfigStore {
 
     /// Hold this lock from the policy refresh through a privileged write.
     /// ConfigStore::update takes the same lock before replacing config.toml.
-    pub fn lock_current(&self) -> Result<File> {
+    pub fn lock_current(&self) -> Result<ConfigLock> {
         let parent = self.path.parent().context("config path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         let path = parent.join(".config.lock");
@@ -398,7 +480,11 @@ impl ConfigStore {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         file.lock().context("locking configuration")?;
-        Ok(file)
+        self.lock_held.store(true, Ordering::SeqCst);
+        Ok(ConfigLock {
+            held: Arc::clone(&self.lock_held),
+            _file: file,
+        })
     }
 
     /// A malformed or newer config is shown to setup, never used for capture.
@@ -464,7 +550,13 @@ impl ConfigStore {
     /// was matched by one of these contracts or by the current policy, so an
     /// origin they cover is decided by them alone: a stripped canonical URL
     /// that happens to equal another page's is never identity evidence.
+    ///
+    /// Contracts that left config.toml by hand are read the same way from
+    /// the host's adopted-contract state (`AdoptedContracts`).
     pub(crate) fn note_key_rule(&self, url: &str) -> NoteKeyRule {
+        if self.note_key_rules.all_unavailable {
+            return NoteKeyRule::Unavailable;
+        }
         let mut covered = self.adapter_document.as_ref().is_some_and(|document| {
             !matches!(document.evaluate(url, None), Err(NoMatch::NoAdapter))
         });
@@ -499,12 +591,12 @@ impl ConfigStore {
             .context("adapter policy is unavailable")
     }
 
-    fn set_adapter_policy(&mut self, include_warnings: bool) {
-        self.set_capture_adapter_policy(include_warnings);
+    fn set_note_key_rules(&mut self) {
         self.note_key_rules = note_key_rules(
             &self.config,
             self.adapter_document.is_none(),
             &self.retired_adapter_contracts,
+            &self.adopted,
         );
     }
 
@@ -902,7 +994,11 @@ impl ConfigStore {
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
         self.retired_adapter_contracts = retired_adapter_contracts;
-        self.set_adapter_policy(true);
+        self.recordable = None;
+        self.set_capture_adapter_policy(true);
+        // Still under the lock: record what this write adopted.
+        self.sync_adopted_contracts();
+        self.set_note_key_rules();
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
                 "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
@@ -1530,6 +1626,9 @@ struct NoteKeyRules {
     /// contract may have named artifacts there, so identity on those origins
     /// is unavailable rather than decided by the contracts that remain.
     unavailable_origins: std::collections::BTreeSet<String>,
+    /// The adopted-contract state is unreadable, or holds a damaged entry
+    /// with no origin, so no unrecognized URL's key can be established.
+    all_unavailable: bool,
 }
 
 /// Compile the note-only identity rules. Retired contracts are compiled
@@ -1538,13 +1637,25 @@ struct NoteKeyRules {
 /// (only capture-specific checks failed), keeping first-match and scope
 /// semantics, and otherwise per contract. A contract without a valid origin
 /// never compiled on any host, so it cannot have produced a record key.
+///
+/// Adopted contracts config.toml no longer holds, as current or history,
+/// were removed by hand and are added like history entries. Their file is
+/// host-written, so a damaged entry is corruption: one with no readable
+/// origin makes every unrecognized URL unavailable.
 fn note_key_rules(
     config: &ConfigSnapshot,
     current_inert: bool,
     retired: &[serde_json::Value],
+    adopted: &AdoptedContracts,
 ) -> NoteKeyRules {
     // History entries are stored in contract form; anything else is invalid.
-    fn add(rules: &mut NoteKeyRules, contract: &serde_json::Value, format: u32, exact: bool) {
+    // Returns false for an invalid entry with no origin to attribute it to.
+    fn add(
+        rules: &mut NoteKeyRules,
+        contract: &serde_json::Value,
+        format: u32,
+        exact: bool,
+    ) -> bool {
         let compiled = (format == 1)
             .then(|| adapter_contract(contract))
             .flatten()
@@ -1562,16 +1673,18 @@ fn note_key_rules(
         match compiled {
             Some(document) => rules.documents.push(document),
             None => {
-                if let Some(origin) = contract
+                let Some(origin) = contract
                     .get("origin")
                     .and_then(serde_json::Value::as_str)
                     .and_then(|origin| url::Url::parse(origin).ok())
                     .map(|origin| origin.origin().ascii_serialization())
-                {
-                    rules.unavailable_origins.insert(origin);
-                }
+                else {
+                    return false;
+                };
+                rules.unavailable_origins.insert(origin);
             }
         }
+        true
     }
     let mut rules = NoteKeyRules::default();
     if current_inert {
@@ -1587,7 +1700,149 @@ fn note_key_rules(
     for contract in retired {
         add(&mut rules, contract, 1, true);
     }
+    match adopted {
+        AdoptedContracts::Read { contracts, .. } => {
+            let current = adapter_contracts(config);
+            for contract in contracts {
+                if !current.contains(contract)
+                    && !retired.contains(contract)
+                    && !add(&mut rules, contract, 1, true)
+                {
+                    rules.all_unavailable = true;
+                }
+            }
+        }
+        AdoptedContracts::Unreadable => rules.all_unavailable = true,
+        AdoptedContracts::Unread => {}
+    }
     rules
+}
+
+/// Every adapter contract, in the recognition form `[[adapter_id_history]]`
+/// uses, that a host adopted from config.toml under the config lock. Only a
+/// settings save records history, so a contract deleted from config.toml in
+/// an editor would otherwise leave its routes on URL keys and its artifact
+/// note unreachable. A recorded contract config.toml no longer holds names
+/// note keys like a history entry; it never authorizes capture and never
+/// guards ID changes. Contracts are only ever added: re-adding one makes it
+/// current again, and one later moved to history is read from there.
+///
+/// Several hosts (one per native-messaging connection) share the file. Each
+/// rereads it under the config lock, adds what it lacks, and replaces it
+/// atomically; readers without the lock see one whole version or the other.
+/// A file this host cannot read is never rewritten: it may name the
+/// contracts that decide an origin, so note identity on every URL the
+/// current policy does not recognize is unavailable until it is repaired or
+/// removed. Removing it forgets those contracts, like a config repair.
+#[derive(Debug, Clone, PartialEq)]
+enum AdoptedContracts {
+    /// Not read yet.
+    Unread,
+    /// The file as read, or nothing recorded when it is absent.
+    Read {
+        revision: String,
+        contracts: Vec<serde_json::Value>,
+    },
+    /// Unreadable, not a regular file, over a bound, malformed, or from a
+    /// newer host.
+    Unreadable,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAdoptedContracts {
+    format: u32,
+    contracts: Vec<serde_json::Value>,
+}
+
+fn read_adopted_contracts(path: &Path) -> AdoptedContracts {
+    // As for config.toml, opening a FIFO would block under the lock.
+    match fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AdoptedContracts::Read {
+                revision: MISSING_REVISION.into(),
+                contracts: Vec::new(),
+            };
+        }
+        Ok(metadata) if metadata.is_file() => {}
+        _ => return AdoptedContracts::Unreadable,
+    }
+    let mut bytes = Vec::new();
+    let read = File::open(path).and_then(|file| {
+        file.take(MAX_ADOPTED_CONTRACTS_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+    });
+    if read.is_err() || bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
+        return AdoptedContracts::Unreadable;
+    }
+    match serde_json::from_slice::<StoredAdoptedContracts>(&bytes) {
+        Ok(stored)
+            if stored.format == ADOPTED_CONTRACTS_FORMAT
+                && stored.contracts.len() <= MAX_ADOPTED_CONTRACTS =>
+        {
+            AdoptedContracts::Read {
+                revision: revision_for(&bytes),
+                contracts: stored.contracts,
+            }
+        }
+        _ => AdoptedContracts::Unreadable,
+    }
+}
+
+/// Call under the config lock. Adds the `contracts` the file lacks and
+/// returns the state as written, or as found when nothing was missing or it
+/// cannot be read. Fails without writing past either bound.
+fn record_adopted_contracts(
+    path: &Path,
+    contracts: &[serde_json::Value],
+) -> Result<AdoptedContracts> {
+    let found = read_adopted_contracts(path);
+    let AdoptedContracts::Read {
+        contracts: recorded,
+        ..
+    } = &found
+    else {
+        return Ok(found);
+    };
+    let mut next = recorded.clone();
+    for contract in contracts {
+        if !next.contains(contract) {
+            next.push(contract.clone());
+        }
+    }
+    if next.len() == recorded.len() {
+        return Ok(found);
+    }
+    let bytes = serde_json::to_vec(&StoredAdoptedContracts {
+        format: ADOPTED_CONTRACTS_FORMAT,
+        contracts: next.clone(),
+    })
+    .context("serializing adopted adapter contracts")?;
+    if next.len() > MAX_ADOPTED_CONTRACTS || bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
+        bail!("{} is full", path.display());
+    }
+    let parent = path.parent().context("state path has no parent")?;
+    // The config directory's startup sweep removes this name if a killed
+    // host leaves it behind.
+    let temporary = parent.join(format!(".config-{}.tmp", Uuid::new_v4()));
+    let (mut file, _cleanup) = create_temporary(&temporary)?;
+    let write_result = (|| -> Result<()> {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    drop(file);
+    write_result?;
+    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+    if let Err(error) = sync_parent(parent) {
+        eprintln!(
+            "{NAMESPACE}: warning: contract state was saved but directory sync failed: {error:#}"
+        );
+    }
+    Ok(AdoptedContracts::Read {
+        revision: revision_for(&bytes),
+        contracts: next,
+    })
 }
 
 fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
@@ -2298,6 +2553,324 @@ mod tests {
             store.note_key_rule("https://elsewhere.example/items/8"),
             NoteKeyRule::Uncovered
         );
+    }
+
+    /// Host-state fixtures for contracts that leave config.toml by hand.
+    mod adopted_contracts {
+        use super::*;
+
+        const ITEM: &str = "[[artifacts]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n";
+        const DOC: &str = "[[artifacts]]\ntype = \"work.doc\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/docs/{id:int}\" }]\nid = \"doc:{host}/{id}\"\n";
+        const ITEM_7: &str = "https://work.example/items/7";
+        const DOC_8: &str = "https://work.example/docs/8";
+        const BOARD: &str = "https://work.example/boards/1";
+        const ELSEWHERE: &str = "https://elsewhere.example/items/8";
+
+        /// Write config.toml by hand, as a user editing it would.
+        fn write_by_hand(folder: &Path, adapters: &[&str]) -> PathBuf {
+            let root = folder.join("notes");
+            fs::create_dir_all(&root).unwrap();
+            let path = folder.join("config.toml");
+            fixtures::write(
+                &path,
+                &root,
+                "",
+                "",
+                &format!("[adapters]\nformat = 1\n\n{}", adapters.join("\n")),
+            );
+            path
+        }
+
+        /// A refresh under the config lock, as every note request makes.
+        fn adopted(path: &Path) -> ConfigStore {
+            let mut store = ConfigStore::for_test(path.to_path_buf());
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            store
+        }
+
+        fn state_path(folder: &Path) -> PathBuf {
+            adopted_contracts_path(folder)
+        }
+
+        fn entries(folder: &Path) -> Vec<serde_json::Value> {
+            let state: serde_json::Value =
+                serde_json::from_slice(&fs::read(state_path(folder)).unwrap()).unwrap();
+            state["contracts"].as_array().unwrap().clone()
+        }
+
+        #[test]
+        fn a_hand_removed_contract_keeps_naming_note_keys() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+
+            write_by_hand(folder.path(), &[ITEM]);
+            let store = loaded(&path);
+            assert!(store.adapter_match(DOC_8, None).is_err());
+            assert_eq!(
+                store.note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+            // The origin is still decided by contracts alone.
+            assert_eq!(store.note_key_rule(BOARD), NoteKeyRule::Unrecognized);
+            assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Uncovered);
+            // Never written into config.toml, and never capture authority.
+            assert!(
+                !fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("adapter_id_history")
+            );
+            assert_eq!(store.capture_origins(), vec!["https://work.example"]);
+            assert!(!store.adapter_matches(DOC_8, None).unwrap());
+        }
+
+        #[test]
+        fn only_a_refresh_under_the_config_lock_records_contracts() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            let mut store = loaded(&path);
+            store.refresh().unwrap();
+            assert!(!state_path(folder.path()).exists());
+            // A contract nobody adopted under the lock cannot have keyed a
+            // note, so its removal leaves nothing to keep.
+            write_by_hand(folder.path(), &[ITEM]);
+            let store = adopted(&path);
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
+            assert_eq!(entries(folder.path()).len(), 1);
+        }
+
+        #[test]
+        fn a_re_added_contract_is_current_again_and_recorded_once() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            adopted(&path);
+            write_by_hand(folder.path(), &[ITEM]);
+            adopted(&path);
+            write_by_hand(folder.path(), &[DOC, ITEM]);
+            let store = adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+            assert!(store.note_key_rules.documents.is_empty());
+            assert!(store.adapter_matches(DOC_8, None).unwrap());
+
+            write_by_hand(folder.path(), &[ITEM]);
+            let store = adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+            assert_eq!(
+                store.note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+        }
+
+        #[test]
+        fn a_settings_removal_is_kept_once_by_adapter_id_history() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            let mut store = adopted(&path);
+            let before = fs::read(state_path(folder.path())).unwrap();
+            let mut next = store.snapshot().clone();
+            next.adapters
+                .artifacts
+                .retain(|adapter| adapter["type"] != "work.doc");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(store.retired_adapter_contracts.len(), 1);
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), before);
+
+            for store in [store, adopted(&path)] {
+                assert_eq!(store.note_key_rules.documents.len(), 1);
+                assert_eq!(
+                    store.note_key_rule(DOC_8),
+                    NoteKeyRule::Artifact("doc:work.example/8".into())
+                );
+            }
+        }
+
+        #[test]
+        fn a_settings_save_records_the_contracts_it_writes() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(adapter(
+                "https://work.example",
+                "work.doc",
+                "/docs/{id:int}",
+                "doc:{host}/{id}",
+            ));
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(entries(folder.path()).len(), 2);
+
+            write_by_hand(folder.path(), &[ITEM]);
+            assert_eq!(
+                loaded(&path).note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+        }
+
+        #[test]
+        fn hosts_sharing_the_state_file_keep_each_others_contracts() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut first = adopted(&path);
+            write_by_hand(folder.path(), &[DOC]);
+            adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+
+            write_by_hand(folder.path(), &[]);
+            let lock = first.lock_current().unwrap();
+            first.refresh().unwrap();
+            drop(lock);
+            assert_eq!(
+                first.note_key_rule(ITEM_7),
+                NoteKeyRule::Artifact("work:work.example/7".into())
+            );
+            assert_eq!(
+                first.note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+        }
+
+        /// The state file can change while config.toml does not, when
+        /// another host records into it or it is damaged.
+        #[test]
+        fn a_changed_state_file_is_reread_without_a_config_change() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut store = adopted(&path);
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
+            fs::write(state_path(folder.path()), b"not json").unwrap();
+            store.refresh().unwrap();
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unavailable);
+        }
+
+        #[test]
+        fn unreadable_state_makes_unrecognized_note_identity_unavailable() {
+            let oversized = format!(
+                "{{\"format\":1,\"contracts\":[],\"pad\":\"{}\"}}",
+                "x".repeat(MAX_ADOPTED_CONTRACTS_BYTES)
+            );
+            for (damage, bytes) in [
+                ("garbage", Some(b"{\"format\":1,\"contr".to_vec())),
+                (
+                    "newer format",
+                    Some(b"{\"format\":2,\"contracts\":[]}".to_vec()),
+                ),
+                (
+                    "unknown key",
+                    Some(b"{\"format\":1,\"contracts\":[],\"x\":1}".to_vec()),
+                ),
+                ("oversized", Some(oversized.into_bytes())),
+                ("directory", None),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+                adopted(&path);
+                let state = state_path(folder.path());
+                fs::remove_file(&state).unwrap();
+                match &bytes {
+                    Some(bytes) => fs::write(&state, bytes).unwrap(),
+                    None => fs::create_dir(&state).unwrap(),
+                }
+                write_by_hand(folder.path(), &[ITEM]);
+
+                let mut store = adopted(&path);
+                // The contract that left config.toml cannot be read back,
+                // so no unrecognized URL anywhere may choose a key.
+                for url in [DOC_8, BOARD, ELSEWHERE] {
+                    assert_eq!(
+                        store.note_key_rule(url),
+                        NoteKeyRule::Unavailable,
+                        "{damage}: {url}"
+                    );
+                }
+                // The current policy still decides the pages it recognizes.
+                assert!(store.adapter_match(ITEM_7, None).is_ok(), "{damage}");
+                // The damaged file is evidence: never overwrite it.
+                match &bytes {
+                    Some(bytes) => assert_eq!(&fs::read(&state).unwrap(), bytes, "{damage}"),
+                    None => assert!(state.is_dir(), "{damage}"),
+                }
+
+                // Removing it forgets what it held, like a config repair.
+                match &bytes {
+                    Some(_) => fs::remove_file(&state).unwrap(),
+                    None => fs::remove_dir(&state).unwrap(),
+                }
+                let lock = store.lock_current().unwrap();
+                store.refresh().unwrap();
+                drop(lock);
+                assert_eq!(
+                    store.note_key_rule(DOC_8),
+                    NoteKeyRule::Unrecognized,
+                    "{damage}"
+                );
+                assert_eq!(
+                    store.note_key_rule(ELSEWHERE),
+                    NoteKeyRule::Uncovered,
+                    "{damage}"
+                );
+                assert_eq!(entries(folder.path()).len(), 1, "{damage}");
+            }
+        }
+
+        #[test]
+        fn a_damaged_entry_makes_only_its_origin_unavailable() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[]);
+            let damaged = json!({
+                "type": "work.other",
+                "origin": "https://work.example",
+                "match": [{"path": "/items/{n:nope}"}],
+                "id": "other:{host}/{n}",
+            });
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": [damaged]})).unwrap(),
+            )
+            .unwrap();
+            let store = loaded(&path);
+            assert_eq!(store.note_key_rule(ITEM_7), NoteKeyRule::Unavailable);
+            assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Uncovered);
+
+            // An entry that names no origin cannot be attributed to one.
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": [{"type": "work.other"}]}))
+                    .unwrap(),
+            )
+            .unwrap();
+            let store = loaded(&path);
+            assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Unavailable);
+        }
+
+        #[test]
+        fn the_state_file_stops_growing_at_its_bound() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let full: Vec<_> = (0..MAX_ADOPTED_CONTRACTS)
+                .map(|n| {
+                    adapter(
+                        &format!("https://site{n}.example"),
+                        "work.item",
+                        "/items/{id:int}",
+                        "work:{host}/{id}",
+                    )
+                })
+                .collect();
+            let bytes = serde_json::to_vec(&json!({"format": 1, "contracts": full})).unwrap();
+            fs::write(state_path(folder.path()), &bytes).unwrap();
+            let store = adopted(&path);
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), bytes);
+            assert_eq!(
+                store.note_key_rule("https://site3.example/items/4"),
+                NoteKeyRule::Artifact("work:site3.example/4".into())
+            );
+            assert!(store.adapter_matches(ITEM_7, None).unwrap());
+        }
     }
 
     fn adapter(origin: &str, artifact_type: &str, path: &str, id: &str) -> serde_json::Value {

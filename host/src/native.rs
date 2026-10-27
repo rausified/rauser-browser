@@ -1110,10 +1110,11 @@ fn note_context(
     // artifact itself. Recorded URLs are stripped canonical forms: the
     // page's own canonical URL, an indexed modal route, or a note's creation
     // URL can equal an unrelated page's URL once `strip_params` removed the
-    // query value that identified the artifact. A URL on an origin config.toml no longer covers names no artifact, for
-    // the same reason it gets no artifact key above; that holds even for the
-    // artifact's own indexed routes and its note's creation URL, which are
-    // stripped forms too. A current match is final, as it is for the page's
+    // query value that identified the artifact. A URL on an origin no
+    // recorded contract covers names no artifact, for the same reason it
+    // gets no artifact key above; that holds even for the artifact's own
+    // indexed routes and its note's creation URL, which are stripped forms
+    // too. A current match is final, as it is for the page's
     // own key: a retired shape cannot also claim a URL the current policy
     // names differently.
     let names_artifact = |candidate: &str| {
@@ -2556,10 +2557,11 @@ id = "work:{host}/{id}"
         };
 
         // Rewrite config.toml with no adapter and no `[[adapter_id_history]]`,
-        // as a hand edit or repair would. Recorded history alone is a stripped
-        // canonical URL and cannot name the artifact, so the page gets its URL
-        // note, and the shared note stays untouched on disk.
-        write_adapter_config(&path, &root, "");
+        // and forget the host's adopted contracts, as a repair on a fresh
+        // install would. Recorded history alone is a stripped canonical URL
+        // and cannot name the artifact, so the page gets its URL note, and
+        // the shared note stays untouched on disk.
+        forget_every_contract(&mut config, &path, &root, url, &saved);
         assert_shared_note_is_kept_but_not_guessed(&mut config, &root, url, &saved);
     }
 
@@ -2624,8 +2626,24 @@ id = "work:{host}/{id}"
         };
 
         // The note's stored creation URL is a stripped form too.
-        write_adapter_config(&path, &root, "");
+        forget_every_contract(&mut config, &path, &root, url, &saved);
         assert_shared_note_is_kept_but_not_guessed(&mut config, &root, url, &saved);
+    }
+
+    /// Delete every adapter from config.toml by hand. The host's adopted
+    /// contracts still name the shared note; then remove that state too.
+    fn forget_every_contract(
+        config: &mut ConfigStore,
+        path: &std::path::Path,
+        root: &std::path::Path,
+        url: &str,
+        shared: &NoteSaved,
+    ) {
+        write_adapter_config(path, root, "");
+        let kept = note_load(config, url);
+        assert_eq!(kept.key, shared.key);
+        assert_eq!(kept.body, "keep this text");
+        std::fs::remove_file(config::adopted_contracts_path(path.parent().unwrap())).unwrap();
     }
 
     #[test]
@@ -3007,8 +3025,9 @@ id = "jira:{host}/{key}"
             );
         }
 
-        /// Removes the Jira adapter and then `[[adapter_id_history]]`, as a
-        /// config repair or an install older than that history would, so no
+        /// Removes the Jira adapter, then `[[adapter_id_history]]` and the
+        /// host's adopted-contract state, as a config repair on a fresh
+        /// install or an install older than both records would, so no
         /// recorded contract covers the origin any more.
         fn forget_jira_contracts(folder: &tempfile::TempDir, config: &mut ConfigStore) {
             let mut next = config.snapshot().clone();
@@ -3020,6 +3039,9 @@ id = "jira:{host}/{key}"
                 toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
             assert!(table.remove("adapter_id_history").is_some());
             std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            // The host's own record of adopted contracts goes too, as on a
+            // fresh install or one older than that record.
+            std::fs::remove_file(config::adopted_contracts_path(folder.path())).unwrap();
             *config = loaded(&path);
             assert_eq!(
                 config.note_key_rule(ABC_123),
@@ -3112,7 +3134,10 @@ id = "jira:{host}/{key}"
                 assert_ne!(board.key, issue.key, "activity={activity}");
                 assert_ne!(board.body, "ABC-123 text", "activity={activity}");
                 let saved = save(&mut config, BOARD, "Notes about the whole board");
-                assert_ne!(saved.relative_path, issue.relative_path, "activity={activity}");
+                assert_ne!(
+                    saved.relative_path, issue.relative_path,
+                    "activity={activity}"
+                );
                 assert_eq!(
                     std::fs::read(&issue_path).unwrap(),
                     issue_bytes,
@@ -3138,7 +3163,6 @@ id = "jira.board:{host}/{id}"
         /// Removing only jira.board by hand must keep the board's note
         /// reachable, and the next autosave must update it, not split it.
         #[test]
-        #[ignore = "brwr-hrc: hand-removed contract recovery, follow-up (B)"]
         fn hand_removing_only_the_board_adapter_keeps_its_note_beside_the_modal_rule() {
             let folder = tempfile::tempdir().unwrap();
             let root = folder.path().join("notes");
@@ -3159,18 +3183,7 @@ id = "jira.board:{host}/{id}"
             let issue_path = root.join(&issue.relative_path);
             let issue_bytes = std::fs::read(&issue_path).unwrap();
 
-            let mut table: toml::Table =
-                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let artifacts = table
-                .get_mut("artifacts")
-                .and_then(toml::Value::as_array_mut)
-                .expect("top-level [[artifacts]]");
-            let before = artifacts.len();
-            artifacts.retain(|rule| {
-                rule.get("type").and_then(toml::Value::as_str) != Some("jira.board")
-            });
-            assert_eq!(artifacts.len(), before - 1);
-            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            hand_remove_board_adapter(&path);
             config = loaded(&path);
 
             let loaded_board = note_load(&mut config, BOARD);
@@ -3193,6 +3206,76 @@ id = "jira.board:{host}/{id}"
             );
             assert_eq!(std::fs::read(&issue_path).unwrap(), issue_bytes);
             assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 text");
+        }
+
+        fn board_and_issue_store(folder: &tempfile::TempDir) -> (std::path::PathBuf, ConfigStore) {
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            config::fixtures::write(
+                &path,
+                &root,
+                "artifacts_dir = \"artifacts\"",
+                "capture_enabled = true\nstrip_params = [\"selectedIssue\"]",
+                &format!("[adapters]\nformat = 1\n\n{JIRA}\n{JIRA_BOARD}"),
+            );
+            (path.clone(), loaded(&path))
+        }
+
+        /// Delete the jira.board adapter from config.toml in an editor.
+        fn hand_remove_board_adapter(path: &std::path::Path) {
+            let mut table: toml::Table =
+                toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let artifacts = table
+                .get_mut("artifacts")
+                .and_then(toml::Value::as_array_mut)
+                .expect("top-level [[artifacts]]");
+            let before = artifacts.len();
+            artifacts.retain(|rule| {
+                rule.get("type").and_then(toml::Value::as_str) != Some("jira.board")
+            });
+            assert_eq!(artifacts.len(), before - 1);
+            std::fs::write(path, toml::to_string(&table).unwrap()).unwrap();
+        }
+
+        /// If the host's record of the removed board contract cannot be
+        /// read, the board's key cannot be established: loads and saves
+        /// refuse rather than start a URL note beside the artifact note.
+        #[test]
+        fn unreadable_contract_state_refuses_the_hand_removed_boards_note() {
+            let folder = tempfile::tempdir().unwrap();
+            let (path, mut config) = board_and_issue_store(&folder);
+            let board = save(&mut config, BOARD, "board artifact note");
+            let root = folder.path().join("notes");
+            let board_bytes = std::fs::read(root.join(&board.relative_path)).unwrap();
+            hand_remove_board_adapter(&path);
+            std::fs::write(config::adopted_contracts_path(folder.path()), b"{").unwrap();
+            config = loaded(&path);
+
+            let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal);
+            let loaded_board = load_note(
+                brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "load".into(),
+                    url: BOARD.into(),
+                },
+                &mut config,
+            );
+            assert!(refused(&loaded_board), "{loaded_board:?}");
+            let url_key = crate::vault::url_record_key(BOARD).unwrap();
+            for key in [url_key, board.key.clone()] {
+                let saved = note_save(&mut config, BOARD, "split", "missing", key);
+                assert!(refused(&saved), "{saved:?}");
+            }
+            assert_eq!(
+                std::fs::read(root.join(&board.relative_path)).unwrap(),
+                board_bytes
+            );
+            // The live issue adapter still decides its own pages.
+            assert_eq!(
+                note_load(&mut config, BROWSE_123).key.kind,
+                RecordKeyKind::Artifact
+            );
         }
     }
 
@@ -3364,13 +3447,19 @@ id = "work:{host}/{id}"
                 );
             }
 
-            /// A config repair or hand edit can discard `[[adapter_id_history]]`;
-            /// the origin is then uncovered and its pages use URL keys.
+            /// A config repair on a fresh install, or one older than both
+            /// records, has neither `[[adapter_id_history]]` nor the host's
+            /// adopted contracts; the origin is then uncovered and its pages
+            /// use URL keys.
             fn forget_policy_history(&self) {
                 let mut table: toml::Table =
                     toml::from_str(&std::fs::read_to_string(&self.path).unwrap()).unwrap();
                 assert!(table.remove("adapter_id_history").is_some());
                 std::fs::write(&self.path, toml::to_string(&table).unwrap()).unwrap();
+                match std::fs::remove_file(config::adopted_contracts_path(self.folder.path())) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => panic!("{error}"),
+                    _ => {}
+                }
                 let config = loaded(&self.path);
                 assert!(config.config_issue().is_none());
                 assert_eq!(

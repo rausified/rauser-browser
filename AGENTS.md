@@ -96,10 +96,12 @@ notes), and settings can regenerate artifact files while reporting every
 unowned-path conflict it leaves untouched.
 
 After adapter/site removal, recognition narrowing, or while the adapter
-document is inert, note keys come from the note-only contracts config.toml
-still records (`[[adapter_id_history]]` and the inert document; never
-capture), so every route a contract matched keeps one note
-(`ConfigStore::note_key_rule`). Those contracts alone decide an origin they
+document is inert, note keys come from the note-only contracts still recorded
+(`[[adapter_id_history]]`, the inert document, and contracts removed from
+config.toml by hand, which the host keeps in its own `adopted-contracts.json`
+state file; never capture), so every route a contract matched keeps one note
+(`ConfigStore::note_key_rule`). An unusable state file makes identity on
+every page the current policy does not recognize unavailable. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL

@@ -69,7 +69,12 @@ separate and viewable. If config.toml no longer records any rule for a site
 (a repair replaced it, or the site was removed before Brauser kept those
 rules), the host cannot tell that board from its modals, so every page there
 uses its own URL note; the shared artifact note is left untouched in the
-notes folder. Notes alone do not turn capture back on.
+notes folder. Deleting an adapter from config.toml by hand keeps its notes
+too: the host records every adapter it has used in `adopted-contracts.json`
+beside config.toml and reads removed ones from there. If that file is damaged,
+notes on pages no current adapter recognizes refuse to load or save until it
+is fixed or removed; removing it forgets those adapters. Notes alone do not
+turn capture back on.
 
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. macOS is the only supported platform (DESIGN.md §13); the public package remains a later release milestone.
 

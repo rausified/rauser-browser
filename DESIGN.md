@@ -519,10 +519,10 @@ Because `artifact_id` is the record key below, an `id` template is durable. The 
 As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
 
 **Note keys outlive capture (2026-10-27).** When the capture policy does not
-recognize a URL, its note key comes from the note-only contracts config.toml
-still records: the superseded recognition contracts in `[[adapter_id_history]]`
-and, while an adapter document is inert (an `adapter_issue`), that current
-document. They name record keys only and never authorize capture. Removing an
+recognize a URL, its note key comes from the note-only contracts still
+recorded: the superseded recognition contracts in `[[adapter_id_history]]`,
+contracts removed from config.toml by hand (below), and, while an adapter
+document is inert (an `adapter_issue`), that current document. They name record keys only and never authorize capture. Removing an
 adapter or its site, narrowing its rules, or an inert document therefore keeps
 one note per artifact on every route its contract matched, including routes
 with no recorded activity and documents first noted afterwards. Exactly one
@@ -542,9 +542,10 @@ contracts. A URL on an origin no contract covers never qualifies, not even
 the artifact's own indexed routes or its note's creation URL.
 
 **Policy removal acceptance (2026-10-27, revised the same day).** When
-config.toml no longer records any contract for an origin (for example, a
-repair replaced the file, or an adapter was removed before
-`[[adapter_id_history]]` existed), the host uses the URL key on that origin
+neither config.toml nor the host's adopted-contract state (below) records any
+contract for an origin (for example, a repair replaced config.toml on a fresh
+install, or an adapter was removed before either record existed), the host
+uses the URL key on that origin
 and does not recover an artifact key from recorded evidence. Every recorded
 URL (activity, mode URLs, explicit `why` context, an artifact note's creation
 URL) is a stripped canonical form, so without a contract the host cannot tell
@@ -558,24 +559,40 @@ block notes on it. The artifact note itself is never changed or deleted; it
 stays reachable from any route a current or recorded contract still covers
 and in the notes folder, and a client holding its key gets `key_changed`
 rather than an autosave. Removing an adapter or site through settings records
-its contract, so this applies only once that record is gone. Neither cache
+its contract in config.toml, and adopting one records it in the host's state,
+so this applies only once both records are gone. Neither cache
 deletion nor reindex changes these decisions. Optional older-note discovery
 on a recognized page remains best effort, so a broken optional note does not
 hide the primary note.
 
-**Known gap: hand-removed contracts (2026-10-27, `brwr-hrc`).** Only a
-removal through settings records `[[adapter_id_history]]`. If config.toml is
-edited by hand to delete one adapter while another adapter still covers the
-origin (for example, deleting `jira.board` beside a `jira.issue` rule whose
-modal route reads the stripped `selectedIssue`), the remaining contract
-decides the origin alone. It does not match the board, so the board gets the
-URL key: its artifact note stays on disk and is never overwritten, but the
-board page no longer reaches it, and the next autosave starts a separate URL
-note. The planned fix has the host record every contract it has adopted and,
-when one vanishes from config.toml, keep it in a host-owned retired-contracts
-state file that note identity reads like `[[adapter_id_history]]`. The test
-`hand_removing_only_the_board_adapter_keeps_its_note_beside_the_modal_rule`
-pins the expected behavior and stays ignored until then.
+**Hand-removed contracts (2026-10-27, `brwr-hrc`).** Only a removal
+through settings records `[[adapter_id_history]]`, so the host also keeps its
+own record of every adapter contract it has adopted, in the same recognition
+form, in a host-owned state file (`adopted-contracts.json` beside config.toml
+for now; the planned home folder moves it to its `state/` folder). Each
+refresh under the config lock, which every note request makes before deriving
+a key, adds the current revision's contracts the file lacks, so a contract is
+recorded before it can key a note. A recorded contract config.toml no longer
+holds, as a current adapter or a history entry, was removed or reshaped by
+hand; note identity reads it like `[[adapter_id_history]]` (record keys only,
+never capture, and no part in ID-change checks). Deleting `jira.board` in an
+editor beside a `jira.issue` rule whose modal route reads the stripped
+`selectedIssue` therefore keeps the board on its artifact note, and its next
+autosave updates that note. Contracts are only added: re-adding one makes it
+current again, and one a later settings save moves to history is read from
+there, never twice. Several hosts share the file; each rereads it under the
+lock, adds what it lacks, and replaces it atomically (temporary file, fsync,
+rename), so none drops another's entries. It holds at most 1,024 contracts
+and 1 MiB; a write past either bound, or any other write failure, is skipped
+with a warning and retried on later refreshes, and until it succeeds a hand
+removal of an unrecorded contract leaves its pages on URL keys as before. A
+file the host cannot use (unreadable, not a regular file, over a bound,
+malformed, or from a newer host) is never rewritten, and every URL the current
+policy does not recognize has unavailable identity: loads and saves refuse,
+because any origin's deciding contract may be in it. A damaged entry with a
+readable origin makes only that origin unavailable, as a damaged history entry
+does; one with no readable origin counts as an unusable file. Removing the
+file forgets its contracts, like a config repair.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
