@@ -514,7 +514,10 @@ As built in M1.5a, note loads derive the key in the host, consult indexed artifa
 or narrowing its recognition rules, preserves the existing shared note on
 its recorded URLs without authorizing further capture. Historical URL
 evidence includes activity, its mode URLs, and explicit `why` context even
-before any measured activity. Both lookup directions use that same evidence;
+before any measured activity. Older-note discovery also includes the shared
+note's verified creation URL, so a separate URL note there remains viewable
+from another recorded route even without activity on the creation route.
+Both lookup directions use that same evidence;
 recovered artifact notes retain the older URL-note list and its read-only
 viewing action. A separate URL note remains separate, and an occupied artifact
 note still blocks explicit migration. With several historical artifact IDs

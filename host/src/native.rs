@@ -1258,6 +1258,9 @@ fn note_context(
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
+                if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key) {
+                    older_urls.push(candidate);
+                }
                 let Some(candidate) = note::url_keyed_note_url(&contents) else {
                     continue;
                 };
@@ -3099,6 +3102,72 @@ id = "work:{host}/{id}"
                         .is_none(),
                     "note recovery cannot invent measured activity"
                 );
+            }
+        }
+
+        #[test]
+        fn recovered_routes_keep_the_older_note_on_the_shared_notes_creation_url() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                note::save_note(
+                    &vault,
+                    VIEW,
+                    "Before adapters",
+                    "Separate URL text",
+                    "missing",
+                )
+                .unwrap();
+                let first = session.load(VIEW);
+                assert!(matches!(
+                    session.save(VIEW, &first, "Shared artifact text"),
+                    Response::NoteSaved(_)
+                ));
+                let shared = session.load(VIEW);
+                assert_eq!(shared.older_notes.len(), 1);
+                assert!(matches!(
+                    session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "remember-context-route".into(),
+                        event: brauser_protocol::WhyEvent {
+                            event_id: uuid::Uuid::new_v4().to_string(),
+                            artifact_id: shared.key.value.clone(),
+                            url: CONTEXT.into(),
+                            occurred_at: "2026-10-16T13:00:00Z".into(),
+                            incognito: false,
+                            text: "Preparing the review".into(),
+                        },
+                    })),
+                    Response::WhyRecorded(WhyRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                ));
+                session.policy(removal);
+                for rebuild in [false, true] {
+                    if rebuild {
+                        std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                        session.index().reindex().unwrap();
+                    }
+                    let recovered = session.load(CONTEXT);
+                    assert_eq!(recovered.key, shared.key);
+                    assert_eq!(recovered.revision, shared.revision);
+                    assert_eq!(recovered.older_notes, shared.older_notes, "{removal}");
+                    assert!(matches!(
+                        session.call(Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "view-creation-url".into(),
+                            url: CONTEXT.into(),
+                            source_url: VIEW.into(),
+                        })),
+                        Response::NoteLoaded(note) if note.body == "Separate URL text"
+                    ));
+                    assert_eq!(
+                        note::load_note(&vault, VIEW).unwrap().body,
+                        "Separate URL text"
+                    );
+                }
             }
         }
 

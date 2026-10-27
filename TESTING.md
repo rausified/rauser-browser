@@ -115,6 +115,19 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced an older URL note disappearing
+  from a recovered context-only route when the shared note's creation route
+  had no delivered activity. Older-note discovery now uses the shared note's
+  ownership-checked creation URL as well as log evidence. The failing-first
+  native regression covers adapter removal, rule narrowing, site removal,
+  cache deletion/reindex, read-only viewing and unchanged note revisions.
+  No browser or native dialog is involved. Full workspace and scripted-dialogs
+  suites pass, as do extension checks. The Node differential runner stalled in
+  this sandbox; the same 5,000 generated requests, with its U+2028/U+2029
+  escaping and generator-health checks, passed through separate bounded Python
+  subprocess calls to the Rust and TypeScript engines (2,355 matches, 426
+  invalid documents). macOS smoke cannot run on Linux, and offline fuzz
+  compilation lacks the cached `libfuzzer-sys` dependency.
 - 2026-10-27: The note-removal matrix uses framed native requests with a fresh
   host store per request for save/load, adapter and site removal, older-note
   viewing, migration refusal and capture suppression. Rule narrowing replaces
