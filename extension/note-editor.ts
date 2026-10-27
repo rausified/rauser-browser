@@ -8,6 +8,7 @@
 // latest active tab's note is loaded into the editor.
 
 import type { OlderNote, RecordKey } from "../protocol/ts/generated.js";
+import type { NoteRecovery, RecoveryText } from "./note-recovery.js";
 
 /** Matches MAX_TITLE_BYTES in host/src/note.rs, which clamps longer titles. */
 export const MAX_NOTE_TITLE_BYTES = 2_048;
@@ -43,6 +44,7 @@ export interface NoteView {
   setEditable(editable: boolean): void;
   setStatus(message: string, warning?: boolean): void;
   showUnsaved(entries: readonly UnsavedText[]): void;
+  setRecoveryWarning?(message: string): void;
   showOlderNotes?(entries: readonly OlderNote[]): void;
 }
 
@@ -70,13 +72,22 @@ export class NoteEditor {
   private loadFailed = false;
   private dirty = false;
   private saveError = "";
+  private draft: RecoveryText | null = null;
 
   constructor(
     private readonly view: NoteView,
     private readonly host: NoteHost,
     private readonly describe: (error: unknown) => string,
     private readonly debounceMs = 1_000,
-  ) {}
+    private readonly recovery?: NoteRecovery,
+  ) {
+    try {
+      this.unsaved.push(...(recovery?.list() ?? []));
+      this.view.showUnsaved(this.unsaved);
+    } catch (error) {
+      this.recoveryFailed(error);
+    }
+  }
 
   /** Resolves once all load and save work queued so far has finished. */
   idle(): Promise<void> {
@@ -87,6 +98,7 @@ export class NoteEditor {
   edited(): void {
     if (!this.loaded) return;
     this.dirty = true;
+    this.rememberDraft(this.view.readBody());
     this.view.setStatus("");
     this.clearTimer();
     this.saveTimer = setTimeout(() => {
@@ -133,6 +145,38 @@ export class NoteEditor {
     return this.showPage(page);
   }
 
+  /** Explicit discard affects only the displayed copies, never live edits in
+   * this panel or a newer snapshot written by another panel. */
+  discardUnsaved(): void {
+    try {
+      for (const entry of this.unsaved) {
+        if ("id" in entry) this.recovery?.remove(entry as RecoveryText);
+      }
+      this.unsaved.length = 0;
+      this.view.showUnsaved(this.unsaved);
+    } catch (error) {
+      this.recoveryFailed(error);
+    }
+  }
+
+  private recoveryFailed(error: unknown): void {
+    this.view.setRecoveryWarning?.(`Could not keep or clear a local recovery copy: ${this.describe(error)}. Keep this panel open until your note is saved.`);
+  }
+
+  private rememberDraft(text: string, reason = "This edit has no confirmed save. Check the current note before copying it back."): void {
+    if (!this.recovery || this.url === null) return;
+    try {
+      const previous = this.draft;
+      this.draft = this.recovery.write({ url: this.url, text, reason });
+      // Publish the new copy before retiring the previous one. Distinct keys
+      // avoid cross-panel read/remove races; a failed write leaves old bytes.
+      if (previous) this.recovery.remove(previous);
+      this.view.setRecoveryWarning?.("");
+    } catch (error) {
+      this.recoveryFailed(error);
+    }
+  }
+
   private enqueue(work: () => Promise<void>): Promise<void> {
     // Start at once when nothing is running, so a flush from `pagehide` sends
     // its request before the panel disconnects from the host.
@@ -153,8 +197,10 @@ export class NoteEditor {
   }
 
   private keepUnsaved(url: string, text: string, reason: string): void {
-    if (text === "") return;
-    this.unsaved.push({ url, text, reason });
+    this.rememberDraft(text, reason);
+    this.unsaved.push(this.draft?.text === text && this.draft.url === url && this.draft.reason === reason
+      ? this.draft : { url, text, reason });
+    this.draft = null; // Later edits must not replace this copy-out.
     this.view.showUnsaved(this.unsaved);
   }
 
@@ -200,6 +246,10 @@ export class NoteEditor {
     if (!this.dirty || !this.loaded || this.url === null || this.revision === null || this.key === null) return;
     const url = this.url;
     const body = this.view.readBody();
+    // Retry a failed local write before dispatch; asynchronous teardown must
+    // never be the first attempt to keep the user's text.
+    this.rememberDraft(body);
+    const draft = this.draft;
     this.dirty = false;
     this.view.setStatus("Saving…");
     let response: Awaited<ReturnType<NoteHost["save"]>>;
@@ -216,6 +266,14 @@ export class NoteEditor {
     this.revision = response.revision;
     this.key = response.key ?? this.key;
     if (response.type === "note_saved") {
+      if (draft) {
+        try {
+          this.recovery?.remove(draft);
+          if (this.draft === draft) this.draft = null;
+        } catch (error) {
+          this.recoveryFailed(error);
+        }
+      }
       // Edits typed during the save are still pending; their timer saves them.
       if (!this.dirty) this.view.setStatus("Saved");
       return;

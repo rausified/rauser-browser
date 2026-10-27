@@ -299,13 +299,6 @@ Their line numbers predate step 6.6, so re-check them.
   P3: extract a small framework-free primitive only when Capture Site or
   streaming demonstrates repeated rendering needs; do not rewrite the panel
   solely to create an abstraction.
-- [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
-  Extend the existing built-page smoke check so it opens the artifact card,
-  saves context, filters Recent, changes and copies a worklog, migrates an
-  older note, and refreshes after background delivery. Cover close/reopen
-  during debounce and an in-flight save, retaining any lost edits in durable
-  recovery. This P2 stabilization gate precedes M2; use only isolated local
-  fixtures and preserve setup smoke and dialog counts.
 - [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
   drop that races the last in-flight batch stays counted and visible, but its
   marker currently waits for another authorized event to provide a safe log
@@ -368,8 +361,26 @@ Their line numbers predate step 6.6, so re-check them.
   can run on Windows without Known Folders reading real per-user settings.
   Direct child lifecycle coverage already runs on both platforms; preserve
   the existing macOS smoke configuration and release-build exclusion.
+- [ ] `brwr-ppn` **Curate a worklog before copying it.** Let a person select
+  the artifact-day rows they want in an update, then preview and copy that
+  precise plain-text worklog. Keep measured totals and source logs intact,
+  retain stable selections across refreshes, and omit unselected work from
+  the clipboard. This is P3 after the ordered plan, discovered from `brwr-9xg`.
 
 ## In Progress / This Iteration
+
+- [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
+  Implemented (2026-10-27): built-panel tests and macOS headless steps cover
+  card/context, combined filters, all worklog periods and isolated Copy,
+  real URL-note viewing/migration, delivery with Recent open, and close during
+  debounce or a held real save acknowledgement. Lost edits and stale history
+  were reproduced and fixed as `brwr-3nq` and `brwr-fqk`. All local checks pass:
+  1,300 extension tests (+16) across nine files, 336 workspace Rust tests and
+  311 scripted-build tests. **Still needs an actual macOS headless run** before
+  closure; this VM is Linux and the runner refuses it. No further Linux-only
+  implementation is needed for this gate unless that browser run finds a bug.
+  Setup still expects 14 dialogs; clipboard substitution is confined to the
+  disposable panel. This remains a prerequisite for M2 host invocation.
 
 - [ ] `brwr-bzx` **Windows CI.** Configured the shared job for `macos-15`
   and `windows-latest`, preserving macOS-only Chrome smoke/fuzz checks.
@@ -381,6 +392,10 @@ Their line numbers predate step 6.6, so re-check them.
   The HOME-only host-kill fixture stays Unix-gated pending `brwr-3rt`.
 
 ## Shipped
+
+- **Category:** Reliability. **Keep unsaved notes recoverable after panel close (2026-10-27).** `brwr-3nq` publishes a local browser recovery snapshot on each edit before native autosave; immutable snapshot keys keep earlier acknowledgements and other panels from erasing newer typing. Reopening displays the current note and separate copy-out text, including conflicts and attempted empty deletions, with explicit Copy/Discard and visible storage failures. Recovery never silently writes against a changed revision or artifact key. **Metrics:** 1,300 extension tests (+16 across this cycle), 9 new recovery regressions and 7 compiled-panel interactions; 336 workspace Rust and 311 scripted-build tests; required gate green; macOS lifecycle acceptance remains `brwr-9xg`, 14 dialogs unchanged.
+
+- **Category:** User Experience. **Refresh artifact history while the panel stays open (2026-10-27).** `brwr-fqk` refreshes the current artifact and visible Recent/worklog after worker sync and on the existing 30-second poll. A failing-first compiled-panel regression reproduced stale measures and worklog data; the fix preserves selected filters/period and unfinished context, with a separate explicit-sync regression. The extended browser runner is implemented and awaits macOS validation under `brwr-9xg`. **Metrics:** All 1,300 extension tests across 9 files and 336 workspace Rust tests pass; 311 scripted-build tests and both Clippy configurations green; smoke runner syntax checked, macOS execution unavailable on Linux.
 
 - **Category:** New Capability. **Keep native messaging responsive during setup (2026-10-27).** `brwr-jfe` adds a dedicated reader, one ordered config/consent worker and a serialized writer, so health, settings and readiness queries respond while a dialog or harness probe is waiting. Child waits cancel on EOF, terminal framing failure, queue overload or broken output; Unix harness groups are killed and private run directories removed. The existing v5 messages, revision checks and single-use grants stay intact. **Metrics:** 336 workspace Rust tests (+1), 311 scripted-build tests (+4), 8 extension test files and both Clippy configurations green; 3 new executable regressions cover six disconnect/overload cases; macOS smoke unavailable on Linux, expected dialog count 14.
 
@@ -417,9 +432,20 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Notes / Ideas for Later
 
-- `brwr-jfe` is complete; `brwr-9xg` is the next ready P2 stabilization
-  item. Continue its built-panel/close-and-reopen acceptance before further
-  M2 features. Streaming (`brwr-0cj`) must add its own correlated cancel
+- `brwr-9xg` now needs macOS evidence, not another implementation pass on
+  Linux. Run `npm run smoke:macos:headless` against the new steps, retain the
+  14-dialog assertion and close the bead only after a real pass. The compiled
+  panel checks establish module wiring, not browser teardown/clipboard/visual
+  acceptance. The two discovered fixes (`brwr-3nq`, `brwr-fqk`) are complete.
+- Worklog curation (`brwr-ppn`) is a useful visible follow-up: a person often
+  wants a concise update rather than every captured artifact. Keep it behind
+  the ordered plan; do not replace local measured history with an AI summary.
+- Synchronous recovery uses a fresh immutable key per snapshot, publishing
+  before retiring old bytes. Reusing a key with a read-then-remove version
+  check would permit another panel to write between those two operations.
+  Unconfirmed copies intentionally remain until a person discards them; they
+  are recovery text, never an authoritative note or an automatic replay queue.
+- `brwr-jfe` is complete. Streaming (`brwr-0cj`) must add its own correlated cancel
   request and route it around long work; the current bypass covers only
   health/settings/readiness, and connection cancellation is bound to the
   ordered worker thread. Do not mistake this prerequisite for streaming.

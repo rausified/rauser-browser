@@ -107,6 +107,15 @@ platform. Windows was reinstated in scope
 (DESIGN.md §13–14); its CI is configured, but the first passing Windows run
 and interactive Chrome acceptance are still pending.
 
+Panel note edits now keep synchronous recovery snapshots in extension-local
+browser storage before autosave. Confirmed saves retire only their own exact
+snapshot; unacknowledged edits and conflict copy-out survive close/reopen for
+explicit Copy or Discard, never automatic replay. Storage failures warn visibly.
+Artifact measures and visible Recent/worklogs refresh after sync and on the
+30-second poll without replacing unfinished context. Compiled-panel interaction
+tests cover these paths; the extended macOS headless smoke steps still need
+their first real run (`brwr-9xg`, 14 setup dialogs unchanged).
+
 DESIGN.md's principle 9 (standalone product) governs this repo: no file, build
 step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or Astrolabe
 exist, even though development happens inside the ENDURANCE vault. No AMOS

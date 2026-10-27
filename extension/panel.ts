@@ -9,6 +9,7 @@ import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { recordNoteOrigin } from "./grants.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
+import { NoteRecovery } from "./note-recovery.js";
 import type {
   ArtifactListItem,
   ArtifactView,
@@ -42,6 +43,8 @@ const noteConflict = element<HTMLDivElement>("note-conflict");
 const noteConflictMessage = noteConflict.querySelector("p")!;
 const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
 const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
+const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
+const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
 const artifactCard = element<HTMLElement>("artifact-card");
 const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
@@ -435,6 +438,7 @@ async function replayVisits(): Promise<void> {
   } finally {
     replaying = false;
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
+    await refreshHistory();
     updateControls();
   }
 }
@@ -446,6 +450,7 @@ async function panelTick(): Promise<void> {
   try {
     const state = await session.refreshStatus();
     if (state.revoked_origins.length) await session.reconcileRevocations();
+    await refreshHistory();
   } catch (error) {
     show(`Panel refresh failed: ${describe(error)}`, true);
   } finally {
@@ -526,6 +531,10 @@ const notes = new NoteEditor({
   setEditable: (editable) => { noteBody.disabled = !editable; },
   setStatus: showNoteStatus,
   showUnsaved: showUnsavedText,
+  setRecoveryWarning: (message) => {
+    noteRecoveryWarning.textContent = message;
+    noteRecoveryWarning.hidden = !message;
+  },
   showOlderNotes: renderOlderNotes,
 }, {
   load: (url) => session.host.call({
@@ -540,7 +549,7 @@ const notes = new NoteEditor({
     request_id: newRequestId(),
     ...request,
   }, ["note_saved", "note_conflict"]),
-}, describe, NOTE_SAVE_DEBOUNCE_MS);
+}, describe, NOTE_SAVE_DEBOUNCE_MS, new NoteRecovery(() => window.localStorage));
 
 async function refreshGrantButton(origin: string): Promise<void> {
   try {
@@ -710,6 +719,13 @@ function selectView(view: "page" | "recent"): void {
   }
 }
 
+/** History changes when the worker delivers with this panel already open.
+ * Keep filters and unfinished context while updating only displayed data. */
+async function refreshHistory(): Promise<void> {
+  await refreshArtifact();
+  if (!recentView.hidden) await Promise.all([loadRecent(), loadWorklog()]);
+}
+
 function copyWorklog(): void {
   void navigator.clipboard.writeText(worklogText.textContent ?? "")
     .then(() => show("Worklog copied."))
@@ -792,6 +808,7 @@ dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 noteGrantOrigin.addEventListener("click", requestNoteOrigin);
 copyUnsavedButton.addEventListener("click", copyUnsavedText);
+discardUnsavedButton.addEventListener("click", () => notes.discardUnsaved());
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;

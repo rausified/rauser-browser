@@ -585,7 +585,7 @@ async function nativeHostPreflight(cdp, extensionId) {
 function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
-    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/after-removal"]);
+    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/after-removal", `/allowed/background-${caseId}`]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (!known.has(pathname)) {
@@ -1286,6 +1286,16 @@ async function run() {
     });
 
     await step("Confirmed adapter becomes the worker and host capture boundary", async () => {
+      // Seed a real URL-keyed note before recognition exists. Later the built
+      // panel must offer viewing and explicit migration; no forged frontmatter.
+      if (options.headless) {
+        const old = await hostRequest(wrapper, {
+          type: "load_note", protocol_version: PROTOCOL_VERSION, request_id: randomUUID(), url: allowed,
+        });
+        requireCondition(old.type === "note_loaded" && old.key.kind === "url" && !old.exists,
+          "The legacy fixture did not start as an absent URL note");
+        await hostSaveNote(wrapper, allowed, title, `Legacy note ${caseId}`, old.revision, old.key);
+      }
       const current = await hostConfig(wrapper);
       const next = structuredClone(current.config);
       next.adapters = {
@@ -1423,6 +1433,40 @@ async function run() {
         "Allowed activity entry was duplicated or removed");
     });
 
+    if (options.headless) {
+      await step("The built panel views then explicitly migrates an older URL note", async () => {
+        await navigate(origin, allowed);
+        await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+        await openPanel();
+        const view = '#older-note-list button[data-older-action="view"]';
+        const use = '#older-note-list button[data-older-action="use"]';
+        await waitFor(() => onPanel(async (page) =>
+          requireCondition(await page.enabled(view), "The older-note View control is missing")));
+        const before = await markdownFiles(path.join(notesRoot, "pages"));
+        await onPanel((page) => page.click(view));
+        await waitFor(() => onPanel(async (page) => {
+          requireCondition(await page.hidden("#older-note-view") === false &&
+            await page.evaluate("document.querySelector('#older-note-view-body').readOnly"),
+          "The older note is not visible read-only");
+        }));
+        requireCondition(await fieldValue("older-note-view-body") === `Legacy note ${caseId}`,
+          "View did not load the legacy note");
+        requireCondition(JSON.stringify(await markdownFiles(path.join(notesRoot, "pages"))) === JSON.stringify(before),
+          "Viewing the older note changed its file");
+        await onPanel((page) => page.click(use));
+        await waitFor(async () => requireCondition(await fieldValue("note-body") === `Legacy note ${caseId}`,
+          "Migration did not reload the shared note"));
+        const migrated = await hostRequest(wrapper, {
+          type: "load_note", protocol_version: PROTOCOL_VERSION, request_id: randomUUID(), url: allowed,
+        });
+        requireCondition(migrated.type === "note_loaded" && migrated.key.kind === "artifact" &&
+          migrated.body === `Legacy note ${caseId}` && migrated.older_notes.length === 0,
+        "Migration did not retain exactly one shared note");
+        requireCondition((await markdownFiles(path.join(notesRoot, "pages"))).length === 1,
+          "Migration left an extra note file");
+      });
+    }
+
     await step("Note autosave writes the whole note about a second after typing stops", async () => {
       await navigate(origin, allowed);
       await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
@@ -1488,6 +1532,171 @@ async function run() {
       requireCondition(files.length === 1 && files[0].text.includes(recovered),
         "The recovered edit was not saved after the conflict");
     });
+
+    if (options.headless) {
+      // Instrument only this disposable panel's transport and clipboard. All
+      // requests still reach the real scripted host. Holding an acknowledgement
+      // lets the user keep typing while a real save has finished on disk, then
+      // close before the panel learns its revision. Nothing touches the user's
+      // clipboard, and no test hook is bundled into the product.
+      await onPanel(async (page) => {
+        const { identifier } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+          window.__smokeRequests = [];
+          window.__smokeHeldSaves = [];
+          window.__smokeHoldSaves = false;
+          window.__smokeCopies = [];
+          Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+            writeText: async (text) => { window.__smokeCopies.push(text); }
+          }});
+          const connect = chrome.runtime.connectNative.bind(chrome.runtime);
+          chrome.runtime.connectNative = (...args) => {
+            const port = connect(...args);
+            return {
+              postMessage(request) { window.__smokeRequests.push(request); port.postMessage(request); },
+              disconnect() { port.disconnect(); },
+              onDisconnect: port.onDisconnect,
+              onMessage: { addListener(listener) { port.onMessage.addListener((message) => {
+                if (window.__smokeHoldSaves && ["note_saved", "note_conflict"].includes(message.type)) {
+                  window.__smokeHeldSaves.push(message);
+                } else listener(message);
+              }); }}
+            };
+          };
+        ` }, page.sessionId);
+        await cdp.send("Page.reload", {}, page.sessionId);
+        await waitFor(async () => requireCondition(await page.evaluate(
+          "Array.isArray(window.__smokeRequests) && !document.querySelector('#note-body')?.disabled"),
+        "Instrumented panel has not loaded"));
+        await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }, page.sessionId);
+      });
+
+      await step("Artifact card context persists through the built Save control", async () => {
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          await page.hidden("#artifact-card") === false &&
+          (await page.text("#artifact-identity")).includes("smoke.page"), "Artifact card is missing")));
+        const why = `Checking the release ${caseId}`;
+        await onPanel((page) => page.fill("#artifact-why", why));
+        await onPanel((page) => page.click("#save-why"));
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          await page.text("#status") === "Artifact context saved.", "Context Save did not finish")));
+        const reply = await hostRequest(wrapper, {
+          type: "get_artifact", protocol_version: PROTOCOL_VERSION, request_id: randomUUID(), url: allowed, title,
+        });
+        requireCondition(reply.type === "artifact_result" && reply.artifact?.why === why,
+          "Context was not persisted by the native host");
+      });
+
+      await step("Recent filtering and worklog selection/Copy use the displayed result", async () => {
+        await onPanel((page) => page.click("#tab-recent"));
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          await page.evaluate("document.querySelectorAll('#recent-list a.recent-row').length > 0"),
+          "Recent did not render delivered activity")));
+        await onPanel((page) => page.evaluate(`(() => {
+          const type = document.querySelector('#recent-type');
+          type.value = 'smoke.page'; type.dispatchEvent(new Event('change', { bubbles: true }));
+        })()`));
+        await onPanel((page) => page.fill("#recent-title", "no-such-title-in-this-fixture"));
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          (await page.text("#recent-list")) === "No matching artifact activity yet.", "Title filter did not empty Recent")));
+        await onPanel((page) => page.fill("#recent-title", "/allowed/page"));
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          await page.evaluate("[...document.querySelectorAll('#recent-list a.recent-row')].some(row => row.href === " + JSON.stringify(allowed) + ")"),
+          "Combined filters did not restore the fixture")));
+        for (const period of ["yesterday", "week", "today"]) {
+          requireCondition(await onPanel((page) => page.evaluate(`(() => {
+            const select = document.querySelector('#worklog-period');
+            select.value = ${JSON.stringify(period)};
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return document.querySelector('#copy-worklog').disabled;
+          })()`)), "Copy stayed enabled while changing the worklog period");
+          await waitFor(() => onPanel(async (page) => requireCondition(
+            await page.enabled("#copy-worklog"), "The selected worklog has not loaded")));
+          const request = await onPanel((page) => page.evaluate(
+            "window.__smokeRequests.filter(request => request.type === 'worklog').at(-1)"));
+          requireCondition(request, "The selected worklog did not send a native request");
+          const expected = await hostRequest(wrapper, { ...request, request_id: randomUUID() });
+          requireCondition(expected.type === "worklog_result" &&
+            await onPanel((page) => page.text("#worklog-text")) === expected.text,
+          "The displayed worklog does not match the selected native result");
+          await onPanel((page) => page.click("#copy-worklog"));
+          await waitFor(() => onPanel(async (page) => requireCondition(
+            await page.evaluate("window.__smokeCopies.at(-1)") === expected.text &&
+            await page.text("#status") === "Worklog copied.", "Copy did not receive the displayed worklog")));
+        }
+      });
+
+      await step("An open Recent view refreshes after worker delivery with its filter retained", async () => {
+        await onPanel((page) => page.fill("#recent-title", `background-${caseId}`));
+        const backgroundUrl = `${origin}/allowed/background-${caseId}`;
+        const background = await cdp.send("Target.createTarget", { url: backgroundUrl, background: true });
+        try {
+          await waitFor(async () => requireCondition((await activityTotals()).some((total) =>
+            total.url === backgroundUrl && total.title.includes(`background-${caseId}`)),
+            "The worker did not measure the background fixture"));
+          await waitFor(async () => {
+            if (!(await logs()).some((text) => text.includes(backgroundUrl))) {
+              await rewindActivityHour();
+              await onSettings((page) => page.evaluate("chrome.runtime.sendMessage({ kind: 'sync_now' })"));
+            }
+            requireCondition((await logs()).some((text) => text.includes(backgroundUrl)), "Background delivery is missing");
+          }, { timeout: 30_000, interval: 1_000 });
+          await waitFor(() => onPanel(async (page) => requireCondition(
+            await page.evaluate("[...document.querySelectorAll('#recent-list a.recent-row')].some(row => row.href === " + JSON.stringify(backgroundUrl) + ")"),
+            "Recent did not refresh after background delivery")), { timeout: 45_000 });
+          requireCondition(await fieldValue("recent-title") === `background-${caseId}` &&
+            await fieldValue("recent-type") === "smoke.page", "Background refresh reset the filters");
+        } finally {
+          await cdp.send("Target.closeTarget", { targetId: background.targetId });
+        }
+        await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+        await onPanel((page) => page.click("#tab-page"));
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          await page.text("#page-url") === allowed && await page.enabled("#note-body"),
+          "The panel did not return to the original fixture note")));
+      });
+
+      const recoveryPrefix = `${storageKey("note_recovery_v1")}:`;
+      const recoveryTexts = () => onPanel((page) => page.evaluate(`Object.keys(localStorage)
+        .filter(key => key.startsWith(${JSON.stringify(recoveryPrefix)})).map(key => JSON.parse(localStorage.getItem(key)).text)`));
+
+      await step("Close during an in-flight save preserves the newer edit on reopen", async () => {
+        await onPanel((page) => page.evaluate("window.__smokeHoldSaves = true"));
+        const first = `Save in flight ${caseId}`;
+        const tail = `${first} plus typing during that save`;
+        await typeNote(first);
+        await waitFor(() => onPanel(async (page) => requireCondition(
+          await page.evaluate("window.__smokeHeldSaves.some(reply => reply.type === 'note_saved')"),
+          "No real save acknowledgement was held")));
+        await typeNote(tail);
+        requireCondition((await recoveryTexts()).includes(tail), "The latest edit has no recovery copy before close");
+        await closePanel();
+        await openPanel();
+        await waitForNoteStatus("Saved");
+        requireCondition(await fieldValue("note-body") === first &&
+          (await fieldValue("note-unsaved")).includes(tail), "Reopening lost the newer edit or applied it automatically");
+        requireCondition((await recoveryTexts()).includes(tail), "Reopening removed the durable recovery copy");
+        await onPanel((page) => page.click("#discard-unsaved"));
+        requireCondition((await recoveryTexts()).length === 0, "Explicit discard did not clear the displayed recovery copies");
+      });
+
+      await step("Close before debounce leaves an acknowledged note or an explicit recovery copy", async () => {
+        const text = `Close before debounce ${caseId}`;
+        // Dispatch input and close in the same JS turn, before the one-second
+        // debounce. The native save on pagehide may or may not finish.
+        await onPanel((page) => page.evaluate(`(() => {
+          const note = document.querySelector('#note-body');
+          note.value = ${JSON.stringify(text)};
+          note.dispatchEvent(new Event('input', { bubbles: true }));
+          window.close();
+        })()`)).catch(() => undefined); // Closing may detach the evaluating session.
+        await waitFor(async () => requireCondition(!(await cdp.targetFor(panelUrl())), "Panel did not close before debounce"));
+        await openPanel();
+        await waitForNoteStatus("Saved");
+        const saved = await fieldValue("note-body");
+        const recovered = await fieldValue("note-unsaved");
+        requireCondition(saved === text || recovered.includes(text), "Closing before debounce lost the note text");
+      });
+    }
 
     // AI harness setup (§7.1-§7.3) runs only the fakes under fake-install.
     // Guided runs skip it: their dialogs would need a person for five more

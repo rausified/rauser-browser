@@ -364,6 +364,19 @@ As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per req
 - Notes work on any HTTP(S) page, not only logged sites. The panel cannot see an ungranted tab's URL (§5.2), so the first note on a site starts, like summarizing, from the toolbar action, a keyboard command, or the page context menu, which grant `activeTab`; the panel then requests that exact origin from Chrome so it can read the tab's URL and title on later visits. A grant made for a note does not enable logging, and removing a logging site keeps it; the extension records the origins the panel requested so the settings page can tell them apart.
 - The note's title comes from the page's title when the note is created (or its host name when the page has none); the panel asks only for the note text.
 - The panel autosaves: it sends the whole note about one second after the user stops typing, and again when the active tab changes or the panel closes. There is no Save button. A small indicator shows "Saving…", "Saved", or an error.
+- Closing a panel cannot guarantee that its final native request completes.
+  Each edit first writes a synchronous recovery snapshot to the extension's
+  local browser storage. A confirmed save removes only the snapshot it saved;
+  later typing and another panel's drafts use different keys. Conflicts and
+  failed saves keep their copy-out text across panel close/reopen, including
+  an attempted empty-note deletion. Reopening shows the current host note and
+  separate recovery text with its source URL; it never applies that text
+  automatically to a revision or artifact key that may have changed. Copy and
+  **Discard recovery copies** are explicit actions, with discard affecting
+  only the displayed snapshots. Recovery text stays local to this browser
+  profile until acknowledged or discarded (extension removal clears it); it
+  is neither synced nor part of the vault log or index. Storage/quota failures
+  warn visibly without preventing ordinary native saves or evicting old copies.
 - The side panel is the only supported editor. The files stay plain Markdown and can be read anywhere, but an edit made outside Brauser can be overwritten. The version check in §4.4 exists so two Brauser windows do not overwrite each other: when a save is refused, the panel loads the newer note and shows the text it could not save so the user can copy it back.
 - A page note holds only the user's thoughts. Agent output never goes into a note; it goes to the page's separate summary file (§5.2) or wherever a command sends it (§5.6).
 - Notes created by M1 load into the editor normally. M1 review drafts are left in place and are not merged.
@@ -417,6 +430,12 @@ Template variables: `{page.title}`, `{page.url}`, `{page.content}`, `{selection}
 ### 5.7 Side panel layout
 
 The panel is about the page in the active tab. Capture housekeeping collapses into a one-line strip at the bottom, and configuration stays on the settings page.
+
+The current artifact card and visible Recent/worklog data refresh after an
+explicit **Send pending records** sync and on the existing 30-second status
+poll, so worker delivery while the panel is open becomes visible. Refreshes
+keep the selected filters and period, and preserve unfinished context on the
+same artifact. Copy is disabled while a newly selected worklog is loading.
 
 ```
 ┌────────────────────────────────────────────┐
@@ -1009,7 +1028,15 @@ The plan follows Chrome's current [optional-permission rules](https://developer.
    - **Windows reinstated (2026-10-16): the 2026-10-15 drop below is superseded (§14).** Windows CI comes first (`brwr-bzx`); interactive Windows checks are [human] work.
    - **Windows CI prepared (2026-10-27), not yet accepted.** The shared build/check job now targets `macos-15` and `windows-latest`, including scripted-dialog tests, extension checks and adapter differential tests. SQLite test subprocesses select the platform Python command and UTF-8 output; newline assertions accept CRLF. Unix shell/process-group fixtures remain Unix-only; the host-kill fixture also remains Unix-only until it can inject a disposable config path on Windows (`brwr-3rt`). The macOS Chrome smoke and fuzz compile stay on macOS. This Linux cycle cannot provide a passing Windows run, so `brwr-bzx` stays open; no Windows browser, native dialog, installer or AI execution acceptance is implied.
    - **Windows dropped (2026-10-15), superseding the earlier "Windows parked" status.** macOS is the only supported platform; see §14. Windows CI was removed. The Windows smoke runner, its interactive run, its default-port check, and the registry-based native-host registration it would have needed are no longer planned work.
-2. **Catch page-load regressions in CI (optional, recommended).** Unit tests import the pages but do not load the built extension. A headless Chrome step that loads `extension/dist/` and opens the panel and settings page would have caught the stale-manifest class of failure before a manual run.
+2. **Catch page-load regressions in CI.** The existing macOS headless runner
+   loads the built extension and opens panel/settings pages. The 2026-10-27
+   `brwr-9xg` extension of that runner covers artifact card/context, Recent
+   filtering, worklog selection and isolated Copy, a real URL-note migration,
+   worker delivery with Recent open, and close/reopen during debounce and a
+   held real save acknowledgement. Compiled-panel DOM/native-boundary tests
+   run on all CI platforms. Local Linux tests cover the recovery and refresh
+   fixes; the new browser steps still require an actual macOS headless run
+   before `brwr-9xg` is accepted. Setup still expects 14 scripted dialogs.
 3. **Settle M2 design before code: done (2026-09-28).** The answers are in §14 and in §4.4, §5.2, §6, §7.1, §7.3, and §8. The last open question, Codex isolation, was answered on 2026-09-28: Codex runs with the user's normal home (§14).
 4. **Rework the side panel and make notes editable (before M2): done (2026-09-28).** Built the §5.7 layout with the controls M1 already has: the page area following the active tab, the autosaving note (§5.3) with the host's versioned replace (§4.4), notes on any HTTP(S) page started from the toolbar action, a keyboard command, or the context menu (§5.3), which brings `activeTab`, `contextMenus`, and a `note` entry under `commands` (§8) forward from M2, and the capture strip collapsed into a one-line disclosure. This replaces the create-only note flow and review drafts. Protocol version 3 replaces `create_page_note`/`page_note_result` with `load_note` (returns `exists`, a `revision`, `title`, `body`) and `save_note` (takes `expected_revision`; a match replaces the note whole and returns `note_saved`, a stale revision returns `note_conflict` with the note's current content instead of writing anything). The host reuses `get_config`/`update_config`'s revision-check pattern; before replacing, it checks the existing file's recorded canonical URL and `brauser:` ownership (kind absent or `page`, never `summary`), never adopting a mismatch. The answer card, Summary section, and full omnibar remain M2/M3 and are not built; the omnibar's one-line input and the `/summarize`, `/related`, and `Read later` surfaces have no placeholder yet beyond the capture strip. The headless smoke run (`npm run smoke:macos:headless`) now exercises autosave (typing, then the debounce save; a save flushed by navigating the page away and back) and the refused-save path (a simulated second window saves first, so the panel's own save is refused, shows the current note, and keeps the unsaved text in a copy-out box; a later edit then saves cleanly against the now-current revision) in place of the removed create-only/review-draft checks. Not yet verified against real Chrome: whether the toolbar action alone (via `openPanelOnActionClick`, with no `action.onClicked` handler) grants `activeTab` the way the `note` command and context-menu item do — the same open question M2's build order already flags for `summarize` (§12.2 step 8.4).
 5. **M2 step 1, harness setup: done (2026-09-28), merged in PR #19.** The host offers harnesses found on `PATH` and shows a native confirmation of the binary, arguments, environment variable names, the denylist review (§7.3), and the proposed `summaries_dir` (§6.1). As with `storage.root`, the extension never supplies a raw binary path; `update_config` requires a single-use token bound to the confirmed harness entry and denylist, and that token sets `agent_denylist_confirmed`. The same setup records the harness version and identity, checks every flag against `--help` (and `codex features list`), runs the one-token probe, and refuses a harness that fails (§7.1). Add optional `summaries_dir` and the privacy keys to the protocol `StorageConfig`/config schema, validation, and overlap checks, with a protocol version bump. Tests cover the host refusing agent requests while the denylist is unconfirmed and `update_config` rejecting an extension attempt to set it. See the as-built notes in §7.1. macOS CI passes, as does the headless smoke run; the smoke run covers it end to end with fake harnesses on a pinned `PATH` (detection, including a fake Codex passing its checks, a canceled setup, a failing probe, a confirmed setup, denylist add and removal, a confirmed Codex setup whose dialog carries the §14 disclosure and whose probe runs the reviewed argv with only `HOME` and `PATH`, and a denylist edit after the harness is removed). Not yet verified: the real macOS confirmation dialog (guided or `--auto` run), and setup against real `claude` or `codex` binaries. Where a Chrome-spawned host gets auth values is still open (§14).
