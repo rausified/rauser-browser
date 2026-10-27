@@ -848,7 +848,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
         reconcile_index_from_logs(config);
     } else if !activities.is_empty()
         && let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_activities(activities, &config.snapshot().strip_params)
     {
         eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
@@ -1000,7 +1000,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     let capture_outcome = store.record_why(policy, &value.event);
     if matches!(&capture_outcome, CaptureOutcome::Persisted { .. })
         && let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_why(&value.event, &config.snapshot().strip_params)
     {
         eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
@@ -1025,7 +1025,7 @@ fn update_activity_index(config: &ConfigStore, event: &brauser_protocol::Activit
         return;
     };
     if let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_activity(event, &config.snapshot().strip_params)
     {
         eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
@@ -1040,12 +1040,25 @@ fn capture_outcome_is_duplicate(outcome: &CaptureOutcome) -> bool {
     matches!(outcome, CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")
 }
 
+/// Open the artifact index with the confirmed adapter document, which
+/// resolves title refs into mentions edges (adapter-templates.md §10.1).
+fn open_index(
+    config: &ConfigStore,
+    storage: &brauser_protocol::StorageConfig,
+    cache_dir: &std::path::Path,
+) -> Result<ArtifactIndex> {
+    Ok(
+        ArtifactIndex::open_in(storage, config.root_identity(), cache_dir)?
+            .with_adapters(config.adapter_document().ok()),
+    )
+}
+
 fn reconcile_index_from_logs(config: &ConfigStore) {
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return;
     };
     if let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.reconcile_from_logs()
     {
         eprintln!("{NAMESPACE}: warning: could not reconcile artifact index: {error:#}");
@@ -1065,12 +1078,31 @@ fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return;
     };
-    if let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-        && (interactive || index.daily_pass_due(time::OffsetDateTime::now_utc()))
-        && let Err(error) = index.regenerate_dirty()
-    {
-        eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+    let Ok(cache_dir) = config.cache_dir() else {
+        return;
+    };
+    let index = match open_index(config, storage, &cache_dir) {
+        Ok(index) => index,
+        Err(error) => {
+            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+            return;
+        }
+    };
+    if !interactive && !index.daily_pass_due(time::OffsetDateTime::now_utc()) {
+        return;
+    }
+    match index.regenerate_dirty() {
+        Ok(report) => {
+            if let Some(failure) = report.first_failure {
+                eprintln!(
+                    "{NAMESPACE}: warning: {} artifact file(s) could not be regenerated: {failure}",
+                    report.failed
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+        }
     }
 }
 
@@ -1147,8 +1179,7 @@ fn note_context(
                 // Failure is not an empty candidate set: a missing source can
                 // conceal a conflicting identity and redirect an autosave.
                 let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
-                let index = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                    .map_err(|_| unavailable())?;
+                let index = open_index(config, storage, &cache_dir).map_err(|_| unavailable())?;
                 candidates.extend(
                     index
                         .artifact_candidates_for_url(&canonical)
@@ -1170,7 +1201,7 @@ fn note_context(
     let mut older_urls = vec![canonical.clone()];
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
         if let Ok(cache_dir) = config.cache_dir()
-            && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+            && let Ok(index) = open_index(config, storage, &cache_dir)
             && let Ok(urls) = index.artifact_urls(&key.value)
         {
             older_urls.extend(urls);
@@ -1518,7 +1549,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             );
         }
     };
-    let index = match ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir) {
+    let index = match open_index(config, storage, &cache_dir) {
         Ok(index) => index,
         Err(_) => {
             return error(
@@ -1690,6 +1721,24 @@ fn refresh_artifacts(
         Err((code, message)) => return error(&value.request_id, code, message),
     };
     match index.regenerate_dirty() {
+        // The others were updated; name the path that still needs attention,
+        // and any unowned conflicts, since an error carries no paths field.
+        Ok(report) if report.failed > 0 => {
+            let mut message = format!(
+                "{} artifact file(s) could not be updated ({} written); first: {}",
+                report.failed,
+                report.written,
+                report.failed_paths.first().map_or("", String::as_str)
+            );
+            if report.conflicts > 0 {
+                message.push_str(&format!(
+                    ". {} unowned path conflict(s) were not overwritten: {}",
+                    report.conflicts,
+                    report.conflict_paths.join(", ")
+                ));
+            }
+            error(&value.request_id, ErrorCode::Internal, &message)
+        }
         Ok(report) => Response::ArtifactsRefreshed(ArtifactsRefreshed {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
@@ -1718,7 +1767,7 @@ fn read_index(config: &mut ConfigStore) -> Result<ArtifactIndex, (ErrorCode, &'s
     };
     let unavailable = || (ErrorCode::Internal, "artifact index is unavailable");
     let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
-    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir).map_err(|_| unavailable())
+    open_index(config, storage, &cache_dir).map_err(|_| unavailable())
 }
 
 fn local_date(value: &str) -> Option<time::Date> {
@@ -4558,6 +4607,176 @@ id = "work:{host}/{id}"
             assert_eq!(duplicate.reason.as_deref(), Some("duplicate_event"));
             assert_eq!(std::fs::read(log_path).unwrap(), durable_bytes);
         }
+    }
+
+    fn deliver_activity(config: &mut ConfigStore, event: ActivityEvent) -> VisitOutcome {
+        let Response::ActivityRecorded(reply) = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "capture".into(),
+                event,
+            },
+            config,
+        ) else {
+            panic!("expected capture result")
+        };
+        reply.outcome
+    }
+
+    #[test]
+    fn title_refs_resolve_through_the_confirmed_adapters_into_links() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://acme.atlassian.net\", path_prefix = \"/\" }, { origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "jira.issue"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/browse/{key:jira_key}" }]
+id = "jira:{host}/{key}"
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+title = "{title}"
+refs = [{ type = "jira.issue", find = "jira_key" }]
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut issue = activity_for_invalid_policy();
+        issue.artifact_id = "jira:acme.atlassian.net/PROJ-1".into();
+        issue.artifact_type = "jira.issue".into();
+        issue.url = "https://acme.atlassian.net/browse/PROJ-1".into();
+        issue.title = Some("Export pagination".into());
+        assert_eq!(
+            deliver_activity(&mut config, issue),
+            VisitOutcome::Persisted
+        );
+        let mut pull = activity_for_invalid_policy();
+        pull.url = "https://work.example/issues/412".into();
+        pull.artifact_id = "work:work.example/412".into();
+        pull.title = Some("PROJ-1 Fix SBOM export pagination".into());
+        pull.refs = vec![brauser_protocol::ActivityRef {
+            artifact_type: "jira.issue".into(),
+            value: "PROJ-1".into(),
+        }];
+        assert_eq!(deliver_activity(&mut config, pull), VisitOutcome::Persisted);
+        for url in [
+            "https://acme.atlassian.net/browse/PROJ-1",
+            "https://work.example/issues/412",
+        ] {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: url.into(),
+                    title: None,
+                },
+                &mut config,
+            ) else {
+                panic!("expected artifact result")
+            };
+            assert_eq!(reply.artifact.unwrap().linked_count, 1, "{url}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refreshing_artifacts_updates_the_rest_and_names_an_unwritable_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+        );
+        let mut config = loaded(&path);
+        let deliver = |config: &mut ConfigStore, number: u8, title: &str| {
+            let mut event = activity_for_invalid_policy();
+            event.url = format!("https://work.example/issues/{number}");
+            event.artifact_id = format!("work:work.example/{number}");
+            event.title = Some(title.into());
+            assert_eq!(deliver_activity(config, event), VisitOutcome::Persisted);
+        };
+        let refresh = |config: &mut ConfigStore| {
+            refresh_artifacts(
+                brauser_protocol::RefreshArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "refresh".into(),
+                },
+                config,
+            )
+        };
+        deliver(&mut config, 1, "First");
+        deliver(&mut config, 2, "Second");
+        let Response::ArtifactsRefreshed(reply) = refresh(&mut config) else {
+            panic!("expected refreshed artifacts")
+        };
+        assert_eq!(reply.written, 2);
+        let files = std::fs::read_dir(root.join("artifacts/work-item/work-example"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        let locked = files
+            .iter()
+            .find(|path| std::fs::read_to_string(path).unwrap().contains("First"))
+            .unwrap()
+            .clone();
+        let other = files.iter().find(|path| **path != locked).unwrap().clone();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        deliver(&mut config, 1, "First again");
+        deliver(&mut config, 2, "Second again");
+        // A third artifact's path is occupied by someone else's file.
+        let occupied = root.join(format!(
+            "artifacts/work-item/work-example/3-{}.md",
+            &hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+                b"work:work.example/3"
+            ))[..12]
+        ));
+        std::fs::write(&occupied, "not ours\n").unwrap();
+        deliver(&mut config, 3, "Third");
+        let reply = refresh(&mut config);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let Response::Error(reply) = reply else {
+            panic!("expected the failure to be reported: {reply:?}")
+        };
+        let name = locked.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(reply.message.contains(&name), "{}", reply.message);
+        let occupied_name = occupied.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(reply.message.contains(&occupied_name), "{}", reply.message);
+        assert_eq!(std::fs::read_to_string(&occupied).unwrap(), "not ours\n");
+        assert!(
+            std::fs::read_to_string(&other)
+                .unwrap()
+                .contains("Second again")
+        );
+        let Response::ArtifactsRefreshed(reply) = refresh(&mut config) else {
+            panic!("expected refreshed artifacts")
+        };
+        assert_eq!(reply.written, 1);
+        assert!(
+            std::fs::read_to_string(&locked)
+                .unwrap()
+                .contains("First again")
+        );
     }
 
     #[test]

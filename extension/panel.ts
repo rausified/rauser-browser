@@ -5,6 +5,7 @@ import {
 } from "./model.js";
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME } from "./brand.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import {
@@ -72,6 +73,11 @@ const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 
 const session = new ConfigSession(render);
+let captureSite: CaptureSitePanel | null = null;
+// Suppress note loads only while capture policy can change their identity.
+// Once the post-save reload starts, tab events must reach NoteEditor's token
+// handling so a slow response cannot bind the editor to a page we have left.
+let changingNoteIdentity = false;
 let busy = false;
 let replaying = false;
 let tickRunning = false;
@@ -91,7 +97,7 @@ const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 let tabRefreshSeq = 0;
 // The tab the panel last resolved as active; only its updates matter.
 let followedTabId: number | null = null;
-let currentPage: { url: string; title: string } | null = null;
+let currentPage: { url: string; title: string; tabId: number | undefined } | null = null;
 let currentArtifact: ArtifactView | null = null;
 let olderNoteEntries: OlderNote[] = [];
 // Tracks the artifact the "Why I'm here" field was last rendered for, so an
@@ -312,10 +318,11 @@ function copyOlderNoteView(): void {
 }
 
 function changing(): boolean {
-  return busy || replaying || tickRunning;
+  return busy || replaying || tickRunning || captureSite?.saving === true;
 }
 
 function updateControls(): void {
+  captureSite?.render(currentPage, changing());
   const connected = session.connected;
   const config = session.config;
   const state = session.status;
@@ -548,6 +555,22 @@ const notes = new NoteEditor({
   }, ["note_saved", "note_conflict"]),
 }, describe, NOTE_SAVE_DEBOUNCE_MS);
 
+captureSite = new CaptureSitePanel(session, {
+  isBusy: changing,
+  changed: updateControls,
+  show,
+  beforeSave: () => {
+    changingNoteIdentity = true;
+    return notes.showPage(null);
+  },
+  afterSave: async () => {
+    changingNoteIdentity = false;
+    await notes.showPage(currentPage);
+    // The new adapter changes whether this page is an artifact.
+    await refreshArtifact(true);
+  },
+});
+
 function copyUnsavedText(): void {
   void navigator.clipboard.writeText(noteUnsaved.value).catch((error: unknown) => {
     showNoteStatus(`Could not copy: ${describe(error)}`, true);
@@ -718,6 +741,7 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
 
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   currentPage = null;
+  updateControls();
   void refreshArtifact();
   pageTitle.textContent = title;
   pageUrl.textContent = url;
@@ -764,8 +788,9 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
   showPageArea("note");
-  currentPage = { url: tab.url, title };
-  await notes.showPage({ url: tab.url, title });
+  currentPage = { url: tab.url, title, tabId: tab.id };
+  updateControls();
+  if (!changingNoteIdentity) await notes.showPage({ url: tab.url, title });
   void refreshArtifact();
 }
 

@@ -639,6 +639,7 @@ async function installPolicy(
   lease: PolicyLease,
   resumeAfterConfirmation: boolean,
   resumeAfterPauseToken: string | null,
+  seedOpenTabs = false,
 ): Promise<WorkerStatus> {
   // Reject an expired message before it can replace the compiled document for
   // the active revision. Otherwise the unchanged stored lease would reuse the
@@ -671,6 +672,10 @@ async function installPolicy(
     [QUEUE_KEY]: queue,
   });
   await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
+  // A page installing policy may have just enabled capture on an open tab.
+  // Background renewal must leave its in-flight navigation unmapped until
+  // captureNavigation records the real open after renewal completes.
+  if (effectiveLease.capture_enabled && seedOpenTabs) await rebuildActivityMap();
   return currentStatus(await activeLease());
 }
 
@@ -1023,7 +1028,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
   switch (message.kind) {
     case "install_policy":
       return installPolicy(message.lease, message.resume_after_confirmation,
-        message.resume_after_pause_token);
+        message.resume_after_pause_token, true);
     case "suspend_policy":
       return suspendPolicy();
     case "pause_capture": {
@@ -1254,7 +1259,11 @@ export async function rebuildActivityMap(): Promise<void> {
     const match = url ? matchingArtifact(lease, url) : null;
     if (!url || !match) continue;
     activity.tabs[String(tab.id)] = {
-      artifact_id: match.artifact_id, artifact_type: match.type, url, title: null,
+      artifact_id: match.artifact_id, artifact_type: match.type, url,
+      // Only keep tab metadata after recognizing the live top-frame URL,
+      // and only if the tab snapshot still names the same page.
+      title: tab.status === "complete" && tab.url && withoutHash(tab.url) === withoutHash(url)
+        ? tab.title?.slice(0, MAX_TITLE_CHARS) ?? null : null,
       mode: match.mode, window_id: tab.windowId ?? -1,
     };
     if (tab.active) activity.active_by_window[String(tab.windowId ?? -1)] = tab.id;
