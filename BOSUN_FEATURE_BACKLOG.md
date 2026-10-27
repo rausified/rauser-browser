@@ -872,7 +872,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `fc11c73`)
+### Current health handoff (2026-10-27 — baseline `ddc0ecc`)
 
 - Clean workspace; no quarantine failure file or incomplete implementation.
   The required unfiltered Cargo gate passes 26 adapter-template tests and 447
@@ -892,9 +892,11 @@ were folded into `brwr-q7e` above rather than given their own item.
 - The same restriction was observed on `728b200`, `90f88b4`, `382bf29`,
   `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4`,
   `21d06c3`, `5231f9e`, `2f1e64c`, `2f06f4b`, `b52332f`, `7877d0b`,
-  `1276c9d`, `7d550bd`, `6f057ca`, `898af0c` and now `fc11c73`.
+  `1276c9d`, `7d550bd`, `6f057ca`, `898af0c`, `fc11c73` and now
+  `ddc0ecc`.
   Current Cargo failure output is in
-  `target/overnight-health/baseline-fc11c73/cargo-failures.log`; earlier logs remain in
+  `target/overnight-health/baseline-ddc0ecc/cargo-failures.log`; earlier logs remain in
+  `target/overnight-health/baseline-fc11c73/`,
   `target/overnight-health/baseline-898af0c/`,
   `target/overnight-health/baseline-6f057ca/`,
   `target/overnight-health/baseline-bdbbbb4/` and
