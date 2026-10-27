@@ -17,4 +17,6 @@ pub mod harness_setup;
 pub mod index;
 pub mod native;
 pub mod note;
+#[cfg(target_os = "macos")]
+pub mod service;
 pub mod vault;
