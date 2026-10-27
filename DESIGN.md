@@ -519,7 +519,10 @@ document. They name record keys only and never authorize capture. Removing an
 adapter or its site, narrowing its rules, or an inert document therefore keeps
 one note per artifact on every route its contract matched, including routes
 with no recorded activity and documents first noted afterwards. Exactly one
-named artifact gives its key; several give the URL key. An origin any current
+named artifact gives its key; several give the URL key. A recorded contract
+this host cannot compile (an unsupported document format or a damaged history
+entry) makes identity on its origin unavailable: loads and saves there refuse
+rather than choose a key. An origin any current
 or recorded contract covers is decided by those contracts alone: every
 recorded artifact URL was matched by one of them, so a URL none of them
 matches is not that artifact, even when its canonical form equals one an

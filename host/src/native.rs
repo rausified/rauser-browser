@@ -1205,6 +1205,14 @@ fn note_context(
             NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => {
                 crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
             }
+            // A recorded contract this host cannot compile may name an
+            // artifact here; refuse rather than pick an autosave target.
+            NoteKeyRule::Unavailable => {
+                return Err((
+                    ErrorCode::Internal,
+                    "note identity is unavailable; an adapter contract cannot be read",
+                ));
+            }
             // No recorded contract covers this origin (for example, a
             // config repair discarded its history). Before falling back to
             // a fresh URL key, check whether it was previously recorded
@@ -1277,7 +1285,7 @@ fn note_context(
         }
         match config.note_key_rule(candidate) {
             NoteKeyRule::Artifact(artifact_id) => artifact_id == key.value,
-            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => false,
+            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Unavailable => false,
             NoteKeyRule::Uncovered => recorded,
         }
     };
@@ -3704,6 +3712,48 @@ id = "work:{host}/{id}"
             let view = session.load(VIEW);
             assert_eq!(view.key, shared.key);
             assert_eq!(view.body, "One note for item 7");
+        }
+
+        #[test]
+        fn an_unsupported_adapter_format_refuses_note_identity_on_its_origins() {
+            let session = Session::new();
+            let first = session.load(EDIT);
+            let Response::NoteSaved(saved) = session.save(EDIT, &first, "Keep original text")
+            else {
+                panic!("expected saved note")
+            };
+            let current = session.load(EDIT);
+            let note_path = session.root.join(saved.relative_path);
+            let original = std::fs::read(&note_path).unwrap();
+            let text = std::fs::read_to_string(&session.path).unwrap();
+            let edited = text.replacen("format = 1", "format = 2", 1);
+            assert_ne!(edited, text, "fixture must name its adapter format");
+            std::fs::write(&session.path, edited).unwrap();
+            let config = loaded(&session.path);
+            assert!(config.config_issue().is_none());
+            assert!(config.adapter_issue().is_some());
+
+            for url in [EDIT, VIEW] {
+                let response = session.call(Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "unsupported-format".into(),
+                    url: url.into(),
+                }));
+                assert!(
+                    matches!(&response, Response::Error(reply) if reply.message.contains("note identity is unavailable")),
+                    "{url}: {response:?}"
+                );
+                assert!(
+                    matches!(session.save(url, &current, "Must not autosave"), Response::Error(reply) if reply.message.contains("note identity is unavailable")),
+                    "{url}"
+                );
+            }
+            assert_eq!(std::fs::read(&note_path).unwrap(), original);
+            // Other sites keep working.
+            assert_eq!(
+                session.load("https://other.example/page").key.kind,
+                RecordKeyKind::Url
+            );
         }
 
         #[test]

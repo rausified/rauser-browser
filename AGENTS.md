@@ -95,8 +95,9 @@ its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. Only an origin with no recorded contract falls back
 to complete note identities and recorded activity, mode URLs, or explicit
 context; separate older URL notes remain viewable. Ambiguous contracts or
-history fall back to the URL key, while unavailable history or an incomplete
-bounded note scan refuses loads and saves instead of guessing an autosave target.
+history fall back to the URL key, while an uncompilable recorded contract,
+unavailable history, or an incomplete bounded note scan refuses loads and saves
+instead of guessing an autosave target.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
