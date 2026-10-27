@@ -626,13 +626,7 @@ fn parse_date(value: &str) -> Result<Date> {
 }
 
 fn plain_text(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(500)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+    crate::presentation::plain_line(value, 500)
 }
 
 fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result<ActivityEvent> {
@@ -1249,7 +1243,10 @@ fn slug(value: &str, fallback: &str) -> String {
 fn render_artifact(artifact: &ArtifactRow) -> String {
     let mut out = String::new();
     out.push_str("---\n");
-    out.push_str(&format!("title: {}\n", yaml_string(&artifact.title)));
+    out.push_str(&format!(
+        "title: {}\n",
+        yaml_string(&crate::presentation::plain_line(&artifact.title, 2048))
+    ));
     out.push_str(&format!("url: {}\n", yaml_string(&artifact.url)));
     out.push_str("brauser:\n  kind: artifact\n");
     out.push_str(&format!(
@@ -1298,25 +1295,7 @@ fn whole_minutes(seconds: u64) -> u64 {
 }
 
 fn safe_markdown(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars().take(2048) {
-        if ch.is_control() {
-            out.push(' ');
-        } else {
-            if matches!(
-                ch,
-                '\\' | '!' | '[' | ']' | '<' | '>' | '*' | '_' | '`' | '|'
-            ) {
-                out.push('\\');
-            }
-            out.push(ch);
-        }
-    }
-    if out.trim().is_empty() {
-        "Untitled".into()
-    } else {
-        out
-    }
+    crate::presentation::markdown_line(value, 2048)
 }
 
 #[derive(Clone)]
@@ -1784,6 +1763,160 @@ mod tests {
 
     fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
         ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
+    }
+
+    #[test]
+    fn hostile_presentation_is_safe_in_logs_and_rebuilt_artifacts_without_changing_payloads() {
+        use crate::capture::{CaptureBatchEvent, CaptureOutcome, CapturePolicy, CaptureStore};
+        use brauser_protocol::{SiteConfig, VisitEvent};
+
+        let hostile = "Report\u{202e}evil\u{202c}\u{200b}\u{200f}\u{2066}hidden\u{2069}\u{feff} %%comment%% ==marked== #tag ![embed](https://bad.invalid)";
+        for batched in [false, true] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let config = storage(root.path());
+            let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
+            let sites = [SiteConfig {
+                origin: "https://example.com".into(),
+                path_prefix: "/".into(),
+            }];
+            let policy = || CapturePolicy {
+                enabled: true,
+                sites: &sites,
+                strip_params: &[],
+            };
+            let event = activity(
+                "00000000-0000-4000-8000-000000000001",
+                "ABC",
+                hostile,
+                "2026-10-15T12:00:00Z",
+            );
+            let visit = VisitEvent {
+                event_id: "00000000-0000-4000-8000-000000000002".into(),
+                url: "https://example.com/old".into(),
+                title: Some(hostile.into()),
+                occurred_at: event.occurred_at.clone(),
+                incognito: false,
+            };
+            if batched {
+                let outcome = capture.record_batch(
+                    policy(),
+                    "00000000-0000-4000-8000-000000000004",
+                    &[
+                        CaptureBatchEvent::Activity(&event),
+                        CaptureBatchEvent::Visit(&visit),
+                    ],
+                    None,
+                );
+                assert_eq!(outcome.events.len(), 2);
+                assert!(
+                    outcome
+                        .events
+                        .iter()
+                        .all(|(_, result)| matches!(result, CaptureOutcome::Persisted { .. }))
+                );
+            } else {
+                assert!(matches!(
+                    capture.record_activity(policy(), &event),
+                    CaptureOutcome::Persisted { .. }
+                ));
+                assert!(matches!(
+                    capture.record(policy(), &visit),
+                    CaptureOutcome::Persisted { .. }
+                ));
+            }
+            let why = WhyEvent {
+                event_id: "00000000-0000-4000-8000-000000000003".into(),
+                artifact_id: event.artifact_id.clone(),
+                url: event.url.clone(),
+                occurred_at: event.occurred_at.clone(),
+                incognito: false,
+                text: hostile.into(),
+            };
+            assert!(matches!(
+                capture.record_why(policy(), &why),
+                CaptureOutcome::Persisted { .. }
+            ));
+            let log = root.path().join("log/2026/10/2026-10-15.md");
+            let original = fs::read_to_string(&log).unwrap();
+            for (kind, payload) in [
+                ("activity", serde_json::to_value(&event).unwrap()),
+                ("why", serde_json::to_value(&why).unwrap()),
+            ] {
+                let expected = hex::encode(serde_json::to_vec(&payload).unwrap());
+                assert!(original.contains(&format!(" kind={kind} data={expected} -->")));
+            }
+            let rows = original.lines().filter(|line| line.starts_with("- "));
+            assert_eq!(rows.clone().count(), 3);
+            for row in rows {
+                assert!(
+                    !row.contains(['\u{202e}', '\u{200b}', '\u{200f}', '\u{2066}', '\u{feff}'])
+                );
+                assert!(row.contains(r"\%\%comment\%\% \=\=marked\=\= \#tag \!\[embed\]"));
+            }
+
+            // Rebuild from the actual markers, not a second sanitized event.
+            let decoded = parse_log(&original);
+            assert_eq!(decoded.len(), 3);
+            assert!(decoded.iter().any(|stored| matches!(stored,
+                CachedEvent::Activity(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&event).unwrap()
+            )));
+            assert!(decoded.iter().any(|stored| matches!(stored,
+                CachedEvent::Why(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&why).unwrap()
+            )));
+            let index = index(&root, &cache);
+            assert_eq!(index.reindex().unwrap().written, 2);
+            for path in artifact_files(root.path()) {
+                let markdown = fs::read_to_string(path).unwrap();
+                assert!(
+                    !markdown
+                        .contains(['\u{202e}', '\u{200b}', '\u{200f}', '\u{2066}', '\u{feff}'])
+                );
+                assert!(markdown.contains("Report"));
+            }
+            assert_eq!(fs::read_to_string(&log).unwrap(), original);
+            assert_eq!(index.reindex().unwrap().unchanged, 2);
+        }
+    }
+
+    #[test]
+    fn artifact_files_and_worklogs_neutralize_unicode_formatting() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let hostile = "Visible\u{202e}spoof\u{202c}\u{200b}\u{2069}\u{feff} end";
+        let event = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "ABC",
+            hostile,
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&event, &[]).unwrap();
+        index
+            .record_why(
+                &WhyEvent {
+                    event_id: "00000000-0000-4000-8000-000000000002".into(),
+                    artifact_id: event.artifact_id.clone(),
+                    url: event.url.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    incognito: false,
+                    text: format!("{hostile} %%hidden%% ==mark== #tag"),
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(!markdown.contains(['\u{202e}', '\u{202c}', '\u{200b}', '\u{2069}', '\u{feff}']));
+        assert!(markdown.contains(r"\%\%hidden\%\% \=\=mark\=\= \#tag"));
+        let (worklog, _) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-15").unwrap(),
+            )
+            .unwrap();
+        assert!(!worklog.contains(['\u{202e}', '\u{202c}', '\u{200b}', '\u{2069}', '\u{feff}']));
+        assert!(worklog.contains("Visible spoof"));
     }
 
     #[test]

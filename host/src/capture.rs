@@ -1738,23 +1738,7 @@ fn safe_title(value: Option<&str>) -> String {
 }
 
 fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
-    let title = value.unwrap_or("Untitled").trim();
-    let mut out = String::new();
-    for ch in title.chars().take(limit) {
-        if ch.is_control() {
-            out.push(' ');
-        } else {
-            if matches!(ch, '\\' | '[' | ']' | '<' | '>' | '*' | '_' | '`' | '|') {
-                out.push('\\');
-            }
-            out.push(ch);
-        }
-    }
-    if out.trim().is_empty() {
-        "Untitled".into()
-    } else {
-        out
-    }
+    crate::presentation::markdown_line(value.unwrap_or("Untitled"), limit)
 }
 
 #[cfg(test)]
