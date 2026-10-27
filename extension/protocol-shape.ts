@@ -8,7 +8,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set([
 ]);
 
 const AGENT_STATES: ReadonlySet<string> = new Set([
-  "not_set_up", "denylist_unconfirmed", "harness_problem", "ready",
+  "not_set_up", "harness_problem", "ready",
 ]);
 
 function stringOrNull(value: unknown): boolean {
@@ -109,9 +109,17 @@ function isArtifactListItem(value: unknown): boolean {
       .every((key) => isUnsignedInteger(item[key])) && stringOrNull(item.why);
 }
 
+/** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
+ * `agent_denylist` means the host speaks another shape. */
+const CONFIG_KEYS: readonly string[] = [
+  "storage", "capture_enabled", "sites", "strip_params", "agent", "adapters",
+];
+
 export function isConfig(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const config = value as Record<string, unknown>;
+  const keys = Object.keys(config);
+  if (keys.length !== CONFIG_KEYS.length || !CONFIG_KEYS.every((key) => keys.includes(key))) return false;
   const storage = config.storage;
   if (storage !== null) {
     if (typeof storage !== "object" || storage === null) return false;
@@ -127,9 +135,6 @@ export function isConfig(value: unknown): boolean {
       typeof (site as Record<string, unknown>).origin === "string" &&
       typeof (site as Record<string, unknown>).path_prefix === "string") &&
     isStringArray(config.strip_params) &&
-    isStringArray(config.agent_denylist) &&
-    typeof config.agent_denylist_confirmed === "boolean" &&
-    config.log_incognito === false &&
     isAgent(config.agent) && isAdapterDocument(config.adapters);
 }
 
@@ -197,8 +202,7 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         isUnsignedInteger(value.conflicts) && Array.isArray(value.conflict_paths) &&
         value.conflict_paths.length <= 64 && isStringArray(value.conflict_paths);
     case "agent_checked":
-      return typeof value.harness_id === "string" && typeof value.harness_version === "string" &&
-        (value.url_allowed === null || typeof value.url_allowed === "boolean");
+      return typeof value.harness_id === "string" && typeof value.harness_version === "string";
     case "harnesses_discovered":
       return Array.isArray(value.offers) && value.offers.every(isHarnessOffer);
     case "harness_setup_confirmed":

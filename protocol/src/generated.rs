@@ -108,9 +108,6 @@ pub struct ConfigSnapshot {
     pub capture_enabled: bool,
     pub sites: Vec<SiteConfig>,
     pub strip_params: Vec<String>,
-    pub agent_denylist: Vec<String>,
-    pub agent_denylist_confirmed: bool,
-    pub log_incognito: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub agent: Option<AgentConfig>,
     pub adapters: AdapterDocument,
@@ -177,7 +174,6 @@ pub struct AgentStatus {
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     NotSetUp,
-    DenylistUnconfirmed,
     HarnessProblem,
     Ready,
 }
@@ -317,8 +313,6 @@ pub struct RefreshArtifactsRequest {
 pub struct CheckAgentRequest {
     pub protocol_version: u32,
     pub request_id: String,
-    #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -532,8 +526,6 @@ pub struct AgentChecked {
     pub request_id: String,
     pub harness_id: String,
     pub harness_version: String,
-    #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub url_allowed: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -678,7 +670,6 @@ pub struct ConfirmHarnessSetupRequest {
     pub expected_revision: String,
     pub offer_id: String,
     pub env_names: Vec<String>,
-    pub agent_denylist: Vec<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summaries_dir: Option<String>,
 }

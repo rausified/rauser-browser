@@ -105,19 +105,6 @@
           <small>A folder inside the notes folder, separate from the visit log, page notes, and read-later folders.</small>
         </div>
 
-        <div class="field">
-          <h3>AI privacy exclusions</h3>
-          <small>Pages on these sites and their subdomains are never sent to an AI harness. Until the first harness setup confirms this list, changes wait for that setup. After it, adding an exclusion applies at once and removing one asks for confirmation, even if the harness is later removed.</small>
-          <label for="denylist-input">Exclude a domain</label>
-          <input id="denylist-input" type="text" placeholder="bank.example" spellcheck="false" autocomplete="off" />
-          <output id="denylist-preview"></output>
-          <div>
-            <button id="denylist-add" type="button" class="secondary" disabled>Add exclusion</button>
-          </div>
-          <div id="denylist-suggestions"><small>Common kinds of site to exclude. Choosing one fills the box with an example to edit:</small></div>
-          <ul id="denylist-list" class="plain-list"><li>No domains excluded.</li></ul>
-        </div>
-
         <button id="setup-harness" type="button" disabled>Set up harness…</button>
         <button id="remove-harness" type="button" class="secondary" disabled>Remove harness</button>
       </section>

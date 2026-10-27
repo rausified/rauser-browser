@@ -15,14 +15,9 @@ import {
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import {
-  SUGGESTED_EXCLUSIONS,
-  addDenylistEntry,
   agentStateText,
-  denylistEditsLive,
   harnessFoundText,
   harnessOfferNote,
-  previewDenylistEntry,
-  removeDenylistEntry,
 } from "./agent.js";
 import { forgetNoteOrigin, noteOrigins, pruneNoteOrigins } from "./grants.js";
 import {
@@ -70,11 +65,6 @@ const detectButton = element<HTMLButtonElement>("detect-harnesses");
 const offersList = element<HTMLUListElement>("harness-offers");
 const envList = element<HTMLUListElement>("harness-env");
 const summariesInput = element<HTMLInputElement>("summaries-dir");
-const denylistInput = element<HTMLInputElement>("denylist-input");
-const denylistPreview = element<HTMLOutputElement>("denylist-preview");
-const denylistAddButton = element<HTMLButtonElement>("denylist-add");
-const denylistSuggestions = element<HTMLDivElement>("denylist-suggestions");
-const denylistList = element<HTMLUListElement>("denylist-list");
 const setupButton = element<HTMLButtonElement>("setup-harness");
 const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
 
@@ -92,9 +82,6 @@ let preflight: {
 let offers: HarnessOffer[] = [];
 let selectedOfferId: string | null = null;
 const envChoices = new Map<string, boolean>();
-// Until setup confirms the list, exclusion edits stay on this page and are
-// sent with the setup request, which shows them in the native confirmation.
-let pendingDenylist: string[] | null = null;
 let summariesEdited = false;
 type AdapterEdit =
   | { kind: "new" }
@@ -189,8 +176,6 @@ function updateControls(): void {
   detectButton.disabled = !idle || session.configIssue !== null;
   setupButton.disabled = !idle || !session.config?.storage || selectedOffer() === null;
   removeHarnessButton.disabled = !idle || !session.config?.agent;
-  denylistAddButton.disabled = !idle || !addDenylistEntry(shownDenylist(), denylistInput.value).ok;
-  for (const control of denylistList.querySelectorAll("button")) control.disabled = !idle;
   for (const input of offersList.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
@@ -219,15 +204,6 @@ function selectOffer(offerId: string | null): void {
   envChoices.clear();
   // Credentials the host has are proposed; the user can untick any of them.
   for (const env of selectedOffer()?.env_optional ?? []) envChoices.set(env.name, env.present);
-}
-
-function denylistLive(): boolean {
-  return denylistEditsLive(session.config);
-}
-
-function shownDenylist(): string[] {
-  if (denylistLive()) return session.config!.agent_denylist;
-  return pendingDenylist ?? session.config?.agent_denylist ?? [];
 }
 
 function renderAgent(): void {
@@ -302,33 +278,6 @@ function renderAgent(): void {
       item.append(label);
       envList.append(item);
     }
-  }
-
-  denylistList.replaceChildren();
-  const list = shownDenylist();
-  if (!list.length) {
-    const item = document.createElement("li");
-    item.textContent = "No domains excluded.";
-    denylistList.append(item);
-  }
-  for (const entry of list) {
-    const item = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = entry;
-    item.append(label);
-    if (!denylistLive() && !(config?.agent_denylist.includes(entry) ?? false)) {
-      const pending = document.createElement("small");
-      pending.textContent = " Saved when you set up a harness.";
-      item.append(pending);
-    }
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "secondary";
-    remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove ${entry}`);
-    remove.addEventListener("click", () => void removeExclusion(entry));
-    item.append(remove);
-    denylistList.append(item);
   }
 }
 
@@ -1188,13 +1137,11 @@ async function setupHarness(): Promise<void> {
     return;
   }
   const envNames = offer.env_optional.filter((env) => envChoices.get(env.name)).map((env) => env.name);
-  const denylist = [...shownDenylist()];
   busy = true;
   updateControls();
   try {
     await withConfigMutationLock(() =>
-      session.setupHarness(offer.offer_id!, envNames, denylist, summaries));
-    pendingDenylist = null;
+      session.setupHarness(offer.offer_id!, envNames, summaries));
     summariesEdited = false;
     show(`${harnessName(offer.adapter)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
@@ -1224,82 +1171,6 @@ async function removeHarness(): Promise<void> {
   }
 }
 
-/** The host decides whether a change needs its dialog: none to add an
- * exclusion, one to remove it. */
-async function saveDenylist(list: string[], done: string): Promise<void> {
-  busy = true;
-  updateControls();
-  try {
-    await withConfigMutationLock(() =>
-      session.saveConfig({ ...session.config!, agent_denylist: list }, null));
-    show(done);
-  } catch (error) {
-    show(`Could not change AI privacy exclusions: ${describe(error)}`, true);
-    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
-  } finally {
-    busy = false;
-    renderConfig();
-  }
-}
-
-async function addExclusion(): Promise<void> {
-  if (busy || !session.connected) return;
-  const edit = addDenylistEntry(shownDenylist(), denylistInput.value);
-  if (!edit.ok) {
-    show(edit.error, true);
-    return;
-  }
-  const entry = edit.list[edit.list.length - 1]!;
-  denylistInput.value = "";
-  denylistPreview.textContent = "";
-  if (denylistLive()) {
-    await saveDenylist(edit.list, `AI commands now exclude ${entry} and its subdomains.`);
-  } else {
-    pendingDenylist = edit.list;
-    show(`${entry} will be excluded; harness setup asks you to confirm the list.`);
-    renderConfig();
-  }
-}
-
-async function removeExclusion(entry: string): Promise<void> {
-  if (busy || !session.connected) return;
-  const list = removeDenylistEntry(shownDenylist(), entry);
-  if (denylistLive()) {
-    await saveDenylist(list, `AI commands may now read pages on ${entry}.`);
-  } else {
-    pendingDenylist = list;
-    show(`${entry} removed from the list harness setup will confirm.`);
-    renderConfig();
-  }
-}
-
-function refreshDenylistPreview(): void {
-  const raw = denylistInput.value;
-  if (!raw.trim()) {
-    denylistPreview.textContent = "";
-  } else {
-    const preview = previewDenylistEntry(raw);
-    denylistPreview.textContent = preview.ok
-      ? `Excludes ${preview.normalized} and its subdomains.`
-      : preview.error;
-  }
-  updateControls();
-}
-
-for (const suggestion of SUGGESTED_EXCLUSIONS) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "secondary";
-  button.textContent = `${suggestion.label}, e.g. ${suggestion.example}`;
-  // Only fills the box; the user edits it and chooses Add.
-  button.addEventListener("click", () => {
-    denylistInput.value = suggestion.example;
-    refreshDenylistPreview();
-    denylistInput.focus();
-  });
-  denylistSuggestions.append(button);
-}
-
 detectButton.addEventListener("click", () => void detectHarnesses());
 newAdapterButton.addEventListener("click", () => beginAdapterEdit("new"));
 resetAdaptersButton.addEventListener("click", () => void saveAdapterDocument(
@@ -1314,11 +1185,6 @@ adapterPreviewUrl.addEventListener("input", refreshAdapterEditor);
 adapterPreviewTitle.addEventListener("input", refreshAdapterEditor);
 setupButton.addEventListener("click", () => void setupHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
-denylistAddButton.addEventListener("click", () => void addExclusion());
-denylistInput.addEventListener("input", refreshDenylistPreview);
-denylistInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") void addExclusion();
-});
 summariesInput.addEventListener("input", () => { summariesEdited = true; });
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
 enableButton.addEventListener("click", enableSite);

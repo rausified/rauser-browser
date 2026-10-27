@@ -26,7 +26,6 @@ thread_local! {
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
-use crate::privacy;
 use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
@@ -96,16 +95,6 @@ const AGENT_ENTRY_INVALID: &str = concat!(
     "The AI harness entry in config.toml is invalid. Set up the harness again in ",
     crate::app_name!(),
     " settings."
-);
-const SET_UP_AGENT: &str = concat!(
-    "Set up an AI harness and confirm AI privacy exclusions in ",
-    crate::app_name!(),
-    " settings."
-);
-const CONFIRM_DENYLIST: &str = concat!(
-    "Confirm AI privacy exclusions in ",
-    crate::app_name!(),
-    " settings before using AI commands."
 );
 const SET_UP_HARNESS: &str = concat!("Set up an AI harness in ", crate::app_name!(), " settings.");
 const CHOOSE_SUMMARIES: &str = concat!(
@@ -200,8 +189,8 @@ impl HarnessRecord {
     }
 }
 
-/// What native harness setup commits in one write (§7.3): the harness entry,
-/// its checked record, and `agent_denylist_confirmed = true`.
+/// What native harness setup commits in one write (§7.3): the harness entry
+/// and its checked record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommit {
     pub agent: AgentConfig,
@@ -477,8 +466,8 @@ impl ConfigStore {
     }
 
     /// Whether AI commands may run. Call under `lock_current` right after
-    /// `refresh`. The host refuses every agent request until the user has
-    /// confirmed the denylist once through native harness setup (§7.3).
+    /// `refresh`. A harness committed by native harness setup is enough;
+    /// there is no separate privacy confirmation.
     pub fn agent_readiness(&self) -> Result<AgentReadiness, (ErrorCode, String)> {
         self.agent_gate()
             .map_err(|refusal| (refusal.code, refusal.message))
@@ -516,17 +505,6 @@ impl ConfigStore {
                 ErrorCode::InvalidConfig,
                 "configuration is unavailable or needs repair",
             ));
-        }
-        if !self.config.agent_denylist_confirmed {
-            return Err(if self.config.agent.is_some() {
-                refuse(
-                    AgentState::DenylistUnconfirmed,
-                    ErrorCode::NotConfigured,
-                    CONFIRM_DENYLIST,
-                )
-            } else {
-                refuse(AgentState::NotSetUp, ErrorCode::NotConfigured, SET_UP_AGENT)
-            });
         }
         let Some(agent) = &self.config.agent else {
             return Err(match &self.agent.issue {
@@ -642,7 +620,6 @@ impl ConfigStore {
         validate_base(&next)?;
         if let Some(commit) = &harness_commit
             && (next.agent.as_ref() != Some(&commit.agent)
-                || !next.agent_denylist_confirmed
                 || commit.record.harness_id != commit.agent.harness_id)
         {
             bail!("harness setup does not match this configuration");
@@ -705,12 +682,7 @@ impl ConfigStore {
                 AgentView::committed(commit)?
             }
             None => {
-                // Only native harness setup turns the confirmation on or sets
-                // a harness. Removing the harness keeps the confirmation.
-                let confirmed = current.issue.is_none() && current.config.agent_denylist_confirmed;
-                if next.agent_denylist_confirmed != confirmed {
-                    bail!("agent_denylist_confirmed can only be set by native harness setup");
-                }
+                // Only native harness setup sets a harness.
                 match (&next.agent, &current.config.agent) {
                     (None, Some(_)) => AgentView::default(),
                     // Keep an entry this host cannot parse for the user to fix.
@@ -821,13 +793,13 @@ struct StoredConfig {
     // Accept and ignore the retired M1 key. New config writes omit it.
     #[serde(default, skip_serializing, rename = "near_repeat_secs")]
     _near_repeat_secs: Option<u32>,
-    // A missing key (any config written before M2) counts as unconfirmed.
-    #[serde(default)]
-    agent_denylist: Vec<String>,
-    #[serde(default)]
-    agent_denylist_confirmed: bool,
-    #[serde(default)]
-    log_incognito: bool,
+    // Accept and ignore the retired v5 privacy keys. New config writes omit them.
+    #[serde(default, skip_serializing, rename = "agent_denylist")]
+    _agent_denylist: Option<toml::Value>,
+    #[serde(default, skip_serializing, rename = "agent_denylist_confirmed")]
+    _agent_denylist_confirmed: Option<toml::Value>,
+    #[serde(default, skip_serializing, rename = "log_incognito")]
+    _log_incognito: Option<toml::Value>,
     #[serde(default)]
     agent: Option<toml::Value>,
     #[serde(default)]
@@ -1005,9 +977,9 @@ impl StoredConfig {
             sites: value.sites.clone(),
             strip_params: value.strip_params.clone(),
             _near_repeat_secs: None,
-            agent_denylist: value.agent_denylist.clone(),
-            agent_denylist_confirmed: value.agent_denylist_confirmed,
-            log_incognito: value.log_incognito,
+            _agent_denylist: None,
+            _agent_denylist_confirmed: None,
+            _log_incognito: None,
             // The harness entry and record come from the host's own view,
             // never from the extension's snapshot.
             agent: agent.table.clone(),
@@ -1029,9 +1001,6 @@ impl From<StoredConfig> for ConfigSnapshot {
             capture_enabled: value.capture_enabled,
             sites: value.sites,
             strip_params: value.strip_params,
-            agent_denylist: value.agent_denylist,
-            agent_denylist_confirmed: value.agent_denylist_confirmed,
-            log_incognito: value.log_incognito,
             agent: None,
             adapters: AdapterDocument {
                 format: value.adapters.format,
@@ -1297,9 +1266,6 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
         capture_enabled: false,
         sites: Vec::new(),
         strip_params: default_strip_params(),
-        agent_denylist: Vec::new(),
-        agent_denylist_confirmed: false,
-        log_incognito: false,
         agent: None,
         adapters: AdapterDocument {
             format: 1,
@@ -1362,10 +1328,6 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     if config.capture_enabled && (config.storage.is_none() || config.sites.is_empty()) {
         bail!("capture requires a selected notes folder and at least one site");
     }
-    if config.log_incognito {
-        bail!("log_incognito cannot be turned on");
-    }
-    privacy::validate_denylist(&config.agent_denylist)?;
     if let Some(agent) = &config.agent {
         validate_agent(agent)?;
     }
@@ -1972,7 +1934,7 @@ pub(crate) mod fixtures {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist = [\"bank.example\"]\nagent_denylist_confirmed = true",
+            "",
             &format!("{}{}", agent_table(&binary), record_table(&binary)),
         );
         (path, root, binary)
@@ -2093,10 +2055,10 @@ mod tests {
     }
 
     #[test]
-    fn m1_config_without_new_keys_loads_unconfirmed() {
+    fn m1_config_without_new_keys_loads_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        // An M1 file: storage without summaries_dir and no privacy keys.
+        // An M1 file: storage without summaries_dir and no agent keys.
         fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
         let store = loaded(&path);
         assert_eq!(store.config_issue(), None);
@@ -2107,16 +2069,13 @@ mod tests {
             snapshot.storage.as_ref().unwrap().artifacts_dir,
             "artifacts"
         );
-        assert!(snapshot.agent_denylist.is_empty());
-        assert!(!snapshot.agent_denylist_confirmed);
-        assert!(!snapshot.log_incognito);
         assert_eq!(snapshot.agent, None);
         assert_eq!(snapshot.adapters.format, 1);
         assert!(snapshot.adapters.artifacts.is_empty());
         assert_eq!(store.adapter_issue(), None);
         assert_eq!(
             refusal(&store),
-            (ErrorCode::NotConfigured, SET_UP_AGENT.into())
+            (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
         );
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
     }
@@ -2605,7 +2564,7 @@ mod tests {
 
         let revision = store.revision().to_owned();
         let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
+            strip_params: vec!["utm_*".into()],
             ..store.snapshot().clone()
         };
         store.update(next, &revision).unwrap().unwrap();
@@ -2677,7 +2636,7 @@ mod tests {
         let mut store = loaded(&path);
         let revision = store.revision().to_owned();
         let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
+            strip_params: vec!["utm_*".into()],
             ..store.snapshot().clone()
         };
 
@@ -2685,7 +2644,7 @@ mod tests {
 
         let mut reloaded = loaded(&path);
         assert_eq!(reloaded.snapshot().adapters.format, 2);
-        assert_eq!(reloaded.snapshot().agent_denylist, ["bank.example"]);
+        assert_eq!(reloaded.snapshot().strip_params, ["utm_*"]);
         assert!(reloaded.adapter_issue().is_some());
 
         let revision = reloaded.revision().to_owned();
@@ -2789,40 +2748,29 @@ mod tests {
     }
 
     #[test]
-    fn log_incognito_true_is_rejected_and_on_disk_true_is_recoverable() {
-        let config = ConfigSnapshot {
-            log_incognito: true,
-            ..empty_config()
-        };
-        assert!(validate(&config).is_err());
-
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("config.toml");
-        fixtures::write(&path, folder.path(), "", "log_incognito = true", "");
+    fn v5_config_with_retired_privacy_keys_loads_and_drops_them_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "agent_denylist = [\"bank.example\"]\nagent_denylist_confirmed = true\nlog_incognito = true",
+            "",
+        );
         let mut store = loaded(&path);
-        assert!(store.config_issue().is_some());
-        assert!(!store.configured());
-        let revision = store.revision().to_owned();
-        let repaired = ConfigSnapshot {
-            storage: Some(StorageConfig {
-                root: folder.path().to_string_lossy().into_owned(),
-                profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
-                later_dir: "later".into(),
-                artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
-            }),
-            ..empty_config()
-        };
-        let identity = selected_root_identity(folder.path()).unwrap();
+        assert_eq!(store.config_issue(), None);
+        assert!(store.configured());
+        assert_eq!(backup_count(dir.path()), 0);
+        let rev = store.revision().to_owned();
         store
-            .update_with_root_identity(repaired, &revision, Some(&identity))
+            .update(store.snapshot().clone(), &rev)
             .unwrap()
             .unwrap();
-        let store = loaded(&path);
-        assert_eq!(store.config_issue(), None);
-        assert!(!store.snapshot().log_incognito);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("agent_denylist") && !text.contains("log_incognito"));
     }
 
     #[test]
@@ -2833,7 +2781,7 @@ mod tests {
             &path,
             folder.path(),
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             "[agent]\ndefault = \"claude-code\"\n[agent.harnesses.claude-code]\nbinary = \"claude\"\nargs = [\"{prompt}\"]\n",
         );
         let mut store = loaded(&path);
@@ -2922,7 +2870,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn agent_readiness_is_ready_with_confirmed_denylist_and_unchanged_harness() {
+    fn agent_readiness_is_ready_with_committed_and_unchanged_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, binary) = fixtures::ready(folder.path());
         let store = loaded(&path);
@@ -2959,7 +2907,7 @@ mod tests {
     }
 
     #[test]
-    fn update_without_commit_cannot_confirm_or_set_a_harness() {
+    fn update_without_commit_cannot_set_a_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, root, _) = fixtures::ready(folder.path());
         let agent = loaded(&path).snapshot().agent.clone().unwrap();
@@ -2967,36 +2915,16 @@ mod tests {
         let mut store = loaded(&path);
         let revision = store.revision().to_owned();
         let before = fs::read(&path).unwrap();
-        for next in [
-            ConfigSnapshot {
-                agent_denylist_confirmed: true,
-                ..store.snapshot().clone()
-            },
-            ConfigSnapshot {
-                agent: Some(agent.clone()),
-                ..store.snapshot().clone()
-            },
-        ] {
-            assert!(store.update(next, &revision).is_err());
-        }
+        let next = ConfigSnapshot {
+            agent: Some(agent),
+            ..store.snapshot().clone()
+        };
+        assert!(store.update(next, &revision).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]
-    fn update_without_commit_cannot_unconfirm_the_denylist() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = fixtures::ready(folder.path());
-        let mut store = loaded(&path);
-        let revision = store.revision().to_owned();
-        let next = ConfigSnapshot {
-            agent_denylist_confirmed: false,
-            ..store.snapshot().clone()
-        };
-        assert!(store.update(next, &revision).is_err());
-    }
-
-    #[test]
-    fn removing_harness_keeps_denylist_confirmed() {
+    fn removing_harness_leaves_ai_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, _) = fixtures::ready(folder.path());
         let mut store = loaded(&path);
@@ -3010,11 +2938,6 @@ mod tests {
         assert!(!contents.contains("[agent"));
         assert!(!contents.contains("[harness_record]"));
         let store = loaded(&path);
-        assert!(store.snapshot().agent_denylist_confirmed);
-        assert_eq!(
-            store.snapshot().agent_denylist,
-            vec!["bank.example".to_owned()]
-        );
         assert_eq!(
             refusal(&store),
             (ErrorCode::NotConfigured, SET_UP_HARNESS.into())
@@ -3102,7 +3025,7 @@ mod tests {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             &format!(
                 "{}{}",
                 fixtures::harness_table("codex", &binary, &harness::codex_args("0.144.4").unwrap()),
@@ -3118,7 +3041,7 @@ mod tests {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             &format!(
                 "{}{}",
                 fixtures::harness_table("codex", &binary, &harness::codex_args("0.144.4").unwrap()),
@@ -3170,7 +3093,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_readiness_refuses_unconfirmed() {
+    fn v5_unconfirmed_denylist_key_no_longer_blocks_a_committed_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, root, binary) = fixtures::ready(folder.path());
         fixtures::write(
@@ -3185,14 +3108,9 @@ mod tests {
             ),
         );
         let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
         assert!(store.snapshot().agent.is_some());
-        assert_eq!(
-            refusal(&store),
-            (ErrorCode::NotConfigured, CONFIRM_DENYLIST.into())
-        );
-        let status = store.agent_status();
-        assert_eq!(status.state, AgentState::DenylistUnconfirmed);
-        assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
+        assert_ready_here(&store, "claude-code", "2.1.284");
     }
 
     #[test]
@@ -3203,7 +3121,7 @@ mod tests {
             &path,
             folder.path(),
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             "",
         );
         let store = loaded(&path);
@@ -3222,7 +3140,7 @@ mod tests {
             &path,
             &root,
             "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = true",
+            "",
             &fixtures::agent_table(&binary),
         );
         let store = loaded(&path);
@@ -3236,7 +3154,7 @@ mod tests {
             &path,
             &root,
             "",
-            "agent_denylist_confirmed = true",
+            "",
             &format!(
                 "{}{}",
                 fixtures::agent_table(&binary),
@@ -3250,7 +3168,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_commit_writes_entry_record_and_confirmation_in_one_write() {
+    fn harness_commit_writes_entry_and_record_in_one_write() {
         let folder = tempfile::tempdir().unwrap();
         let (path, root, binary) = fixtures::ready(folder.path());
         let record: HarnessRecord = loaded(&path).agent.record.clone().unwrap();
@@ -3258,7 +3176,6 @@ mod tests {
         let mut store = loaded(&path);
         let revision = store.revision().to_owned();
         let next = ConfigSnapshot {
-            agent_denylist_confirmed: true,
             agent: Some(claude(&binary)),
             ..store.snapshot().clone()
         };
@@ -3288,7 +3205,6 @@ mod tests {
             .unwrap()
             .unwrap();
         let store = loaded(&path);
-        assert!(store.snapshot().agent_denylist_confirmed);
         assert_eq!(store.snapshot().agent, Some(claude(&binary)));
         assert_ready_here(&store, "claude-code", "2.1.284");
     }
@@ -3298,17 +3214,10 @@ mod tests {
     fn committed(folder: &Path) -> (PathBuf, PathBuf, String) {
         let (path, root, binary) = fixtures::ready(folder);
         let record: HarnessRecord = loaded(&path).agent.record.clone().unwrap();
-        fixtures::write(
-            &path,
-            &root,
-            "summaries_dir = \"summaries\"",
-            "agent_denylist = [\"bank.example\"]",
-            "",
-        );
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
         let mut store = loaded(&path);
         assert_eq!(store.agent_status().state, AgentState::NotSetUp);
         let next = ConfigSnapshot {
-            agent_denylist_confirmed: true,
             agent: Some(claude(&binary)),
             ..store.snapshot().clone()
         };
@@ -3325,13 +3234,13 @@ mod tests {
     }
 
     #[test]
-    fn harness_commit_writes_record_and_flag_in_one_revision() {
+    fn harness_commit_writes_entry_and_record_in_one_revision() {
         let folder = tempfile::tempdir().unwrap();
         let (path, binary, revision) = committed(folder.path());
         let text = fs::read_to_string(&path).unwrap();
-        // One serialization carries all three; the revision is of that file.
+        // One serialization carries both; the revision is of that file.
         assert_eq!(revision_for(text.as_bytes()), revision);
-        assert!(text.contains("agent_denylist_confirmed = true"), "{text}");
+        assert!(!text.contains("agent_denylist"), "{text}");
         assert!(text.contains("[agent"), "{text}");
         assert!(text.contains("[harness_record]"), "{text}");
         assert!(text.contains("probe_passed_at"), "{text}");
@@ -3366,7 +3275,6 @@ mod tests {
                 .iter()
                 .any(|value| value == "campaign")
         );
-        assert!(store.snapshot().agent_denylist_confirmed);
         assert_eq!(store.agent.record, record);
         assert_ready_here(&store, "claude-code", "2.1.284");
     }

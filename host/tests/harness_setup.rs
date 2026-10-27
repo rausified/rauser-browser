@@ -96,7 +96,8 @@ esac
         PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
     }
 
-    /// A config with a notes folder chosen and no harness.
+    /// A config with a notes folder chosen and no harness. It still carries
+    /// a retired v5 privacy key, which loads and is dropped on the next save.
     fn write_config(&self) {
         let root = fs::canonicalize(self.path("notes")).unwrap();
         let metadata = fs::metadata(&root).unwrap();
@@ -222,7 +223,6 @@ impl Host {
             "expected_revision": revision,
             "offer_id": offer_id,
             "env_names": [],
-            "agent_denylist": ["bank.example"],
             "summaries_dir": null,
         }))
     }
@@ -259,7 +259,7 @@ fn assert_secret_absent(world: &World) {
 }
 
 #[test]
-fn harness_setup_confirms_and_commits_flag() {
+fn harness_setup_confirms_and_commits_harness() {
     let world = World::new(PASSING_BODY);
     let mut host = world.serve();
     let revision = host.revision();
@@ -283,7 +283,10 @@ fn harness_setup_confirms_and_commits_flag() {
         "Program: {:?}",
         world.path("bin").join("claude").to_str().unwrap()
     )));
-    assert!(text.contains(": \"bank.example\"\n"));
+    assert!(
+        !text.contains("bank.example") && !text.contains("privacy"),
+        "{text}"
+    );
     assert_eq!(
         confirmed["summary"].as_str(),
         text.split_once('\n').map(|(_, body)| body)
@@ -308,14 +311,14 @@ fn harness_setup_confirms_and_commits_flag() {
         "harness_token": confirmed["harness_token"],
     }));
     assert_eq!(updated["type"], "config_updated", "{updated}");
-    let checked = host.call(json!({"type": "check_agent", "url": "https://mail.bank.example/"}));
+    let checked = host.call(json!({"type": "check_agent"}));
     assert_eq!(checked["type"], "agent_checked", "{checked}");
     assert_eq!(checked["harness_version"], "2.1.284");
-    assert_eq!(checked["url_allowed"], false);
+    assert!(checked.get("url_allowed").is_none(), "{checked}");
     host.close();
 
     let saved = fs::read_to_string(&world.config).unwrap();
-    assert!(saved.contains("agent_denylist_confirmed = true"), "{saved}");
+    assert!(!saved.contains("agent_denylist"), "{saved}");
     assert!(saved.contains("[harness_record]"), "{saved}");
     assert!(saved.contains("summaries_dir = \"summaries\""), "{saved}");
     assert_secret_absent(&world);

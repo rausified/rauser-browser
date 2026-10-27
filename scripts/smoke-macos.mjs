@@ -935,10 +935,11 @@ async function run() {
   // --headless: the host's dialog child records each dialog in shown.jsonl
   // and waits for an answer file. Answer only the dialog the step expects.
   let dialogsShown = 0;
+  const dialogLogLines = async () => (await readFile(path.join(dialogs, "shown.jsonl"), "utf8").catch(() => ""))
+    .split("\n").filter(Boolean);
   async function scriptedDialog(dialog, reply) {
     const shown = await waitFor(async () => {
-      const lines = (await readFile(path.join(dialogs, "shown.jsonl"), "utf8").catch(() => ""))
-        .split("\n").filter(Boolean);
+      const lines = await dialogLogLines();
       requireCondition(lines.length > dialogsShown, `The ${dialog} dialog has not opened`);
       return JSON.parse(lines[dialogsShown]);
     }, { timeout: 20_000, signal: abort.signal });
@@ -1534,41 +1535,18 @@ async function run() {
       requireCondition(status?.startsWith(prefix), `Settings page says: ${status}`);
       return status;
     }, { timeout: 60_000 });
-    function describesSetup(text, denylist) {
+    function describesSetup(text) {
       for (const expected of [`${fakeInstallReal}/`, `"${fakeBin}/claude"`, "--disallowedTools", "{prompt}",
         "HOME", "PATH", "ANTHROPIC_API_KEY", "\"summaries\""]) {
         requireCondition(text.includes(expected), `The setup dialog does not show ${expected}: ${JSON.stringify(text)}`);
       }
       requireCondition(!text.includes(secret) && !text.includes("SMOKE_NOT_ALLOWED"),
         "The setup dialog shows an environment value or a name it must not pass");
-      requireCondition(denylist.length ? denylist.every((entry) => text.includes(JSON.stringify(entry))) &&
-        !text.includes("No domains excluded.") : text.includes("No domains excluded."),
-      `The setup dialog does not list the exclusions ${JSON.stringify(denylist)}: ${JSON.stringify(text)}`);
     }
 
     if (!options.headless) {
       console.log("\nAI harness setup steps skipped: they run with --headless only.");
     } else {
-      await step("AI commands refused until privacy list is confirmed", async () => {
-        const refused = await agentRequest({ type: "check_agent", url: null });
-        requireCondition(refused.type === "error" && refused.code === "not_configured" &&
-          refused.message.includes("settings"), `check_agent answered ${JSON.stringify(refused)}`);
-        const before = await hostConfig(wrapper);
-        const forged = { ...before.config, agent_denylist_confirmed: true };
-        for (const harnessToken of [null, randomUUID()]) {
-          const reply = await agentRequest({
-            type: "update_config", expected_revision: before.revision, config: forged,
-            picker_token: null, consent_token: null, harness_token: harnessToken,
-          });
-          requireCondition(reply.type === "error" && reply.code === "unauthorized",
-            `Confirming the privacy list without setup answered ${reply.type} ${reply.code ?? ""}`);
-        }
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && !after.config.agent_denylist_confirmed &&
-          after.config.agent === null && after.agent_status.state === "not_set_up",
-        `The refused updates changed the config: ${JSON.stringify(after.agent_status)}`);
-      });
-
       await step("Detect harnesses", async () => {
         const rows = await detect();
         const claude = rows.find((row) => row.adapter === "claude_code");
@@ -1600,7 +1578,7 @@ async function run() {
       await step("Harness setup canceled", async () => {
         const before = await hostConfig(wrapper);
         await startSetup();
-        describesSetup(await scriptedDialog("confirm", "canceled"), []);
+        describesSetup(await scriptedDialog("confirm", "canceled"));
         await settledStatus("Harness setup did not finish: Canceled");
         const after = await hostConfig(wrapper);
         requireCondition(after.revision === before.revision && after.config.agent === null,
@@ -1617,8 +1595,8 @@ async function run() {
         const status = await settledStatus("Harness setup did not finish");
         requireCondition(status.includes("failed its test run"), `Settings page says: ${status}`);
         const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && !after.config.agent_denylist_confirmed &&
-          after.config.agent === null, "A failed test run changed the config");
+        requireCondition(after.revision === before.revision && after.config.agent === null,
+          "A failed test run changed the config");
         const probes = await probeRuns();
         requireCondition(probes.length === 1 && probes[0].program === "claude-bad" && probes[0].argv === probeArgv,
           `Expected one test run with the template argv; got ${JSON.stringify(probes)}`);
@@ -1626,21 +1604,12 @@ async function run() {
 
       await step("Harness setup confirmed", async () => {
         await pointFakeClaude(fakeBin, fakeInstall, "good");
-        await onSettings((page) => page.fill("#denylist-input", "Bank.Example"));
-        await inSettings((page) => page.click("#denylist-add"));
-        await waitFor(async () => requireCondition(
-          await onSettings((page) => page.evaluate('!!document.querySelector(\'#denylist-list button[aria-label="Remove bank.example"]\')')),
-          "bank.example is not in the pending list"));
-        requireCondition((await hostConfig(wrapper)).config.agent_denylist.length === 0,
-          "A pending exclusion was saved before setup");
         await detect();
         await startSetup();
-        describesSetup(await scriptedDialog("confirm", "confirmed"), ["bank.example"]);
+        describesSetup(await scriptedDialog("confirm", "confirmed"));
         await settledStatus("Claude Code is set up.");
         const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.agent_denylist_confirmed &&
-          reply.config.agent?.binary === `${fakeBin}/claude` &&
-          reply.config.agent_denylist.join(",") === "bank.example" &&
+        requireCondition(reply.config.agent?.binary === `${fakeBin}/claude` &&
           reply.config.storage?.summaries_dir === "summaries",
         `The host config after setup: ${JSON.stringify({ ...reply.config, sites: undefined })}`);
         requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "2.1.284",
@@ -1651,62 +1620,9 @@ async function run() {
           good[0].env.join(",") === "ANTHROPIC_API_KEY,HOME,PATH",
         `Expected one passing test run with the chosen env names; got ${JSON.stringify(probes)}`);
         requireCondition(!(await readFile(configPath, "utf8")).includes(secret), "config.toml holds an environment value");
-        for (const [url, allowedUrl] of [["https://www.bank.example/x", false], ["https://example.org/", true]]) {
-          const checked = await agentRequest({ type: "check_agent", url });
-          requireCondition(checked.type === "agent_checked" && checked.url_allowed === allowedUrl,
-            `check_agent for ${url} answered ${JSON.stringify(checked)}`);
-        }
-      });
-
-      // Run while edits are live, so an auto-add would save at once (§7.3).
-      await step("Suggestion only fills the box", async () => {
-        const shownEntries = () => onSettings((page) => page.evaluate(
-          '[...document.querySelectorAll("#denylist-list button[aria-label^=\\"Remove \\"]")].map((b) => b.getAttribute("aria-label"))'));
-        const before = await hostConfig(wrapper);
-        const listBefore = await shownEntries();
-        await onSettings((page) => page.fill("#denylist-input", ""));
-        // The second suggestion (Email) is mail.example, not yet excluded.
-        await inSettings((page) => page.click("#denylist-suggestions button:nth-of-type(2)"));
-        const value = await onSettings((page) => page.evaluate('document.getElementById("denylist-input").value'));
-        requireCondition(value === "mail.example", `The suggestion filled the box with ${JSON.stringify(value)}`);
-        await delay(500);
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision &&
-          after.config.agent_denylist.join(",") === before.config.agent_denylist.join(","),
-        `Choosing a suggestion changed the host denylist: ${JSON.stringify(after.config.agent_denylist)}`);
-        requireCondition(JSON.stringify(await shownEntries()) === JSON.stringify(listBefore),
-          `Choosing a suggestion changed the shown list: ${JSON.stringify(await shownEntries())}`);
-      });
-
-      await step("Denylist add is immediate, removal asks", async () => {
-        const hasEntry = (entry) => onSettings((page) => page.evaluate(
-          `!!document.querySelector('#denylist-list button[aria-label="Remove ${entry}"]')`));
-        const shownCount = async () => (await readFile(path.join(dialogs, "shown.jsonl"), "utf8"))
-          .split("\n").filter(Boolean).length;
-        const shownBefore = await shownCount();
-        await onSettings((page) => page.fill("#denylist-input", "mail.example"));
-        await inSettings((page) => page.click("#denylist-add"));
-        await settledStatus("AI commands now exclude mail.example");
-        requireCondition(await shownCount() === shownBefore, "Adding an exclusion opened a dialog");
-        requireCondition((await hostConfig(wrapper)).config.agent_denylist.includes("mail.example"),
-          "mail.example was not saved");
-
-        await inSettings((page) => page.click('#denylist-list button[aria-label="Remove bank.example"]'));
-        await scriptedDialog("confirm", "canceled");
-        await settledStatus("Could not change AI privacy exclusions: Canceled");
-        requireCondition(await hasEntry("bank.example") &&
-          (await hostConfig(wrapper)).config.agent_denylist.includes("bank.example"),
-        "A canceled removal still removed bank.example");
-
-        await inSettings((page) => page.click('#denylist-list button[aria-label="Remove bank.example"]'));
-        const text = await scriptedDialog("confirm", "confirmed");
-        requireCondition(text.includes('Allow AI commands to read pages on "bank.example"'),
-          `The removal dialog does not describe the change: ${JSON.stringify(text)}`);
-        await settledStatus("AI commands may now read pages on bank.example");
-        const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.agent_denylist.join(",") === "mail.example" &&
-          reply.config.agent_denylist_confirmed && !(await hasEntry("bank.example")),
-        `The denylist after removal: ${JSON.stringify(reply.config.agent_denylist)}`);
+        const checked = await agentRequest({ type: "check_agent" });
+        requireCondition(checked.type === "agent_checked" && checked.harness_version === "2.1.284" &&
+          !("url_allowed" in checked), `check_agent answered ${JSON.stringify(checked)}`);
       });
 
       // Codex runs under the user's own HOME (and CODEX_HOME when set), so
@@ -1720,7 +1636,7 @@ async function run() {
         const text = await scriptedDialog("confirm", "confirmed");
         for (const expected of ["Codex runs with your normal Codex home and login",
           "instructions (AGENTS.md) and skills can shape its answers", "Claude Code is the recommended harness",
-          `"${fakeBin}/codex"`, "--sandbox", "read-only", "--disable", "shell_tool", "{prompt}", "mail.example"]) {
+          `"${fakeBin}/codex"`, "--sandbox", "read-only", "--disable", "shell_tool", "{prompt}"]) {
           requireCondition(text.includes(expected), `The Codex dialog does not show ${expected}: ${JSON.stringify(text)}`);
         }
         requireCondition(!text.includes(secret) && !text.includes("ANTHROPIC_API_KEY"),
@@ -1728,8 +1644,7 @@ async function run() {
         await settledStatus("Codex is set up.");
         const reply = await hostConfig(wrapper);
         const agent = reply.config.agent;
-        requireCondition(agent?.binary === `${fakeBin}/codex` && reply.config.agent_denylist_confirmed &&
-          agent.env_allow.join(",") === "HOME,PATH" && reply.config.agent_denylist.join(",") === "mail.example",
+        requireCondition(agent?.binary === `${fakeBin}/codex` && agent.env_allow.join(",") === "HOME,PATH",
         `The host config after Codex setup: ${JSON.stringify({ ...reply.config, sites: undefined })}`);
         requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "0.144.4",
           `Agent status: ${JSON.stringify(reply.agent_status)}`);
@@ -1748,10 +1663,9 @@ async function run() {
         const reply = await hostConfig(wrapper);
         requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,
           "Host still has capture enabled or the site rule");
-        // A capture change echoes the harness and its confirmation unchanged.
+        // A capture change echoes the harness unchanged.
         if (options.headless) {
-          requireCondition(reply.config.agent !== null && reply.config.agent_denylist_confirmed,
-            "Site removal dropped the AI harness or its privacy-list confirmation");
+          requireCondition(reply.config.agent !== null, "Site removal dropped the AI harness");
         }
       }, { timeout: 20_000, interval: 1_000 });
       await waitFor(async () => {
@@ -1764,22 +1678,6 @@ async function run() {
         requireCondition(reason === "No sites are enabled for capture.", `Setup warning says: ${reason}`);
       }), { timeout: 20_000 });
     });
-
-    if (options.headless) {
-      await step("Denylist stays live after harness removal", async () => {
-        await inSettings((page) => page.click("#remove-harness"));
-        await settledStatus("Harness removed.");
-        const removed = await hostConfig(wrapper);
-        requireCondition(removed.config.agent === null && removed.config.agent_denylist_confirmed,
-          `Removing the harness changed the confirmation: ${JSON.stringify(removed.agent_status)}`);
-        // With no harness the list still saves at once, not on the next setup.
-        await onSettings((page) => page.fill("#denylist-input", "hr.example"));
-        await inSettings((page) => page.click("#denylist-add"));
-        await settledStatus("AI commands now exclude hr.example");
-        requireCondition((await hostConfig(wrapper)).config.agent_denylist.includes("hr.example"),
-          "hr.example was not saved after the harness was removed");
-      });
-    }
 
     await step("No capture after removal", async () => {
       await closePanel();
@@ -1801,7 +1699,9 @@ async function run() {
         const pids = (await commandOutput("/usr/bin/pgrep", ["-f", `${options.host} __dialog-`]).catch(() => ""))
           .split("\n").filter(Boolean);
         requireCondition(pids.length === 0, "A dialog process is still running");
-        requireCondition(dialogsShown === 14, `Expected fourteen scripted dialogs; answered ${dialogsShown}`);
+        const logged = (await dialogLogLines()).length;
+        requireCondition(dialogsShown === logged,
+          `The host opened ${logged} dialogs; the smoke answered ${dialogsShown}`);
         requireCondition(!(await maybeLstat(path.join(dialogs, "answer"))), "An unused scripted answer remains");
         await nothingOnScreen();
       });

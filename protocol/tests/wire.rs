@@ -1,11 +1,11 @@
 use brauser_protocol::{Request, Response};
 
-// Every privacy and agent key is required on the wire, like `storage`.
-const PRIVACY: &str = r#""agent_denylist":[],"agent_denylist_confirmed":false,"log_incognito":false,"agent":null,"adapters":{"format":1,"artifacts":[]}"#;
+// Every agent and adapter key is required on the wire, like `storage`.
+const AGENT_AND_ADAPTERS: &str = r#""agent":null,"adapters":{"format":1,"artifacts":[]}"#;
 
 fn config(storage: &str) -> String {
     format!(
-        r#"{{{storage}"capture_enabled":false,"sites":[],"strip_params":["utm_*","fbclid","gclid"],{PRIVACY}}}"#
+        r#"{{{storage}"capture_enabled":false,"sites":[],"strip_params":["utm_*","fbclid","gclid"],{AGENT_AND_ADAPTERS}}}"#
     )
 }
 
@@ -81,13 +81,36 @@ fn v6_config_requires_artifacts_dir_key() {
     );
 }
 
+fn config_with_extra(key: &str) -> String {
+    let value = if key == "agent_denylist" {
+        r#"["bank.example"]"#
+    } else {
+        "false"
+    };
+    let body = config(r#""storage":null,"#).replacen('{', &format!(r#"{{"{key}":{value},"#), 1);
+    format!(
+        r#"{{"type":"config_result","protocol_version":6,"request_id":"r1","revision":"missing","config_issue":null,"agent_status":{{"state":"not_set_up","harness_version":null,"message":null}},"adapter_issue":null,"adapter_warnings":[],"config":{body}}}"#
+    )
+}
+
 #[test]
-fn v6_config_requires_privacy_and_adapter_keys() {
+fn v6_config_rejects_retired_privacy_keys() {
+    assert!(serde_json::from_str::<Response>(&config_with_extra("capture_enabled_x")).is_err());
+    let plain = config_with_extra("x").replace(r#""x":false,"#, "");
+    assert!(serde_json::from_str::<Response>(&plain).is_ok(), "{plain}");
     for key in [
-        r#""agent_denylist":[],"#,
-        r#""agent_denylist_confirmed":false,"#,
-        r#""log_incognito":false,"#,
-        r#","agent":null"#,
+        "agent_denylist",
+        "agent_denylist_confirmed",
+        "log_incognito",
+    ] {
+        assert!(serde_json::from_str::<Response>(&config_with_extra(key)).is_err());
+    }
+}
+
+#[test]
+fn v6_config_requires_agent_and_adapter_keys() {
+    for key in [
+        r#""agent":null,"#,
         r#","adapters":{"format":1,"artifacts":[]}"#,
     ] {
         let without = config(r#""storage":null,"#).replace(key, "");
@@ -131,21 +154,20 @@ fn harness_adapter_rejects_hyphenated_value() {
 }
 
 #[test]
-fn check_agent_requires_url_key() {
+fn check_agent_carries_no_url() {
+    let plain = r#"{"type":"check_agent","protocol_version":6,"request_id":"r1"}"#;
+    assert!(serde_json::from_str::<Request>(plain).is_ok());
     let with_url = r#"{"type":"check_agent","protocol_version":6,"request_id":"r1","url":null}"#;
-    assert!(serde_json::from_str::<Request>(with_url).is_ok());
-    let without = r#"{"type":"check_agent","protocol_version":6,"request_id":"r1"}"#;
-    assert!(serde_json::from_str::<Request>(without).is_err());
+    assert!(serde_json::from_str::<Request>(with_url).is_err());
 }
 
 #[test]
 fn confirm_harness_setup_requires_every_key() {
-    let full = r#"{"type":"confirm_harness_setup","protocol_version":6,"request_id":"r1","expected_revision":"missing","offer_id":"o1","env_names":["HOME"],"agent_denylist":[],"summaries_dir":null}"#;
+    let full = r#"{"type":"confirm_harness_setup","protocol_version":6,"request_id":"r1","expected_revision":"missing","offer_id":"o1","env_names":["HOME"],"summaries_dir":null}"#;
     assert!(serde_json::from_str::<Request>(full).is_ok());
     for key in [
         r#","offer_id":"o1""#,
         r#","env_names":["HOME"]"#,
-        r#","agent_denylist":[]"#,
         r#","summaries_dir":null"#,
     ] {
         assert!(

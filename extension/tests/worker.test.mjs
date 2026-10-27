@@ -1095,14 +1095,13 @@ test("unaddressed host errors and version mismatches reach the caller", async ()
   client.disconnect();
 });
 
-test("host config shape requires every v5 privacy, agent, and adapter key", () => {
+test("host config shape requires every v6 agent and adapter key and no retired privacy key", () => {
   const config = {
     storage: {
       root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: null,
     },
     capture_enabled: false, sites: [], strip_params: [],
-    agent_denylist: ["bank.example"], agent_denylist_confirmed: false, log_incognito: false,
     agent: null,
     adapters: { format: 1, artifacts: [] },
   };
@@ -1112,12 +1111,14 @@ test("host config shape requires every v5 privacy, agent, and adapter key", () =
     args: ["-p", "{prompt}"], env_allow: [], timeout_secs: 120,
   };
   assert.equal(isConfig({ ...config, agent }), true);
-  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent", "adapters"]) {
+  for (const key of ["agent", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);
   }
-  assert.equal(isConfig({ ...config, log_incognito: true }), false);
+  assert.equal(isConfig({ ...config, agent_denylist: ["bank.example"] }), false);
+  assert.equal(isConfig({ ...config, agent_denylist_confirmed: false }), false);
+  assert.equal(isConfig({ ...config, log_incognito: false }), false);
   assert.equal(isConfig({ ...config, agent: { ...agent, adapter: "claude-code" } }), false);
   // The host always sends summaries_dir, as null until a folder is chosen.
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
@@ -1133,7 +1134,7 @@ test("host config shape requires every v5 privacy, agent, and adapter key", () =
   assert.equal(isResponseShape({ ...result, agent_status: agentStatus }), true);
   assert.equal(isResponseShape({ ...result, agent_status: { ...agentStatus, state: "on" } }), false);
   assert.equal(isResponseShape({
-    type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0", url_allowed: null,
+    type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0",
   }), true);
 
   // Harness setup: every offer key is present, nullable ones as null.
@@ -1212,7 +1213,7 @@ function configResult(request, origin, overrides = {}) {
         summaries_dir: null,
       },
       capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [],
-      agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
+      agent: null,
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,

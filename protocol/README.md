@@ -75,6 +75,12 @@ shared origin adds an explicit every-account-in-this-Chrome-profile warning.
 Version 6 is the current protocol. The host refuses version 5 and earlier
 requests with `unsupported_protocol_version`. Its message changes are
 documented as they land (to be completed with the open-access work).
+`ConfigSnapshot` no longer has `agent_denylist`, `agent_denylist_confirmed`, or
+`log_incognito`, and refuses them as unknown keys. `AgentState` drops
+`denylist_unconfirmed`: a harness committed by native setup is enough for
+`ready`. `check_agent` carries no `url`, `agent_checked` no `url_allowed`, and
+`confirm_harness_setup` no denylist. A version 5 `config.toml` that still has
+those keys loads unchanged, and the host drops them on its next save.
 
 `load_note` returns the host-derived `RecordKey` and any bounded older
 URL-keyed notes that now resolve to the same artifact. `save_note` must echo
@@ -94,10 +100,10 @@ names with a `present` flag; values are never sent. A usable offer carries a
 five-minute, single-use `offer_id` bound to the revision. A refused offer
 (Codex, for now, or an unsafe path) has a `null` `offer_id` and a `refusal`.
 `confirm_harness_setup` names an `offer_id`, the optional environment names
-to pass through, the denylist, and `summaries_dir` (`null` keeps the current
-folder or uses `summaries`). The host spends the offer, re-checks the
-binary's identity, shows a native confirmation listing the program, arguments,
-environment names, summaries folder, and every denylist entry, then runs one
+to pass through, and `summaries_dir` (`null` keeps the current folder or uses
+`summaries`). The host spends the offer, re-checks the binary's identity,
+shows a native confirmation listing the program, arguments, environment
+names, and summaries folder, then runs one
 short test prompt. Only when the test passes does it return
 `harness_setup_confirmed` with the proposed `config`, the confirmed
 `summary`, and a single-use `harness_token`. That token authorizes exactly

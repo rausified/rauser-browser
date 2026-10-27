@@ -453,9 +453,6 @@
         "capture_enabled",
         "sites",
         "strip_params",
-        "agent_denylist",
-        "agent_denylist_confirmed",
-        "log_incognito",
         "agent",
         "adapters"
       ],
@@ -488,23 +485,6 @@
             "minLength": 1,
             "maxLength": 64
           }
-        },
-        "agent_denylist": {
-          "type": "array",
-          "maxItems": 128,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 253
-          }
-        },
-        "agent_denylist_confirmed": {
-          "type": "boolean",
-          "description": "Set only by the host through native harness setup; update_config accepts it unchanged."
-        },
-        "log_incognito": {
-          "type": "boolean",
-          "const": false
         },
         "agent": {
           "oneOf": [
@@ -721,7 +701,6 @@
       "type": "string",
       "enum": [
         "not_set_up",
-        "denylist_unconfirmed",
         "harness_problem",
         "ready"
       ]
@@ -1016,12 +995,11 @@
     "CheckAgentRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ask whether AI commands may run, and optionally whether a page URL passes the agent denylist.",
+      "description": "Ask whether AI commands may run.",
       "required": [
         "type",
         "protocol_version",
-        "request_id",
-        "url"
+        "request_id"
       ],
       "properties": {
         "type": {
@@ -1035,18 +1013,6 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
-        },
-        "url": {
-          "oneOf": [
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 8192
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       }
     },
@@ -1481,8 +1447,7 @@
         "protocol_version",
         "request_id",
         "harness_id",
-        "harness_version",
-        "url_allowed"
+        "harness_version"
       ],
       "properties": {
         "type": {
@@ -1505,16 +1470,6 @@
         "harness_version": {
           "type": "string",
           "maxLength": 256
-        },
-        "url_allowed": {
-          "oneOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       }
     },
@@ -1735,7 +1690,6 @@
         "expected_revision",
         "offer_id",
         "env_names",
-        "agent_denylist",
         "summaries_dir"
       ],
       "properties": {
@@ -1768,15 +1722,6 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 64
-          }
-        },
-        "agent_denylist": {
-          "type": "array",
-          "maxItems": 128,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 253
           }
         },
         "summaries_dir": {

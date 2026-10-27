@@ -216,9 +216,6 @@ fn harness_confirmation_text_round_trips() {
         capture_enabled: false,
         sites: Vec::new(),
         strip_params: Vec::new(),
-        agent_denylist: vec!["bank.example".into(), "mail.example".into()],
-        agent_denylist_confirmed: false,
-        log_incognito: false,
         agent: None,
         adapters: AdapterDocument {
             format: 1,
@@ -227,8 +224,6 @@ fn harness_confirmation_text_round_trips() {
     };
     let after = ConfigSnapshot {
         storage: Some(storage(Some("summaries"))),
-        agent_denylist: vec!["bank.example".into()],
-        agent_denylist_confirmed: true,
         agent: Some(AgentConfig {
             harness_id: "claude-code".into(),
             adapter: HarnessAdapter::ClaudeCode,
@@ -258,7 +253,11 @@ fn harness_confirmation_text_round_trips() {
     };
     let (title, body) =
         brauser_host::consent::harness_confirmation_text(&candidate, &after, &current).unwrap();
-    assert!(body.contains("\"mail.example\" and its subdomains"));
+    assert!(
+        body.contains("Summaries folder: \"summaries\" in "),
+        "{body}"
+    );
+    assert!(body.contains('\u{e9}'), "{body}");
 
     let directory = private_tempdir();
     std::fs::write(

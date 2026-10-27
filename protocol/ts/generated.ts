@@ -68,9 +68,6 @@ export interface ConfigSnapshot {
   capture_enabled: boolean;
   sites: SiteConfig[];
   strip_params: string[];
-  agent_denylist: string[];
-  agent_denylist_confirmed: boolean;
-  log_incognito: boolean;
   agent: AgentConfig | null;
   adapters: AdapterDocument;
 }
@@ -114,7 +111,7 @@ export interface AgentStatus {
   message: string | null;
 }
 
-export type AgentState = "not_set_up" | "denylist_unconfirmed" | "harness_problem" | "ready";
+export type AgentState = "not_set_up" | "harness_problem" | "ready";
 
 export interface ChooseFolderRequest {
   type: "choose_folder";
@@ -231,7 +228,6 @@ export interface CheckAgentRequest {
   type: "check_agent";
   protocol_version: 6;
   request_id: string;
-  url: string | null;
 }
 
 export interface FolderChosen {
@@ -408,7 +404,6 @@ export interface AgentChecked {
   request_id: string;
   harness_id: string;
   harness_version: string;
-  url_allowed: boolean | null;
 }
 
 export interface SiteConfig {
@@ -504,7 +499,6 @@ export interface ConfirmHarnessSetupRequest {
   expected_revision: string;
   offer_id: string;
   env_names: string[];
-  agent_denylist: string[];
   summaries_dir: string | null;
 }
 

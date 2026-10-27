@@ -268,7 +268,6 @@ export class ConfigSession {
   async setupHarness(
     offerId: string,
     envNames: string[],
-    denylist: string[],
     summariesDir: string | null,
   ): Promise<void> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
@@ -282,7 +281,6 @@ export class ConfigSession {
       expected_revision: expectedRevision,
       offer_id: offerId,
       env_names: envNames,
-      agent_denylist: denylist,
       summaries_dir: summariesDir,
     }, "harness_setup_confirmed", 6 * 60_000);
     // The harness dialog was this change's consent, so no confirm_config.

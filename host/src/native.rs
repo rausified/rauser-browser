@@ -21,7 +21,6 @@ use crate::dialog::{self, DialogText};
 use crate::harness::HarnessEnv;
 use crate::index::ArtifactIndex;
 use crate::note;
-use crate::privacy;
 use crate::vault::Vault;
 
 const MAX_INBOUND_BYTES: usize = 4 * 1024 * 1024;
@@ -472,8 +471,7 @@ fn confirm_harness_setup(
 }
 
 /// The minimal agent-gated request (§7.3): every AI command goes through the
-/// same readiness gate first. A URL, when given, is checked in its original
-/// form against the agent denylist.
+/// same readiness gate first.
 fn check_agent(value: brauser_protocol::CheckAgentRequest, config: &mut ConfigStore) -> Response {
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
@@ -496,16 +494,11 @@ fn check_agent(value: brauser_protocol::CheckAgentRequest, config: &mut ConfigSt
         Ok(ready) => ready,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    let url_allowed = value
-        .url
-        .as_deref()
-        .map(|url| !privacy::denylisted(url, &config.snapshot().agent_denylist));
     Response::AgentChecked(AgentChecked {
         protocol_version: PROTOCOL_VERSION,
         request_id: value.request_id,
         harness_id: ready.harness_id,
         harness_version: ready.harness_version,
-        url_allowed,
     })
 }
 
@@ -1959,9 +1952,6 @@ mod tests {
                     capture_enabled: false,
                     sites: Vec::new(),
                     strip_params: Vec::new(),
-                    agent_denylist: Vec::new(),
-                    agent_denylist_confirmed: false,
-                    log_incognito: false,
                     agent: None,
                     adapters: crate::config::empty_config().adapters,
                 },
@@ -2084,10 +2074,8 @@ mod tests {
         let mut config = ConfigStore::for_test(path);
         config.refresh().unwrap();
         let revision = config.revision().to_owned();
-        let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
-            ..config.snapshot().clone()
-        };
+        let mut next = config.snapshot().clone();
+        next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
         let context = SetupContext {
@@ -2129,7 +2117,7 @@ mod tests {
         match updated {
             Response::ConfigUpdated(value) => {
                 assert_eq!(value.config.adapters.format, 2);
-                assert_eq!(value.config.agent_denylist, ["bank.example"]);
+                assert!(value.config.strip_params.iter().any(|v| v == "campaign"));
             }
             other => panic!("expected config update, got {other:?}"),
         }
@@ -2220,9 +2208,6 @@ mod tests {
                 capture_enabled: false,
                 sites: Vec::new(),
                 strip_params: Vec::new(),
-                agent_denylist: Vec::new(),
-                agent_denylist_confirmed: false,
-                log_incognito: false,
                 agent: None,
                 adapters: crate::config::empty_config().adapters,
             };
@@ -3155,11 +3140,10 @@ id = "work:{host}/{id}"
         responses
     }
 
-    fn check_agent_json(url: Option<&str>) -> String {
+    fn check_agent_json() -> String {
         serde_json::to_string(&Request::CheckAgent(brauser_protocol::CheckAgentRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "agent-1".into(),
-            url: url.map(str::to_owned),
         }))
         .unwrap()
     }
@@ -3564,37 +3548,11 @@ id = "work:{host}/{id}"
     }
 
     #[test]
-    fn check_agent_refused_while_denylist_unconfirmed() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, root, binary) = config::fixtures::ready(folder.path());
-        // A harness entry and record exist, but the denylist was never
-        // confirmed through native setup.
-        config::fixtures::write(
-            &path,
-            &root,
-            "summaries_dir = \"summaries\"",
-            "agent_denylist_confirmed = false",
-            &format!(
-                "{}{}",
-                config::fixtures::agent_table(&binary),
-                config::fixtures::record_table(&binary)
-            ),
-        );
-        let responses = served(
-            &[check_agent_json(Some("https://example.com/"))],
-            loaded(&path),
-        );
-        let (code, message) = refused(&responses[0]);
-        assert_eq!(code, ErrorCode::NotConfigured);
-        assert!(message.contains(&format!("{} settings", crate::brand::APP_NAME)));
-    }
-
-    #[test]
     fn check_agent_refused_for_m1_config_missing_key() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         config::fixtures::write(&path, folder.path(), "", "", "");
-        let responses = served(&[check_agent_json(None)], loaded(&path));
+        let responses = served(&[check_agent_json()], loaded(&path));
         let (code, message) = refused(&responses[0]);
         assert_eq!(code, ErrorCode::NotConfigured);
         assert!(message.contains(&format!("{} settings", crate::brand::APP_NAME)));
@@ -3602,47 +3560,27 @@ id = "work:{host}/{id}"
 
     #[cfg(unix)]
     #[test]
-    fn check_agent_reports_harness_and_denylisted_url() {
+    fn check_agent_reports_harness() {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, _) = config::fixtures::ready(folder.path());
-        let responses = served(
-            &[
-                check_agent_json(Some("https://www.bank.example/account")),
-                check_agent_json(Some("https://example.com/")),
-                check_agent_json(None),
-            ],
-            loaded(&path),
-        );
-        let allowed: Vec<Option<bool>> = responses
-            .iter()
-            .map(|response| match response {
-                Response::AgentChecked(value) => {
-                    assert_eq!(value.harness_id, "claude-code");
-                    assert_eq!(value.harness_version, "2.1.284");
-                    value.url_allowed
-                }
-                other => panic!("expected agent_checked, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(allowed, vec![Some(false), Some(true), None]);
+        match &served(&[check_agent_json()], loaded(&path))[0] {
+            Response::AgentChecked(value) => {
+                assert_eq!(value.harness_id, "claude-code");
+                assert_eq!(value.harness_version, "2.1.284");
+            }
+            other => panic!("expected agent_checked, got {other:?}"),
+        }
     }
 
-    /// Step 1 refuses AI commands off unix, for any URL, even when setup's
-    /// record still matches the harness.
+    /// Step 1 refuses AI commands off unix, even when setup's record still
+    /// matches the harness.
     #[cfg(not(unix))]
     #[test]
     fn check_agent_refused_on_this_platform() {
         let folder = tempfile::tempdir().unwrap();
         let (path, _, _) = config::fixtures::ready(folder.path());
-        let responses = served(
-            &[
-                check_agent_json(Some("https://www.bank.example/account")),
-                check_agent_json(Some("https://example.com/")),
-                check_agent_json(None),
-            ],
-            loaded(&path),
-        );
-        assert_eq!(responses.len(), 3);
+        let responses = served(&[check_agent_json()], loaded(&path));
+        assert_eq!(responses.len(), 1);
         for response in &responses {
             assert_eq!(
                 refused(response),
@@ -3652,32 +3590,6 @@ id = "work:{host}/{id}"
                 )
             );
         }
-    }
-
-    #[test]
-    fn update_config_rejects_extension_setting_agent_denylist_confirmed() {
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("config.toml");
-        config::fixtures::write(&path, folder.path(), "", "", "");
-        let store = loaded(&path);
-        let revision = store.revision().to_owned();
-        let before = std::fs::read(&path).unwrap();
-        let request = Request::UpdateConfig(UpdateConfigRequest {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: "write-1".into(),
-            expected_revision: revision.clone(),
-            config: ConfigSnapshot {
-                agent_denylist_confirmed: true,
-                ..store.snapshot().clone()
-            },
-            picker_token: None,
-            consent_token: None,
-            harness_token: None,
-        });
-        let responses = served(&[serde_json::to_string(&request).unwrap()], store);
-        assert_eq!(refused(&responses[0]).0, ErrorCode::Unauthorized);
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-        assert_eq!(loaded(&path).revision(), revision);
     }
 
     #[test]
@@ -3760,7 +3672,7 @@ id = "work:{host}/{id}"
             let root = fake.path("notes");
             std::fs::create_dir(&root).unwrap();
             let path = fake.path("config.toml");
-            config::fixtures::write(&path, &root, "", "agent_denylist = [\"bank.example\"]", "");
+            config::fixtures::write(&path, &root, "", "", "");
             let env = fake.env(&[]);
             Session {
                 config: loaded(&path),
@@ -3830,7 +3742,6 @@ id = "work:{host}/{id}"
                         expected_revision: revision.into(),
                         offer_id: offer_id.into(),
                         env_names: Vec::new(),
-                        agent_denylist: vec!["bank.example".into()],
                         summaries_dir: summaries_dir.map(str::to_owned),
                     }),
                     confirm,
@@ -3971,30 +3882,19 @@ id = "work:{host}/{id}"
         }
 
         #[test]
-        fn check_agent_reports_denylisted_url() {
+        fn check_agent_reports_harness_after_setup() {
             let mut session = session(PASSING_BODY);
             session.set_up();
-            let checked: Vec<Option<bool>> = [
-                Some("https://www.bank.example/account"),
-                Some("https://example.com/"),
-                None,
-            ]
-            .into_iter()
-            .map(|url| {
-                match session.call(
-                    serde_json::from_str(&check_agent_json(url)).unwrap(),
-                    no_dialog,
-                ) {
-                    Response::AgentChecked(value) => {
-                        assert_eq!(value.harness_id, "claude-code");
-                        assert_eq!(value.harness_version, "2.1.284");
-                        value.url_allowed
-                    }
-                    other => panic!("expected agent_checked, got {other:?}"),
+            match session.call(
+                serde_json::from_str(&check_agent_json()).unwrap(),
+                no_dialog,
+            ) {
+                Response::AgentChecked(value) => {
+                    assert_eq!(value.harness_id, "claude-code");
+                    assert_eq!(value.harness_version, "2.1.284");
                 }
-            })
-            .collect();
-            assert_eq!(checked, vec![Some(false), Some(true), None]);
+                other => panic!("expected agent_checked, got {other:?}"),
+            }
         }
 
         #[test]
@@ -4020,7 +3920,8 @@ id = "work:{host}/{id}"
             assert_eq!(status.state, AgentState::HarnessProblem);
             assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
 
-            // A hand-written entry without the native confirmation.
+            // A v5 file whose retired privacy confirmation is false is
+            // still ready: the committed harness is enough.
             let root = session.fake.path("notes");
             config::fixtures::write(
                 &session.path,
@@ -4033,7 +3934,7 @@ id = "work:{host}/{id}"
                     config::fixtures::record_table(&binary)
                 ),
             );
-            assert_eq!(session.status().state, AgentState::DenylistUnconfirmed);
+            assert_eq!(session.status().state, AgentState::Ready);
         }
     }
 }

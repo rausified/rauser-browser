@@ -3,8 +3,7 @@ import test from "node:test";
 
 // Run after build:extension. agent.js is pure: no chrome or DOM access.
 const {
-  CODEX_DISCLOSURE, SUGGESTED_EXCLUSIONS, addDenylistEntry, agentStateText, denylistEditsLive,
-  harnessFoundText, harnessOfferNote, previewDenylistEntry, removeDenylistEntry,
+  CODEX_DISCLOSURE, agentStateText, harnessFoundText, harnessOfferNote,
 } = await import("../dist/agent.js");
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
@@ -14,60 +13,9 @@ const config = {
     summaries_dir: "summaries",
   },
   capture_enabled: false, sites: [], strip_params: [],
-  agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
+  agent: null,
   adapters: { format: 1, artifacts: [] },
 };
-
-test("previewDenylistEntry_normalizes_case_and_idn", () => {
-  assert.deepEqual(previewDenylistEntry("Bank.Example"), { ok: true, normalized: "bank.example" });
-  assert.deepEqual(previewDenylistEntry("  mail.example  "), { ok: true, normalized: "mail.example" });
-  assert.deepEqual(previewDenylistEntry("Bücher.example"), { ok: true, normalized: "xn--bcher-kva.example" });
-  assert.deepEqual(previewDenylistEntry("192.168.0.1"), { ok: true, normalized: "192.168.0.1" });
-  assert.deepEqual(previewDenylistEntry("[::1]"), { ok: true, normalized: "[::1]" });
-  // The URL serialization, in hex, which is the form the host stores
-  // (host/src/privacy.rs denylist_ipv6_uses_the_url_serialization).
-  assert.deepEqual(previewDenylistEntry("[::FFFF:10.0.0.1]"), { ok: true, normalized: "[::ffff:a00:1]" });
-  // The longest label and name the host accepts.
-  const longest = `${Array(3).fill("a".repeat(63)).join(".")}.${"b".repeat(61)}`;
-  assert.equal(longest.length, 253);
-  assert.deepEqual(previewDenylistEntry(longest), { ok: true, normalized: longest });
-});
-
-test("previewDenylistEntry_rejects_scheme_path_port_wildcard_trailing_dot", () => {
-  for (const raw of [
-    "", "   ", "https://bank.example", "bank.example/login", "bank.example:443", "*.bank.example",
-    "bank.example.", "bank example", "user@bank.example", "bank.example?x", "bank.example#x",
-    "bank\\example", "[::1]:443", "mailto:bank.example",
-    // The host's own rejects (host/src/privacy.rs): leading dot, empty
-    // label, a label over 63 bytes, and a name over 253 bytes.
-    ".a.com", "a..com", `${"a".repeat(64)}.com`, `${Array(5).fill("a".repeat(60)).join(".")}.com`,
-  ]) {
-    const preview = previewDenylistEntry(raw);
-    assert.equal(preview.ok, false, raw);
-    assert.equal(typeof preview.error, "string", raw);
-  }
-});
-
-test("suggestions_are_valid_examples_and_editing_adds_only_the_typed_entry", () => {
-  // The click handler that only fills the input is covered by the headless
-  // smoke step "Suggestion only fills the box".
-  assert.ok(SUGGESTED_EXCLUSIONS.length >= 4);
-  assert.ok(Object.isFrozen(SUGGESTED_EXCLUSIONS));
-  for (const suggestion of SUGGESTED_EXCLUSIONS) {
-    assert.equal(typeof suggestion.label, "string");
-    assert.equal(previewDenylistEntry(suggestion.example).ok, true, suggestion.example);
-  }
-  // Adding one entry adds exactly that entry, never a suggestion alongside it.
-  const added = addDenylistEntry([], "Bank.Example");
-  assert.deepEqual(added, { ok: true, list: ["bank.example"] });
-  assert.deepEqual(addDenylistEntry(["bank.example"], "BANK.example").ok, false);
-  const list = ["bank.example"];
-  assert.deepEqual(removeDenylistEntry(list, "bank.example"), []);
-  assert.deepEqual(list, ["bank.example"], "the input list is not changed");
-  // The status text never claims an exclusion exists.
-  const text = agentStateText({ state: "not_set_up", harness_version: null, message: null });
-  for (const suggestion of SUGGESTED_EXCLUSIONS) assert.equal(text.includes(suggestion.example), false);
-});
 
 test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   const withFolder = harnessFoundText("Claude Code", "2.1.284", true);
@@ -78,18 +26,6 @@ test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   assert.match(withoutFolder, /Choose a notes folder first/);
   assert.doesNotMatch(withoutFolder, /then choose Set up harness\.$/);
   assert.match(harnessFoundText("Codex", null, true), /^Found Codex\. /);
-});
-
-test("denylist_edits_are_live_once_confirmed_even_without_harness", () => {
-  assert.equal(denylistEditsLive(null), false);
-  assert.equal(denylistEditsLive(config), false, "before setup, edits wait for its confirmation");
-  const agent = {
-    harness_id: "claude-code", adapter: "claude_code", binary: "/bin/claude", args: ["-p", "{prompt}"],
-    env_allow: ["HOME", "PATH"], timeout_secs: 120,
-  };
-  assert.equal(denylistEditsLive({ ...config, agent_denylist_confirmed: true, agent }), true);
-  // Removing the harness keeps the confirmation, so edits still save at once.
-  assert.equal(denylistEditsLive({ ...config, agent_denylist_confirmed: true, agent: null }), true);
 });
 
 test("codex_offer_note_discloses_shared_codex_home", () => {
@@ -109,8 +45,6 @@ test("codex_offer_note_discloses_shared_codex_home", () => {
 test("agentStateText_describes_each_state", () => {
   assert.match(agentStateText(null), /unavailable/);
   assert.match(agentStateText({ state: "not_set_up", harness_version: null, message: "x" }), /off/);
-  assert.match(agentStateText({ state: "denylist_unconfirmed", harness_version: null, message: null }),
-    /privacy/);
   assert.equal(agentStateText({ state: "ready", harness_version: "2.1.284", message: null }),
     "AI harness ready (version 2.1.284).");
   assert.equal(
@@ -118,20 +52,19 @@ test("agentStateText_describes_each_state", () => {
     "AI commands are off (version 2.1.284): run setup again");
 });
 
-test("isConfig_requires_v5_keys", () => {
+test("isConfig requires exactly the v6 keys", () => {
   assert.equal(isConfig(config), true);
-  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent", "adapters"]) {
+  assert.equal(isConfig({ ...config, agent_denylist: [] }), false);
+  for (const key of ["agent_denylist_confirmed", "log_incognito"]) {
+    assert.equal(isConfig({ ...config, [key]: false }), false, key);
+  }
+  for (const key of ["storage", "capture_enabled", "sites", "strip_params", "agent", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);
   }
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
-});
-
-test("isConfig_rejects_log_incognito_true", () => {
-  assert.equal(isConfig({ ...config, log_incognito: true }), false);
-  assert.equal(isConfig({ ...config, log_incognito: "false" }), false);
 });
 
 test("isResponseShape_accepts_new_responses_and_rejects_unknown", () => {
@@ -146,7 +79,7 @@ test("isResponseShape_accepts_new_responses_and_rejects_unknown", () => {
     type: "harness_setup_confirmed", harness_token: "t", config, summary: "s",
   }), true);
   assert.equal(isResponseShape({
-    type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.284", url_allowed: false,
+    type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.284",
   }), true);
   assert.equal(isResponseShape({ type: "harness_ready", offers: [offer] }), false);
   assert.equal(isResponseShape({ type: "agent_checked", harness_id: "claude-code" }), false);

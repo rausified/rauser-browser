@@ -70,9 +70,6 @@ function configWith(sites) {
     capture_enabled: sites.length > 0,
     sites,
     strip_params: [],
-    agent_denylist: [],
-    agent_denylist_confirmed: false,
-    log_incognito: false,
     agent: null,
     adapters: { format: 1, artifacts: [] },
   };
@@ -118,8 +115,7 @@ function install({
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
-    ["summaries-dir", "input"], ["denylist-input", "input"], ["denylist-preview", "output"],
-    ["denylist-add", "button"], ["denylist-suggestions", "div"], ["denylist-list", "ul"],
+    ["summaries-dir", "input"],
     ["setup-harness", "button"], ["remove-harness", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
@@ -473,9 +469,6 @@ test("an unsupported adapter document can be removed without blocking unrelated 
   assert.equal(env.elements.get("pause-capture").disabled, false);
   assert.equal(env.elements.get("choose-folder").disabled, false);
   assert.equal(env.elements.get("detect-harnesses").disabled, false);
-  env.elements.get("denylist-input").value = "internal.example";
-  env.elements.get("denylist-input").dispatch("input");
-  assert.equal(env.elements.get("denylist-add").disabled, false);
   assert.equal(env.elements.get("reset-adapters").disabled, false);
 
   env.elements.get("pause-capture").click();

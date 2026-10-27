@@ -328,8 +328,6 @@ impl ConsentAuthority {
                 summaries_dir: Some(summaries_dir),
                 ..storage.clone()
             }),
-            agent_denylist: request.agent_denylist.clone(),
-            agent_denylist_confirmed: true,
             agent: Some(agent.clone()),
             ..current.clone()
         };
@@ -699,7 +697,6 @@ pub fn harness_confirmation_text(
     .into_iter()
     .chain(agent.args.iter().map(String::as_str))
     .chain(agent.env_allow.iter().map(String::as_str))
-    .chain(after.agent_denylist.iter().map(String::as_str))
     .chain(changes.iter().map(String::as_str));
     for value in values {
         if config::has_unsafe_display_chars(value) {
@@ -709,9 +706,8 @@ pub fn harness_confirmation_text(
 
     let title = format!("Set up {name} for {APP_NAME} AI commands");
     let mut lines = Vec::new();
-    // Weakening changes come first. The caller chooses the exclusion list,
-    // and additions need no approval, so a long list must not push a removal
-    // out of sight below it.
+    // Policy changes come first, so the harness details below cannot push
+    // them out of sight.
     if !changes.is_empty() {
         lines.push("This setup also makes these changes:".to_owned());
         lines.extend(changes.iter().map(|change| format!("• {change}")));
@@ -747,19 +743,6 @@ pub fn harness_confirmation_text(
         "Summaries folder: {summaries:?} in {:?}",
         storage.root
     ));
-    let exclusions = if after.agent_denylist.is_empty() {
-        "No domains excluded.".to_owned()
-    } else {
-        after
-            .agent_denylist
-            .iter()
-            .map(|entry| format!("{entry:?}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    lines.push(format!(
-        "AI privacy exclusions (pages on these sites are never sent to the AI): {exclusions}"
-    ));
     lines.push(format!("Timeout: {} seconds", agent.timeout_secs));
     lines.push(String::new());
     lines.push(format!(
@@ -767,9 +750,7 @@ pub fn harness_confirmation_text(
     ));
     let description = lines.join("\n");
     if title.len() + 1 + description.len() > MAX_HARNESS_SUMMARY_BYTES {
-        bail!(
-            "the harness confirmation would be too long to review; shorten the AI privacy exclusions or remove fewer at once"
-        );
+        bail!("the harness confirmation would be too long to review; make fewer changes at once");
     }
     Ok((title, description))
 }
@@ -792,18 +773,12 @@ fn shell_word(arg: &str) -> String {
     }
 }
 
-/// Only native harness setup sets `agent_denylist_confirmed` or a harness
-/// entry (§7.3). The extension may echo both unchanged or remove the harness;
-/// removing it keeps the confirmation.
+/// Only native harness setup sets a harness entry (§7.3). The extension may
+/// echo it unchanged or remove it.
 fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     let trusted_current = config::validate_base(current).is_ok();
-    let confirmed = trusted_current && current.agent_denylist_confirmed;
-    if next.agent_denylist_confirmed != confirmed
-        || (next.agent.is_some() && (!trusted_current || next.agent != current.agent))
-    {
-        bail!(
-            "agent_denylist_confirmed and the AI harness can only be set by native harness setup"
-        );
+    if next.agent.is_some() && (!trusted_current || next.agent != current.agent) {
+        bail!("the AI harness can only be set by native harness setup");
     }
     Ok(())
 }
@@ -822,18 +797,6 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
     let preserving_inert_adapters = current.adapters == next.adapters
         && !config::adapter_policy_valid(current)
         && !config::adapter_policy_valid(next);
-    // Adding an exclusion takes effect at once. Removing or replacing one
-    // weakens privacy and needs confirmation, confirmed list or not (§7.3).
-    // These come first: sites the caller adds cannot push them down the dialog.
-    if trusted_current {
-        for entry in &current.agent_denylist {
-            if !next.agent_denylist.contains(entry) {
-                lines.push(format!(
-                    "Allow AI commands to read pages on {entry:?} and its subdomains."
-                ));
-            }
-        }
-    }
     if !(trusted_current && current.capture_enabled) && next.capture_enabled {
         lines.push("Turn on automatic visit logging.".to_owned());
     }
@@ -1032,8 +995,6 @@ mod tests {
 
     fn set_up() -> ConfigSnapshot {
         ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
-            agent_denylist_confirmed: true,
             agent: Some(agent()),
             ..crate::config::empty_config()
         }
@@ -1058,30 +1019,16 @@ mod tests {
     }
 
     #[test]
-    fn update_rejects_confirmed_true_without_harness_token() {
+    fn update_rejects_forged_harness_token() {
         let current = crate::config::empty_config();
-        let next = ConfigSnapshot {
-            agent_denylist_confirmed: true,
-            ..current.clone()
-        };
-        assert!(authorize(&current, &next, None, None).is_err());
         // No harness grant exists in this build, so any token is refused.
-        assert!(authorize(&current, &next, None, Some("forged")).is_err());
+        assert!(authorize(&current, &current, None, Some("forged")).is_err());
+        let current = set_up();
         assert!(authorize(&current, &current, None, Some("forged")).is_err());
     }
 
     #[test]
-    fn update_rejects_confirmed_flip_to_false() {
-        let current = set_up();
-        let next = ConfigSnapshot {
-            agent_denylist_confirmed: false,
-            ..current.clone()
-        };
-        assert!(authorize(&current, &next, None, None).is_err());
-    }
-
-    #[test]
-    fn update_accepts_unchanged_confirmed_and_agent_echo() {
+    fn update_accepts_unchanged_agent_echo() {
         let current = set_up();
         let next = current.clone();
         assert!(approval_lines(&current, &next).is_empty());
@@ -1110,10 +1057,8 @@ mod tests {
     fn unrelated_update_can_preserve_an_invalid_adapter_document() {
         let mut current = crate::config::empty_config();
         current.adapters.format = 2;
-        let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
-            ..current.clone()
-        };
+        let mut next = current.clone();
+        next.strip_params.push("campaign".into());
 
         assert!(crate::config::validate(&next).is_err());
         assert!(approval_lines(&current, &next).is_empty());
@@ -1152,57 +1097,6 @@ mod tests {
         };
         assert!(approval_lines(&current, &next).is_empty());
         assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
-    }
-
-    #[test]
-    fn denylist_addition_needs_no_confirmation() {
-        let current = set_up();
-        let next = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into(), "mail.example".into()],
-            ..current.clone()
-        };
-        assert!(approval_lines(&current, &next).is_empty());
-        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
-    }
-
-    #[test]
-    fn denylist_removal_needs_native_confirmation() {
-        for current in [
-            set_up(),
-            ConfigSnapshot {
-                agent_denylist: vec!["bank.example".into()],
-                ..crate::config::empty_config()
-            },
-        ] {
-            let next = ConfigSnapshot {
-                agent_denylist: Vec::new(),
-                ..current.clone()
-            };
-            assert_eq!(
-                approval_lines(&current, &next),
-                vec![
-                    "Allow AI commands to read pages on \"bank.example\" and its subdomains."
-                        .to_owned()
-                ]
-            );
-            assert!(authorize(&current, &next, None, None).is_err());
-            let mut authority = ConsentAuthority::new();
-            let token = authority.mint_consent(current.clone(), next.clone(), "revision");
-            authority
-                .authorize_update(&current, "revision", &next, None, Some(&token), None)
-                .unwrap();
-        }
-    }
-
-    #[test]
-    fn denylist_replacement_counts_as_removal() {
-        let current = set_up();
-        let next = ConfigSnapshot {
-            agent_denylist: vec!["other.example".into()],
-            ..current.clone()
-        };
-        assert_eq!(approval_lines(&current, &next).len(), 1);
-        assert!(authorize(&current, &next, None, None).is_err());
     }
 
     #[test]
@@ -1382,7 +1276,7 @@ mod tests {
         }
     }
 
-    fn denylist(entries: &[&str]) -> Vec<String> {
+    fn names(entries: &[&str]) -> Vec<String> {
         entries.iter().map(|entry| (*entry).to_owned()).collect()
     }
 
@@ -1405,17 +1299,15 @@ mod tests {
         fs::write(&binary, "#!/bin/sh\n").unwrap();
         let current = ConfigSnapshot {
             storage: Some(storage_at(&notes, None)),
-            agent_denylist: denylist(&["bank.example"]),
             ..crate::config::empty_config()
         };
         let agent = brauser_protocol::AgentConfig {
             binary: binary.to_string_lossy().into_owned(),
-            env_allow: denylist(&["HOME", "PATH"]),
+            env_allow: names(&["HOME", "PATH"]),
             ..agent()
         };
         let after = ConfigSnapshot {
             storage: Some(storage_at(&notes, Some("summaries"))),
-            agent_denylist_confirmed: true,
             agent: Some(agent.clone()),
             ..current.clone()
         };
@@ -1526,22 +1418,6 @@ mod tests {
     }
 
     #[test]
-    fn harness_token_rejected_when_denylist_differs() {
-        let granted = granted();
-        for entries in [
-            &[][..],
-            &["bank.example", "mail.example"][..],
-            &["mail.example"][..],
-        ] {
-            let next = ConfigSnapshot {
-                agent_denylist: denylist(entries),
-                ..granted.after.clone()
-            };
-            assert!(granted.check(&next).is_err(), "{entries:?}");
-        }
-    }
-
-    #[test]
     fn harness_token_rejected_when_harness_entry_differs() {
         let granted = granted();
         let other = granted.binary.with_file_name("other-claude");
@@ -1562,7 +1438,7 @@ mod tests {
         let granted = granted();
         let next = granted.with_agent(|agent| agent.env_allow.push("ANTHROPIC_API_KEY".into()));
         assert!(granted.check(&next).is_err());
-        let next = granted.with_agent(|agent| agent.env_allow = denylist(&["HOME"]));
+        let next = granted.with_agent(|agent| agent.env_allow = names(&["HOME"]));
         assert!(granted.check(&next).is_err());
     }
 
@@ -1668,23 +1544,16 @@ mod tests {
     }
 
     /// `current -> after` for the text tests, with a real notes folder so
-    /// `current` is trusted and its removals are listed.
-    fn text_configs(
-        notes: &Path,
-        before: &[&str],
-        after: &[&str],
-    ) -> (ConfigSnapshot, ConfigSnapshot) {
+    /// `current` is trusted and only real changes are listed.
+    fn text_configs(notes: &Path) -> (ConfigSnapshot, ConfigSnapshot) {
         let current = ConfigSnapshot {
             storage: Some(storage_at(notes, None)),
-            agent_denylist: denylist(before),
             ..crate::config::empty_config()
         };
         let next = ConfigSnapshot {
             storage: Some(storage_at(notes, Some("summaries"))),
-            agent_denylist: denylist(after),
-            agent_denylist_confirmed: true,
             agent: Some(brauser_protocol::AgentConfig {
-                env_allow: denylist(&["HOME", "PATH", "ANTHROPIC_API_KEY"]),
+                env_allow: names(&["HOME", "PATH", "ANTHROPIC_API_KEY"]),
                 ..agent()
             }),
             ..current.clone()
@@ -1695,7 +1564,7 @@ mod tests {
     #[test]
     fn harness_confirmation_text_lists_binary_args_env_names_summaries_dir() {
         let folder = tempfile::tempdir().unwrap();
-        let (current, after) = text_configs(folder.path(), &[], &["bank.example"]);
+        let (current, after) = text_configs(folder.path());
         let (title, body) = harness_confirmation_text(&hand_candidate(), &after, &current).unwrap();
         assert_eq!(
             title,
@@ -1760,145 +1629,21 @@ mod tests {
     }
 
     #[test]
-    fn harness_confirmation_text_says_no_domains_excluded_when_empty() {
-        let folder = tempfile::tempdir().unwrap();
-        let (current, after) = text_configs(folder.path(), &[], &[]);
-        let (_, body) = harness_confirmation_text(&hand_candidate(), &after, &current).unwrap();
-        let lines: Vec<&str> = body.lines().collect();
-        let heading = lines
-            .iter()
-            .position(|line| line.starts_with("AI privacy exclusions"))
-            .unwrap();
-        assert!(lines[heading].ends_with(": No domains excluded."), "{body}");
-    }
-
-    #[test]
-    fn harness_confirmation_text_lists_each_denylist_entry_and_removals() {
-        let folder = tempfile::tempdir().unwrap();
-        let (current, after) = text_configs(
-            folder.path(),
-            &["bank.example", "mail.example"],
-            &["bank.example", "news.example"],
-        );
-        let (_, body) = harness_confirmation_text(&hand_candidate(), &after, &current).unwrap();
-        let lines: Vec<&str> = body.lines().collect();
-        let heading = lines
-            .iter()
-            .position(|line| line.starts_with("AI privacy exclusions"))
-            .unwrap();
-        assert!(
-            lines[heading].ends_with(": \"bank.example\", \"news.example\""),
-            "{body}"
-        );
-        assert!(!body.contains("No domains excluded."));
-        assert!(
-            body.contains(
-                "• Allow AI commands to read pages on \"mail.example\" and its subdomains."
-            )
-        );
-        assert!(!body.contains("pages on \"bank.example\""));
-    }
-
-    /// An untrusted extension may add up to 127 exclusions in the same setup
-    /// that drops one the user had. Adding needs no approval, so the removal
-    /// must come before the list, where the dialog shows it first.
-    #[test]
-    fn removal_is_shown_before_a_long_list_of_additions() {
-        let folder = tempfile::tempdir().unwrap();
-        let added: Vec<String> = (0..127)
-            .map(|index| format!("j{index:03}.example"))
-            .collect();
-        let (mut current, mut next) = text_configs(folder.path(), &["bank.example"], &[]);
-        current.agent_denylist = denylist(&["bank.example"]);
-        next.agent_denylist = added;
-        crate::config::validate(&next).unwrap();
-        let (_, body) = harness_confirmation_text(&hand_candidate(), &next, &current).unwrap();
-        let lines: Vec<&str> = body.lines().collect();
-        let removal = lines
-            .iter()
-            .position(|line| line.contains("read pages on \"bank.example\""))
-            .unwrap();
-        let heading = lines
-            .iter()
-            .position(|line| line.starts_with("AI privacy exclusions"))
-            .unwrap();
-        assert!(removal < heading, "{body}");
-        assert!(removal <= 2, "the removal is line {removal}:\n{body}");
-    }
-
-    #[test]
-    fn consent_lists_denylist_removal_before_sites() {
-        let current = ConfigSnapshot {
-            agent_denylist: vec!["bank.example".into()],
-            ..set_up()
-        };
-        let next = ConfigSnapshot {
-            agent_denylist: Vec::new(),
-            sites: (0..20)
-                .map(|index| SiteConfig {
-                    origin: format!("https://s{index}.example"),
-                    path_prefix: "/".into(),
-                })
-                .collect(),
-            ..current.clone()
-        };
-        let lines = approval_lines(&current, &next);
-        assert!(lines.len() > 20);
-        assert!(
-            lines[0].contains("read pages on \"bank.example\""),
-            "{lines:?}"
-        );
-    }
-
-    #[test]
     fn harness_confirmation_is_bounded_like_consent() {
         let folder = tempfile::tempdir().unwrap();
-        // 64 maximum-length additions, over the consent dialog's 8 KiB.
-        let host = |index: usize| {
-            format!(
-                "h{index:02}{}.{}.{}.{}",
-                "a".repeat(60),
-                "b".repeat(63),
-                "c".repeat(63),
-                "d".repeat(61)
-            )
+        // 64 long site additions, over the consent dialog's 8 KiB.
+        let site = |index: usize| SiteConfig {
+            origin: format!("https://s{index:02}.example"),
+            path_prefix: format!("/{}", "p".repeat(200)),
         };
-        let (current, mut next) = text_configs(folder.path(), &[], &[]);
-        next.agent_denylist = (0..64).map(host).collect();
+        let (current, mut next) = text_configs(folder.path());
+        next.sites = (0..64).map(site).collect();
         crate::config::validate(&next).unwrap();
         let error = harness_confirmation_text(&hand_candidate(), &next, &current).unwrap_err();
         assert!(error.to_string().contains("too long"), "{error}");
-        next.agent_denylist.truncate(16);
+        next.sites.truncate(16);
         let (title, body) = harness_confirmation_text(&hand_candidate(), &next, &current).unwrap();
         assert!(title.len() + 1 + body.len() <= MAX_HARNESS_SUMMARY_BYTES);
-    }
-
-    #[test]
-    fn oversized_confirmation_is_refused() {
-        let folder = tempfile::tempdir().unwrap();
-        // 128 distinct 252-byte hostnames removed and 128 others added.
-        let host = |prefix: char, index: usize| {
-            format!(
-                "{prefix}{index:02}{}.{}.{}.{}",
-                "a".repeat(60),
-                "b".repeat(63),
-                "c".repeat(63),
-                "d".repeat(60)
-            )
-        };
-        let before: Vec<String> = (0..64)
-            .flat_map(|index| [host('p', index), host('q', index)])
-            .collect();
-        let after: Vec<String> = (0..64)
-            .flat_map(|index| [host('r', index), host('s', index)])
-            .collect();
-        let (mut current, mut next) = text_configs(folder.path(), &[], &[]);
-        current.agent_denylist = before;
-        next.agent_denylist = after;
-        crate::config::validate(&current).unwrap();
-        crate::config::validate(&next).unwrap();
-        let error = harness_confirmation_text(&hand_candidate(), &next, &current).unwrap_err();
-        assert!(error.to_string().contains("too long"), "{error}");
     }
 
     /// Step 1 refuses harness setup off unix: even a checked candidate gets
@@ -1917,7 +1662,7 @@ mod tests {
     #[test]
     fn confirmation_with_unsafe_text_is_refused() {
         let folder = tempfile::tempdir().unwrap();
-        let (current, after) = text_configs(folder.path(), &[], &[]);
+        let (current, after) = text_configs(folder.path());
         let mut candidate = hand_candidate();
         candidate.version = Some("2.1.284\u{202e}".into());
         assert!(harness_confirmation_text(&candidate, &after, &current).is_err());
@@ -1963,7 +1708,6 @@ mod setup_tests {
                 artifacts_dir: "artifacts".into(),
                 summaries_dir: None,
             }),
-            agent_denylist: vec!["bank.example".into()],
             ..crate::config::empty_config()
         };
         Setup {
@@ -1997,7 +1741,6 @@ mod setup_tests {
                 expected_revision: revision.into(),
                 offer_id: offer_id.into(),
                 env_names: env_names.iter().map(|name| (*name).to_owned()).collect(),
-                agent_denylist: vec!["bank.example".into()],
                 summaries_dir: None,
             };
             let current = self.current.clone();
@@ -2183,7 +1926,6 @@ mod setup_tests {
         );
         assert_eq!(agent.env_allow, vec!["HOME".to_owned(), "PATH".to_owned()]);
         assert_eq!(agent.timeout_secs, 120);
-        assert!(confirmed.config.agent_denylist_confirmed);
         assert_eq!(
             confirmed
                 .config
@@ -2292,7 +2034,6 @@ mod setup_tests {
                     artifacts_dir: "artifacts".into(),
                     summaries_dir: None,
                 }),
-                agent_denylist: vec!["bank.example".into()],
                 ..crate::config::empty_config()
             },
             fake,
@@ -2357,7 +2098,6 @@ mod setup_tests {
                     artifacts_dir: "artifacts".into(),
                     summaries_dir: None,
                 }),
-                agent_denylist: vec!["bank.example".into()],
                 ..crate::config::empty_config()
             },
             fake,
