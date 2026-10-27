@@ -10,7 +10,6 @@ const {
   starterOffers,
 } = await import("../dist/starter-adapters.js");
 
-const site = (origin) => ({ origin, path_prefix: "/" });
 const vectors = JSON.parse(await readFile(new URL("../../protocol/adapter-templates/vectors.json", import.meta.url)));
 const recorded = vectors.fixtures.starters.artifacts;
 
@@ -23,10 +22,10 @@ function compiled(offers) {
 
 test("generated starters stay identical to the shared cross-engine fixtures", () => {
   const generated = [
-    ...starterOffers(site("https://acme.atlassian.net"), null),
-    ...starterOffers(site("https://github.com"), ["acme-corp"]),
-    ...starterOffers(site("https://acme.sharepoint.com"), null),
-    ...starterOffers(site("https://acme-my.sharepoint.com"), null),
+    ...starterOffers("https://acme.atlassian.net", []),
+    ...starterOffers("https://github.com", ["acme-corp"]),
+    ...starterOffers("https://acme.sharepoint.com", []),
+    ...starterOffers("https://acme-my.sharepoint.com", []),
   ].map((offer) => offer.adapter);
   const expectedTypes = new Set(["jira.issue", "github.pr", "github.issue", "sharepoint.doc"]);
   const expected = recorded.filter((adapter) => expectedTypes.has(adapter.type));
@@ -43,7 +42,8 @@ test("starter origins are classified narrowly", () => {
   assert.equal(starterKind("https://github.com"), "github");
   assert.equal(starterKind("http://github.com"), null);
   assert.equal(starterKind("https://github.com.evil.example"), null);
-  assert.deepEqual(starterOffers({ origin: "https://acme.atlassian.net", path_prefix: "/browse" }, null), []);
+  assert.deepEqual(starterOffers("https://example.com", []), []);
+  assert.equal(starterOffers("https://acme.atlassian.net", []).length, 1);
 });
 
 test("GitHub organization scopes normalize, deduplicate, and reject unsafe forms", () => {
@@ -55,14 +55,14 @@ test("GitHub organization scopes normalize, deduplicate, and reject unsafe forms
 });
 
 test("an installed GitHub starter is recognized before scope is typed", () => {
-  const installed = starterOffers(site("https://github.com"), ["acme-corp"])[0].adapter;
-  const unscopedOffer = starterOffers(site("https://github.com"), null)[0];
+  const installed = starterOffers("https://github.com", ["acme-corp"])[0].adapter;
+  const unscopedOffer = starterOffers("https://github.com", [])[0];
   assert.equal(unscopedOffer.adapter, null);
   assert.equal(hasAdapter([installed], unscopedOffer), true);
 });
 
 test("Jira draft joins issue pages and board modals under one canonical ID", () => {
-  const doc = compiled(starterOffers(site("https://acme.atlassian.net"), null));
+  const doc = compiled(starterOffers("https://acme.atlassian.net", []));
   const page = evaluate(doc, "https://acme.atlassian.net/browse/PROJ-42", "[PROJ-42] Repair export - Jira");
   const modal = evaluate(doc,
     "https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42");
@@ -75,7 +75,7 @@ test("Jira draft joins issue pages and board modals under one canonical ID", () 
 
 test("SharePoint and OneDrive drafts key documents by sourcedoc and ignore roots", () => {
   const origin = "https://acme-my.sharepoint.com";
-  const doc = compiled(starterOffers(site(origin), null));
+  const doc = compiled(starterOffers(origin, []));
   const guid = "123e4567-e89b-12d3-a456-426614174000";
   const result = evaluate(doc,
     `${origin}/personal/alex/_layouts/15/Doc.aspx?sourcedoc=%7B${guid}%7D`);
@@ -85,7 +85,7 @@ test("SharePoint and OneDrive drafts key documents by sourcedoc and ignore roots
 });
 
 test("GitHub drafts are scoped and preserve PR modes", () => {
-  const offers = starterOffers(site("https://github.com"), ["acme-corp"]);
+  const offers = starterOffers("https://github.com", ["acme-corp"]);
   const doc = compiled(offers);
   const review = evaluate(doc, "https://github.com/acme-corp/widget/pull/412/files");
   assert.equal(review.match, true);

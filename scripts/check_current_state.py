@@ -62,6 +62,15 @@ def main() -> int:
         "README.md panel": "artifact card, Recent view, worklog, record keys",
         "DESIGN.md panel": "record keys, artifact-facing views, and live-tool certification are next",
     }
+    # Retired by protocol v6 (open access): the AI privacy list, the harness
+    # token, and the per-tab grant wall ("can't see this tab").
+    for label, claim in {
+        "privacy list": "AI privacy list",
+        "harness token": "harness token",
+        "grant wall": "can't see this tab",
+    }.items():
+        for doc in ("AGENTS.md", "README.md", "DESIGN.md"):
+            stale_claims[f"{doc} {label}"] = claim
     bodies = {
         "AGENTS.md": agents,
         "README.md": readme,
@@ -76,13 +85,18 @@ def main() -> int:
         "README.md panel": readme,
         "DESIGN.md panel": design,
     }
+    for key in stale_claims:
+        if key not in bodies:
+            bodies[key] = {"AGENTS.md": agents, "README.md": readme, "DESIGN.md": design}[
+                key.split(" ", 1)[0]
+            ]
     for filename, claim in stale_claims.items():
         body = bodies[filename]
         if normalized(claim) in normalized(body):
             errors.append(f"{filename} repeats the obsolete claim: {claim!r}")
 
     required_agents_facts = {
-        "worker policy lease": "confirmed adapter document now travels in the worker's revisioned policy lease",
+        "worker policy lease": "enabled adapter document now travels in the worker's revisioned policy lease",
         "worker prefilter": "prefilters unrecognized or out-of-scope navigations",
         "host recognition": "host independently rechecks each delivered event",
         "artifact activity": "offset-qualified hourly artifact activity",

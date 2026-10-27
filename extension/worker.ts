@@ -5,12 +5,12 @@ import {
   POLICY_STORAGE_KEY,
   PolicyLeaseCache,
   TRUSTED_PAGES,
+  captureUrl,
   emptyQueue,
-  exactOriginPattern,
+  isHttpUrl,
   isPolicyLease,
   isQueuedVisit,
-  matchingSite,
-  siteMatchesUrl,
+  leaseActive,
   type PolicyLease,
   type QueuedVisit,
   type QueueState,
@@ -31,10 +31,21 @@ import {
 
 const QUEUE_KEY = storageKey("queue_v1");
 const POLICY_KEY = POLICY_STORAGE_KEY;
-const REVOCATIONS_KEY = storageKey("revocations_v1");
 const PAUSE_KEY = storageKey("pause_pending_v1");
 const PAUSE_TOKEN_KEY = storageKey("pause_token_v1");
-const REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
+// Origins whose sites were removed or revoked under an earlier build but may
+// still have adapters in the host config. Capture stays off for them until a
+// received lease no longer carries an adapter on any of them.
+const PENDING_REMOVALS_KEY = storageKey("pending_site_removals_v1");
+// Honored as pending removals until migratePendingRemovals carries them over.
+const LEGACY_REVOCATIONS_KEY = storageKey("revocations_v1");
+const LEGACY_REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
+// Written by the per-origin note grants of earlier builds.
+const LEGACY_NOTE_ORIGINS_KEY = storageKey("note_origins_v1");
+// The per-list cap earlier builds enforced on each legacy key.
+const LEGACY_MAX_REMOVALS = 256;
+// Migration merges both legacy lists, so the pending list holds their full union.
+const MAX_PENDING_REMOVALS = 2 * LEGACY_MAX_REMOVALS;
 const HOST_ERROR_KEY = storageKey("host_error_v1");
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const ACTIVITY_SESSION_KEY = storageKey("activity_session_v1");
@@ -56,7 +67,11 @@ const encoder = new TextEncoder();
 
 let storageReady: Promise<void> | null = null;
 let sequence: Promise<unknown> = Promise.resolve();
-let navigationReady = false;
+// The last valid lease this worker received from a page through
+// install_policy, kept even while a local pause holds it out of storage. A
+// lease stored by an earlier build may have been narrowed locally, so only a
+// received lease shows what the host config holds.
+let receivedLease: PolicyLease | null = null;
 const policyLeases = new PolicyLeaseCache();
 
 function activitySessionStorage(): ChromeStorageArea {
@@ -153,21 +168,31 @@ async function readPolicy(): Promise<PolicyLease | null> {
   return (await readPolicyState()).lease;
 }
 
-type LegacyPolicyLease = Omit<PolicyLease, "adapters">;
+type LegacyPolicyLease = Omit<PolicyLease, "adapters"> & { origins: string[] };
 
 function legacyPolicyLease(value: unknown): LegacyPolicyLease | null {
   if (typeof value !== "object" || value === null || "adapters" in value) return null;
-  // Protocol v4 leases had exactly the current policy fields except for the
+  // Protocol v4 leases had the current policy fields and a site list, but no
   // adapter document. Adding an empty document lets the current validator
   // check that old shape without treating arbitrary corrupt state as an
-  // upgrade signal.
+  // upgrade signal. The site origins decide which navigations renew it.
+  const sites = (value as Record<string, unknown>).sites;
+  if (!Array.isArray(sites)) return null;
+  const origins: string[] = [];
+  for (const site of sites) {
+    const origin = typeof site === "object" && site !== null
+      ? (site as Record<string, unknown>).origin
+      : undefined;
+    if (typeof origin !== "string") return null;
+    origins.push(origin);
+  }
   const candidate = { ...value, adapters: { format: 1, artifacts: [] } };
   if (!isPolicyLease(candidate)) return null;
   return {
     revision: candidate.revision,
     expires_at: candidate.expires_at,
     capture_enabled: candidate.capture_enabled,
-    sites: candidate.sites,
+    origins,
   };
 }
 
@@ -320,12 +345,102 @@ async function freezeActivity(now = Date.now()): Promise<number> {
   return accepted;
 }
 
-async function readRevocations(): Promise<string[]> {
-  const stored = await chrome.storage.local.get(REVOCATIONS_KEY);
-  const value = stored[REVOCATIONS_KEY];
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
-    ? value.slice(0, 256)
-    : [];
+async function readStoredPendingRemovals(): Promise<string[]> {
+  const stored = await chrome.storage.local.get(PENDING_REMOVALS_KEY);
+  const value = stored[PENDING_REMOVALS_KEY];
+  if (value === undefined) return [];
+  // This list is a safety gate. If it is corrupt, fail closed.
+  if (!Array.isArray(value) || value.length > MAX_PENDING_REMOVALS ||
+      !value.every((entry) => typeof entry === "string")) {
+    throw new Error("Pending site removal state is unreadable; capture is paused");
+  }
+  return value;
+}
+
+function legacyOrigins(value: unknown, pick: (entry: unknown) => unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(pick).filter((origin): origin is string => typeof origin === "string");
+}
+
+function legacyRemovedSite(value: unknown): value is { origin: string; path_prefix: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const site = value as Record<string, unknown>;
+  if (typeof site.origin !== "string" || typeof site.path_prefix !== "string") return false;
+  try {
+    const url = new URL(site.origin);
+    if (!isHttpUrl(url) || url.username || url.password || url.origin !== site.origin) return false;
+  } catch {
+    return false;
+  }
+  const path = site.path_prefix;
+  return path.startsWith("/") && !path.includes("?") && !path.includes("#") &&
+    !path.includes("\\") && !path.split("/").some((part) => part === "." || part === "..");
+}
+
+/** The earlier build's local site removals, validated exactly as it read
+ * them. That build paused capture on a malformed list; so does this one,
+ * and migration keeps the key rather than deleting the evidence. */
+function legacyRemovedSites(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > LEGACY_MAX_REMOVALS || !value.every(legacyRemovedSite)) {
+    throw new Error("Local site removal state is unreadable; capture is paused");
+  }
+  return value.map((site) => site.origin);
+}
+
+/** Origins an earlier build removed or saw revoked. Until migration has
+ * carried them into the pending list and deleted the legacy keys, they keep
+ * gating capture, so a failed migration write cannot reopen them. */
+async function readLegacyRemovals(): Promise<string[]> {
+  const stored = await chrome.storage.local.get([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
+  return [
+    ...legacyOrigins(stored[LEGACY_REVOCATIONS_KEY], (entry) => entry),
+    ...legacyRemovedSites(stored[LEGACY_REMOVED_SITES_KEY]),
+  ];
+}
+
+/** Every origin capture must stay off for: the pending list plus any legacy
+ * removal state not yet migrated. */
+async function readPendingRemovals(): Promise<string[]> {
+  return [...new Set([...await readStoredPendingRemovals(), ...await readLegacyRemovals()])].sort();
+}
+
+/** Carry origins that an earlier build removed or saw revoked, but whose
+ * adapters the host may still hold, into the one pending-removal list. */
+async function migratePendingRemovals(): Promise<void> {
+  const stored = await chrome.storage.local.get([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
+  if (!(LEGACY_REVOCATIONS_KEY in stored) && !(LEGACY_REMOVED_SITES_KEY in stored)) return;
+  const origins = await readPendingRemovals();
+  // Never drop a removal gate. A union too large to store stays in the
+  // legacy keys, which keep gating capture until it can migrate.
+  if (origins.length > MAX_PENDING_REMOVALS) {
+    throw new Error("Pending site removals exceed the migration limit; legacy state kept");
+  }
+  // Delete the legacy keys only after the merged list is durably written.
+  await chrome.storage.local.set({ [PENDING_REMOVALS_KEY]: origins });
+  await chrome.storage.local.remove([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
+  // Only a lease received after the list changed may clear it.
+  receivedLease = null;
+}
+
+/** The lease capture may use: every adapter on a pending-removal origin is dropped. */
+function withoutPendingRemovals(lease: PolicyLease, pending: string[]): PolicyLease {
+  if (!pending.length) return lease;
+  const removed = new Set(pending);
+  return {
+    ...lease,
+    adapters: {
+      ...lease.adapters,
+      artifacts: lease.adapters.artifacts.filter((artifact) =>
+        typeof artifact.origin !== "string" || !removed.has(artifact.origin)),
+    },
+  };
+}
+
+function holdsPendingRemoval(lease: PolicyLease, pending: string[]): boolean {
+  const removed = new Set(pending);
+  return lease.adapters.artifacts.some((artifact) =>
+    typeof artifact.origin === "string" && removed.has(artifact.origin));
 }
 
 async function pausePending(): Promise<boolean> {
@@ -341,120 +456,14 @@ async function readPauseToken(): Promise<string | null> {
   return value;
 }
 
-function sameSite(left: { origin: string; path_prefix: string }, right: {
-  origin: string; path_prefix: string;
-}): boolean {
-  return left.origin === right.origin && left.path_prefix === right.path_prefix;
-}
-
-function withSites(lease: PolicyLease, sites: PolicyLease["sites"]): PolicyLease {
-  const origins = new Set(sites.map((site) => site.origin));
-  return {
-    ...lease,
-    sites,
-    adapters: {
-      ...lease.adapters,
-      artifacts: lease.adapters.artifacts.filter((artifact) =>
-        typeof artifact.origin === "string" && origins.has(artifact.origin)),
-    },
-  };
-}
-
-function validSite(value: unknown): value is { origin: string; path_prefix: string } {
-  if (typeof value !== "object" || value === null) return false;
-  const site = value as Record<string, unknown>;
-  if (typeof site.origin !== "string" || typeof site.path_prefix !== "string") return false;
-  try {
-    exactOriginPattern(site.origin);
-  } catch {
-    return false;
-  }
-  const path = site.path_prefix;
-  return path.startsWith("/") && !path.includes("?") && !path.includes("#") &&
-    !path.includes("\\") && !path.split("/").some((part) => part === "." || part === "..");
-}
-
-async function readLocallyRemovedSites(): Promise<Array<{ origin: string; path_prefix: string }>> {
-  const stored = await chrome.storage.local.get(REMOVED_SITES_KEY);
-  const value = stored[REMOVED_SITES_KEY];
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > 256 || !value.every(validSite)) {
-    throw new Error("Local site removal state is unreadable; capture is paused");
-  }
-  return value;
-}
-
-function matchesAnySite(sites: Array<{ origin: string; path_prefix: string }>, rawUrl: string): boolean {
-  try {
-    const url = new URL(rawUrl);
-    return sites.some((site) => siteMatchesUrl(site, url));
-  } catch {
-    return false;
-  }
-}
-
-async function checkedGrant(origin: string): Promise<boolean | null> {
-  try {
-    return await chrome.permissions.contains({
-      permissions: ["webNavigation"],
-      origins: [exactOriginPattern(origin)],
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function purgeRevokedQueueWithoutPolicy(): Promise<void> {
-  const queue = await readQueue();
-  if (!queue.items.length) return;
-  const grants = new Map<string, boolean | null>();
-  const retained: QueuedVisit[] = [];
-  const revoked = new Set<string>();
-  for (const item of queue.items) {
-    let origin: string;
-    try {
-      const url = new URL(item.event.url);
-      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
-      origin = url.origin;
-    } catch {
-      continue;
-    }
-    if (!grants.has(origin)) grants.set(origin, await checkedGrant(origin));
-    if (grants.get(origin) !== false) retained.push(item);
-    else revoked.add(origin);
-  }
-  if (retained.length === queue.items.length) return;
-  queue.items = retained;
-  const removed = [...revoked];
-  queue.last_error = removed.length
-    ? `Chrome access was removed for ${removed.join(", ")}; pending capture records were purged`
-    : "Invalid pending capture records were purged";
-  const revocations = await readRevocations();
-  await chrome.storage.local.set({
-    [QUEUE_KEY]: queue,
-    [REVOCATIONS_KEY]: [...new Set([...revocations, ...removed])].slice(0, 256),
-  });
-}
-
-async function reconcileGrants(): Promise<PolicyLease | null> {
-  // The local removal list is an independent safety gate. If it is corrupt,
-  // fail closed even when an older cached policy is otherwise readable.
-  const locallyRemoved = await readLocallyRemovedSites();
-  let lease = await readPolicy();
-  if (!lease) {
-    await purgeRevokedQueueWithoutPolicy();
-    return null;
-  }
+/** The current lease for capture and delivery, or null when capture may not
+ * run. It never asks Chrome about permissions: Brauser holds HTTP(S) access
+ * from install. */
+async function activeLease(): Promise<PolicyLease | null> {
+  const pending = await readPendingRemovals();
+  const lease = await readPolicy();
+  if (!lease) return null;
   if (await pausePending()) return null;
-  const activeSites = lease.sites.filter((site) =>
-    !locallyRemoved.some((removed) => sameSite(removed, site)));
-  if (activeSites.length !== lease.sites.length) {
-    lease = withSites(lease, activeSites);
-    const queue = await readQueue();
-    queue.items = queue.items.filter((item) => matchesAnySite(activeSites, item.event.url));
-    await chrome.storage.local.set({ [POLICY_KEY]: lease, [QUEUE_KEY]: queue });
-    await narrowActivity(lease);
-  }
   if (!lease.capture_enabled) {
     const queue = await readQueue();
     if (queue.items.length) {
@@ -462,31 +471,9 @@ async function reconcileGrants(): Promise<PolicyLease | null> {
       await writeQueue(queue);
     }
     await narrowActivity(null);
-    return lease;
+    return null;
   }
-
-  const retained = [];
-  const removed: string[] = [];
-  for (const site of lease.sites) {
-    const grant = await checkedGrant(site.origin);
-    if (grant === null) throw new Error("Chrome access could not be checked; capture is paused");
-    if (grant) retained.push(site);
-    else removed.push(site.origin);
-  }
-  if (!removed.length) return lease;
-
-  const narrowed = withSites(lease, retained);
-  const queue = await readQueue();
-  queue.items = queue.items.filter((item) => matchesAnySite(narrowed.sites, item.event.url));
-  queue.last_error = `Chrome access was removed for ${removed.join(", ")}; pending capture records were purged`;
-  const revocations = await readRevocations();
-  await chrome.storage.local.set({
-    [POLICY_KEY]: narrowed,
-    [QUEUE_KEY]: queue,
-    [REVOCATIONS_KEY]: [...new Set([...revocations, ...removed])].slice(0, 256),
-  });
-  await narrowActivity(narrowed);
-  return narrowed;
+  return withoutPendingRemovals(lease, pending);
 }
 
 function withoutHash(rawUrl: string): string | null {
@@ -499,13 +486,23 @@ function withoutHash(rawUrl: string): string | null {
   }
 }
 
-/** Match only a URL already allowed by the lease's site policy. */
+/** Whether the lease has an adapter on this URL's origin. Adapters are
+ * origin-wide, so a site is on exactly when it has one. */
+function leaseCoversOrigin(lease: PolicyLease, url: URL): boolean {
+  return lease.adapters.artifacts.some((artifact) => artifact.origin === url.origin);
+}
+
+/** Match only while the lease is active, and only on an origin that has an
+ * adapter in this lease. A URL whose origin has no adapter here never
+ * matches, even when the compiled document for its revision still has one. */
 function matchingArtifact(
   lease: PolicyLease,
   rawUrl: string,
   title?: string,
 ): Extract<EvaluateResult, { match: true }> | null {
-  if (!matchingSite(lease, rawUrl)) return null;
+  if (!leaseActive(lease)) return null;
+  const url = captureUrl(rawUrl);
+  if (!url || !leaseCoversOrigin(lease, url)) return null;
   const compiled = policyLeases.compiledFor(lease);
   if (!compiled) return null;
   const found = evaluate(compiled, rawUrl, title);
@@ -522,10 +519,10 @@ async function captureNavigation(
   }
   await ensureTrustedStorage();
   // Most navigations are for sites the user never enabled. Check the cached
-  // lease first so they cost one storage read, not a full grant reconcile.
-  const cached = await readPolicy();
-  const cachedMatch = cached ? matchingArtifact(cached, details.url) : null;
-  if (!cached || !cachedMatch) {
+  // lease first so they cost one storage read.
+  // A navigation that does not capture still ends the tab's tracked entry,
+  // so the previous page stops gaining focused time.
+  const navigatedAway = async (): Promise<false> => {
     const activity = await readActivity();
     if (activity.tabs[String(details.tabId)]) {
       recordNavigation(activity, {
@@ -536,10 +533,15 @@ async function captureNavigation(
       await writeActivity(activity);
     }
     return false;
-  }
-  const lease = await reconcileGrants();
+  };
+  const cached = await readPolicy();
+  const cachedMatch = cached ? matchingArtifact(cached, details.url) : null;
+  if (!cached || !cachedMatch) return navigatedAway();
+  // The stored lease is the host's as sent, so it can still hold adapters on
+  // pending-removal origins that activeLease() filters out.
+  const lease = await activeLease();
   const match = lease ? matchingArtifact(lease, details.url) : null;
-  if (!lease || !match) return false;
+  if (!lease || !match) return navigatedAway();
   if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return false;
 
   let tab: ChromeTab;
@@ -586,8 +588,9 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
   }
   if (tab.incognito !== false || !tab.url) return;
   await ensureTrustedStorage();
-  const lease = await readPolicy();
-  if (!lease) return;
+  const stored = await readPolicy();
+  if (!stored) return;
+  const lease = withoutPendingRemovals(stored, await readPendingRemovals());
   const current = withoutHash(tab.url);
   if (current === null) return;
   const activity = await readActivity();
@@ -643,32 +646,30 @@ async function installPolicy(
       !policyLeases.install(lease)) {
     throw new Error("Host policy lease is invalid or expired");
   }
+  // Record what the host holds before a pending pause can return early, so a
+  // removal saved during the pause can still clear. Capture stays blocked.
+  receivedLease = lease;
   if (await pausePending()) {
     if (!resumeAfterConfirmation) return currentStatus();
-    // A pause requested during native confirmation must win over an older
+    // A pause requested while a save was in flight must win over an older
     // enable operation, even if that enable later commits its host config.
     if (lease.capture_enabled && resumeAfterPauseToken !== await readPauseToken()) {
       return currentStatus();
     }
   }
-  const removed = await readLocallyRemovedSites();
-  const stillRemoved = removed.filter((site) => lease.sites.some((entry) => sameSite(entry, site)));
-  const effectiveLease = withSites(
-    lease,
-    lease.sites.filter((site) => !stillRemoved.some((entry) => sameSite(entry, site))),
-  );
+  // Store the lease as the host sent it, so clear_pending_removals can tell
+  // whether the host still holds an adapter on a pending-removal origin.
+  const effectiveLease = withoutPendingRemovals(lease, await readPendingRemovals());
   const queue = await readQueue();
   queue.items = queue.items.filter((item) =>
     effectiveLease.capture_enabled && matchingArtifact(effectiveLease, item.event.url));
   await chrome.storage.local.set({
-    [POLICY_KEY]: effectiveLease,
+    [POLICY_KEY]: lease,
     [PAUSE_KEY]: false,
-    [REMOVED_SITES_KEY]: stillRemoved,
     [QUEUE_KEY]: queue,
   });
   await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
-  const reconciled = await reconcileGrants();
-  return currentStatus(reconciled);
+  return currentStatus(await activeLease());
 }
 
 async function currentStatus(
@@ -708,11 +709,9 @@ async function currentStatus(
     // discard, removal, pause, or a purge leaves none, it has nothing to say.
     retry_error: visits.items.some((item) => item.attempts > 0) ? visits.retry_error : null,
     policy_expires_at: policy?.expires_at ?? null,
-    revoked_origins: await readRevocations(),
     pause_pending: paused,
     pause_token: await readPauseToken(),
-    navigation_ready: navigationReady,
-    locally_removed_sites: await readLocallyRemovedSites(),
+    pending_removals: await readPendingRemovals(),
     host_error: await readHostError(),
   };
 }
@@ -726,7 +725,7 @@ interface ReadyBatch {
 /** Take one stable bounded batch. Items retain their batch ID across retry, so
  * a lost acknowledgement resends exactly the request the host saw. */
 async function takeReady(): Promise<ReadyBatch | null> {
-  const lease = await reconcileGrants();
+  const lease = await activeLease();
   if (!lease || lease.expires_at <= Date.now() || !lease.capture_enabled) return null;
   const queue = await readQueue();
   const ready = queue.items.filter(
@@ -865,11 +864,10 @@ async function ackVisit(
 }
 
 async function suspendPolicy(): Promise<WorkerStatus> {
-  // A repairable host config issue is not a user revocation. Remove the
+  // A repairable host config issue is not a site removal. Remove the
   // capture lease immediately, but leave queued visits and an explicit
   // local pause untouched until a valid host policy can reconcile them.
   await chrome.storage.local.set({ [POLICY_KEY]: null });
-  await reconcileGrants();
   return currentStatus();
 }
 
@@ -903,15 +901,18 @@ async function syncNeeds(): Promise<SyncNeeds> {
 /** Whether this URL needs a host renewal before capture can decide. */
 async function leaseNeedsRenewalFor(url: string): Promise<boolean> {
   const state = await readPolicyState();
+  const parsed = captureUrl(url);
+  if (!parsed) return false;
   if (state.legacyLease) {
-    const legacy = { ...state.legacyLease, expires_at: Infinity, adapters: { format: 1, artifacts: [] } };
-    return matchingSite(legacy, url) !== null && !await pausePending();
+    return state.legacyLease.capture_enabled &&
+      state.legacyLease.origins.includes(parsed.origin) &&
+      !await pausePending();
   }
   const lease = state.lease;
   if (!lease || !lease.capture_enabled || lease.expires_at > Date.now()) return false;
-  // matchingSite refuses every URL once the lease lapses, so ask it as if
-  // the lease were still current.
-  if (!matchingSite({ ...lease, expires_at: Infinity }, url)) return false;
+  // Ask as if the lapsed lease were still current: only an origin it has an
+  // adapter for needs a renewal.
+  if (!leaseCoversOrigin(lease, parsed)) return false;
   return !await pausePending();
 }
 
@@ -938,8 +939,8 @@ async function renewPolicy(host: HostClient): Promise<void> {
 /** Send due visits; returns why the host could not be reached, if it could not. */
 async function deliverPending(host: HostClient): Promise<string | null> {
   for (let processed = 0; processed < MAX_QUEUED_VISITS; processed += 64) {
-    // Re-read eligibility before each send so a site removal or Chrome grant
-    // revocation cannot keep draining a stale pending snapshot.
+    // Re-read eligibility before each send so a site removal or pause
+    // cannot keep draining a stale pending snapshot.
     const batch = await serialize(takeReady);
     if (!batch) return null;
     let failure: string | null = null;
@@ -1006,7 +1007,6 @@ async function readHostError(): Promise<string | null> {
 }
 
 async function handleMessage(message: WorkerRequest): Promise<unknown> {
-  registerNavigationListeners();
   await ensureTrustedStorage();
   switch (message.kind) {
     case "install_policy":
@@ -1038,26 +1038,6 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       await writeQueue(queue);
       return currentStatus(null, queue);
     }
-    case "remove_site": {
-      if (!validSite(message.site)) throw new Error("Invalid site removal request");
-      const site = message.site;
-      const removed = await readLocallyRemovedSites();
-      const nextRemoved = removed.some((entry) => sameSite(entry, site))
-        ? removed : [...removed, site];
-      if (nextRemoved.length > 256) throw new Error("Too many locally removed sites");
-      const lease = await readPolicy();
-      const remaining = lease?.sites.filter((entry) => !sameSite(entry, site)) ?? [];
-      const queue = await readQueue();
-      queue.items = queue.items.filter((item) =>
-        !matchesAnySite([site], item.event.url) || matchesAnySite(remaining, item.event.url));
-      await chrome.storage.local.set({
-        [REMOVED_SITES_KEY]: nextRemoved,
-        [POLICY_KEY]: lease ? withSites(lease, remaining) : null,
-        [QUEUE_KEY]: queue,
-      });
-      await narrowActivity(lease ? withSites(lease, remaining) : null);
-      return currentStatus(null, queue);
-    }
     case "get_pending":
       return (await takeReady())?.items ?? [];
     case "get_activity": {
@@ -1069,7 +1049,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
     case "get_status":
     case "sync_now":
       // sync_now is answered in the message listener, after the sync finishes.
-      await reconcileGrants();
+      await activeLease();
       return currentStatus();
     case "clear_notices": {
       const queue = await readQueue();
@@ -1082,31 +1062,19 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       await writeQueue(queue);
       return currentStatus(null, queue);
     }
-    case "ack_reenabled_origin": {
-      // An older revocation must not delete a newly confirmed site. Clear it
-      // only when this exact host revision is active and Chrome still grants
-      // the origin. A fresh removal event queued after this message restores
-      // the revocation marker.
-      const lease = await readPolicy();
-      if (!lease || lease.revision !== message.revision || !lease.capture_enabled ||
-          !lease.sites.some((site) => site.origin === message.origin) ||
-          await checkedGrant(message.origin) !== true) {
-        return currentStatus();
+    case "clear_pending_removals": {
+      // Clear only once the host's lease no longer has an adapter on any
+      // pending origin. Until then, capture stays off for those origins.
+      const pending = await readPendingRemovals();
+      if (pending.length && receivedLease && !holdsPendingRemoval(receivedLease, pending)) {
+        await chrome.storage.local.remove([
+          PENDING_REMOVALS_KEY, LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY,
+        ]);
       }
-      const known = await readRevocations();
-      await chrome.storage.local.set({
-        [REVOCATIONS_KEY]: known.filter((origin) => origin !== message.origin),
-      });
       return currentStatus();
     }
-    case "ack_revocations": {
-      const known = await readRevocations();
-      const acknowledged = new Set(message.origins);
-      await chrome.storage.local.set({
-        [REVOCATIONS_KEY]: known.filter((origin) => !acknowledged.has(origin)),
-      });
-      return currentStatus();
-    }
+    default:
+      throw new Error("Unknown worker request");
   }
 }
 
@@ -1167,20 +1135,10 @@ const onHistoryStateUpdated = (details: ChromeNavigationDetails): void => {
   });
 };
 
-function registerNavigationListeners(): void {
-  if (navigationReady || !chrome.webNavigation) return;
-  try {
-    chrome.webNavigation.onCommitted.addListener(onCommitted);
-    chrome.webNavigation.onHistoryStateUpdated.addListener(onHistoryStateUpdated);
-    navigationReady = true;
-  } catch (error) {
-    console.warn(`${APP_NAME} navigation listeners unavailable:`, describe(error));
-  }
-}
-
-// Register synchronously whenever the optional API is present so MV3 can wake
-// this worker for navigation. A fresh permission grant can expose it later.
-registerNavigationListeners();
+// Register synchronously at top level so MV3 can wake this worker for
+// navigation. webNavigation is a required permission.
+chrome.webNavigation.onCommitted.addListener(onCommitted);
+chrome.webNavigation.onHistoryStateUpdated.addListener(onHistoryStateUpdated);
 
 // Chrome reports a tab's title only for origins this extension was granted.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -1215,10 +1173,10 @@ const moveActivityTab = (added: number, removed: number): void => {
   }).catch((error: unknown) => console.warn(`${APP_NAME} discarded-tab update skipped:`, describe(error)));
 };
 chrome.tabs.onReplaced?.addListener(moveActivityTab);
-chrome.webNavigation?.onTabReplaced?.addListener((details) =>
+chrome.webNavigation.onTabReplaced?.addListener((details) =>
   moveActivityTab(details.tabId, details.replacedTabId));
 
-chrome.webNavigation?.onCreatedNavigationTarget?.addListener((details) => {
+chrome.webNavigation.onCreatedNavigationTarget?.addListener((details) => {
   void serialize(async () => {
     const activity = await readActivity();
     createdNavigationTarget(activity, details.sourceTabId, details.tabId);
@@ -1244,19 +1202,6 @@ chrome.idle?.onStateChanged.addListener((state) => {
   }).catch((error: unknown) => console.warn(`${APP_NAME} idle update skipped:`, describe(error)));
 });
 
-chrome.permissions.onAdded.addListener((permissions) => {
-  if (permissions.permissions?.includes("webNavigation")) registerNavigationListeners();
-});
-
-chrome.permissions.onRemoved.addListener(() => {
-  void serialize(async () => {
-    await ensureTrustedStorage();
-    await reconcileGrants();
-  }).catch((error: unknown) => {
-    console.warn(`${APP_NAME} permission reconciliation failed:`, describe(error));
-  });
-});
-
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) void syncWithHost();
 });
@@ -1264,9 +1209,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onStartup.addListener(() => void syncWithHost());
 
 export async function rebuildActivityMap(): Promise<void> {
-  if (!chrome.tabs.query || !chrome.webNavigation?.getFrame) return;
+  if (!chrome.tabs.query || !chrome.webNavigation.getFrame) return;
   await ensureTrustedStorage();
-  const lease = await reconcileGrants();
+  const lease = await activeLease();
   if (!lease?.capture_enabled) return;
   const activity = await readActivity();
   const now = Date.now();
@@ -1324,35 +1269,19 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((
   console.warn(`${APP_NAME} side panel setup failed:`, describe(error));
 });
 
-// The first note on a page the extension has no standing grant for starts
-// from one of these triggers, which grant `activeTab` for the invoking tab
-// (§5.3). The toolbar action's own grant is Chrome's, from declaring
-// "action" and setPanelBehavior above; no extra listener is needed for it.
-const NOTE_CONTEXT_MENU_ID = `${BINARY_NAME}-note`;
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: NOTE_CONTEXT_MENU_ID,
-      title: `Add a note in ${APP_NAME}`,
-      contexts: ["page"],
-    });
-  });
-});
-
-function openPanelForNote(tab: ChromeTab | undefined): void {
-  if (tab?.id === undefined) return;
-  // Open synchronously in this handler, before any await, so Chrome still
-  // attributes the call to the user gesture that triggered it (§5.2, §5.3).
-  void chrome.sidePanel.open({ tabId: tab.id }).catch((error: unknown) => {
-    console.warn(`${APP_NAME} could not open the side panel for a note:`, describe(error));
-  });
+function runMigration(): Promise<void> {
+  return serialize(migratePendingRemovals).catch((error: unknown) =>
+    console.warn(`${APP_NAME} pending site removal migration failed:`, describe(error)));
 }
 
-chrome.commands.onCommand.addListener((command, tab) => {
-  if (command === "note") openPanelForNote(tab);
+// Earlier builds added a "note" page context-menu item and stored per-origin
+// note grants; clear both on install or update so nothing stale survives.
+chrome.runtime.onInstalled.addListener((details) => {
+  chrome.contextMenus.removeAll();
+  void chrome.storage.local.remove(LEGACY_NOTE_ORIGINS_KEY).catch((error: unknown) =>
+    console.warn(`${APP_NAME} note grant cleanup failed:`, describe(error)));
+  if (details?.reason === "update") void runMigration();
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === NOTE_CONTEXT_MENU_ID) openPanelForNote(tab);
-});
+// Once per worker start, in case the update event was missed.
+void runMigration();

@@ -6,7 +6,7 @@
 //! readers. Either file may be deleted; `brauser reindex` recreates both.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions as StdOpenOptions};
+use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -1329,7 +1329,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(unix)]
 fn sync_host_directory(path: &Path) -> std::io::Result<()> {
-    File::open(path)?.sync_all()
+    fs::File::open(path)?.sync_all()
 }
 
 #[cfg(not(unix))]
@@ -2005,6 +2005,7 @@ fn read_sqlite_varint(bytes: &[u8]) -> Result<(u64, usize)> {
 mod tests {
     use super::*;
     use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
+    use std::fs::File;
     use std::process::Command;
     use tempfile::TempDir;
 
@@ -2017,6 +2018,7 @@ mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         }
     }
 
@@ -2048,7 +2050,7 @@ mod tests {
     #[test]
     fn hostile_presentation_is_safe_in_logs_and_rebuilt_artifacts_without_changing_payloads() {
         use crate::capture::{CaptureBatchEvent, CaptureOutcome, CapturePolicy, CaptureStore};
-        use brauser_protocol::{SiteConfig, VisitEvent};
+        use brauser_protocol::VisitEvent;
 
         let hostile = "Report\u{202e}evil\u{202c}\u{200b}\u{200f}\u{2066}hidden\u{2069}\u{feff} %%comment%% ==marked== #tag ![embed](https://bad.invalid)";
         for batched in [false, true] {
@@ -2056,13 +2058,10 @@ mod tests {
             let cache = TempDir::new().unwrap();
             let config = storage(root.path());
             let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
-            let sites = [SiteConfig {
-                origin: "https://example.com".into(),
-                path_prefix: "/".into(),
-            }];
+            let origins = ["https://example.com".to_owned()];
             let policy = || CapturePolicy {
                 enabled: true,
-                sites: &sites,
+                origins: &origins,
                 strip_params: &[],
             };
             let event = activity(
@@ -2801,7 +2800,13 @@ print(json.dumps([tables,row]))"#;
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{:?}", output.stderr);
-            assert_eq!(String::from_utf8(output.stdout).unwrap(), "2\n['link']\n");
+            // Python writes \r\n on Windows.
+            assert_eq!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
+                "2\n['link']\n"
+            );
             // Do not rewrite historical payloads: their exact content detects
             // conflicting reuse of an event ID during replay and rebuilding.
             assert!(
@@ -3053,7 +3058,7 @@ print(json.dumps([tables,row]))"#;
         let index = index(&root, &cache);
         let policy = CapturePolicy {
             enabled: true,
-            sites: &[],
+            origins: &[],
             strip_params: &[],
         };
         let url = "https://news.ycombinator.com/item?id=50251344";
