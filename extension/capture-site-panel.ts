@@ -64,7 +64,7 @@ export class CaptureSitePanel {
     this.start.disabled = configured || busy || !this.session.connected || !config?.storage ||
       !!this.session.configIssue || !!this.session.adapterIssue;
     this.hint.textContent = configured ? "This site has capture rules. Manage them in settings."
-      : !config?.storage ? "Choose a notes folder in settings, then capture this site here."
+      : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
       : "Remember work on this site without configuring rules by hand.";
     if (this.target) this.updateControls(busy);

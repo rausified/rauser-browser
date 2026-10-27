@@ -74,12 +74,12 @@ fn child_replies_with_the_scripted_folder() {
     let output = run_dialog(
         "__dialog-pick-folder",
         directory.path(),
-        "Choose notes folder",
+        "Choose home folder",
     );
     assert!(output.status.success());
     assert_eq!(output.stdout, b"picked:/tmp/notes");
     let shown = std::fs::read_to_string(directory.path().join("shown.jsonl")).unwrap();
-    assert!(shown.contains(r#""dialog":"pick-folder","text":"Choose notes folder""#));
+    assert!(shown.contains(r#""dialog":"pick-folder","text":"Choose home folder""#));
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn child_fails_closed_on_a_mismatched_answer() {
     let output = run_dialog(
         "__dialog-pick-folder",
         directory.path(),
-        "Choose notes folder",
+        "Choose home folder",
     );
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
@@ -126,7 +126,7 @@ fn child_rejects_a_request_without_its_length() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"Choose notes folder")
+        .write_all(b"Choose home folder")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
@@ -140,7 +140,7 @@ fn child_closes_its_dialog_when_the_parent_goes_away() {
     let (mut child, stdin) = start_dialog(
         "__dialog-pick-folder",
         directory.path(),
-        "Choose notes folder",
+        "Choose home folder",
     );
     // Wait until the dialog is open, then close the parent's end of the pipe,
     // as a host that was killed or disconnected would. No answer arrives.

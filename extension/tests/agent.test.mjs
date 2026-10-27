@@ -8,7 +8,7 @@ const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
 const config = {
   storage: {
-    root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+    root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
     summaries_dir: "summaries", knowledge_base_dir: null,
   },
   capture_enabled: false, strip_params: [],
@@ -22,7 +22,7 @@ test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   assert.doesNotMatch(withFolder, /Review it below/);
   const withoutFolder = harnessFoundText("Claude Code", "2.1.284", false);
   assert.match(withoutFolder, /^Found Claude Code 2\.1\.284\./);
-  assert.match(withoutFolder, /Choose a notes folder first/);
+  assert.match(withoutFolder, /Choose a home folder first/);
   assert.doesNotMatch(withoutFolder, /then choose Set up harness\.$/);
   assert.match(harnessFoundText("Codex", null, true), /^Found Codex\. /);
 });

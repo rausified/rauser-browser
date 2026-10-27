@@ -172,6 +172,31 @@ impl Vault {
         source_contents: &str,
         destination_contents: &str,
     ) -> Result<CreatedPage> {
+        self.move_note_no_clobber_with_sync(
+            source_key,
+            source_url,
+            destination_key,
+            destination_url,
+            source_contents,
+            destination_contents,
+            sync_directory,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn move_note_no_clobber_with_sync<G>(
+        &self,
+        source_key: &RecordKey,
+        source_url: &str,
+        destination_key: &RecordKey,
+        destination_url: &str,
+        source_contents: &str,
+        destination_contents: &str,
+        sync_after_move: G,
+    ) -> Result<CreatedPage>
+    where
+        G: FnOnce(&Dir) -> io::Result<()>,
+    {
         if destination_contents.len() > MAX_NOTE_BYTES {
             bail!("page note exceeds the 4 MiB write limit");
         }
@@ -210,10 +235,16 @@ impl Vault {
             }
             return Err(error).context("removing URL-keyed note after re-keying");
         }
-        sync_directory(&pages)?;
+        // The move is complete once the source is gone. A sync failure now
+        // is a warning, as for every other post-publication step; reporting
+        // it as a failure would hide a finished move behind an error.
+        let mut warnings = Vec::new();
+        if let Err(error) = sync_after_move(&pages) {
+            warnings.push(PostPublishWarning::DirectorySync(error));
+        }
         Ok(CreatedPage {
             relative_path: self.pages_dir.join(destination),
-            warnings: Vec::new(),
+            warnings,
         })
     }
 
@@ -374,20 +405,20 @@ pub(crate) fn open_selected_root(
     expected_identity: Option<&str>,
 ) -> Result<(Dir, String)> {
     if !chosen.is_absolute() {
-        bail!("notes folder must be an absolute path");
+        bail!("home folder must be an absolute path");
     }
     let canonical = fs::canonicalize(chosen)
-        .with_context(|| format!("resolving notes folder {}", chosen.display()))?;
+        .with_context(|| format!("resolving home folder {}", chosen.display()))?;
     if !canonical.is_dir() {
-        bail!("notes folder is not a directory: {}", canonical.display());
+        bail!("home folder is not a directory: {}", canonical.display());
     }
     // This is the sole ambient filesystem entry point for vault contents.
     // cap-std confines subsequent paths to the opened directory.
     let root = Dir::open_ambient_dir(&canonical, ambient_authority())
-        .with_context(|| format!("opening notes folder {}", canonical.display()))?;
+        .with_context(|| format!("opening home folder {}", canonical.display()))?;
     let identity = directory_identity(&root)?;
     if expected_identity.is_some_and(|expected| expected != identity) {
-        bail!("selected notes folder changed; choose it again");
+        bail!("selected home folder changed; choose it again");
     }
     Ok((root, identity))
 }
@@ -400,12 +431,12 @@ pub(crate) fn selected_root_identity(chosen: &Path) -> Result<String> {
 fn directory_identity(dir: &Dir) -> Result<String> {
     let metadata = dir
         .try_clone()
-        .context("cloning notes folder handle")?
+        .context("cloning home folder handle")?
         .into_std_file()
         .metadata()
-        .context("identifying notes folder")?;
+        .context("identifying home folder")?;
     if !metadata.is_dir() {
-        bail!("selected notes folder is not a directory");
+        bail!("selected home folder is not a directory");
     }
     #[cfg(unix)]
     {
@@ -422,10 +453,10 @@ fn directory_identity(dir: &Dir) -> Result<String> {
         // GetFileInformationByHandle for the same volume and file IDs.
         let handle = dir
             .try_clone()
-            .context("cloning notes folder handle")?
+            .context("cloning home folder handle")?
             .into_std_file();
         let info = winapi_util::file::information(&handle)
-            .context("identifying notes folder on Windows")?;
+            .context("identifying home folder on Windows")?;
         Ok(format!(
             "windows:{:08x}:{:016x}",
             info.volume_serial_number(),
@@ -687,6 +718,41 @@ pub(crate) mod tests {
             .replace_page("https://example.com/user-note", "generated")
             .unwrap();
         assert_eq!(fs::read_to_string(user_file).unwrap(), "generated");
+    }
+
+    #[test]
+    fn a_sync_failure_after_a_note_move_reports_the_finished_move_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::open(&storage(root.path(), "pages")).unwrap();
+        let source_url = "https://example.com/older";
+        let source_key = url_record_key(source_url).unwrap();
+        vault.replace_page(source_url, "older note").unwrap();
+        let destination_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work.item:example.com/1".into(),
+        };
+        let destination_url = "https://example.com/item/1";
+        let moved = vault
+            .move_note_no_clobber_with_sync(
+                &source_key,
+                source_url,
+                &destination_key,
+                destination_url,
+                "older note",
+                "artifact note",
+                |_| Err(io::Error::other("simulated directory sync failure")),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            moved.warnings.as_slice(),
+            [PostPublishWarning::DirectorySync(_)]
+        ));
+        assert_eq!(
+            fs::read_to_string(root.path().join(&moved.relative_path)).unwrap(),
+            "artifact note"
+        );
+        assert_eq!(vault.read_page(source_url).unwrap(), None);
     }
 
     pub(crate) fn age_file(path: &Path, age: Duration) {

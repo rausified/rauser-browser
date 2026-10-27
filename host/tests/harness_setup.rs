@@ -97,7 +97,7 @@ esac
         PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
     }
 
-    /// A config with a notes folder chosen and no harness. It still carries
+    /// A config with a home folder chosen and no harness. It still carries
     /// a retired v5 privacy key, which loads and is dropped on the next save.
     fn write_config(&self) {
         let root = fs::canonicalize(self.path("notes")).unwrap();

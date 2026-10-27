@@ -72,7 +72,7 @@ export function leaseFor(config: ConfigSnapshot, currentRevision: string): Polic
 export function setupProblem(config: ConfigSnapshot | null, issue: string | null): string | null {
   if (issue) return `The host configuration needs repair: ${issue}`;
   if (!config) return null;
-  if (!config.storage) return "No notes folder is chosen.";
+  if (!config.storage) return "No home folder is chosen.";
   return null;
 }
 
