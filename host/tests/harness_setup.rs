@@ -275,7 +275,7 @@ fn harness_setup_confirms_and_commits_flag() {
     // The fixture has no summaries folder yet, so setting it is listed first.
     assert!(
         text.starts_with(
-            "Set up Claude Code for Brauser AI commands\nThis setup also makes these changes:\n  Set summaries folder to \"summaries\".\n\nHarness: Claude Code 2.1.284\n"
+            "Set up Claude Code for Brauser AI commands\nThis setup also makes these changes:\n• Set summaries folder to \"summaries\".\n\nHarness: Claude Code 2.1.284\n"
         ),
         "{text}"
     );
@@ -283,7 +283,7 @@ fn harness_setup_confirms_and_commits_flag() {
         "Program: {:?}",
         world.path("bin").join("claude").to_str().unwrap()
     )));
-    assert!(text.contains("  \"bank.example\""));
+    assert!(text.contains(": \"bank.example\"\n"));
     assert_eq!(
         confirmed["summary"].as_str(),
         text.split_once('\n').map(|(_, body)| body)

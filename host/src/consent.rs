@@ -714,19 +714,31 @@ pub fn harness_confirmation_text(
     // out of sight below it.
     if !changes.is_empty() {
         lines.push("This setup also makes these changes:".to_owned());
-        lines.extend(changes.iter().map(|change| format!("  {change}")));
+        lines.extend(changes.iter().map(|change| format!("• {change}")));
         lines.push(String::new());
     }
-    lines.push(format!("Harness: {name} {version}"));
-    if candidate.adapter == Adapter::Codex {
-        lines.push(CODEX_DISCLOSURE.to_owned());
-    }
     lines.extend([
+        format!("Harness: {name} {version}"),
         format!("Program: {:?}", agent.binary),
         format!("Runs: {real_path:?}"),
-        "Arguments (page text goes on standard input, never in arguments):".to_owned(),
+        String::new(),
     ]);
-    lines.extend(agent.args.iter().map(|arg| format!("  {arg:?}")));
+    if candidate.adapter == Adapter::Codex {
+        lines.push(CODEX_DISCLOSURE.to_owned());
+        lines.push(String::new());
+    }
+    // One shell-quoted line: every argument is shown, and quoting keeps
+    // the word boundaries unambiguous without a line per argument.
+    lines.push("Arguments (page text goes on standard input, never in arguments):".to_owned());
+    lines.push(
+        agent
+            .args
+            .iter()
+            .map(|arg| shell_word(arg))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    lines.push(String::new());
     lines.push(format!(
         "Environment variables passed (names only, values are not shown): {}",
         agent.env_allow.join(", ")
@@ -735,17 +747,19 @@ pub fn harness_confirmation_text(
         "Summaries folder: {summaries:?} in {:?}",
         storage.root
     ));
-    lines.push("AI privacy exclusions (pages on these sites are never sent to the AI):".to_owned());
-    if after.agent_denylist.is_empty() {
-        lines.push("  No domains excluded.".to_owned());
+    let exclusions = if after.agent_denylist.is_empty() {
+        "No domains excluded.".to_owned()
     } else {
-        lines.extend(
-            after
-                .agent_denylist
-                .iter()
-                .map(|entry| format!("  {entry:?}")),
-        );
-    }
+        after
+            .agent_denylist
+            .iter()
+            .map(|entry| format!("{entry:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    lines.push(format!(
+        "AI privacy exclusions (pages on these sites are never sent to the AI): {exclusions}"
+    ));
     lines.push(format!("Timeout: {} seconds", agent.timeout_secs));
     lines.push(String::new());
     lines.push(format!(
@@ -758,6 +772,24 @@ pub fn harness_confirmation_text(
         );
     }
     Ok((title, description))
+}
+
+/// `arg` as one POSIX shell word: bare when it has no shell metacharacters,
+/// otherwise single-quoted.
+fn shell_word(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '-' | '_' | '.' | '/' | '=' | ':' | ',' | '@' | '+' | '%'
+                )
+        });
+    if plain {
+        arg.to_owned()
+    } else {
+        format!("'{}'", arg.replace('\'', r"'\''"))
+    }
 }
 
 /// Only native harness setup sets `agent_denylist_confirmed` or a harness
@@ -1673,6 +1705,7 @@ mod tests {
         let all: Vec<&str> = body.lines().collect();
         // Choosing the first summaries folder is the one change, shown first.
         assert_eq!(all[0], "This setup also makes these changes:");
+        assert!(all[1].starts_with("• "), "{body}");
         assert!(all[1].contains("summaries folder"), "{body}");
         assert_eq!(all[2], "");
         let lines = &all[3..];
@@ -1685,15 +1718,16 @@ mod tests {
             )
         );
         assert_eq!(lines[2], "Runs: \"/opt/claude/versions/2.1.284/claude\"");
+        assert_eq!(lines[3], "");
         assert_eq!(
-            lines[3],
+            lines[4],
             "Arguments (page text goes on standard input, never in arguments):"
         );
         let args = harness::template_args(Adapter::ClaudeCode);
-        for (line, arg) in lines[4..].iter().zip(&args) {
-            assert_eq!(*line, format!("  {arg:?}"));
-        }
-        let rest = &lines[4 + args.len()..];
+        let words: Vec<String> = args.iter().map(|arg| shell_word(arg)).collect();
+        assert_eq!(lines[5], words.join(" "));
+        assert_eq!(lines[6], "");
+        let rest = &lines[7..];
         assert_eq!(
             rest[0],
             "Environment variables passed (names only, values are not shown): HOME, PATH, ANTHROPIC_API_KEY"
@@ -1712,6 +1746,20 @@ mod tests {
     }
 
     #[test]
+    fn shell_word_quotes_only_when_needed() {
+        assert_eq!(shell_word("--sandbox"), "--sandbox");
+        assert_eq!(shell_word("read-only"), "read-only");
+        assert_eq!(
+            shell_word("approval_policy=\"never\""),
+            "'approval_policy=\"never\"'"
+        );
+        assert_eq!(shell_word("{prompt}"), "'{prompt}'");
+        assert_eq!(shell_word("a b"), "'a b'");
+        assert_eq!(shell_word("it's"), r"'it'\''s'");
+        assert_eq!(shell_word(""), "''");
+    }
+
+    #[test]
     fn harness_confirmation_text_says_no_domains_excluded_when_empty() {
         let folder = tempfile::tempdir().unwrap();
         let (current, after) = text_configs(folder.path(), &[], &[]);
@@ -1721,7 +1769,7 @@ mod tests {
             .iter()
             .position(|line| line.starts_with("AI privacy exclusions"))
             .unwrap();
-        assert_eq!(lines[heading + 1], "  No domains excluded.");
+        assert!(lines[heading].ends_with(": No domains excluded."), "{body}");
     }
 
     #[test]
@@ -1738,12 +1786,14 @@ mod tests {
             .iter()
             .position(|line| line.starts_with("AI privacy exclusions"))
             .unwrap();
-        assert_eq!(lines[heading + 1], "  \"bank.example\"");
-        assert_eq!(lines[heading + 2], "  \"news.example\"");
+        assert!(
+            lines[heading].ends_with(": \"bank.example\", \"news.example\""),
+            "{body}"
+        );
         assert!(!body.contains("No domains excluded."));
         assert!(
             body.contains(
-                "  Allow AI commands to read pages on \"mail.example\" and its subdomains."
+                "• Allow AI commands to read pages on \"mail.example\" and its subdomains."
             )
         );
         assert!(!body.contains("pages on \"bank.example\""));
@@ -2328,7 +2378,10 @@ mod setup_tests {
             .iter()
             .position(|line| *line == "Harness: Codex 0.144.4")
             .unwrap();
-        assert_eq!(lines[harness_line + 1], CODEX_DISCLOSURE, "{shown}");
+        // Program and Runs, then a blank line, then the disclosure.
+        assert!(lines[harness_line + 2].starts_with("Runs: "), "{shown}");
+        assert_eq!(lines[harness_line + 3], "", "{shown}");
+        assert_eq!(lines[harness_line + 4], CODEX_DISCLOSURE, "{shown}");
         assert!(!shown.contains(SECRET));
         let agent = confirmed.config.agent.unwrap();
         assert_eq!(agent.args, harness::codex_args("0.144.4").unwrap());
