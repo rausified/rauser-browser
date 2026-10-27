@@ -160,11 +160,16 @@ Their line numbers predate step 6.6, so re-check them.
   Durable capture stays acknowledged during cache failure; history APIs report
   unavailable until catch-up and publication succeed. Unchanged logs are skipped,
   partial trailing markers are revisited, and old caches rebuild automatically.
-- [ ] `brwr-ezb` **Keep artifact notes reachable after adapter or site removal.**
-  Verify the current historical-identity handling against the full native
-  save/remove/load acceptance matrix: alternate routes, occupied URL notes,
-  ambiguous mappings, cache deletion and reindex. Capture must remain off and
-  no note may be silently merged or overwritten.
+- [x] `brwr-ezb` **Keep artifact notes reachable after adapter or site removal.**
+  Verified native save/revisioned removal/load across adapter removal, rule
+  narrowing and site removal; recovered notes retain separate older URL notes
+  on all recorded routes, including mode and context-only evidence. Cache
+  deletion/reindex, stale keys and versions, ambiguity and capture suppression
+  pass without automatic merges or overwrites.
+- [x] `brwr-t61` **Refuse incomplete note scans before selecting an autosave target.**
+  Discovered during the removal review: primary recovery now refuses truncated,
+  oversized or unreadable candidate sets. Four injected scan faults preserve
+  note bytes and recover after cleanup; optional older-note lists stay usable.
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
   expected count in `scripts/smoke-macos.mjs` in the same commit. The smoke run
@@ -338,6 +343,11 @@ Their line numbers predate step 6.6, so re-check them.
 
 ### Cookie's own proposals (only after the plan work above)
 
+- [ ] `brwr-r88` **Show ambiguous historical notes for explicit read-only viewing.**
+  When several artifacts share a canonical URL after removal, list the
+  verified preserved notes in the panel so a person can read one deliberately.
+  Keep the primary autosave key, separate URL note, ownership checks and
+  capture policy unchanged; never turn a read-only choice into a migration.
 - [ ] `brwr-1g2` **Show the incoming trail on the artifact card.** The card
   currently shows only a linked count even though the host records validated
   cross-tool edges. After ordered plan work, surface bounded incoming sources
@@ -365,11 +375,16 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## In Progress / This Iteration
 
-- None. Next take `brwr-ezb`, the remaining ready deploy blocker, following
-  `bd ready`. Capture Site remains the next major product step after the
-  blocker; the P3 proposals stay behind plan work.
+- None. `brwr-ezb` and its discovered scan-completeness fix `brwr-t61` are
+  complete after three failing-first regressions, a fresh full diff review and
+  the full gate (332 Rust tests, eight extension test files). Follow `bd ready`
+  next; Capture Site remains the major product investment behind its existing
+  queue prerequisites and the P3 proposals stay behind ordered plan work.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Keep shared and older notes reachable after capture rules are removed (2026-10-27).** Historical note recovery now retains the older URL-note list and its read-only viewing action after adapter removal, recognition narrowing and site removal. Both URL lookup directions share durable activity, mode and explicit-context evidence, so alternate routes and context-only history recover the same note without inventing activity. Native request tests prove separate URL notes, migration refusals, stale-key copy-out, cache deletion/reindex and suppressed capture preserve existing content. **Metrics:** 332 Rust tests (+5) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
+- **Category:** Security & Privacy. **Refuse incomplete historical note scans before autosave (2026-10-27).** Review of note removal reproduced a partial candidate scan selecting a note despite an omitted conflicting identity. Primary recovery now fails closed at the file-count, per-file byte or total-byte limit and on unreadable regular candidates; optional older-note discovery remains best effort. Native loads and saves return correlated unavailable-identity errors, preserve note bytes and recover once the fault clears. **Metrics:** 332 Rust tests and 8 extension test files passing; 4 scan-fault cases within 1 new regression, plus activity/context ambiguity and cache-failure coverage; full gate green.
 
 - **Category:** Bug Fix. **Recover missing artifact history from durable logs (2026-10-27).** Per-file ingestion checkpoints now catch up valid older caches before delivery updates and history queries, including after restart without replaying the missing event. Changed logs reparse in full, unchanged logs are skipped, SQLite publishes before the checkpoint cache, and all cache work shares the configuration lock. Durable capture stays acknowledged during cache failures, while artifact, Recent, and worklog queries report unavailable history instead of silently incomplete totals; bounded failures publish no partial checkpoint. **Metrics:** 326 Rust tests (+4) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
 
@@ -404,20 +419,21 @@ Their line numbers predate step 6.6, so re-check them.
   transactional SQLite ingestion should resume bounded batches across requests,
   rather than permanently stop at the current per-pass read cap. Preserve the
   new recovery and unavailable-history assertions when replacing it.
-- `brwr-ezb` should check the complete note-removal matrix next. Independent
-  review reproduced a wrong-note load and save when catch-up failure hid a
-  conflicting historical identity. Recovery now refuses incomplete lookups,
-  with a regression for log bounds and cache-publication failures. The broader
-  adapter/site-removal acceptance matrix remains open.
-- Capture Site remains the next visible product investment once the remaining
-  deploy blocker is closed. Re-learn and named focus sessions already cover the
+- `brwr-ezb` now passes the complete removal matrix. Historical identity uses
+  the union of note and log evidence, including explicit context, and refuses
+  incomplete sources (`brwr-t61`). `brwr-r88` is the visible follow-up: let a
+  person read preserved ambiguous artifact notes without guessing a primary
+  autosave key. It remains P3 behind plan work.
+- Capture Site remains the next major visible product investment after its
+  queued prerequisites. Re-learn and named focus sessions already cover the
   useful follow-ups; another internal health view would duplicate existing work.
 
 - `brwr-992` is preventive consolidation, not a reproduced behavioral fix:
   the complete parity matrix passed before and after. Keep explicit expected
   outcomes in cross-path tests so two permissive paths cannot pass by agreement.
   `brwr-o1l` still owns the broader authorize/open deduplication; do not widen
-  this cycle into that refactor. The next deploy blocker is now `brwr-ezb`.
+  this cycle into that refactor. Its then-next deploy blocker `brwr-ezb` is now
+  complete; continue from the authoritative ready queue.
 - Product direction remains Capture Site (`brwr-1hj`): the confirmation should
   use concrete matched pages and plain exclusions so someone can start useful
   capture without understanding adapter JSON. Existing Recent/worklog and the

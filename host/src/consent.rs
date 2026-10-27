@@ -157,6 +157,17 @@ impl ConsentAuthority {
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
     ) -> Result<Option<ConfigConfirmation>> {
+        self.confirm_config_with(current, revision, next, picker_token, dialog::confirm)
+    }
+
+    pub(crate) fn confirm_config_with(
+        &mut self,
+        current: &ConfigSnapshot,
+        revision: &str,
+        next: &ConfigSnapshot,
+        picker_token: Option<&str>,
+        confirm: fn(DialogText<'_>) -> Result<bool>,
+    ) -> Result<Option<ConfigConfirmation>> {
         config::validate_update(current, next)?;
         self.check_picker(current, revision, next, picker_token)?;
         check_agent_fields(current, next)?;
@@ -172,7 +183,7 @@ impl ConsentAuthority {
         if !changes.is_empty() {
             let description =
                 format!("{APP_NAME} will make these changes:\n\n{summary}\n\nAllow these changes?");
-            if !dialog::confirm(DialogText {
+            if !confirm(DialogText {
                 title: &format!("Confirm {APP_NAME} settings"),
                 description: &description,
             })? {
