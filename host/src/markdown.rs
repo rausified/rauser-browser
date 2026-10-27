@@ -26,14 +26,20 @@ pub(crate) fn yaml_string(value: &str) -> String {
 /// On top of `markdown_line`'s backslash escapes, every backtick, `$` and `~`
 /// is written as a numeric entity, as in `neutralize_remote`, so no code span
 /// (a Dataview inline query), math, or fence can form wherever the line is
-/// placed, at the start of a line or a list item included. Since
-/// `markdown_line` escapes every backslash, the backslash it puts before a
-/// backtick is dropped for the entity.
+/// placed, at the start of a line or a list item included. Each space from
+/// the fourth of a run on is written as `&#32;`, so a line placed at a line
+/// start, such as `-     x`, cannot make an indented code block in a list
+/// item (`markdown_line` has already turned tabs into spaces and trimmed
+/// both ends). Since `markdown_line` escapes every backslash, the backslash
+/// it puts before a backtick is dropped for the entity.
 pub(crate) fn inline(value: &str, limit: usize) -> String {
     let line = crate::presentation::markdown_line(value, limit);
     let mut out = String::with_capacity(line.len() + line.len() / 4);
+    let mut spaces = 0usize;
     for ch in line.chars() {
+        spaces = if ch == ' ' { spaces + 1 } else { 0 };
         match ch {
+            ' ' if spaces > 3 => out.push_str("&#32;"),
             '`' => {
                 out.pop();
                 out.push_str("&#96;");
@@ -114,18 +120,23 @@ fn percent_encode(segment: &str) -> String {
 const MAX_WIKILINK_LABEL_CHARS: usize = 200;
 
 /// An Obsidian wikilink that cannot close early, alias, or point at a
-/// heading or block: `[ ] | # ^` and control characters are removed. `<` and
-/// `>` are removed too, since a viewer without wikilinks (VS Code preview)
-/// would parse raw HTML inside the brackets, and neither can appear in an
-/// Obsidian file name. When
-/// nothing of the target is left, the label is written as escaped plain
-/// text instead (`Untitled` without one).
+/// heading or block: `[ ] | # ^` and control characters are removed. A
+/// viewer without wikilinks (VS Code preview) parses the inside as Markdown,
+/// so `<` and `>` are removed too, which no Obsidian file name can contain,
+/// and so are backticks and `$`, so no code span (a Dataview inline query in
+/// Obsidian) or math forms there either. Entities are not used, since
+/// Obsidian would not decode them in a link target. A `~` cannot open a fence
+/// after `[[`, so it stays. When nothing of the target is left, the label is
+/// written as escaped plain text instead (`Untitled` without one).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
     fn clean(value: &str) -> String {
         value
             .chars()
-            .filter(|ch| !ch.is_control() && !matches!(ch, '[' | ']' | '|' | '#' | '^' | '<' | '>'))
+            .filter(|ch| {
+                !ch.is_control()
+                    && !matches!(ch, '[' | ']' | '|' | '#' | '^' | '<' | '>' | '`' | '$')
+            })
             .collect::<String>()
             .trim()
             .to_owned()
@@ -151,9 +162,10 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 ///   of backslashes already escapes it. An escaped `!` cannot start an image,
 ///   so inline, full, collapsed and shortcut reference images and Obsidian
 ///   `![[embeds]]` cannot form;
-/// - every backtick becomes `&#96;`, every `$` `&#36;`, and every tab
-///   `&#9;`; every `~` in a run of three or more becomes `&#126;`, and every
-///   space from the fourth of a run on becomes `&#32;`. So no code span,
+/// - every backtick becomes `&#96;`, every `$` `&#36;`, every tab `&#9;`,
+///   and every form feed and vertical tab `&#32;`; every `~` in a run of
+///   three or more becomes `&#126;`, and every space from the fourth of a run
+///   on becomes `&#32;`. So no code span,
 ///   fenced block, indented code block or math can form, in any container.
 ///   Obsidian hands those to other engines: Mermaid (whose v11
 ///   `@{ img: ... }` loads a remote image), Dataview (`= ...` and `$= ...`
@@ -161,9 +173,10 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 ///   and `dataview`/`dataviewjs` fences), math and plugin blocks. Runs of
 ///   one or two `~` stay, so strikethrough still renders. A backslash that
 ///   escapes a backtick, `$` or `~` written as an entity is dropped, since
-///   the entity already shows the plain character; numeric entities are
-///   used rather than backslashes because agent backslashes cannot undo
-///   them;
+///   the entity already shows the plain character, and one before
+///   whitespace written as an entity is doubled, since it would otherwise
+///   escape the entity's `&`; numeric entities are used rather than
+///   backslashes because agent backslashes cannot undo them;
 /// - a `!` at the very end is escaped as `\!`, a trailing run of `~` or of
 ///   spaces is written as entities whatever its length, and a trailing odd
 ///   run of backslashes gets one more, so the output can be joined with
@@ -205,10 +218,15 @@ pub(crate) fn neutralize_remote(text: &str) -> String {
                         continue;
                     }
                 };
-                // A backslash before a space is literal, so only an escaped
-                // `~` loses its backslash.
-                if ch == '~' && position == 0 && escaped {
-                    out.pop();
+                // An escaped `~` loses its backslash. A backslash before a
+                // space is literal, but before the entity it would escape the
+                // `&`, so it is doubled to stay visible.
+                if position == 0 && escaped {
+                    if ch == '~' {
+                        out.pop();
+                    } else {
+                        out.push('\\');
+                    }
                 }
                 out.push_str(entity);
             }
@@ -227,7 +245,15 @@ pub(crate) fn neutralize_remote(text: &str) -> String {
                 }
                 out.push_str(if ch == '`' { "&#96;" } else { "&#36;" });
             }
-            '\t' => out.push_str("&#9;"),
+            // Form feed and vertical tab, which some renderers treat as blank
+            // and others decode to U+FFFD, are written as spaces. As with a
+            // trailing space, an escaping backslash is doubled.
+            '\t' | '\u{b}' | '\u{c}' => {
+                if escaped {
+                    out.push('\\');
+                }
+                out.push_str(if ch == '\t' { "&#9;" } else { "&#32;" });
+            }
             _ => out.push(ch),
         }
         backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
@@ -396,6 +422,29 @@ mod tests {
             ("x ", "x&#32;"),
             ("x\n  ", "x\n&#32;&#32;"),
             ("x\t", "x&#9;"),
+        ] {
+            assert_eq!(neutralize_remote(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn a_backslash_before_whitespace_written_as_an_entity_stays_visible() {
+        for (input, expected) in [
+            // A single backslash would escape the entity's `&`, showing the
+            // entity's text and dropping the backslash, so it is doubled.
+            ("a\\\tb", "a\\\\&#9;b"),
+            ("x\\ ", "x\\\\&#32;"),
+            ("x\\\t", "x\\\\&#9;"),
+            // An even run already shows every backslash.
+            ("x\\\\ ", "x\\\\&#32;"),
+            // A backslash before a raw space stays as it is.
+            ("x\\ y", "x\\ y"),
+            ("a\\    b", "a\\   &#32;b"),
+            // Form feed and vertical tab, which some renderers treat as
+            // blank, are written as spaces.
+            ("a\u{c}b", "a&#32;b"),
+            ("a\u{b}b", "a&#32;b"),
+            ("\\\u{c}", "\\\\&#32;"),
         ] {
             assert_eq!(neutralize_remote(input), expected, "{input:?}");
         }
@@ -593,6 +642,11 @@ mod tests {
         // An agent backslash stays a visible backslash.
         assert_eq!(inline("\\` \\$", 200), "\\\\&#96; \\\\&#36;");
         assert_eq!(inline("~~~mermaid", 200), "&#126;&#126;&#126;mermaid");
+        // No run of four spaces is left, so a line placed at a line start
+        // cannot make an indented code block in a list item.
+        assert_eq!(inline("-     = x", 200), "-   &#32;&#32;\\= x");
+        assert_eq!(inline("1.\t\t= x", 200), "1.  \\= x");
+        assert_eq!(inline("a    b", 200), "a   &#32;b");
         for value in ["`= this.file.name`", "$$x$$", "~~~", "\\`a`", "a ` b"] {
             let line = inline(value, 200);
             assert!(
@@ -607,6 +661,20 @@ mod tests {
         assert_eq!(wikilink("a]]|b#^", None), "[[ab]]");
         assert_eq!(wikilink("a", Some("b]]|c")), "[[a|bc]]");
         assert_eq!(wikilink("a", Some("[]")), "[[a]]");
+    }
+
+    #[test]
+    fn wikilinks_cannot_form_code_spans_or_math() {
+        // A viewer without wikilinks, such as VS Code preview, would make a
+        // code span (a Dataview inline query in Obsidian) or math of these.
+        assert_eq!(
+            wikilink(
+                "`$= dv.el(\"img\", \"\", {attr: {src: \"https://e/x.png\"}})`",
+                Some("$x$ `= this.file.name`")
+            ),
+            "[[= dv.el(\"img\", \"\", {attr: {src: \"https://e/x.png\"}})|x = this.file.name]]"
+        );
+        assert_eq!(wikilink("`$`", Some("x")), "x");
     }
 
     #[test]

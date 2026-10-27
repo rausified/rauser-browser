@@ -176,5 +176,17 @@
  "-     = this.file.name",
  "tail ~~",
  "tail  ",
- "~~strike~~ and ~single~ stay"
+ "~~strike~~ and ~single~ stay",
+ "a\\\tb",
+ "x\\ ",
+ "a\\\\ ",
+ "x\\\t",
+ "a\r\n    = x",
+ "a\r    = x",
+ "\t~~~",
+ "a\fb",
+ "   \f\n- b",
+ "\\\u000b    x",
+ "[[`$= dv.el(\"img\",\"\",{attr:{src:\"https://e.example/x.png\"}})`]]",
+ "[[$\\href{https://e.example}{x}$|`= this.file.name`]]"
 ]

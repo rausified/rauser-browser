@@ -3,18 +3,21 @@
 //! ordinary Markdown. The properties here hold for each input, and
 //! `scripts/check-markdown-neutralizer.mjs` renders the same outputs with
 //! real CommonMark/GFM renderers. This module only names
-//! `markdown::neutralize_remote` and `markdown::yaml_string`, so it runs
-//! unchanged against an older `markdown.rs`.
+//! `markdown::neutralize_remote`, `markdown::yaml_string`, `markdown::inline`
+//! and `markdown::wikilink`, so it runs unchanged against an older
+//! `markdown.rs`.
 
-use crate::markdown::{neutralize_remote, yaml_string};
+use crate::markdown::{inline, neutralize_remote, wikilink, yaml_string};
 
 const CORPUS: &str = include_str!("../tests/fixtures/markdown-neutralize-corpus.json");
 
 /// Set to a file path to have `the_corpus_comes_out_inert` write, for each
-/// input, `{input, output, frontmatter, joined0..}` there as JSON, for the
-/// renderer check. `frontmatter` is the input as a YAML front matter value,
-/// which a viewer without front matter support renders as body text, and
-/// each `joinedN` is the output followed by the neutralized `FOLLOWERS[N]`.
+/// input, `{input, output, frontmatter, inline, wikilink, joined0..}` there
+/// as JSON, for the renderer check. `frontmatter` is the input as a YAML front
+/// matter value, which a viewer without front matter support renders as body
+/// text; `inline` and `wikilink` are the input as a single-line field and as a
+/// wikilink target and label; and each `joinedN` is the output followed by
+/// the neutralized `FOLLOWERS[N]`.
 const OUTPUT_ENV: &str = "BRAUSER_NEUTRALIZE_CORPUS_OUT";
 
 fn corpus() -> Vec<String> {
@@ -71,11 +74,13 @@ fn runs(chars: &[char], target: char) -> Vec<Option<Run>> {
 /// nothing else, read off the input one character at a time: each `<` as
 /// `&lt;`; each `!` before `[` or at the end, after an even run of
 /// backslashes, as `\!`; each backtick, `$` and tab as `&#96;`, `&#36;` and
-/// `&#9;`; each `~` in a run of three or more, or in a run that ends the
-/// input, as `&#126;`; each space from the fourth of a run on, and every
-/// space of a run that ends the input, as `&#32;`; a backslash that ends an
-/// odd run directly before a character written as an entity dropped; and one
-/// more backslash after a trailing odd run. Every other input character must
+/// `&#9;`; each form feed and vertical tab as `&#32;`; each `~` in a run of
+/// three or more, or in a run that ends the input, as `&#126;`; each space
+/// from the fourth of a run on, and every space of a run that ends the input,
+/// as `&#32;`; a backslash that ends an odd run directly before a backtick,
+/// `$` or `~` written as an entity dropped, and one directly before a
+/// whitespace character written as an entity doubled; and one more backslash
+/// after a trailing odd run. Every other input character must
 /// appear unchanged, so a neutralizer that dropped, added or moved any other
 /// character, backslashes before `![` included, fails.
 fn only_the_escapes_changed(input: &str, output: &str) -> bool {
@@ -87,6 +92,7 @@ fn only_the_escapes_changed(input: &str, output: &str) -> bool {
             '`' => Some("&#96;"),
             '$' => Some("&#36;"),
             '\t' => Some("&#9;"),
+            '\u{b}' | '\u{c}' => Some("&#32;"),
             '~' => tildes[at]
                 .filter(|run| run.at_end || run.length >= 3)
                 .map(|_| "&#126;"),
@@ -105,13 +111,21 @@ fn only_the_escapes_changed(input: &str, output: &str) -> bool {
             '!' if matches!(next, Some('[') | None) && backslashes.is_multiple_of(2) => {
                 "\\!".to_owned()
             }
-            // Only backticks, `$` and `~` are escapable; a backslash before
-            // a tab or space is literal and stays.
+            // An escaped backtick, `$` or `~` loses its backslash, since the
+            // entity shows the plain character.
             '\\' if backslashes.is_multiple_of(2)
                 && matches!(next, Some('`' | '$' | '~'))
                 && entity(at + 1).is_some() =>
             {
                 String::new()
+            }
+            // A backslash before whitespace is literal, but before an entity
+            // it would escape the `&`, so it is doubled to stay visible.
+            '\\' if backslashes.is_multiple_of(2)
+                && matches!(next, Some(' ' | '\t' | '\u{b}' | '\u{c}'))
+                && entity(at + 1).is_some() =>
+            {
+                "\\\\".to_owned()
             }
             _ => match entity(at) {
                 Some(escape) => escape.to_owned(),
@@ -135,16 +149,23 @@ fn only_the_escapes_changed(input: &str, output: &str) -> bool {
 
 /// Fragments written after each neutralized corpus output, themselves
 /// neutralized, to check that joined fragments stay inert.
-const FOLLOWERS: [&str; 3] = [
+const FOLLOWERS: [&str; 6] = [
     "[j](https://e.example/j.png)",
     "![j](https://e.example/j.png)",
     "[[https://e.example/j.png]]",
+    "~~x",
+    "   y",
+    "\n    = x",
 ];
 
 struct Case {
     input: String,
     output: String,
     frontmatter: String,
+    /// The input as a single-line field.
+    inline: String,
+    /// The input as a wikilink's target and label.
+    wikilink: String,
     /// The output followed by each neutralized `FOLLOWERS` fragment.
     joined: Vec<String>,
 }
@@ -161,6 +182,8 @@ fn the_corpus_comes_out_inert() {
                     .map(|follower| output.clone() + &neutralize_remote(follower))
                     .collect(),
                 frontmatter: format!("---\ntitle: {}\n---\n", yaml_string(&input)),
+                inline: inline(&input, 2048),
+                wikilink: wikilink(&input, Some(&input)),
                 output,
                 input,
             }
@@ -176,6 +199,8 @@ fn the_corpus_comes_out_inert() {
                     "input": case.input,
                     "output": case.output,
                     "frontmatter": case.frontmatter,
+                    "inline": case.inline,
+                    "wikilink": case.wikilink,
                 });
                 for (index, joined) in case.joined.iter().enumerate() {
                     pair[format!("joined{index}")] = joined.clone().into();
@@ -189,6 +214,8 @@ fn the_corpus_comes_out_inert() {
         input,
         output,
         frontmatter,
+        inline,
+        wikilink,
         joined,
     } in &cases
     {
@@ -209,6 +236,24 @@ fn the_corpus_comes_out_inert() {
                 );
             }
         }
+        // A single-line field or wikilink cannot open a code span or math
+        // either. A single-line field writes every `~` as an entity, so it
+        // cannot open a fence even at a line start; a wikilink starts with
+        // `[[`. (`inline` backslash-escapes `<`; the renderer check covers
+        // its HTML.)
+        for text in [inline, wikilink] {
+            for raw in ["`", "$"] {
+                assert!(
+                    !text.contains(raw),
+                    "raw {raw:?} in {text:?} from {input:?}"
+                );
+            }
+        }
+        // Nor, placed at a line start, a fence or an indented code block.
+        assert!(
+            !inline.contains('~') && !inline.contains("    "),
+            "{inline:?} from {input:?}"
+        );
         // Nothing but the escapes changes.
         assert!(
             only_the_escapes_changed(input, output),

@@ -15,7 +15,11 @@
 // raw form must hold no backtick, `$`, tab, run of three `~` or run of four
 // spaces, since Obsidian hands code spans, fences, indented code and math to
 // Mermaid, Dataview and math engines. Each renderer must also decode the
-// numeric entities the neutralizer writes to their plain characters.
+// numeric entities the neutralizer writes to their plain characters. Each
+// input is also rendered as a single-line field (`markdown::inline`) and as a
+// wikilink (`markdown::wikilink`, as a viewer without wikilinks sees it):
+// those must render with no <code> or <pre> either, and hold no raw backtick
+// or `$`.
 //
 //   npm run test:markdown-neutralizer
 //   node scripts/check-markdown-neutralizer.mjs --outputs pairs.json
@@ -160,6 +164,29 @@ export function rawProblems(text) {
   return found;
 }
 
+/**
+ * Every problem in a raw single-line field or wikilink: characters that could
+ * open a code span or math. A wikilink starts with `[[`, so it cannot open a
+ * fence or indented code block; a single-line field (`atLineStart`) may be
+ * placed at a line start, so it must hold no `~` and no run of four spaces.
+ */
+export function lineRawProblems(text, atLineStart = false) {
+  const found = [];
+  if (atLineStart && text.includes("~")) {
+    found.push("a raw '~'");
+  }
+  if (atLineStart && / {4}/.test(text)) {
+    found.push("a run of four or more raw spaces");
+  }
+  if (text.includes("`")) {
+    found.push("a raw backtick");
+  }
+  if (text.includes("$")) {
+    found.push("a raw '$'");
+  }
+  return found;
+}
+
 function corpusPairs(outputs) {
   if (outputs) {
     return { pairs: JSON.parse(readFileSync(outputs, "utf8")), cargoFailed: false };
@@ -211,9 +238,10 @@ const LIVE_BODY = [
   "    = this.file.name",
 ];
 
-// The neutralizer's numeric entities, and the text each renderer must show.
-const ENTITIES = "&#96;x&#96; &#36;y&#36; &#126;&#126;&#126; a&#9;b   &#32;c";
-const DECODED = "`x` $y$ ~~~ a\tb    c";
+// The neutralizer's numeric entities, and the text each renderer must show;
+// a doubled backslash before an entity shows one backslash.
+const ENTITIES = "&#96;x&#96; &#36;y&#36; &#126;&#126;&#126; a&#9;b   &#32;c d\\\\&#9;e";
+const DECODED = "`x` $y$ ~~~ a\tb    c d\\\te";
 
 function selfCheck() {
   for (const [renderer, render] of RENDERERS) {
@@ -253,13 +281,15 @@ function main() {
   for (const { input, ...documents } of pairs) {
     // `output` is the neutralized body text; `frontmatter` (when present) is
     // the input as a front matter value, rendered as a viewer without front
-    // matter support would; each `joinedN` is the output followed by another
-    // neutralized fragment.
+    // matter support would; `inline` and `wikilink` (when present) are the
+    // input as a single-line field and as a wikilink; each `joinedN` is the
+    // output followed by another neutralized fragment.
     for (const [kind, document] of Object.entries(documents)) {
-      // Everything but front matter is neutralized body text.
+      // Everything but front matter must render with no code or math.
       const body = kind !== "frontmatter";
+      const line = kind === "inline" || kind === "wikilink";
       if (body) {
-        const found = rawProblems(document);
+        const found = line ? lineRawProblems(document, kind === "inline") : rawProblems(document);
         if (found.length > 0) {
           failures += 1;
           console.error(
