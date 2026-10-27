@@ -2655,6 +2655,11 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
         let mut config = loaded(&path);
         let url = "https://work.example/items/7";
 
@@ -2670,7 +2675,7 @@ id = "work:{host}/{id}"
                     artifact_type: "work.item".into(),
                     url: url.into(),
                     title: Some("Issue 7".into()),
-                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    occurred_at,
                     incognito: false,
                     opens: 1,
                     focused_seconds: 3,
@@ -2829,6 +2834,11 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
         let mut config = loaded(&path);
         let url = "https://work.example/items/7";
         let artifact_id = "work:work.example/7";
@@ -2841,7 +2851,7 @@ id = "work:{host}/{id}"
                     event_id: uuid::Uuid::new_v4().to_string(),
                     artifact_id: artifact_id.into(),
                     url: url.into(),
-                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    occurred_at,
                     incognito: false,
                     text: "blocking the release".into(),
                 },
