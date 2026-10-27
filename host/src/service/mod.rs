@@ -6,3 +6,4 @@ pub mod harness_api;
 pub mod paths;
 pub mod queue;
 pub mod record;
+pub mod supervisor;
