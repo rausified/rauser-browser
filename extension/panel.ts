@@ -1094,7 +1094,10 @@ void (async () => {
     updateControls();
   }
   await refreshActiveTab();
-  await runCards.restore();
+  // list_runs makes the host start the registered service, which runs on
+  // demand (spec §5), so only a set-up harness, which can have runs, asks.
+  // A run the shortcut started still restores through its notice.
+  if (session.config?.agent) await runCards.restore();
   await showStoredNotice();
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();

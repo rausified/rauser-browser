@@ -1010,9 +1010,16 @@ function buttonIn(root, text) {
   return null;
 }
 
+// A harness set up in settings, as config_result reports it.
+const SET_UP = {
+  ...CONFIG,
+  agent: { harness: "codex", binary: "/usr/local/bin/codex", version: "1.0.0", timeout_secs: 600, probed_at: "2026-10-27T09:00:00-07:00" },
+  storage: { ...CONFIG.storage, summaries_dir: "summaries" },
+};
+
 async function summarizePanel(options = {}) {
   const page = await install({
-    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY,
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP,
     executeScript: readablePage, intercept: startsRun, ...options,
   });
   await until(() => page.el("note-editor").hidden === false, "the page to show");
@@ -1238,6 +1245,19 @@ test("a summarize failure sent before the panel loads is shown when it opens", a
   const open = await summarizePanel();
   open.notify({ kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 1, at: Date.now() });
   await until(() => open.el("run-area").textContent.includes("Summaries work on http(s) pages."), "the live notice");
+});
+
+test("with no summary harness set up, opening the panel does not wake the service", async () => {
+  // list_runs makes the host start the registered service (launchctl), which
+  // is on demand: only a set-up harness can have runs to restore.
+  const page = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" } });
+  await until(() => page.el("note-body").disabled === false, "the note to load");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.sent("list_runs").length, 0);
+  teardown.splice(0).forEach((listener) => listener());
+
+  const ready = await summarizePanel();
+  await until(() => ready.sent("list_runs").length === 1, "list_runs");
 });
 
 test("the panel restores run cards on load and shows a run the shortcut started", async () => {
