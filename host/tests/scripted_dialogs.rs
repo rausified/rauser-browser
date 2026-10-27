@@ -87,19 +87,34 @@ fn child_fails_closed_on_a_mismatched_answer() {
     let directory = private_tempdir();
     std::fs::write(
         directory.path().join("answer"),
-        r#"{"dialog":"pick-folder","reply":"canceled"}"#,
+        r#"{"dialog":"confirm","reply":"confirmed"}"#,
     )
     .unwrap();
-    let output = run_dialog("__dialog-confirm", directory.path(), "Title\nBody");
+    let output = run_dialog(
+        "__dialog-pick-folder",
+        directory.path(),
+        "Choose notes folder",
+    );
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn retired_confirm_child_command_is_refused() {
+    let out = Command::new(HOST)
+        .arg("__dialog-confirm")
+        .env_clear()
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown command"));
 }
 
 #[test]
 fn child_rejects_a_request_without_its_length() {
     let directory = private_tempdir();
     let mut child = Command::new(HOST)
-        .arg("__dialog-confirm")
+        .arg("__dialog-pick-folder")
         .env("BRAUSER_SCRIPTED_DIALOGS", directory.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -111,7 +126,7 @@ fn child_rejects_a_request_without_its_length() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"Title\nBody")
+        .write_all(b"Choose notes folder")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
@@ -122,7 +137,11 @@ fn child_rejects_a_request_without_its_length() {
 #[test]
 fn child_closes_its_dialog_when_the_parent_goes_away() {
     let directory = private_tempdir();
-    let (mut child, stdin) = start_dialog("__dialog-confirm", directory.path(), "Title\nBody");
+    let (mut child, stdin) = start_dialog(
+        "__dialog-pick-folder",
+        directory.path(),
+        "Choose notes folder",
+    );
     // Wait until the dialog is open, then close the parent's end of the pipe,
     // as a host that was killed or disconnected would. No answer arrives.
     let shown = directory.path().join("shown.jsonl");
