@@ -1578,7 +1578,7 @@ async function run() {
         // Codex passes its checks, and the page says it shares the user's
         // own Codex instructions and skills (DESIGN §14).
         requireCondition(codex?.ready && codex.text.includes("Codex 0.144.4") &&
-          codex.text.includes("instructions (AGENTS.md) and skills can shape its answers"),
+          codex.text.includes("your AGENTS.md and skills can shape answers"),
         `Codex offer: ${JSON.stringify(codex)}`);
         const runs = await harnessRuns(argvLog);
         requireCondition(runs.length > 0 && runs.every((run) => ["claude-good", "codex"].includes(run.program) &&
@@ -1718,9 +1718,10 @@ async function run() {
         await inSettings((page) => page.click('#harness-offers li[data-adapter="codex"] input[type="radio"]'));
         await startSetup();
         const text = await scriptedDialog("confirm", "confirmed");
-        for (const expected of ["Codex runs with your normal Codex home and login",
-          "instructions (AGENTS.md) and skills can shape its answers", "Claude Code is the recommended harness",
-          `"${fakeBin}/codex"`, "--sandbox", "read-only", "--disable", "shell_tool", "{prompt}", "mail.example"]) {
+        for (const expected of ["Codex uses your own Codex home and login",
+          "your AGENTS.md and skills can shape answers", "Claude Code is recommended",
+          `"${fakeBin}/codex"`, "--sandbox", "read-only", "Also --disable each of: shell_tool,", "{prompt}",
+          "mail.example"]) {
           requireCondition(text.includes(expected), `The Codex dialog does not show ${expected}: ${JSON.stringify(text)}`);
         }
         requireCondition(!text.includes(secret) && !text.includes("ANTHROPIC_API_KEY"),

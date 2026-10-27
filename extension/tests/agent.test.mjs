@@ -98,7 +98,7 @@ test("codex_offer_note_discloses_shared_codex_home", () => {
     real_path: "/bin/codex", version: "0.144.4", args: [], env_required: ["HOME", "PATH"],
     env_optional: [], refusal: null,
   };
-  assert.match(CODEX_DISCLOSURE, /instructions \(AGENTS\.md\) and skills can shape/);
+  assert.match(CODEX_DISCLOSURE, /your own Codex home and login, so your AGENTS\.md and skills can shape/);
   assert.equal(harnessOfferNote(offer), `Ready to set up. ${CODEX_DISCLOSURE}`);
   assert.equal(harnessOfferNote({ ...offer, offer_id: null, refusal: "Codex 0.1.0 has not been reviewed" }),
     `Cannot be set up: Codex 0.1.0 has not been reviewed. ${CODEX_DISCLOSURE}`);
