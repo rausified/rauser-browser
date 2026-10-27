@@ -8,13 +8,16 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use adapter_templates::{
-    BaseType, CType, Document, DraftOutcome, Match, NoMatch, Ref, Value, check_draft,
-    prepare_segments, scan_refs,
+    BaseType, CType, Document, DraftOutcome, DraftPolicy, Fill, Match, NoMatch, Provenance, Ref,
+    ResolvedScope, RuleVerdict, Scope, ScopeChoice, ScopeState, SharedOrigin, Value, check_draft,
+    check_draft_rules, prepare_segments, resolve_scope_choice, scan_refs,
 };
 use serde_json::{Map, Value as Json, json};
 
 const VECTORS: &str = include_str!("../../protocol/adapter-templates/vectors.json");
 const DISPUTED: &str = include_str!("disputed.txt");
+/// The host-owned drafting catalog; `draft_rules` cases judge against it.
+const CATALOG: &str = include_str!("../../protocol/capture-site/catalog.json");
 
 /// Replaces `$fixture` references and `$build` strings.
 fn resolve(v: &Json, fixtures: &Map<String, Json>) -> Json {
@@ -86,6 +89,160 @@ fn pair(v: &Json) -> (usize, usize) {
         a[0].as_u64().unwrap() as usize,
         a[1].as_u64().unwrap() as usize,
     )
+}
+
+fn strings(v: &Json) -> Vec<String> {
+    v.as_array()
+        .map(|a| a.iter().map(|s| s.as_str().unwrap().to_owned()).collect())
+        .unwrap_or_default()
+}
+
+/// The catalog as the host parses it (`host/src/capture_site.rs`).
+fn catalog_policy() -> DraftPolicy {
+    let c: Json = serde_json::from_str(CATALOG).expect("catalog parses");
+    let fill = |k: &str| str_field(&c["fill"], k).to_owned();
+    DraftPolicy {
+        probe_paths: strings(&c["probe_paths"]),
+        search_keys: strings(&c["search_keys"]),
+        paging_keys: strings(&c["paging_keys"]),
+        blocked_route_words: strings(&c["blocked_route_words"]),
+        mode_words: c["mode_words"]
+            .as_object()
+            .expect("mode_words")
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned()))
+            .collect(),
+        fill: Fill {
+            num: fill("num"),
+            key: fill("key"),
+            slug: fill("slug"),
+            uuid: fill("uuid"),
+            hex32: fill("hex32"),
+            hex40: fill("hex40"),
+            hex64: fill("hex64"),
+            tailhex32: fill("tailhex32"),
+            id: fill("id"),
+        },
+        starter_types: strings(&c["starter_types"]),
+        shared: c["shared_origins"]
+            .as_object()
+            .expect("shared_origins")
+            .iter()
+            .map(|(origin, e)| SharedOrigin {
+                origin: origin.clone(),
+                tenant: e["tenant"].as_object().map(|t| {
+                    (
+                        t["segment"].as_u64().unwrap() as usize,
+                        t["capture"].as_str().unwrap().to_owned(),
+                    )
+                }),
+                account_index: e["account_index"]
+                    .as_array()
+                    .expect("account_index")
+                    .iter()
+                    .map(|a| {
+                        (
+                            a["literal"].as_str().unwrap().to_owned(),
+                            a["segment"].as_u64().unwrap() as usize,
+                        )
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn scope_json(scope: &Scope) -> Json {
+    Json::Object(
+        scope
+            .iter()
+            .map(|(k, vs)| (k.clone(), json!(vs)))
+            .collect::<Map<String, Json>>(),
+    )
+}
+
+fn run_draft_rules(case: &Json) -> Result<Json, String> {
+    let existing = document(&case["existing"]).map_err(|e| format!("existing invalid: {e}"))?;
+    let draft: Value = serde_json::from_value(case["draft"].clone()).map_err(|e| e.to_string())?;
+    let rules = case["draft"]["match"].as_array().map_or(0, Vec::len);
+    let provenance: Vec<Provenance> = match case.get("provenance") {
+        None => vec![Provenance::Drafted; rules],
+        Some(p) => strings(p)
+            .iter()
+            .map(|p| match p.as_str() {
+                "drafted" => Ok(Provenance::Drafted),
+                "user_written" => Ok(Provenance::UserWritten),
+                other => Err(format!("bad provenance {other}")),
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    let accepted = case
+        .get("accepted")
+        .and_then(Json::as_array)
+        .map(|a| a.iter().map(document).collect::<Result<Vec<_>, _>>())
+        .transpose()
+        .map_err(|e| format!("accepted invalid: {e}"))?
+        .unwrap_or_default();
+    let mut policy = catalog_policy();
+    if let Some(extra) = case.get("extra_probe_paths") {
+        policy.probe_paths.extend(strings(extra));
+    }
+    let report = match check_draft_rules(&existing, &draft, &provenance, &policy, &accepted) {
+        Ok(report) => report,
+        Err(DraftOutcome::DraftError(code)) => return Ok(json!({"draft_error": code.as_str()})),
+        Err(DraftOutcome::Invalid(e)) => return Ok(json!({"error": validation_json(&e)})),
+        Err(DraftOutcome::Ok { .. }) => return Err("refusal carried Ok".into()),
+    };
+    let scope = match &report.scope {
+        ScopeState::NotShared => json!("not_shared"),
+        ScopeState::UnscopedOnly => json!("unscoped_only"),
+        ScopeState::Pending { capture } => json!({"pending": capture}),
+        ScopeState::Copied(s) => json!({"copied": scope_json(s)}),
+    };
+    let verdicts: Vec<Json> = report
+        .rules
+        .iter()
+        .map(|v| match v {
+            RuleVerdict::Kept => json!("kept"),
+            RuleVerdict::Dropped(c) => json!({"dropped": c.as_str()}),
+            RuleVerdict::Warned(c) => json!({"warned": c.as_str()}),
+        })
+        .collect();
+    let survivors = report
+        .rules
+        .iter()
+        .filter(|v| !matches!(v, RuleVerdict::Dropped(_)))
+        .count();
+    let in_document = report
+        .document
+        .as_ref()
+        .map_or(0, |d| d.adapters()[0].rule_count());
+    if survivors != in_document {
+        return Err(format!(
+            "{survivors} surviving rules but {in_document} in the document"
+        ));
+    }
+    let mut out = json!({"scope": scope, "rules": verdicts});
+    if let Some(choice) = case.get("choice") {
+        let choice = match choice {
+            Json::Null => ScopeChoice::None,
+            Json::String(s) if s == "unscoped" => ScopeChoice::Unscoped,
+            Json::Object(o) if o.len() == 1 && o.contains_key("values") => {
+                ScopeChoice::Values(strings(&o["values"]))
+            }
+            other => return Err(format!("bad choice {other}")),
+        };
+        let resolved = match resolve_scope_choice(&report.scope, &choice) {
+            Ok(ResolvedScope::NotShared) => json!("not_shared"),
+            Ok(ResolvedScope::Unscoped) => json!("unscoped"),
+            Ok(ResolvedScope::Scoped(s)) => json!({"scoped": scope_json(&s)}),
+            Err(code) => json!({"scope_error": code.as_str()}),
+        };
+        out.as_object_mut()
+            .unwrap()
+            .insert("resolved".into(), resolved);
+    }
+    Ok(out)
 }
 
 /// The README invariants on every match.
@@ -242,6 +399,7 @@ fn run_case(case: &Json) -> Result<Json, String> {
                 DraftOutcome::Invalid(e) => json!({"error": validation_json(&e)}),
             }
         }
+        "draft_rules" => return run_draft_rules(case),
         other => return Err(format!("unknown kind {other}")),
     })
 }

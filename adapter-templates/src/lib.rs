@@ -25,7 +25,10 @@ mod value;
 
 pub use ctype::{BaseType, CType, CaseMod};
 pub use document::{Adapter, Document, MAX_ADAPTERS, MAX_RULES, Mode, SHARED_ORIGINS};
-pub use draft::{DraftOutcome, Scope, check_draft};
+pub use draft::{
+    DraftOutcome, DraftRulesReport, Provenance, ResolvedScope, RuleVerdict, Scope, ScopeChoice,
+    ScopeState, check_draft, check_draft_rules, resolve_scope_choice,
+};
 pub use error::{DraftErrorCode, ErrorCode, Field, ValidationError};
 pub use eval::{
     MAX_ID_BYTES, MAX_REFS, MAX_URL_CHARS, Match, NoMatch, Ref, ResolvedRef, TitleMatch, scan_refs,

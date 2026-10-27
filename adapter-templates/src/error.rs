@@ -124,6 +124,11 @@ codes! {
         SearchCapture => "draft_search_capture",
         MatchesProbe => "draft_matches_probe",
         Overlap => "draft_overlap",
+        BlockedRoute => "draft_blocked_route",
+        PagingCapture => "draft_paging_capture",
+        InvalidRule => "draft_invalid_rule",
+        ScopePending => "draft_scope_pending",
+        ScopeChoice => "draft_scope_choice",
     }
 }
 

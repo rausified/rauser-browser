@@ -23,7 +23,7 @@ An **adapter document** is the JSON form of the `[adapters]` TOML table:
 
 Adapter keys are `type`, `origin`, `match`, `id`, `title`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, and `fields`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
 
-A case's `doc` field (called `existing` for `draft` cases) is either an inline adapter document or `{"$fixture": "<name>"}`, which refers to an entry in `fixtures`. `$fixture` is never a real document key.
+A case's `doc` field (called `existing` for `draft` and `draft_rules` cases) is either an inline adapter document or `{"$fixture": "<name>"}`, which refers to an entry in `fixtures`. `$fixture` is never a real document key.
 
 ### String builder
 
@@ -194,6 +194,42 @@ The host checks a draft in this order (§10.4):
 7. `draft_matches_probe`: probes are the origin root, which is always probed, plus `probes`. Rules are matched without applying scope (SQ-V3).
 8. `draft_overlap`: any rule of any existing adapter on the origin may overlap.
 
+### `draft_rules` (rust)
+
+The per-rule checks both Capture Site drafters use (DESIGN §5.1). A failing drafted rule is dropped and the rest of the draft is kept. A failing user-written rule only warns and is kept.
+
+- **Input:**
+  - `existing` (a document) and `draft` (one adapter table). The table is the checked table: only the Tier 0 keys, before the review's scope, unscoped and title overlays.
+  - `provenance`: optional, one of `"drafted"` or `"user_written"` per rule. When absent, every rule is drafted. A rule without an entry counts as drafted.
+  - `accepted`: optional, the earlier-ranked drafted adapter documents.
+  - The policy is the host catalog, `protocol/capture-site/catalog.json`. `extra_probe_paths` (optional) appends probe paths to its `probe_paths`.
+  - `choice`: optional, the review's scope choice: `null`, `"unscoped"`, or `{"values": [..]}`.
+- **Expected result:** one of:
+  - `{"scope": S, "rules": [V, ..]}`, plus `"resolved": R` when `choice` is present;
+  - `{"draft_error": code}`, for a refusal of the whole draft;
+  - `{"error": <validation error>}`, for an adapter-level validation failure (`rule` is `null`).
+- `S` is `"not_shared"`, `"unscoped_only"`, `{"pending": capture}`, or `{"copied": scope}`.
+- `V` is `"kept"`, `{"dropped": code}`, or `{"warned": code}`.
+- `R` is `"not_shared"`, `"unscoped"`, `{"scoped": scope}`, or `{"scope_error": code}`.
+
+The host checks the rules in this order. The first failing check decides each verdict.
+
+1. `draft_forbidden_key` refuses the whole draft when any rule is drafted. When every rule is user-written, every rule is warned with it instead.
+2. The scope state, on a shared origin:
+   - `unscoped_only` where the catalog has no tenant position, whatever the existing adapters are scoped by;
+   - otherwise `copied` when every scoped adapter on the origin agrees (SQ-V5, SQ-V17);
+   - otherwise `pending`, naming the catalog's tenant capture: there is no scoped adapter, or they disagree.
+3. Each rule is validated as a one-rule adapter with the copied scope. While scope is pending, a stand-in scope of the tenant capture is used, and where only unscoped is possible, `unscoped`. A rule that fails is dropped as `draft_invalid_rule`, whoever wrote it, because it can never be saved. A failure with no rule index refuses the whole draft as `error`.
+4. Per rule: `draft_no_leading_literal`, `draft_rest_second`, `draft_blocked_route` (a path literal or alternative is a catalog `blocked_route_words` entry, compared with ASCII folding), `draft_search_capture` and `draft_paging_capture` (an ID capture bound from a `search_keys` or `paging_keys` key), `draft_matches_probe` (the origin root and each catalog probe path on the draft's origin, matched without scope, SQ-V3), and `draft_overlap` (with `existing`, then with `accepted`). The survivors are then validated together in rule order, and a rule that conflicts with an earlier survivor is dropped as `draft_invalid_rule`.
+5. `draft_id_needs_typed_capture`, judged on the survivors. It refuses the whole draft when any rule is drafted, and warns every surviving rule otherwise.
+
+`resolved` judges `choice` against the scope state after the checks, and never changes a verdict:
+
+- Pending scope accepts `"unscoped"` or non-empty `values` that are canonical `name|lower` values, at most 64 after duplicates are removed. No choice, or an empty list, is `draft_scope_pending`; a bad value is `draft_scope_choice`.
+- Unscoped-only accepts only `"unscoped"`.
+- Copied and not-shared scope accept only `null`; copied scope resolves to the host's copy.
+- Any other choice is `draft_scope_choice`.
+
 ## Error codes (`validate`)
 
 These are the complete format-1 enum. Every code appears in at least one vector.
@@ -214,7 +250,7 @@ These are the complete format-1 enum. Every code appears in at least one vector.
 | Alias | `bad_alias`, `alias_capture_not_id`, `alias_capture_not_in_title`, `alias_type_mismatch` |
 | Refs | `too_many_refs`, `bad_ref`, `bad_ref_find` |
 
-The draft codes are `draft_forbidden_key`, `draft_no_scope_source`, `draft_scope_conflict`, `draft_no_leading_literal`, `draft_rest_second`, `draft_id_needs_typed_capture`, `draft_search_capture`, `draft_matches_probe`, and `draft_overlap`.
+The draft codes are `draft_forbidden_key`, `draft_no_scope_source`, `draft_scope_conflict`, `draft_no_leading_literal`, `draft_rest_second`, `draft_id_needs_typed_capture`, `draft_search_capture`, `draft_matches_probe`, and `draft_overlap`. The `draft_rules` kind adds `draft_blocked_route`, `draft_paging_capture`, `draft_invalid_rule`, `draft_scope_pending`, and `draft_scope_choice`.
 
 ### Check order
 
@@ -400,10 +436,11 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | refs | 37 | rust, ts |
 | overlap | 35 | rust |
 | draft | 37 | rust |
+| draft_rules | 32 | rust |
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 4 | rust |
-| **Total** | **1248** | |
+| **Total** | **1280** | |
 
 ## Maintenance
 
