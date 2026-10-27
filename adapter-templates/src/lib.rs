@@ -19,6 +19,7 @@ mod eval;
 mod overlap;
 mod path;
 mod policy;
+pub mod shape;
 mod title;
 mod value;
 

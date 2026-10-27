@@ -1,0 +1,334 @@
+{
+  "format": 1,
+  "description": "Shared URL-shape fixture (DESIGN §5.1). Every accept row pins the in-page shaper (extension/site-patterns.ts inspectSitePatterns) and the host parser (adapter-templates/src/shape.rs UrlShape::parse) to one canonical shape. Every reject row must fail both isUrlShape and UrlShape::parse. {\"$build\": [...]} concatenates strings and {\"repeat\", \"times\"} parts.",
+  "accept": [
+    {
+      "note": "Jira canonical issue (docs/adapters/jira.issue.md)",
+      "url": "https://acme.atlassian.net/browse/PROJ-42",
+      "shape": "/browse/{key}"
+    },
+    {
+      "note": "Jira board modal (docs/adapters/jira.issue.md)",
+      "url": "https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42",
+      "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
+    },
+    {
+      "note": "GitHub issue (docs/adapters/github.issue.md)",
+      "url": "https://github.com/acme/widget/issues/42",
+      "shape": "/acme/widget/issues/{num}"
+    },
+    {
+      "note": "GitHub pull request overview (docs/adapters/github.pr.md)",
+      "url": "https://github.com/Acme/Widget/pull/42",
+      "shape": "/{slug}/{slug}/pull/{num}"
+    },
+    {
+      "note": "GitHub pull request files (docs/adapters/github.pr.md)",
+      "url": "https://github.com/acme/widget/pull/42/files",
+      "shape": "/acme/widget/pull/{num}/files"
+    },
+    {
+      "note": "GitHub pull request commits (docs/adapters/github.pr.md)",
+      "url": "https://github.com/acme/widget/pull/42/commits",
+      "shape": "/acme/widget/pull/{num}/commits"
+    },
+    {
+      "note": "GitHub pull request checks (docs/adapters/github.pr.md)",
+      "url": "https://github.com/acme/widget/pull/42/checks",
+      "shape": "/acme/widget/pull/{num}/checks"
+    },
+    {
+      "note": "SharePoint site document (docs/adapters/sharepoint.doc.md)",
+      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+      "shape": "/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
+    },
+    {
+      "note": "SharePoint personal document (docs/adapters/sharepoint.doc.md)",
+      "url": "https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+      "shape": "/personal/{slug}/_layouts/{num}/{slug}?sourcedoc={uuid}"
+    },
+    {
+      "note": "SharePoint sharing form (docs/adapters/sharepoint.doc.md)",
+      "url": "https://acme.sharepoint.com/:w:/r/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+      "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
+    },
+    {
+      "note": "SharePoint braced sourcedoc",
+      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc={0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}",
+      "shape": "/sites/{slug}/_layouts/{num}/{slug}?sourcedoc={uuid}"
+    },
+    {
+      "note": "SharePoint bare sourcedoc",
+      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+      "shape": "/sites/{slug}/_layouts/{num}/{slug}?sourcedoc={uuid}"
+    },
+    {
+      "note": "Confluence display page",
+      "url": "https://wiki.example/display/SPACE/Title",
+      "shape": "/display/{slug}/{slug}"
+    },
+    {
+      "note": "Confluence cloud page",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/123/Title",
+      "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
+    },
+    {
+      "note": "Notion title-prefixed workspace page",
+      "url": "https://www.notion.so/acme/Release-Plan-0123456789abcdef0123456789abcdef",
+      "shape": "/acme/{tailhex32}"
+    },
+    {
+      "note": "Notion bare workspace page",
+      "url": "https://www.notion.so/acme/0123456789abcdef0123456789abcdef",
+      "shape": "/acme/{hex32}"
+    },
+    {
+      "note": "Non-shared title-prefixed page behind a route word",
+      "url": "https://wiki.example/p/Release-Plan-0123456789abcdef0123456789abcdef",
+      "shape": "/p/{tailhex32}"
+    },
+    {
+      "note": "Non-shared bare hex page behind a route word",
+      "url": "https://wiki.example/p/0123456789abcdef0123456789abcdef",
+      "shape": "/p/{hex32}"
+    },
+    {
+      "note": "Google Docs document",
+      "url": "https://docs.google.com/document/d/1aBcD23eFgH/edit",
+      "shape": "/document/d/{id}/edit"
+    },
+    {
+      "note": "Google Docs document under an account index",
+      "url": "https://docs.google.com/document/u/0/d/1aBcD23eFgH/edit",
+      "shape": "/document/u/{num}/d/{id}/edit"
+    },
+    {
+      "note": "Linear issue with title slug",
+      "url": "https://linear.app/acme/issue/ABC-12/some-title",
+      "shape": "/acme/issue/{key}/some-title"
+    },
+    {
+      "note": "Percent-encoded page name",
+      "url": "https://wiki.example/pages/Customer%20Roadmap",
+      "shape": "/pages/{slug}"
+    },
+    {
+      "note": "40-character mixed-case slug",
+      "url": "https://wiki.example/pages/VeryLongMixedCaseCustomerRoadmapPlanDocs",
+      "shape": "/pages/{slug}"
+    },
+    {
+      "note": "Root page",
+      "url": "https://wiki.example/",
+      "shape": "/"
+    },
+    {
+      "note": "Empty segments are kept",
+      "url": "https://work.example//a/",
+      "shape": "//a/"
+    },
+    {
+      "note": "UUID item",
+      "url": "https://wiki.example/items/123e4567-e89b-12d3-a456-426614174000",
+      "shape": "/items/{uuid}"
+    },
+    {
+      "note": "40-character hex item",
+      "url": "https://wiki.example/items/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shape": "/items/{hex40}"
+    },
+    {
+      "note": "64-character hex item",
+      "url": "https://wiki.example/items/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shape": "/items/{hex64}"
+    },
+    {
+      "note": "Repeated query names stay in order",
+      "url": "https://work.example/a?x=one&x=two",
+      "shape": "/a?x={slug}&x={slug}"
+    },
+    {
+      "note": "Private query names become {param} and pairs sort",
+      "url": "https://work.example/route-word/_layouts/end_?customer=secret&privateKey=CustomerName&sort=ASC&page=42#TOP-SECRET",
+      "shape": "/route-word/_layouts/end_?customer={slug}&page={num}&sort={slug}&{param}={slug}"
+    },
+    {
+      "note": "A 20-character literal is the longest route word",
+      "url": "https://wiki.example/aaaaaaaaaaaaaaaaaaaa/1",
+      "shape": "/aaaaaaaaaaaaaaaaaaaa/{num}"
+    },
+    {
+      "note": "32 segments is the limit",
+      "url": {
+        "$build": [
+          "https://wiki.example",
+          {
+            "repeat": "/a",
+            "times": 32
+          }
+        ]
+      },
+      "shape": {
+        "$build": [
+          {
+            "repeat": "/a",
+            "times": 32
+          }
+        ]
+      }
+    },
+    {
+      "note": "8 query pairs is the limit",
+      "url": {
+        "$build": [
+          "https://wiki.example/a?",
+          {
+            "repeat": "b=1&",
+            "times": 7
+          },
+          "b=1"
+        ]
+      },
+      "shape": {
+        "$build": [
+          "/a?",
+          {
+            "repeat": "b={num}&",
+            "times": 7
+          },
+          "b={num}"
+        ]
+      }
+    }
+  ],
+  "reject": [
+    {
+      "note": "Uppercase literal",
+      "shape": "/Title"
+    },
+    {
+      "note": "Uppercase query name",
+      "shape": "/a?Key={slug}"
+    },
+    {
+      "note": "Digits outside a placeholder",
+      "shape": "/items/123"
+    },
+    {
+      "note": "Digit inside a literal",
+      "shape": "/v2/{num}"
+    },
+    {
+      "note": "21-character literal",
+      "shape": "/xxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "note": "Two separators in one literal",
+      "shape": "/a-b-c/{num}"
+    },
+    {
+      "note": "Separator-only literal",
+      "shape": "/-/{num}"
+    },
+    {
+      "note": "Query value that is not a placeholder",
+      "shape": "/a?key=secret"
+    },
+    {
+      "note": "Query placeholder used as a value",
+      "shape": "/a?{param}={param}"
+    },
+    {
+      "note": "Second question mark",
+      "shape": "/x?a=b?c"
+    },
+    {
+      "note": "Second query after a valid one",
+      "shape": "/a?key={slug}?x={num}"
+    },
+    {
+      "note": "Empty query",
+      "shape": "/a?"
+    },
+    {
+      "note": "Trailing ampersand",
+      "shape": "/a?b={num}&"
+    },
+    {
+      "note": "Pair without a value",
+      "shape": "/a?b"
+    },
+    {
+      "note": "Pair with two equals signs",
+      "shape": "/a?b={num}={num}"
+    },
+    {
+      "note": "Fragment",
+      "shape": "/a#{slug}"
+    },
+    {
+      "note": "Unknown placeholder",
+      "shape": "/{token}"
+    },
+    {
+      "note": "Query-name placeholder in the path",
+      "shape": "/{param}"
+    },
+    {
+      "note": "Uppercase placeholder",
+      "shape": "/{Num}"
+    },
+    {
+      "note": "Unbalanced placeholder",
+      "shape": "/{num"
+    },
+    {
+      "note": "No leading slash",
+      "shape": "a/{num}"
+    },
+    {
+      "note": "Empty string",
+      "shape": ""
+    },
+    {
+      "note": "Non-ASCII literal",
+      "shape": "/café"
+    },
+    {
+      "note": "33 segments",
+      "shape": {
+        "$build": [
+          {
+            "repeat": "/a",
+            "times": 33
+          }
+        ]
+      }
+    },
+    {
+      "note": "9 query pairs",
+      "shape": {
+        "$build": [
+          "/a?",
+          {
+            "repeat": "b={num}&",
+            "times": 8
+          },
+          "b={num}"
+        ]
+      }
+    },
+    {
+      "note": "Over 2,048 characters",
+      "shape": {
+        "$build": [
+          "/",
+          {
+            "repeat": "a",
+            "times": 2048
+          }
+        ]
+      }
+    }
+  ]
+}

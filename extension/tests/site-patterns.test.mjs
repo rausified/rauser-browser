@@ -173,3 +173,24 @@ test("corrupt samples are discarded and origin, shape and metadata budgets are i
   assert.equal(Object.keys(prunePatternSamples(many, Object.keys(many), now)).length, 64);
   assert.deepEqual(prunePatternSamples({ [origin]: [...Array(20).fill(null), row] }, [origin], now), {});
 });
+
+// One fixture pins this shaper and the host's Rust parser
+// (adapter-templates/src/shape.rs) to the same canonical shapes.
+const shapeFixture = JSON.parse(readFileSync(new URL("../../protocol/capture-site/shapes.json", import.meta.url), "utf8"));
+const built = (value) => typeof value === "string" ? value : value.$build.map((part) =>
+  typeof part === "string" ? part : part.repeat.repeat(part.times)).join("");
+
+test("shared shape fixture matches the in-page shaper", () => {
+  assert.ok(shapeFixture.accept.length >= 30);
+  for (const row of shapeFixture.accept) {
+    const expected = built(row.shape);
+    assert.equal(inspectSitePatterns(built(row.url)).current, expected, row.note);
+    assert.ok(isUrlShape(expected), row.note);
+    privateShape(expected);
+  }
+});
+
+test("isUrlShape agrees with the shared reject list", () => {
+  assert.ok(shapeFixture.reject.length >= 20);
+  for (const row of shapeFixture.reject) assert.equal(isUrlShape(built(row.shape)), false, row.note);
+});
