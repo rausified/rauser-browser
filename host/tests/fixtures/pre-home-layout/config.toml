@@ -1,0 +1,114 @@
+root_picker_confirmed = true
+root_identity = "@ROOT_IDENTITY@"
+capture_enabled = true
+strip_params = [
+    "utm_*",
+    "fbclid",
+    "gclid",
+]
+
+[storage]
+root = "@ROOT@"
+profile = "neutral"
+log_dir = "log"
+pages_dir = "pages"
+later_dir = "later"
+artifacts_dir = "artifacts"
+summaries_dir = "summaries"
+
+[agent]
+default = "codex"
+
+[agent.harnesses.codex]
+args = [
+    "exec",
+    "--sandbox",
+    "read-only",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--strict-config",
+    "--ephemeral",
+    "--skip-git-repo-check",
+    "--json",
+    "-c",
+    'approval_policy="never"',
+    "-c",
+    'web_search="disabled"',
+    "-c",
+    "project_doc_max_bytes=0",
+    "--disable",
+    "shell_tool",
+    "--disable",
+    "unified_exec",
+    "--disable",
+    "apps",
+    "--disable",
+    "plugins",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "hooks",
+    "--disable",
+    "memories",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "image_generation",
+    "--disable",
+    "in_app_browser",
+    "--disable",
+    "browser_use_external",
+    "--disable",
+    "browser_use_full_cdp_access",
+    "--disable",
+    "code_mode_host",
+    "--disable",
+    "goals",
+    "--disable",
+    "remote_plugin",
+    "--disable",
+    "plugin_sharing",
+    "--disable",
+    "tool_suggest",
+    "{prompt}",
+]
+binary = "/usr/local/bin/codex"
+env_allow = [
+    "HOME",
+    "PATH",
+]
+timeout_secs = 120
+
+[harness_record]
+confirmed_flags = [
+    "--disable",
+    "--ephemeral",
+    "--ignore-rules",
+    "--ignore-user-config",
+    "--json",
+    "--sandbox",
+    "--skip-git-repo-check",
+    "--strict-config",
+    "-c",
+]
+file_id = "16777233:704832274"
+harness_id = "codex"
+help_sha256 = "9f86f0115238ddde2514587e5f95b0ab0aa6b89495e5912878d49ad26038aa19"
+mtime_ns = "1784004750426452200"
+probe_passed_at = "2026-10-27T09:20:11.990237Z"
+real_path = "/usr/local/lib/codex/0.144.4/bin/codex"
+size = 260406464
+version = "0.144.4"
+
+[adapters]
+format = 1
+
+[[artifacts]]
+id = "work.item:{host}/{id}"
+origin = "https://news.ycombinator.com"
+type = "work.item"
+
+[[artifacts.match]]
+path = "/items/{id:int}"

@@ -1,5 +1,5 @@
-//! Chrome native messaging uses a four-byte, native-endian length prefix
-//! followed by one UTF-8 JSON value. Stdout contains frames only.
+//! Chrome native messaging with the extension. Framing lives in
+//! `crate::frame`; stdout contains frames only.
 
 use std::io::{self, Read, Write};
 
@@ -16,17 +16,15 @@ use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore, NoteKeyRule};
 use crate::consent::ConsentAuthority;
+use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::harness_setup;
 use crate::index::ArtifactIndex;
 use crate::note;
+#[cfg(unix)]
+use crate::service::client::{ServiceError, ServiceLink};
 use crate::vault::Vault;
 
-const MAX_INBOUND_BYTES: usize = 4 * 1024 * 1024;
-// Chrome limits host-to-extension messages to 1 MiB. Leave room for the
-// framing prefix and future envelope fields. Note limits (`note.rs`) are
-// derived from this so a saved note can always be loaded again.
-pub(crate) const MAX_OUTBOUND_BYTES: usize = 900 * 1024;
 const MAX_REQUEST_ID_CHARS: usize = 128;
 
 pub fn serve(config: ConfigStore) -> Result<()> {
@@ -35,16 +33,42 @@ pub fn serve(config: ConfigStore) -> Result<()> {
     serve_with_io(input.lock(), output.lock(), config)
 }
 
-/// What harness setup may use from the host process. Built once per
-/// connection; tests build it by hand with a fake search path.
+/// What harness setup and the run proxy may use from the host process.
+/// Built once per connection; tests build it by hand with a fake search path
+/// and, for run messages, a fake service.
 pub struct SetupContext<'a> {
     pub env: &'a HarnessEnv,
+    /// Where run messages go. `None` answers them `service_unavailable`.
+    #[cfg(unix)]
+    pub service: Option<&'a ServiceLink>,
+}
+
+impl<'a> SetupContext<'a> {
+    /// A context with no service link.
+    pub fn new(env: &'a HarnessEnv) -> Self {
+        Self {
+            env,
+            #[cfg(unix)]
+            service: None,
+        }
+    }
 }
 
 /// Process requests until the browser closes the native messaging pipe.
 pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore) -> Result<()> {
     let env = HarnessEnv::from_process(config.dir()?);
-    let context = SetupContext { env: &env };
+    // Building the link never connects; only a run message does.
+    #[cfg(unix)]
+    let link = ServiceLink::for_config(&config)
+        .inspect_err(|link_error| {
+            eprintln!("{NAMESPACE}: the service cannot be reached: {link_error:#}");
+        })
+        .ok();
+    let context = SetupContext {
+        #[cfg(unix)]
+        service: link.as_ref(),
+        ..SetupContext::new(&env)
+    };
     serve_with_context(input, output, config, &context)
 }
 
@@ -55,11 +79,13 @@ pub fn serve_with_context<R: Read, W: Write>(
     context: &SetupContext<'_>,
 ) -> Result<()> {
     let mut consent = ConsentAuthority::new();
+    // Whether this is the panel's connection (`panel_request`).
+    let mut interactive = false;
     loop {
         let body = match read_frame(&mut input) {
             Ok(Some(body)) => body,
             Ok(None) => {
-                regenerate_artifacts(&mut config);
+                regenerate_artifacts(&mut config, interactive);
                 return Ok(());
             }
             Err(FrameError::TooLarge) => {
@@ -86,64 +112,110 @@ pub fn serve_with_context<R: Read, W: Write>(
             }
             Err(FrameError::Io(error)) => return Err(error).context("reading native message"),
         };
+        interactive = interactive || panel_request(&body);
         let response = dispatch_json(&body, &mut config, &mut consent, context);
         write_frame(&mut output, &response)?;
     }
 }
 
-/// Read the common envelope before the version-specific request. A newer
-/// extension may add fields or message types this host cannot deserialize.
+/// The requests only the side panel sends: its page note, artifact card,
+/// context, Recent, and worklog. Closing a connection that sent one runs the
+/// artifact pass (§6.7). The worker's background sync (lease and delivery)
+/// and the settings page (which has its own "Update artifact files now"
+/// action) only get the first pass of each local day.
+fn panel_request(body: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Kind<'a> {
+        #[serde(rename = "type", borrow)]
+        kind: Option<std::borrow::Cow<'a, str>>,
+    }
+    serde_json::from_slice::<Kind<'_>>(body).is_ok_and(|value| {
+        matches!(
+            value.kind.as_deref(),
+            Some(
+                "load_note"
+                    | "save_note"
+                    | "use_artifact_note"
+                    | "view_older_note"
+                    | "get_artifact"
+                    | "record_why"
+                    | "list_artifacts"
+                    | "worklog"
+            )
+        )
+    })
+}
+
 fn dispatch_json(
     body: &[u8],
     config: &mut ConfigStore,
     consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
+    match parse_envelope(body) {
+        Ok((_, request)) => dispatch(request, config, consent, context),
+        Err(response) => response,
+    }
+}
+
+/// Read the common envelope before the version-specific request. A newer
+/// peer may add fields or message types this build cannot deserialize, so
+/// the request id and version are checked first and a mismatch answers
+/// `unsupported_protocol_version`. Shared by the native host and the
+/// service; the error is the response to send.
+// The error is the response itself, sent as is; boxing it would only add an
+// allocation to the rare refusal path.
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_envelope(body: &[u8]) -> std::result::Result<(String, Request), Response> {
     let envelope: serde_json::Value = match serde_json::from_slice(body) {
         Ok(value) => value,
-        Err(_) => return error("", ErrorCode::InvalidRequest, "invalid request JSON"),
+        Err(_) => return Err(error("", ErrorCode::InvalidRequest, "invalid request JSON")),
     };
     let Some(object) = envelope.as_object() else {
-        return error(
+        return Err(error(
             "",
             ErrorCode::InvalidRequest,
             "request must be a JSON object",
-        );
+        ));
     };
     let Some(id) = object.get("request_id").and_then(serde_json::Value::as_str) else {
-        return error("", ErrorCode::InvalidRequest, "request_id is required");
+        return Err(error(
+            "",
+            ErrorCode::InvalidRequest,
+            "request_id is required",
+        ));
     };
     if !valid_request_id(id) {
-        return error(
+        return Err(error(
             "",
             ErrorCode::InvalidRequest,
             "request_id must be 1–128 non-control characters",
-        );
+        ));
     }
     let Some(version) = object
         .get("protocol_version")
         .and_then(serde_json::Value::as_u64)
     else {
-        return error(
+        return Err(error(
             id,
             ErrorCode::InvalidRequest,
             "protocol_version is required",
-        );
+        ));
     };
     if version != u64::from(PROTOCOL_VERSION) {
-        return error(
+        return Err(error(
             id,
             ErrorCode::UnsupportedProtocolVersion,
             "extension and host protocol versions differ",
-        );
+        ));
     }
     match serde_json::from_slice::<Request>(body) {
-        Ok(request) => dispatch(request, config, consent, context),
-        Err(_) => error(
+        Ok(request) => Ok((id.to_owned(), request)),
+        Err(_) => Err(error(
             id,
             ErrorCode::InvalidRequest,
             "invalid or unsupported request JSON",
-        ),
+        )),
     }
 }
 
@@ -190,7 +262,10 @@ fn dispatch(
         // Report that state instead of an error: the extension treats a
         // failed hello as a missing host, and the issue says how to repair.
         Request::Hello(value) => {
+            // The panel and settings ask on every open; that retries a
+            // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
+            config.migrate_layout_or_warn();
             Response::HelloResult(HelloResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -200,7 +275,10 @@ fn dispatch(
             })
         }
         Request::GetConfig(value) => {
+            // The panel and settings ask on every open; that retries a
+            // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
+            config.migrate_layout_or_warn();
             let adapter_warnings = config.adapter_warnings().to_vec();
             Response::ConfigResult(ConfigResult {
                 protocol_version: PROTOCOL_VERSION,
@@ -281,11 +359,16 @@ fn dispatch(
                     ErrorCode::Conflict,
                     "configuration changed; read it again before updating",
                 ),
-                Err(_) => error(
-                    &value.request_id,
-                    ErrorCode::Internal,
-                    "could not save configuration",
-                ),
+                // Saving the same home folder moves its older folders first;
+                // a refusal says which folder is in the way.
+                Err(save_error) => match save_error.downcast_ref::<crate::layout::Refusal>() {
+                    Some(refusal) => error(&value.request_id, ErrorCode::InvalidConfig, &refusal.0),
+                    None => error(
+                        &value.request_id,
+                        ErrorCode::Internal,
+                        "could not save configuration",
+                    ),
+                },
             }
         }
         Request::ChooseFolder(value) => {
@@ -340,6 +423,104 @@ fn dispatch(
             offers: harness_setup::offers(context.env),
         }),
         Request::SetUpHarness(value) => set_up_harness(value, config, context),
+        #[cfg(unix)]
+        Request::StartRun(value) => start_run(value, config, context.service),
+        // Run ids and offsets are the service's to check.
+        #[cfg(unix)]
+        request @ (Request::GetRun(_)
+        | Request::ListRuns(_)
+        | Request::CancelRun(_)
+        | Request::RetrySave(_)) => forward(&request, context.service),
+        #[cfg(not(unix))]
+        Request::StartRun(_)
+        | Request::GetRun(_)
+        | Request::ListRuns(_)
+        | Request::CancelRun(_)
+        | Request::RetrySave(_) => error(
+            id,
+            ErrorCode::ServiceUnavailable,
+            "The Brauser service is not supported on Windows.",
+        ),
+        // service_hello is host-to-service only.
+        Request::ServiceHello(_) => error(
+            id,
+            ErrorCode::InvalidRequest,
+            "service_hello is not accepted from the extension",
+        ),
+    }
+}
+
+/// Check what only the host may decide, then forward: the record key is
+/// always the one the page's note uses, never the extension's.
+#[cfg(unix)]
+fn start_run(
+    mut value: brauser_protocol::StartRunRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    if value.record_key.is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "record_key is chosen by the host",
+        );
+    }
+    if let Err(message) = crate::service::record::check_start_run(
+        &value.url,
+        &value.title,
+        &value.content,
+        value.selection.as_deref(),
+    ) {
+        return error(&value.request_id, ErrorCode::InvalidRequest, message);
+    }
+    if crate::capture::parse_event_time(&value.requested_at)
+        .and_then(crate::capture::check_event_window)
+        .is_err()
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "requested_at must be a current RFC 3339 timestamp",
+        );
+    }
+    // Resolve under the same lock as note loading so a config update cannot
+    // interleave; release it before forwarding, since the service takes it
+    // too when it reads the run's working directory.
+    let resolved = match config.lock_current() {
+        Ok(_config_lock) => resolve_record_key(config, &value.url),
+        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable")),
+    };
+    match resolved {
+        Ok(key) => value.record_key = Some(key),
+        Err((code, message)) => return error(&value.request_id, code, message),
+    }
+    forward(&Request::StartRun(value), service)
+}
+
+/// Send a run message to the service and return its answer as is.
+#[cfg(unix)]
+fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
+    let id = request.request_id();
+    let Some(service) = service else {
+        return error(
+            id,
+            ErrorCode::ServiceUnavailable,
+            "The Brauser service cannot be reached from this configuration folder.",
+        );
+    };
+    match service.request(request) {
+        Ok(response) => response,
+        Err(ServiceError::Unavailable(message)) => {
+            error(id, ErrorCode::ServiceUnavailable, &message)
+        }
+        Err(ServiceError::Protocol(detail)) => {
+            eprintln!("{NAMESPACE}: service protocol error: {detail}");
+            error(
+                id,
+                ErrorCode::Internal,
+                "The Brauser service sent an unexpected reply.",
+            )
+        }
     }
 }
 
@@ -449,14 +630,14 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
         Err(_) => return retryable("adapter policy is unavailable"),
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return retryable("choose a notes folder before capture");
+        return retryable("choose a home folder before capture");
     };
     let store = match config
         .dir()
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => return retryable("notes folder is unavailable"),
+        Err(_) => return retryable("home folder is unavailable"),
     };
     let policy = CapturePolicy {
         enabled: config.snapshot().capture_enabled,
@@ -539,7 +720,7 @@ fn record_activity(
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
             VisitOutcome::Retryable,
-            Some("choose a notes folder before capture".into()),
+            Some("choose a home folder before capture".into()),
             None,
         );
     };
@@ -551,7 +732,7 @@ fn record_activity(
         Err(_) => {
             return answer(
                 VisitOutcome::Retryable,
-                Some("notes folder is unavailable".into()),
+                Some("home folder is unavailable".into()),
                 None,
             );
         }
@@ -732,7 +913,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                 Accepted::Activity(event) => event.event_id.clone(),
             },
             outcome: VisitOutcome::Retryable,
-            reason: Some("choose a notes folder before capture".into()),
+            reason: Some("choose a home folder before capture".into()),
             relative_path: None,
         }));
         return Response::BatchRecorded(BatchRecorded {
@@ -755,7 +936,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                     Accepted::Activity(event) => event.event_id.clone(),
                 },
                 outcome: VisitOutcome::Retryable,
-                reason: Some("notes folder is unavailable".into()),
+                reason: Some("home folder is unavailable".into()),
                 relative_path: None,
             }));
             return Response::BatchRecorded(BatchRecorded {
@@ -817,7 +998,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
         reconcile_index_from_logs(config);
     } else if !activities.is_empty()
         && let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_activities(activities, &config.snapshot().strip_params)
     {
         eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
@@ -944,7 +1125,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
             VisitOutcome::Retryable,
-            Some("choose a notes folder before capture".into()),
+            Some("choose a home folder before capture".into()),
             None,
         );
     };
@@ -956,7 +1137,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         Err(_) => {
             return answer(
                 VisitOutcome::Retryable,
-                Some("notes folder is unavailable".into()),
+                Some("home folder is unavailable".into()),
                 None,
             );
         }
@@ -969,7 +1150,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     let capture_outcome = store.record_why(policy, &value.event);
     if matches!(&capture_outcome, CaptureOutcome::Persisted { .. })
         && let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_why(&value.event, &config.snapshot().strip_params)
     {
         eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
@@ -994,7 +1175,7 @@ fn update_activity_index(config: &ConfigStore, event: &brauser_protocol::Activit
         return;
     };
     if let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_activity(event, &config.snapshot().strip_params)
     {
         eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
@@ -1009,19 +1190,35 @@ fn capture_outcome_is_duplicate(outcome: &CaptureOutcome) -> bool {
     matches!(outcome, CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")
 }
 
+/// Open the artifact index with the confirmed adapter document, which
+/// resolves title refs into mentions edges (adapter-templates.md §10.1).
+fn open_index(
+    config: &ConfigStore,
+    storage: &brauser_protocol::StorageConfig,
+    cache_dir: &std::path::Path,
+) -> Result<ArtifactIndex> {
+    Ok(
+        ArtifactIndex::open_in(storage, config.root_identity(), cache_dir)?
+            .with_adapters(config.adapter_document().ok()),
+    )
+}
+
 fn reconcile_index_from_logs(config: &ConfigStore) {
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return;
     };
     if let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+        && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.reconcile_from_logs()
     {
         eprintln!("{NAMESPACE}: warning: could not reconcile artifact index: {error:#}");
     }
 }
 
-fn regenerate_artifacts(config: &mut ConfigStore) {
+/// The connection-boundary pass (§6.7): when the panel's connection closes,
+/// and on the first connection of each local day. Delivery alone only marks
+/// artifacts dirty, so a background sync does not rewrite their files.
+fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
     let Ok(_lock) = config.lock_current() else {
         return;
     };
@@ -1031,11 +1228,31 @@ fn regenerate_artifacts(config: &mut ConfigStore) {
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return;
     };
-    if let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-        && let Err(error) = index.regenerate_dirty()
-    {
-        eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+    let Ok(cache_dir) = config.cache_dir() else {
+        return;
+    };
+    let index = match open_index(config, storage, &cache_dir) {
+        Ok(index) => index,
+        Err(error) => {
+            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+            return;
+        }
+    };
+    if !interactive && !index.daily_pass_due(time::OffsetDateTime::now_utc()) {
+        return;
+    }
+    match index.regenerate_dirty() {
+        Ok(report) => {
+            if let Some(failure) = report.first_failure {
+                eprintln!(
+                    "{NAMESPACE}: warning: {} artifact file(s) could not be regenerated: {failure}",
+                    report.failed
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+        }
     }
 }
 
@@ -1050,11 +1267,30 @@ struct NoteContext {
     older_urls: Vec<String>,
 }
 
-fn note_context(
+/// The key-only part of `note_context`, shared by notes, the run proxy, and
+/// the run finisher, so a run and the page's note always agree on the record
+/// they belong to. It never lists older notes. Callers hold `lock_current`.
+// Only the Unix run proxy calls it outside tests.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
+pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
-    include_older_notes: bool,
-) -> Result<NoteContext, (ErrorCode, &'static str)> {
+) -> Result<RecordKey, (ErrorCode, &'static str)> {
+    resolve_key_parts(config, url).map(|parts| parts.key)
+}
+
+/// What key resolution already computed, kept so `note_context` can build on
+/// it without opening the vault or matching adapters a second time.
+struct KeyParts {
+    canonical: String,
+    vault: Vault,
+    key: RecordKey,
+}
+
+fn resolve_key_parts(
+    config: &mut ConfigStore,
+    url: &str,
+) -> Result<KeyParts, (ErrorCode, &'static str)> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
             ErrorCode::InvalidConfig,
@@ -1062,12 +1298,12 @@ fn note_context(
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
     };
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
+        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable"))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule
@@ -1086,8 +1322,8 @@ fn note_context(
             },
             // A covered origin is decided by its contracts alone; an
             // ambiguous one keeps the URL note rather than guessing. On an
-            // origin no recorded contract covers (a config repair discarded
-            // its history, or it was removed before that history existed),
+            // origin no recorded contract covers (both records were lost,
+            // or it was removed before either existed),
             // recorded URLs are stripped canonical forms: a Jira board and
             // every issue modal on it share one once `selectedIssue` is
             // stripped, so no recorded URL can name this page's artifact.
@@ -1105,6 +1341,23 @@ fn note_context(
             }
         },
     };
+    Ok(KeyParts {
+        canonical,
+        vault,
+        key,
+    })
+}
+
+fn note_context(
+    config: &mut ConfigStore,
+    url: &str,
+    include_older_notes: bool,
+) -> Result<NoteContext, (ErrorCode, &'static str)> {
+    let KeyParts {
+        canonical,
+        vault,
+        key,
+    } = resolve_key_parts(config, url)?;
     // `older_urls` is both the older-note list and the only authorization
     // for viewing or migrating one, so every candidate must name this
     // artifact itself. Recorded URLs are stripped canonical forms: the
@@ -1134,8 +1387,11 @@ fn note_context(
         older_urls.push(canonical.clone());
     }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
+        let Some(storage) = config.snapshot().storage.as_ref() else {
+            return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        };
         if let Ok(cache_dir) = config.cache_dir()
-            && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+            && let Ok(index) = open_index(config, storage, &cache_dir)
             && let Ok(urls) = index.artifact_urls(&key.value)
         {
             older_urls.extend(urls.into_iter().filter(|url| names_artifact(url)));
@@ -1468,7 +1724,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         return error(
             &value.request_id,
             ErrorCode::NotConfigured,
-            "choose a notes folder first",
+            "choose a home folder first",
         );
     };
     let cache_dir = match config.cache_dir() {
@@ -1481,7 +1737,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             );
         }
     };
-    let index = match ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir) {
+    let index = match open_index(config, storage, &cache_dir) {
         Ok(index) => index,
         Err(_) => {
             return error(
@@ -1653,6 +1909,24 @@ fn refresh_artifacts(
         Err((code, message)) => return error(&value.request_id, code, message),
     };
     match index.regenerate_dirty() {
+        // The others were updated; name the path that still needs attention,
+        // and any unowned conflicts, since an error carries no paths field.
+        Ok(report) if report.failed > 0 => {
+            let mut message = format!(
+                "{} artifact file(s) could not be updated ({} written); first: {}",
+                report.failed,
+                report.written,
+                report.failed_paths.first().map_or("", String::as_str)
+            );
+            if report.conflicts > 0 {
+                message.push_str(&format!(
+                    ". {} unowned path conflict(s) were not overwritten: {}",
+                    report.conflicts,
+                    report.conflict_paths.join(", ")
+                ));
+            }
+            error(&value.request_id, ErrorCode::Internal, &message)
+        }
         Ok(report) => Response::ArtifactsRefreshed(ArtifactsRefreshed {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
@@ -1677,11 +1951,11 @@ fn read_index(config: &mut ConfigStore) -> Result<ArtifactIndex, (ErrorCode, &'s
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
     };
     let unavailable = || (ErrorCode::Internal, "artifact index is unavailable");
     let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
-    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir).map_err(|_| unavailable())
+    open_index(config, storage, &cache_dir).map_err(|_| unavailable())
 }
 
 fn local_date(value: &str) -> Option<time::Date> {
@@ -1689,7 +1963,7 @@ fn local_date(value: &str) -> Option<time::Date> {
     time::Date::parse(value, &format).ok()
 }
 
-fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
+pub(crate) fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
     Response::Error(ErrorResponse {
         protocol_version: PROTOCOL_VERSION,
         request_id: request_id.to_owned(),
@@ -1698,55 +1972,10 @@ fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
     })
 }
 
-#[derive(Debug)]
-enum FrameError {
-    TooLarge,
-    InvalidLength,
-    Io(io::Error),
-}
-
-fn read_frame<R: Read>(input: &mut R) -> std::result::Result<Option<Vec<u8>>, FrameError> {
-    let mut prefix = [0u8; 4];
-    let received = input.read(&mut prefix[..1]).map_err(FrameError::Io)?;
-    if received == 0 {
-        return Ok(None);
-    }
-    input.read_exact(&mut prefix[1..]).map_err(FrameError::Io)?;
-    let size = u32::from_ne_bytes(prefix) as usize;
-    if size == 0 {
-        return Err(FrameError::InvalidLength);
-    }
-    if size > MAX_INBOUND_BYTES {
-        return Err(FrameError::TooLarge);
-    }
-    let mut body = vec![0u8; size];
-    input.read_exact(&mut body).map_err(FrameError::Io)?;
-    Ok(Some(body))
-}
-
-fn write_frame<W: Write>(output: &mut W, response: &Response) -> Result<()> {
-    let mut body = serde_json::to_vec(response).context("serializing native response")?;
-    if body.len() > MAX_OUTBOUND_BYTES {
-        // One oversized answer must not end the connection: that would drop
-        // every other in-flight request and show the extension only a
-        // disconnect. Answer the same request with a small error instead.
-        let fallback = error(
-            response.request_id(),
-            ErrorCode::MessageTooLarge,
-            "response exceeds the host-to-extension size limit",
-        );
-        body = serde_json::to_vec(&fallback).context("serializing native response")?;
-    }
-    let size = u32::try_from(body.len()).context("native response length overflow")?;
-    output.write_all(&size.to_ne_bytes())?;
-    output.write_all(&body)?;
-    output.flush()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::{MAX_INBOUND_BYTES, MAX_OUTBOUND_BYTES};
     use brauser_protocol::{
         ActivityEvent, ActivityMode, ActivityTrail, CaptureBatchItem, ConfigSnapshot,
         GetConfigRequest, HelloRequest, RecordActivityRequest, RecordBatchRequest,
@@ -1918,7 +2147,7 @@ mod tests {
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
 
         let updated = dispatch(
             Request::UpdateConfig(UpdateConfigRequest {
@@ -2010,17 +2239,17 @@ mod tests {
         let mut config = ConfigStore::for_test(folder.path().join("config.toml"));
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         for root in [existing.clone(), folder.path().join("absent")] {
             let snapshot = ConfigSnapshot {
                 storage: Some(brauser_protocol::StorageConfig {
                     root: root.to_string_lossy().into_owned(),
                     profile: "neutral".into(),
-                    log_dir: "log".into(),
-                    pages_dir: "pages".into(),
+                    log_dir: "logs".into(),
+                    pages_dir: "notes".into(),
                     later_dir: "later".into(),
                     artifacts_dir: "artifacts".into(),
-                    summaries_dir: None,
+                    summaries_dir: Some("summaries".into()),
                     knowledge_base_dir: None,
                 }),
                 capture_enabled: false,
@@ -2071,7 +2300,7 @@ mod tests {
         let mut config = configured_store(folder.path());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         let read = dispatch(
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -2118,7 +2347,7 @@ mod tests {
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         match dispatch(
             update_request("stale", next),
             &mut config,
@@ -2137,11 +2366,11 @@ mod tests {
             storage: Some(brauser_protocol::StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,
@@ -2199,6 +2428,52 @@ mod tests {
             },
             config,
         )
+    }
+
+    #[test]
+    fn run_key_matches_page_note_key() {
+        // Plain URL on the configured store: a URL key, identical to load_note's.
+        let folder = tempfile::tempdir().unwrap();
+        let mut plain = configured_store(folder.path());
+        let url = "https://example.com/a?b=1";
+        let resolved = resolve_record_key(&mut plain, url).unwrap();
+        assert_eq!(resolved.kind, RecordKeyKind::Url);
+        assert_eq!(resolved, note_load(&mut plain, url).key);
+
+        // Adapter URL: an artifact key, identical to load_note's.
+        let adapter_folder = tempfile::tempdir().unwrap();
+        let root = adapter_folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = adapter_folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "gdoc"
+origin = "https://docs.google.com"
+unscoped = "acknowledged"
+match = [{ path = "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}" }]
+modes = { edit = "edit", view = "view", preview = "view" }
+id = "gdoc:{host}/{id}"
+"#,
+        );
+        let mut adapter = loaded(&path);
+        let doc = "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit";
+        let resolved = resolve_record_key(&mut adapter, doc).unwrap();
+        assert_eq!(resolved.kind, RecordKeyKind::Artifact);
+        assert_eq!(resolved, note_load(&mut adapter, doc).key);
+
+        // Errors match note_context's: no storage is not_configured.
+        let empty_folder = tempfile::tempdir().unwrap();
+        let mut empty = ConfigStore::for_test(empty_folder.path().join("config.toml"));
+        assert!(matches!(
+            resolve_record_key(&mut empty, url),
+            Err((ErrorCode::NotConfigured, _))
+        ));
+        assert!(matches!(
+            resolve_record_key(&mut plain, "not a url"),
+            Err((ErrorCode::InvalidRequest, _))
+        ));
     }
 
     #[test]
@@ -3280,7 +3555,7 @@ id = "jira.board:{host}/{id}"
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the
-    /// notes folder, so its note works however many notes the folder holds.
+    /// home folder, so its note works however many notes the folder holds.
     #[test]
     fn a_large_notes_folder_does_not_block_notes_on_uncovered_pages() {
         let folder = tempfile::tempdir().unwrap();
@@ -3366,7 +3641,7 @@ id = "work:{host}/{id}"
             fn log_path(&self) -> std::path::PathBuf {
                 let date = self.at.date();
                 self.root.join(format!(
-                    "log/{:04}/{:02}/{:04}-{:02}-{:02}.md",
+                    "logs/{:04}/{:02}/{:04}-{:02}-{:02}.md",
                     date.year(),
                     u8::from(date.month()),
                     date.year(),
@@ -3383,9 +3658,7 @@ id = "work:{host}/{id}"
                     Cursor::new(encoded_request(request)),
                     &mut output,
                     loaded(&self.path),
-                    &SetupContext {
-                        env: &no_harnesses(self.folder.path()),
-                    },
+                    &SetupContext::new(&no_harnesses(self.folder.path())),
                 )
                 .unwrap();
                 decoded_response(output)
@@ -3802,7 +4075,7 @@ id = "work:{host}/{id}"
                     Response::NoteConflict(reply) if reply.reason == "stale" && reply.body == "Still editable")
                 );
                 assert!(
-                    !session.root.join("log").exists(),
+                    !session.root.join("logs").exists(),
                     "notes cannot restart capture"
                 );
             }
@@ -3837,7 +4110,7 @@ id = "work:{host}/{id}"
                 assert_eq!(other_route.key, created.key, "{removal}");
                 assert_eq!(other_route.body, "Item 8", "{removal}");
                 assert!(
-                    !session.root.join("log").exists(),
+                    !session.root.join("logs").exists(),
                     "{removal}: note keys never restart capture"
                 );
             }
@@ -3994,7 +4267,7 @@ id = "work:{host}/{id}"
                 session.forget_policy_history();
                 let note_path = session.root.join(saved.relative_path);
                 let original = std::fs::read(&note_path).unwrap();
-                let pages = session.root.join("pages");
+                let pages = session.root.join("notes");
                 let mut faults = Vec::new();
                 match fault {
                     "count" => {
@@ -4157,9 +4430,7 @@ id = "work:{host}/{id}"
             }),
             &mut config,
             &mut ConsentAuthority::new(),
-            &SetupContext {
-                env: &no_harnesses(folder.path()),
-            },
+            &SetupContext::new(&no_harnesses(folder.path())),
         );
         match response {
             Response::NoteLoaded(value) => {
@@ -4250,9 +4521,7 @@ id = "work:{host}/{id}"
             save_request("save-1", "small", "missing"),
             &mut config,
             &mut ConsentAuthority::new(),
-            &SetupContext {
-                env: &no_harnesses(folder.path()),
-            },
+            &SetupContext::new(&no_harnesses(folder.path())),
         ) {
             Response::NoteSaved(value) => value,
             other => panic!("expected note_saved, got {other:?}"),
@@ -4319,7 +4588,7 @@ id = "work:{host}/{id}"
         let mut config = configured_store(&notes);
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         let save = |config: &mut ConfigStore,
                     consent: &mut ConsentAuthority,
                     body: &str,
@@ -4385,7 +4654,7 @@ id = "work:{host}/{id}"
     fn served(requests: &[String], config: ConfigStore) -> Vec<Response> {
         let folder = tempfile::tempdir().unwrap();
         let env = no_harnesses(folder.path());
-        served_with(requests, config, &SetupContext { env: &env })
+        served_with(requests, config, &SetupContext::new(&env))
     }
 
     fn served_with(
@@ -4639,7 +4908,7 @@ scope = { owner = ["acme"] }
                 other => panic!("expected a suppressed visit for {label}, got {other:?}"),
             }
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
 
         let response = record_visit(
             RecordVisitRequest {
@@ -4762,7 +5031,7 @@ id = "work:{host}/{id}"
                 assert!(relative_path.is_none());
             }
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
         assert!(!config.cache_dir().unwrap().join("index.db").exists());
     }
 
@@ -4962,7 +5231,7 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
                     assert_eq!(stored, event, "{label}, batch={batched}");
                 } else {
                     assert!(relative_path.is_none());
-                    assert!(!root.join("log").exists(), "{label}, batch={batched}");
+                    assert!(!root.join("logs").exists(), "{label}, batch={batched}");
                     assert!(!config.cache_dir().unwrap().join("index.db").exists());
                 }
                 outcomes.push((outcome, reason, relative_path));
@@ -5083,7 +5352,7 @@ id = "work:{host}/{id}"
                 std::fs::create_dir(&fault).unwrap();
                 fault
             } else {
-                let fault = root.join("log/oversized.md");
+                let fault = root.join("logs/oversized.md");
                 std::fs::File::create(&fault)
                     .unwrap()
                     .set_len(32 * 1024 * 1024 + 1)
@@ -5313,7 +5582,7 @@ id = "work:{host}/{id}"
             let cache = config.cache_dir().unwrap();
             let old_state = std::fs::read(cache.join("index-state.json")).unwrap();
             let fault = if oversized_log {
-                let fault = root.join("log/oversized.md");
+                let fault = root.join("logs/oversized.md");
                 let file = std::fs::File::create(&fault).unwrap();
                 file.set_len(32 * 1024 * 1024 + 1).unwrap();
                 fault
@@ -5403,6 +5672,176 @@ id = "work:{host}/{id}"
             assert_eq!(duplicate.reason.as_deref(), Some("duplicate_event"));
             assert_eq!(std::fs::read(log_path).unwrap(), durable_bytes);
         }
+    }
+
+    fn deliver_activity(config: &mut ConfigStore, event: ActivityEvent) -> VisitOutcome {
+        let Response::ActivityRecorded(reply) = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "capture".into(),
+                event,
+            },
+            config,
+        ) else {
+            panic!("expected capture result")
+        };
+        reply.outcome
+    }
+
+    #[test]
+    fn title_refs_resolve_through_the_confirmed_adapters_into_links() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://acme.atlassian.net\", path_prefix = \"/\" }, { origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "jira.issue"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/browse/{key:jira_key}" }]
+id = "jira:{host}/{key}"
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+title = "{title}"
+refs = [{ type = "jira.issue", find = "jira_key" }]
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut issue = activity_for_invalid_policy();
+        issue.artifact_id = "jira:acme.atlassian.net/PROJ-1".into();
+        issue.artifact_type = "jira.issue".into();
+        issue.url = "https://acme.atlassian.net/browse/PROJ-1".into();
+        issue.title = Some("Export pagination".into());
+        assert_eq!(
+            deliver_activity(&mut config, issue),
+            VisitOutcome::Persisted
+        );
+        let mut pull = activity_for_invalid_policy();
+        pull.url = "https://work.example/issues/412".into();
+        pull.artifact_id = "work:work.example/412".into();
+        pull.title = Some("PROJ-1 Fix SBOM export pagination".into());
+        pull.refs = vec![brauser_protocol::ActivityRef {
+            artifact_type: "jira.issue".into(),
+            value: "PROJ-1".into(),
+        }];
+        assert_eq!(deliver_activity(&mut config, pull), VisitOutcome::Persisted);
+        for url in [
+            "https://acme.atlassian.net/browse/PROJ-1",
+            "https://work.example/issues/412",
+        ] {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: url.into(),
+                    title: None,
+                },
+                &mut config,
+            ) else {
+                panic!("expected artifact result")
+            };
+            assert_eq!(reply.artifact.unwrap().linked_count, 1, "{url}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refreshing_artifacts_updates_the_rest_and_names_an_unwritable_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+        );
+        let mut config = loaded(&path);
+        let deliver = |config: &mut ConfigStore, number: u8, title: &str| {
+            let mut event = activity_for_invalid_policy();
+            event.url = format!("https://work.example/issues/{number}");
+            event.artifact_id = format!("work:work.example/{number}");
+            event.title = Some(title.into());
+            assert_eq!(deliver_activity(config, event), VisitOutcome::Persisted);
+        };
+        let refresh = |config: &mut ConfigStore| {
+            refresh_artifacts(
+                brauser_protocol::RefreshArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "refresh".into(),
+                },
+                config,
+            )
+        };
+        deliver(&mut config, 1, "First");
+        deliver(&mut config, 2, "Second");
+        let Response::ArtifactsRefreshed(reply) = refresh(&mut config) else {
+            panic!("expected refreshed artifacts")
+        };
+        assert_eq!(reply.written, 2);
+        let files = std::fs::read_dir(root.join("artifacts/work-item/work-example"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        let locked = files
+            .iter()
+            .find(|path| std::fs::read_to_string(path).unwrap().contains("First"))
+            .unwrap()
+            .clone();
+        let other = files.iter().find(|path| **path != locked).unwrap().clone();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        deliver(&mut config, 1, "First again");
+        deliver(&mut config, 2, "Second again");
+        // A third artifact's path is occupied by someone else's file.
+        let occupied = root.join(format!(
+            "artifacts/work-item/work-example/3-{}.md",
+            &hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+                b"work:work.example/3"
+            ))[..12]
+        ));
+        std::fs::write(&occupied, "not ours\n").unwrap();
+        deliver(&mut config, 3, "Third");
+        let reply = refresh(&mut config);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let Response::Error(reply) = reply else {
+            panic!("expected the failure to be reported: {reply:?}")
+        };
+        let name = locked.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(reply.message.contains(&name), "{}", reply.message);
+        let occupied_name = occupied.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(reply.message.contains(&occupied_name), "{}", reply.message);
+        assert_eq!(std::fs::read_to_string(&occupied).unwrap(), "not ours\n");
+        assert!(
+            std::fs::read_to_string(&other)
+                .unwrap()
+                .contains("Second again")
+        );
+        let Response::ArtifactsRefreshed(reply) = refresh(&mut config) else {
+            panic!("expected refreshed artifacts")
+        };
+        assert_eq!(reply.written, 1);
+        assert!(
+            std::fs::read_to_string(&locked)
+                .unwrap()
+                .contains("First again")
+        );
     }
 
     #[test]
@@ -5497,7 +5936,7 @@ id = "work:{host}/{id}"
             "Work item"
         );
         assert!(!root.join("artifacts").exists());
-        regenerate_artifacts(&mut config);
+        regenerate_artifacts(&mut config, true);
         assert!(root.join("artifacts").is_dir());
         match invoke(&mut config, event("work:work.example/8", Vec::new())) {
             Response::ActivityRecorded(recorded) => {
@@ -5681,7 +6120,7 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected a rejected trail, got {other:?}"),
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
     }
 
     fn refused(response: &Response) -> (ErrorCode, &str) {
@@ -5825,7 +6264,7 @@ id = "work:{host}/{id}"
 
         impl Session {
             fn call(&mut self, request: Request) -> Response {
-                let context = SetupContext { env: &self.env };
+                let context = SetupContext::new(&self.env);
                 dispatch(request, &mut self.config, &mut self.consent, &context)
             }
 
@@ -6027,22 +6466,22 @@ id = "work:{host}/{id}"
         }
 
         #[test]
-        fn summaries_overlap_at_setup_is_recoverable_invalid_config() {
+        fn setup_cannot_choose_a_summaries_folder() {
             let mut session = session(PASSING_BODY);
             let before = std::fs::read(&session.path).unwrap();
             let revision = session.revision();
-            let response = session.set_up_harness(&revision, "claude-code", Some("log"));
+            let response = session.set_up_harness(&revision, "claude-code", Some("ai"));
             let (code, message) = refused(&response);
             assert_eq!(code, ErrorCode::InvalidConfig);
-            assert!(message.contains("must not overlap"), "{message}");
+            assert!(message.contains("content folders are fixed"), "{message}");
             assert_eq!(std::fs::read(&session.path).unwrap(), before);
             assert_eq!(session.fake.log("claude", "stdin.log"), None);
-            // Choose a different folder and set up again.
-            let response = session.set_up_harness(&revision, "claude-code", Some("ai"));
+            // The fixed name, or none, sets up the harness.
+            let response = session.set_up_harness(&revision, "claude-code", Some("summaries"));
             match response {
                 Response::ConfigUpdated(value) => assert_eq!(
                     value.config.storage.unwrap().summaries_dir.as_deref(),
-                    Some("ai")
+                    Some("summaries")
                 ),
                 other => panic!("expected config_updated, got {other:?}"),
             }
@@ -6099,6 +6538,834 @@ id = "work:{host}/{id}"
                 ),
             );
             assert_eq!(session.status().state, AgentState::Ready);
+        }
+    }
+
+    /// The run proxy against a fake service on a short `/tmp` socket. No
+    /// launchd, no real service, and no harness is ever involved.
+    #[cfg(unix)]
+    mod run_proxy {
+        use super::*;
+        use crate::service::client::fake::{self, FakeService};
+        use crate::service::client::{Launch, NOT_INSTALLED, ServiceLink};
+        use brauser_protocol::{
+            CancelRunRequest, GetRunRequest, LoadNoteRequest, RunStarted, ServiceHelloRequest,
+            StartRunRequest,
+        };
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        const BUILD: &str = "this-build";
+
+        fn now() -> String {
+            time::OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        }
+
+        fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
+            Request::StartRun(StartRunRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "run-1".into(),
+                url: url.into(),
+                title: "A page".into(),
+                content: "Some text".into(),
+                selection: None,
+                harness: None,
+                record_key,
+                requested_at: requested_at.into(),
+            })
+        }
+
+        fn link(socket: std::path::PathBuf, launch: fn(bool) -> Launch) -> ServiceLink {
+            ServiceLink {
+                restart_lock: socket.with_file_name("restart.lock"),
+                socket,
+                launch: Box::new(launch),
+                wait: Duration::from_secs(2),
+                build_id: BUILD.into(),
+                disk_build: || BUILD.to_owned(),
+            }
+        }
+
+        fn never(_: bool) -> Launch {
+            panic!("the service must not be started")
+        }
+
+        /// Dispatch one request with `link` as the connection's service.
+        fn call(config: &mut ConfigStore, link: &ServiceLink, request: Request) -> Response {
+            let folder = tempfile::tempdir().unwrap();
+            let env = no_harnesses(folder.path());
+            let context = SetupContext {
+                service: Some(link),
+                ..SetupContext::new(&env)
+            };
+            dispatch(request, config, &mut ConsentAuthority::new(), &context)
+        }
+
+        /// A fake service whose start_run answer echoes the forwarded key.
+        fn echoing_service(socket: &std::path::Path) -> FakeService {
+            FakeService::listen(
+                socket,
+                Arc::new(|request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::StartRun(value) => Response::RunStarted(RunStarted {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        run: fake::run_view(value.record_key.clone().unwrap()),
+                        existing: false,
+                    }),
+                    _ => fake::runs_listed(request),
+                }),
+            )
+        }
+
+        #[test]
+        fn start_run_forwards_host_resolved_key() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a?b=1";
+            let expected = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                start_run(url, None, &now()),
+            );
+            match response {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(requests[0], Request::ServiceHello(_)));
+            match &requests[1] {
+                Request::StartRun(forwarded) => {
+                    assert_eq!(forwarded.record_key.as_ref(), Some(&expected));
+                    assert_eq!(forwarded.url, url);
+                    assert_eq!(forwarded.content, "Some text");
+                }
+                other => panic!("expected start_run, got {other:?}"),
+            }
+        }
+
+        /// The key is resolved under the same config lock as note loading,
+        /// so a config update cannot interleave with it.
+        #[test]
+        fn start_run_resolves_the_key_under_the_config_lock() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a";
+            let expected = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let held = config.lock_current().unwrap();
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    call(
+                        &mut config,
+                        &link(socket.clone(), never),
+                        start_run(url, None, &now()),
+                    )
+                });
+                std::thread::sleep(Duration::from_millis(300));
+                assert!(!worker.is_finished(), "start_run ran without the lock");
+                assert!(service.requests().is_empty());
+                drop(held);
+                match worker.join().unwrap() {
+                    Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                    other => panic!("expected run_started, got {other:?}"),
+                }
+            });
+        }
+
+        #[test]
+        fn extension_supplied_record_key_is_rejected_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let key = RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "gdoc:docs.google.com/abc".into(),
+            };
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                start_run("https://example.com/", Some(key), &now()),
+            );
+            assert_eq!(
+                refused(&response),
+                (
+                    ErrorCode::InvalidRequest,
+                    "record_key is chosen by the host"
+                )
+            );
+        }
+
+        #[test]
+        fn start_run_with_an_unparseable_requested_at_is_invalid_request_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            for requested_at in ["yesterday", "2026-10-26 00:00:00Z", "2001-01-01T00:00:00Z"] {
+                let response = call(
+                    &mut config,
+                    &link,
+                    start_run("https://example.com/", None, requested_at),
+                );
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{requested_at}"
+                );
+            }
+        }
+
+        #[test]
+        fn start_run_over_the_schema_bounds_is_invalid_request_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let oversized = |change: &dyn Fn(&mut StartRunRequest)| {
+                let Request::StartRun(mut value) = start_run("https://example.com/", None, &now())
+                else {
+                    unreachable!()
+                };
+                change(&mut value);
+                Request::StartRun(value)
+            };
+            for request in [
+                oversized(&|value| value.title = "t".repeat(2049)),
+                oversized(&|value| {
+                    value.url = format!("https://example.com/{}", "a".repeat(8192));
+                }),
+                oversized(&|value| value.content = "c".repeat(1024 * 1024 + 1)),
+                oversized(&|value| value.selection = Some("s".repeat(64 * 1024 + 1))),
+            ] {
+                let response = call(&mut config, &link, request);
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{response:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn start_run_key_errors_are_reported_without_connecting() {
+            let empty = tempfile::tempdir().unwrap();
+            let mut config = ConfigStore::for_test(empty.path().join("config.toml"));
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                start_run("https://example.com/", None, &now()),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::NotConfigured);
+        }
+
+        #[test]
+        fn not_installed_service_gives_service_unavailable() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), |_| Launch::NotInstalled);
+            for request in [
+                start_run("https://example.com/", None, &now()),
+                Request::GetRun(GetRunRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "get-1".into(),
+                    run_id: "r".into(),
+                    since_offset: 0,
+                }),
+            ] {
+                let id = request.request_id().to_owned();
+                let response = call(&mut config, &link, request);
+                assert_eq!(response.request_id(), id);
+                assert_eq!(
+                    refused(&response),
+                    (ErrorCode::ServiceUnavailable, NOT_INSTALLED)
+                );
+            }
+        }
+
+        #[test]
+        fn run_messages_other_than_start_are_forwarded_verbatim() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+            let cancel = Request::CancelRun(CancelRunRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "cancel-1".into(),
+                run_id: "not-checked-by-the-host".into(),
+            });
+            let response = call(&mut config, &link, cancel.clone());
+            assert_eq!(response.request_id(), "cancel-1");
+            assert_eq!(service.requests()[1], cancel);
+        }
+
+        #[test]
+        fn service_hello_from_the_extension_is_refused() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                Request::ServiceHello(ServiceHelloRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "hello-1".into(),
+                }),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::InvalidRequest);
+        }
+
+        #[test]
+        fn notes_and_capture_do_not_touch_the_service() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+            let url = "https://example.com/page";
+            let loaded = match call(
+                &mut config,
+                &link,
+                Request::LoadNote(LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "load-1".into(),
+                    url: url.into(),
+                }),
+            ) {
+                Response::NoteLoaded(note) => note,
+                other => panic!("expected note_loaded, got {other:?}"),
+            };
+            let saved = call(
+                &mut config,
+                &link,
+                Request::SaveNote(brauser_protocol::SaveNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save-1".into(),
+                    url: url.into(),
+                    title: "Page".into(),
+                    body: "A note".into(),
+                    expected_revision: loaded.revision,
+                    expected_key: loaded.key,
+                }),
+            );
+            assert!(matches!(saved, Response::NoteSaved(_)), "{saved:?}");
+            for request in [
+                hello_request("hello-1"),
+                Request::GetConfig(GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "config-1".into(),
+                }),
+                Request::RecordVisit(RecordVisitRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "visit-1".into(),
+                    event: VisitEvent {
+                        event_id: "00000000-0000-4000-8000-0000000000aa".into(),
+                        url: url.into(),
+                        title: Some("Page".into()),
+                        occurred_at: now(),
+                        incognito: false,
+                    },
+                }),
+            ] {
+                assert!(
+                    !matches!(call(&mut config, &link, request), Response::Error(ref e) if e.code == ErrorCode::ServiceUnavailable)
+                );
+            }
+            assert!(service.requests().is_empty());
+        }
+    }
+
+    /// DESIGN.md §6.7: delivery marks artifacts dirty and does not touch their
+    /// files. Only the panel's connection close, the first connection of each
+    /// local day, and the settings action regenerate them; closing settings
+    /// does not.
+    #[test]
+    fn delivery_only_connections_leave_artifact_files_to_later_passes() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_minute(0)
+            .unwrap()
+            .replace_second(0)
+            .unwrap()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let connect = |requests: Vec<Request>| {
+            let json = requests
+                .iter()
+                .map(|request| serde_json::to_string(request).unwrap())
+                .collect::<Vec<_>>();
+            served(&json, loaded(&path))
+        };
+        let delivery = |focused_seconds| {
+            vec![
+                Request::GetConfig(GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "lease".into(),
+                }),
+                Request::RecordActivity(RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "deliver".into(),
+                    event: ActivityEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        artifact_id: "work:work.example/7".into(),
+                        artifact_type: "work.item".into(),
+                        url: "https://work.example/items/7".into(),
+                        title: Some("Work item".into()),
+                        occurred_at: occurred_at.clone(),
+                        incognito: false,
+                        opens: 1,
+                        focused_seconds,
+                        background_seconds: 0,
+                        modes: Vec::new(),
+                        trails: Vec::new(),
+                        refs: Vec::new(),
+                    },
+                }),
+            ]
+        };
+        let artifact_file = || {
+            let mut files = Vec::new();
+            for entry in walk(&root.join("artifacts")) {
+                files.push(std::fs::read_to_string(entry).unwrap());
+            }
+            files
+        };
+        fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    found.extend(walk(&path));
+                } else {
+                    found.push(path);
+                }
+            }
+            found
+        }
+
+        // The first connection of the day runs the pass, even for delivery.
+        connect(delivery(60));
+        let first = artifact_file();
+        assert_eq!(first.len(), 1, "the daily pass writes the artifact file");
+
+        // Later deliveries the same day leave the file for a later pass.
+        connect(delivery(120));
+        connect(delivery(180));
+        assert_eq!(
+            artifact_file(),
+            first,
+            "delivery must not rewrite artifact files"
+        );
+        // Nor does closing the settings page, which has its own action.
+        connect(vec![
+            Request::Hello(HelloRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "settings".into(),
+            }),
+            Request::GetConfig(GetConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "settings-config".into(),
+            }),
+        ]);
+        assert_eq!(
+            artifact_file(),
+            first,
+            "settings must not rewrite artifact files"
+        );
+
+        // The panel's connection close regenerates what delivery dirtied.
+        connect(vec![Request::GetArtifact(
+            brauser_protocol::GetArtifactRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "card".into(),
+                url: "https://work.example/items/7".into(),
+                title: Some("Work item".into()),
+            },
+        )]);
+        let refreshed = artifact_file();
+        assert_eq!(refreshed.len(), 1);
+        assert_ne!(
+            refreshed, first,
+            "the panel's close regenerates dirty files"
+        );
+    }
+
+    /// One-time move of an older install's folders to the fixed layout
+    /// (DESIGN.md §6.1), against a fixture shaped like a real pre-home install.
+    mod home_layout_migration {
+        use super::*;
+        use std::fs;
+        use std::path::{Path, PathBuf};
+
+        const FIXTURE: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/pre-home-layout"
+        );
+        const FORUM_NOTE: &str = "forum-example-com-item-5888e994a837414002b5aa66675dd4546e95a792d52a480a1f1b95ac4fd02c42.md";
+        const NEWS_URL: &str = "https://news.example.org/region/livestory/provincial-election-results-live-updates-2026-9.1234567";
+
+        struct Install {
+            folder: tempfile::TempDir,
+            home: PathBuf,
+            path: PathBuf,
+        }
+
+        impl Install {
+            fn new() -> Self {
+                let folder = tempfile::tempdir().unwrap();
+                let home = folder.path().join("notes-brauser");
+                fs::create_dir_all(home.join("pages")).unwrap();
+                for entry in fs::read_dir(Path::new(FIXTURE).join("home/pages")).unwrap() {
+                    let entry = entry.unwrap();
+                    fs::copy(entry.path(), home.join("pages").join(entry.file_name())).unwrap();
+                }
+                let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
+                let identity = crate::vault::selected_root_identity(&home).unwrap();
+                let config = fs::read_to_string(Path::new(FIXTURE).join("config.toml"))
+                    .unwrap()
+                    .replace("\"@ROOT_IDENTITY@\"", &quoted(&identity))
+                    .replace("\"@ROOT@\"", &quoted(&home.to_string_lossy()));
+                let state = folder.path().join("state");
+                fs::create_dir(&state).unwrap();
+                let path = state.join("config.toml");
+                fs::write(&path, config).unwrap();
+                Self { folder, home, path }
+            }
+
+            fn store(&self) -> ConfigStore {
+                ConfigStore::for_test(self.path.clone())
+            }
+
+            fn call(&self, config: &mut ConfigStore, request: Request) -> Response {
+                dispatch(
+                    request,
+                    config,
+                    &mut ConsentAuthority::new(),
+                    &SetupContext::new(&no_harnesses(self.folder.path())),
+                )
+            }
+
+            fn hello(&self, config: &mut ConfigStore) -> HelloResult {
+                let request = Request::Hello(brauser_protocol::HelloRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "hello".into(),
+                });
+                match self.call(config, request) {
+                    Response::HelloResult(value) => value,
+                    other => panic!("expected hello_result, got {other:?}"),
+                }
+            }
+
+            fn load(&self, config: &mut ConfigStore, url: &str) -> Response {
+                self.call(
+                    config,
+                    Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "load".into(),
+                        url: url.into(),
+                    }),
+                )
+            }
+
+            fn fixture_note(name: &str) -> Vec<u8> {
+                fs::read(Path::new(FIXTURE).join("home/pages").join(name)).unwrap()
+            }
+
+            fn table(&self) -> toml::Table {
+                fs::read_to_string(&self.path).unwrap().parse().unwrap()
+            }
+        }
+
+        fn without_layout(mut table: toml::Table) -> toml::Table {
+            let storage = table["storage"].as_table_mut().unwrap();
+            for key in [
+                "log_dir",
+                "pages_dir",
+                "later_dir",
+                "artifacts_dir",
+                "summaries_dir",
+            ] {
+                storage.remove(key);
+            }
+            table
+        }
+
+        #[test]
+        fn a_real_pre_home_install_moves_pages_to_notes_once() {
+            let install = Install::new();
+            let before = install.table();
+            let mut config = install.store();
+            let hello = install.hello(&mut config);
+            assert_eq!(hello.config_issue, None);
+            assert!(hello.configured);
+
+            assert!(!install.home.join("pages").exists());
+            for entry in fs::read_dir(Path::new(FIXTURE).join("home/pages")).unwrap() {
+                let name = entry.unwrap().file_name();
+                assert_eq!(
+                    fs::read(install.home.join("notes").join(&name)).unwrap(),
+                    Install::fixture_note(name.to_str().unwrap())
+                );
+            }
+            // Only folders that existed are renamed; nothing else is created.
+            let mut names: Vec<_> = fs::read_dir(&install.home)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            assert_eq!(names, ["notes"]);
+
+            let after = install.table();
+            let storage = after["storage"].as_table().unwrap();
+            for (key, value) in [
+                ("log_dir", "logs"),
+                ("pages_dir", "notes"),
+                ("later_dir", "later"),
+                ("artifacts_dir", "artifacts"),
+                ("summaries_dir", "summaries"),
+            ] {
+                assert_eq!(storage[key].as_str(), Some(value), "{key}");
+            }
+            // Every other setting, including the harness and adapters, is kept.
+            assert_eq!(without_layout(after), without_layout(before));
+
+            match install.load(&mut config, NEWS_URL) {
+                Response::NoteLoaded(value) => {
+                    assert!(value.exists);
+                    assert_eq!(value.body.trim(), "Note");
+                }
+                other => panic!("expected note_loaded, got {other:?}"),
+            }
+            // A second connection finds nothing to do.
+            let bytes = fs::read(&install.path).unwrap();
+            let mut second = install.store();
+            assert_eq!(install.hello(&mut second).config_issue, None);
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+        }
+
+        #[test]
+        fn an_existing_notes_folder_refuses_without_changing_anything_until_moved() {
+            let install = Install::new();
+            fs::create_dir(install.home.join("notes")).unwrap();
+            fs::write(install.home.join("notes/mine.md"), "the user's own").unwrap();
+            let bytes = fs::read(&install.path).unwrap();
+            let mut config = install.store();
+            let hello = install.hello(&mut config);
+            assert!(!hello.configured);
+            let issue = hello.config_issue.unwrap();
+            assert!(
+                issue.contains("notes/ already exists beside pages/"),
+                "{issue}"
+            );
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+            assert_eq!(
+                fs::read(install.home.join("pages").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            assert_eq!(
+                fs::read_to_string(install.home.join("notes/mine.md")).unwrap(),
+                "the user's own"
+            );
+            // Notes, capture, and settings saves stay off meanwhile.
+            assert!(matches!(
+                install.load(&mut config, NEWS_URL),
+                Response::Error(_)
+            ));
+            let mut next = config.snapshot().clone();
+            next.storage = Some(crate::layout::fixed(next.storage.as_ref().unwrap()));
+            let revision = config.revision().to_owned();
+            let response = install.call(
+                &mut config,
+                Request::UpdateConfig(brauser_protocol::UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save".into(),
+                    config: next,
+                    expected_revision: revision,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }),
+            );
+            match response {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("notes/ already exists"),
+                        "{}",
+                        value.message
+                    );
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+
+            // The user moves their folder; the next open finishes the move.
+            fs::rename(install.home.join("notes"), install.home.join("my-notes")).unwrap();
+            let hello = install.hello(&mut config);
+            assert_eq!(hello.config_issue, None);
+            assert!(hello.configured);
+            assert_eq!(
+                fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            assert_eq!(
+                fs::read_to_string(install.home.join("my-notes/mine.md")).unwrap(),
+                "the user's own"
+            );
+        }
+
+        #[test]
+        fn a_crash_between_renames_and_the_config_write_resumes() {
+            let install = Install::new();
+            fs::create_dir_all(install.home.join("log/2026/10")).unwrap();
+            fs::write(install.home.join("log/2026/10/2026-10-26.md"), "log").unwrap();
+            // As if a host renamed pages/ and then died.
+            fs::rename(install.home.join("pages"), install.home.join("notes")).unwrap();
+            let mut config = install.store();
+            config.refresh().unwrap();
+            assert!(!config.configured());
+            config.migrate_layout().unwrap();
+            assert!(config.configured());
+            assert!(crate::layout::is_fixed(
+                config.snapshot().storage.as_ref().unwrap()
+            ));
+            assert_eq!(
+                fs::read_to_string(install.home.join("logs/2026/10/2026-10-26.md")).unwrap(),
+                "log"
+            );
+            assert!(!install.home.join("log").exists());
+            assert_eq!(
+                fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            // Intents that name log/ are pointed at logs/ before it moves.
+            let relocations = fs::read_to_string(
+                install
+                    .path
+                    .parent()
+                    .unwrap()
+                    .join("visit-ids/log-relocations.json"),
+            )
+            .unwrap();
+            assert!(
+                relocations.contains("\"from\":\"log\",\"to\":\"logs\""),
+                "{relocations}"
+            );
+
+            // Every folder renamed, config still old: only the config changes.
+            let install = Install::new();
+            fs::rename(install.home.join("pages"), install.home.join("notes")).unwrap();
+            let mut config = install.store();
+            config.migrate_layout().unwrap();
+            assert!(config.configured());
+            assert!(crate::layout::is_fixed(
+                config.snapshot().storage.as_ref().unwrap()
+            ));
+        }
+
+        #[test]
+        fn migration_waits_for_every_writer_and_runs_once_across_hosts() {
+            for hold_capture in [false, true] {
+                let install = Install::new();
+                let state = install.path.parent().unwrap().to_path_buf();
+                // A writer in another host process holds its lock.
+                let writer = install.store();
+                let held: Box<dyn std::any::Any> = if hold_capture {
+                    Box::new(crate::capture::lock_capture(&state).unwrap())
+                } else {
+                    Box::new(writer.lock_current().unwrap())
+                };
+                let hosts: Vec<_> = (0..3)
+                    .map(|_| {
+                        let mut store = install.store();
+                        std::thread::spawn(move || {
+                            store.migrate_layout().unwrap();
+                            store.configured()
+                        })
+                    })
+                    .collect();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                assert!(
+                    install.home.join("pages").is_dir(),
+                    "hold_capture={hold_capture}"
+                );
+                assert!(
+                    !install.home.join("notes").exists(),
+                    "hold_capture={hold_capture}"
+                );
+                drop(held);
+                for host in hosts {
+                    assert!(host.join().unwrap(), "hold_capture={hold_capture}");
+                }
+                assert!(!install.home.join("pages").exists());
+                assert_eq!(
+                    fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                    Install::fixture_note(FORUM_NOTE)
+                );
+            }
+        }
+
+        #[test]
+        fn an_update_cannot_choose_its_own_folder_names() {
+            let install = Install::new();
+            let mut config = install.store();
+            assert!(install.hello(&mut config).configured);
+            let mut next = config.snapshot().clone();
+            next.storage.as_mut().unwrap().pages_dir = "pages".into();
+            let revision = config.revision().to_owned();
+            match install.call(
+                &mut config,
+                Request::UpdateConfig(brauser_protocol::UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save".into(),
+                    config: next,
+                    expected_revision: revision,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }),
+            ) {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("content folders are fixed"),
+                        "{}",
+                        value.message
+                    );
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
         }
     }
 }

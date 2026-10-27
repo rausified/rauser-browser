@@ -34,6 +34,7 @@ function harness(debounceMs = 60_000) {
     status: "",
     warning: false,
     unsaved: [],
+    older: [],
     readBody() { return this.body; },
     writeBody(body) { this.body = body; },
     setEditable(editable) { this.editable = editable; },
@@ -42,6 +43,7 @@ function harness(debounceMs = 60_000) {
       this.warning = warning;
     },
     showUnsaved(entries) { this.unsaved = entries.map((entry) => ({ ...entry })); },
+    showOlderNotes(entries) { this.older = entries.map((entry) => ({ ...entry })); },
   };
   const calls = [];
   const host = {
@@ -223,6 +225,27 @@ test("a conflict keeps edits typed during the save and does not save the server 
   assert.equal(h.calls.filter((call) => call.kind === "save").length, 1);
 });
 
+const keyChanged = {
+  type: "note_conflict",
+  revision: "missing",
+  body: "",
+  key: { kind: "artifact", value: "work:p.test/7" },
+  reason: "key_changed",
+};
+const olderUrlNote = {
+  canonical_url: "https://p.test/7",
+  revision: "rev-old key note",
+  title: "old key note",
+  key: { kind: "url", value: "test-key" },
+};
+const artifactLoad = {
+  exists: false,
+  revision: "missing",
+  body: "",
+  key: { kind: "artifact", value: "work:p.test/7" },
+  older_notes: [olderUrlNote],
+};
+
 test("a key change refuses the save and keeps the text for copy-out", async () => {
   const h = harness();
   await open(h, "https://p.test/", "old key note");
@@ -230,18 +253,101 @@ test("a key change refuses the save and keeps the text for copy-out", async () =
   const pending = h.editor.flush();
   const save = await h.next("save");
   assert.deepEqual(save.expected_key, { kind: "url", value: "test-key" });
-  save.resolve({
-    type: "note_conflict",
-    revision: "missing",
-    body: "",
-    key: { kind: "artifact", value: "work:p.test/7" },
-    reason: "key_changed",
-  });
+  save.resolve(keyChanged);
+  (await h.next("load")).resolve(artifactLoad);
   await pending;
   assert.equal(h.view.body, "");
   assert.equal(h.view.warning, true);
   assert.match(h.view.status, /artifact identity changed/);
   assert.equal(h.view.unsaved[0].text, "mine under the old key");
+});
+
+test("a key change reloads the note so its new key, revision, and older notes are shown", async () => {
+  const h = harness();
+  await open(h, "https://p.test/", "old key note");
+  h.type("mine under the old key");
+  const pending = h.editor.flush();
+  (await h.next("save")).resolve(keyChanged);
+  const reload = await h.next("load");
+  assert.equal(reload.url, "https://p.test/");
+  reload.resolve(artifactLoad);
+  await pending;
+  assert.deepEqual(h.view.older, [olderUrlNote]);
+  assert.equal(h.view.editable, true);
+  assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["mine under the old key"]);
+  // Pasting the kept text back saves under the reloaded artifact key.
+  h.type("mine under the old key");
+  const resaved = h.editor.flush();
+  const save = await h.next("save");
+  assert.deepEqual(save.expected_key, { kind: "artifact", value: "work:p.test/7" });
+  assert.equal(save.expected_revision, "missing");
+  save.resolve({ type: "note_saved", revision: "r-artifact", key: save.expected_key });
+  await resaved;
+  assert.equal(h.view.status, "Saved");
+});
+
+test("a key change never autosaves under the stale key while the note reloads", async () => {
+  const h = harness(0);
+  await open(h, "https://p.test/", "old key note");
+  h.type("mine");
+  void h.editor.flush();
+  const save = await h.next("save");
+  h.type("mine and more");
+  save.resolve(keyChanged);
+  const reload = await h.next("load");
+  // The stale note is closed to edits until the reload lands.
+  assert.equal(h.view.editable, false);
+  h.type("typed into a closed editor");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await settle();
+  assert.equal(h.calls.filter((call) => call.kind === "save").length, 1);
+  reload.resolve(artifactLoad);
+  await h.editor.idle();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await settle();
+  assert.equal(h.calls.filter((call) => call.kind === "save").length, 1);
+  // The reload shows the new note without clearing the copy-out box.
+  assert.equal(h.view.body, "");
+  assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["mine and more"]);
+  assert.match(h.view.status, /artifact identity changed/);
+  assert.equal(h.view.warning, true);
+});
+
+test("a key change during a tab switch loads the new tab without a second reload", async () => {
+  const h = harness();
+  await open(h, "https://p.test/", "old key note");
+  h.type("mine under the old key");
+  const switched = h.editor.showPage(page("https://a.test/"));
+  (await h.next("save")).resolve(keyChanged);
+  (await h.next("load")).resolve(loaded("a"));
+  await switched;
+  await settle();
+  assert.deepEqual(h.calls.filter((call) => call.kind === "load").map((call) => call.url),
+    ["https://p.test/", "https://a.test/"]);
+  assert.equal(h.view.body, "a");
+  assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["mine under the old key"]);
+});
+
+test("a key change in a flush queued before a tab switch leaves the new tab to that switch", async () => {
+  const h = harness();
+  await open(h, "https://p.test/", "old key note");
+  h.type("one");
+  void h.editor.flush();
+  const first = await h.next("save");
+  h.type("one two");
+  void h.editor.flush();
+  const switched = h.editor.showPage(page("https://a.test/"));
+  first.resolve({ type: "note_saved", revision: "r1" });
+  (await h.next("save")).resolve(keyChanged);
+  (await h.next("load")).resolve(loaded("a"));
+  await switched;
+  await settle();
+  assert.deepEqual(h.calls.filter((call) => call.kind === "load").map((call) => call.url),
+    ["https://p.test/", "https://a.test/"]);
+  assert.equal(h.view.body, "a");
+  assert.equal(h.view.status, "Saved");
+  assert.equal(h.view.warning, false);
+  assert.deepEqual(h.view.unsaved.map((entry) => entry.text), ["one two"]);
 });
 
 test("a flush with nothing running sends its save before returning", async () => {
@@ -256,7 +362,7 @@ test("a flush with nothing running sends its save before returning", async () =>
 test("a failed load is retried for the same page", async () => {
   const h = harness();
   void h.editor.showPage(page("https://p.test/"));
-  (await h.next("load")).reject(new Error("No notes folder is chosen."));
+  (await h.next("load")).reject(new Error("No home folder is chosen."));
   await h.editor.idle();
   assert.equal(h.view.editable, false);
   // A title update for the same page reloads the failed note.

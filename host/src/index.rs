@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
+use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, WhyEvent};
 use cap_std::fs::{Dir, OpenOptions};
@@ -17,24 +20,32 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
-use time::{Date, OffsetDateTime};
+use time::{Date, OffsetDateTime, UtcOffset};
 use url::Url;
 use uuid::Uuid;
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{
-    activity_shape_is_bounded, activity_shape_is_valid, canonical_url, trail_transition_is_valid,
+    activity_shape_is_valid, canonical_url, logged_activity_is_bounded, trail_transition_is_valid,
 };
 use crate::summary::SummaryEvent;
 use crate::vault::{
-    TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
+    STALE_TEMPORARY_AGE, TempFileCleanup, checked_relative_dir, is_generated_temporary,
+    open_selected_root, sync_directory, sync_directory_chain,
 };
 
 // v2 (main, independently) forces a rescan for the artifact-history
 // recovery fix. v3 adds `CachedEvent::Summary` on top of it; bumping again
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
-// already durable in the log.
-const STATE_VERSION: u8 = 3;
+// already durable in the log. v4 records log positions and the adapter
+// document fingerprint. v5 counts M1 visits as opens and bounds logged
+// titles. A v4 cache is migrated in place (`migrate_v4_state`) rather than
+// rescanned, so its checkpoints survive the upgrade.
+const STATE_VERSION: u8 = 5;
+// How often a long regeneration pass publishes its progress. Chrome ends a
+// host soon after its port closes; without checkpoints a pass killed that
+// way would restart at the same sorted prefix every time.
+const REGENERATION_CHECKPOINT: Duration = Duration::from_millis(500);
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
@@ -47,6 +58,7 @@ const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 #[cfg(test)]
 thread_local! {
     static LOG_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PUBLICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone)]
@@ -54,6 +66,9 @@ pub struct ArtifactIndex {
     cache_dir: PathBuf,
     storage: StorageConfig,
     root_identity: String,
+    /// The confirmed adapter document, used only to resolve title refs
+    /// into mentions edges (adapter-templates.md §10.1).
+    adapters: Option<Arc<Document>>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -62,6 +77,11 @@ pub struct RegenerationReport {
     pub unchanged: usize,
     pub conflicts: usize,
     pub conflict_paths: Vec<String>,
+    /// Artifacts whose file could not be written this pass. They stay dirty
+    /// and never stop the pass from updating the others.
+    pub failed: usize,
+    pub failed_paths: Vec<String>,
+    pub first_failure: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,8 +93,62 @@ struct IndexState {
     log_dir: String,
     artifacts_dir: String,
     events: BTreeMap<String, CachedEvent>,
+    /// Each logged event's durable position (log path, line), which breaks
+    /// ties between equal instants (context is saved with one-second
+    /// resolution) the same way whichever order catch-up discovered the
+    /// files in.
+    positions: BTreeMap<String, (PathBuf, u64)>,
+    /// Arrival order, only for events indexed before any log copy was seen.
+    sequence: BTreeMap<String, u64>,
+    next_sequence: u64,
+    /// The adapter document index.db's resolved mentions were derived with.
+    adapters: String,
+    /// Conflicting bodies seen for an indexed ID during this pass, so a
+    /// rescan can keep the winner a valid cache already recorded.
+    #[serde(skip)]
+    conflicts: BTreeMap<String, Vec<CachedEvent>>,
     dirty: BTreeSet<String>,
     logs: BTreeMap<PathBuf, LogCheckpoint>,
+}
+
+impl IndexState {
+    /// Add one event. A reused event ID with different content keeps the
+    /// body indexed first and never one chosen by an untrusted later
+    /// delivery (which capture can append to an earlier-dated log), so one
+    /// bad duplicate neither replaces durable history nor makes the rest of
+    /// it unavailable. A full rebuild, having only the logs, keeps the copy
+    /// at the earliest log position. Returns false on such a conflict.
+    fn ingest(&mut self, event: CachedEvent, position: Option<(PathBuf, u64)>) -> bool {
+        let (id, artifact_id) = event_identity(&event);
+        let Some(previous) = self.events.get(&id) else {
+            self.sequence.insert(id.clone(), self.next_sequence);
+            self.next_sequence += 1;
+            if let Some(position) = position {
+                self.positions.insert(id.clone(), position);
+            }
+            self.events.insert(id, event);
+            self.dirty.insert(artifact_id);
+            return true;
+        };
+        if previous != &event {
+            let seen = self.conflicts.entry(id).or_default();
+            if seen.len() < 8 && !seen.contains(&event) {
+                seen.push(event);
+            }
+            return false;
+        }
+        // The same body seen at an earlier position (a file discovered
+        // later) takes that position, as a fresh rebuild would.
+        if let Some(position) = position
+            && self
+                .positions
+                .get(&id)
+                .is_none_or(|indexed| &position < indexed)
+        {
+            self.positions.insert(id, position);
+        }
+        true
+    }
 }
 
 /// Metadata is only an ingestion checkpoint, never capture authorization.
@@ -160,6 +234,8 @@ struct ArtifactRow {
     why: Option<String>,
     activities: Vec<ActivityEvent>,
     summaries: Vec<SummaryEvent>,
+    /// Instants of M1 visit entries, each one cold open with no measures.
+    legacy_visits: Vec<OffsetDateTime>,
     latest_at: OffsetDateTime,
 }
 
@@ -206,6 +282,19 @@ struct WorklogRow {
     summary: Option<SummaryEvent>,
 }
 
+/// The local day the last regeneration pass completed, the UTC offset that
+/// day was taken in, and the storage it covered (`ArtifactIndex::daily_pass_due`).
+/// The cache is shared, so a pass for another folder never counts.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PassMarker {
+    date: String,
+    offset_seconds: i32,
+    root: String,
+    root_identity: String,
+    artifacts_dir: String,
+}
+
 impl ArtifactIndex {
     pub fn open(storage: &StorageConfig, expected_identity: Option<&str>) -> Result<Self> {
         let dirs = ProjectDirs::from("", "", APP_NAME)
@@ -225,7 +314,27 @@ impl ArtifactIndex {
             cache_dir: cache_dir.to_path_buf(),
             storage: storage.clone(),
             root_identity: identity,
+            adapters: None,
         })
+    }
+
+    /// Resolve title refs through this adapter document. Without one, every
+    /// ref stays an unresolved key that never counts as a link.
+    pub fn with_adapters(mut self, adapters: Option<&Document>) -> Self {
+        self.adapters = adapters.cloned().map(Arc::new);
+        self
+    }
+
+    fn adapters_fingerprint(&self) -> String {
+        self.adapters
+            .as_deref()
+            .map_or_else(String::new, |document| {
+                sha256_hex(format!("{document:?}").as_bytes())
+            })
+    }
+
+    fn derive(&self, state: &IndexState) -> Derived {
+        derive(state, self.adapters.as_deref())
     }
 
     pub fn record_activity(&self, event: &ActivityEvent, strip_params: &[String]) -> Result<()> {
@@ -259,28 +368,56 @@ impl ArtifactIndex {
         self.record_events(events)
     }
 
+    /// Index events whose log append already succeeded. Catch-up has just
+    /// read the authoritative log, so a body that disagrees with an indexed
+    /// event is skipped (and reported) without dropping the rest.
     fn record_events(&self, events: impl IntoIterator<Item = CachedEvent>) -> Result<()> {
         let (mut state, _) = self.load_current_state()?;
+        let mut conflicts = 0usize;
         for event in events {
             let (event_id, artifact_id) = event_identity(&event);
-            if let Some(previous) = state.events.get(&event_id) {
-                if previous != &event {
-                    bail!("an indexed event ID cannot be reused with different content");
+            match state.events.get(&event_id) {
+                Some(previous) if previous != &event => conflicts += 1,
+                Some(_) => {
+                    state.dirty.insert(artifact_id);
                 }
-                state.dirty.insert(artifact_id);
-                continue;
+                None => {
+                    state.ingest(event, None);
+                }
             }
-            state.events.insert(event_id, event);
-            state.dirty.insert(artifact_id);
         }
-        self.publish_state_and_database(&state)
+        self.publish_state_and_database(&state)?;
+        if conflicts > 0 {
+            bail!("an indexed event ID cannot be reused with different content");
+        }
+        Ok(())
     }
 
     /// Reconcile a terminal replay or a newly drained legacy visit from the
     /// authoritative owned markers. In particular, never let an untrusted
     /// retry body replace the event that is already durable in the log.
+    /// Only artifacts whose generated file would change become dirty, so a
+    /// duplicate retry neither forces a full regeneration pass nor replaces
+    /// external edits to files that had no new activity.
     pub fn reconcile_from_logs(&self) -> Result<()> {
-        let state = self.scan_logs()?;
+        let (mut state, previous) = self.rescan_logs()?;
+        if let Some(previous) = previous {
+            let rendered = |state: &IndexState| {
+                self.derive(state)
+                    .artifacts
+                    .into_iter()
+                    .map(|(id, row)| (id, render_artifact(&self.storage.artifacts_dir, &row)))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let (before, after) = (rendered(&previous), rendered(&state));
+            let mut dirty = previous.dirty;
+            for id in before.keys().chain(after.keys()) {
+                if before.get(id) != after.get(id) {
+                    dirty.insert(id.clone());
+                }
+            }
+            state.dirty = dirty;
+        }
         self.publish_state_and_database(&state)
     }
 
@@ -288,54 +425,177 @@ impl ArtifactIndex {
     /// artifact file. This is the explicit repair path for a deleted or
     /// corrupt cache and intentionally replaces user edits to owned files.
     pub fn reindex(&self) -> Result<RegenerationReport> {
-        let mut state = self.scan_logs()?;
-        let derived = derive(&state.events);
+        let (mut state, _) = self.rescan_logs()?;
+        let derived = self.derive(&state);
         state.dirty = derived.artifacts.keys().cloned().collect();
         self.publish_state_and_database(&state)?;
-        self.regenerate_state(state)
+        self.regenerate_state(state, false)
     }
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.
     pub fn regenerate_dirty(&self) -> Result<RegenerationReport> {
-        let (state, _) = self.load_current_state()?;
-        self.regenerate_state(state)
+        let (state, publish) = self.load_current_state()?;
+        self.regenerate_state(state, publish)
     }
 
-    fn regenerate_state(&self, mut state: IndexState) -> Result<RegenerationReport> {
-        let derived = derive(&state.events);
+    /// Whether no pass has completed yet on the current local day (§6.7), so
+    /// even a delivery-only connection should run one. The day is the user's,
+    /// taken from the offset of their latest activity when the pass ran; a
+    /// missing or unreadable marker means a pass is due.
+    pub fn daily_pass_due(&self, now: OffsetDateTime) -> bool {
+        let Ok(bytes) = fs::read(self.pass_marker_path()) else {
+            return true;
+        };
+        let Ok(marker) = serde_json::from_slice::<PassMarker>(&bytes) else {
+            return true;
+        };
+        let Ok(offset) = UtcOffset::from_whole_seconds(marker.offset_seconds) else {
+            return true;
+        };
+        marker.root != self.storage.root
+            || marker.root_identity != self.root_identity
+            || marker.artifacts_dir != self.storage.artifacts_dir
+            || now.to_offset(offset).date().to_string() != marker.date
+    }
+
+    /// Remove index-cache and artifact temporaries left by a host killed
+    /// between creating and publishing them. Only regular files whose whole
+    /// name is one this module generates, and that are older than
+    /// `STALE_TEMPORARY_AGE`, are removed. Returns how many were removed.
+    pub fn sweep_stale_temporaries(&self) -> Result<usize> {
+        let mut removed = match Dir::open_ambient_dir(&self.cache_dir, cap_std::ambient_authority())
+        {
+            Ok(cache) => sweep_temporaries_in(&cache, &format!(".{NAMESPACE}-index-"))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error).context("opening artifact index cache directory"),
+        };
+        let (root, _) =
+            open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
+        let artifacts = match root.open_dir(checked_relative_dir(&self.storage.artifacts_dir)?) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+            Err(error) => return Err(error).context("opening artifacts directory"),
+        };
+        // Artifact files live exactly at `<type>/<site>/` (`artifact_path`).
+        let prefix = format!(".{NAMESPACE}-artifact-");
+        for types in subdirectories(&artifacts)? {
+            for sites in subdirectories(&types)? {
+                removed += sweep_temporaries_in(&sites, &prefix)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn pass_marker_path(&self) -> PathBuf {
+        self.cache_dir.join("regenerated.json")
+    }
+
+    fn regenerate_state(&self, state: IndexState, publish: bool) -> Result<RegenerationReport> {
+        self.regenerate_state_with(state, publish, REGENERATION_CHECKPOINT, |_| {})
+    }
+
+    /// Publish the cleared dirty set at least every `checkpoint`, and before
+    /// returning an error, so a pass that is killed or fails keeps its work.
+    /// `publish` says the loaded state differs from the published cache.
+    /// `after_file` (a test seam) sees the running count of written files.
+    fn regenerate_state_with(
+        &self,
+        mut state: IndexState,
+        publish: bool,
+        checkpoint: Duration,
+        mut after_file: impl FnMut(usize),
+    ) -> Result<RegenerationReport> {
+        let derived = self.derive(&state);
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let mut report = RegenerationReport::default();
         let dirty = state.dirty.iter().cloned().collect::<Vec<_>>();
+        let mut published_at = Instant::now();
+        let mut interval = checkpoint;
+        // A caught-up or rebuilt state needs publishing even if no file does.
+        let mut unpublished = publish;
         for id in dirty {
             let Some(artifact) = derived.artifacts.get(&id) else {
                 state.dirty.remove(&id);
+                unpublished = true;
                 continue;
             };
             let markdown = render_artifact(&self.storage.artifacts_dir, artifact);
-            match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown)? {
-                ArtifactWrite::Written => {
+            let path = || {
+                artifact_path(&self.storage.artifacts_dir, artifact)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown) {
+                Ok(ArtifactWrite::Written) => {
                     report.written += 1;
                     state.dirty.remove(&id);
+                    unpublished = true;
                 }
-                ArtifactWrite::Unchanged => {
+                Ok(ArtifactWrite::Unchanged) => {
                     report.unchanged += 1;
                     state.dirty.remove(&id);
+                    unpublished = true;
                 }
-                ArtifactWrite::Conflict => {
+                Ok(ArtifactWrite::Conflict) => {
                     report.conflicts += 1;
                     if report.conflict_paths.len() < 64 {
-                        report.conflict_paths.push(
-                            artifact_path(&self.storage.artifacts_dir, artifact)
-                                .to_string_lossy()
-                                .into_owned(),
-                        );
+                        report.conflict_paths.push(path());
                     }
                 }
+                // One unwritable path (a locked file, a read-only folder)
+                // stays dirty for the next pass without blocking the rest.
+                Err(error) => {
+                    report.failed += 1;
+                    if report.failed_paths.len() < 64 {
+                        report.failed_paths.push(path());
+                    }
+                    report
+                        .first_failure
+                        .get_or_insert_with(|| format!("{}: {error:#}", path()));
+                }
             }
+            if unpublished && published_at.elapsed() >= interval {
+                let started = Instant::now();
+                self.publish_state_and_database(&state)?;
+                published_at = Instant::now();
+                interval = checkpoint_interval(checkpoint, published_at - started);
+                unpublished = false;
+            }
+            after_file(report.written);
         }
-        self.publish_state_and_database(&state)?;
+        if unpublished {
+            self.publish_state_and_database(&state)?;
+        }
+        self.record_pass(&derived);
         Ok(report)
+    }
+
+    /// Remember the local day this pass completed (`daily_pass_due`).
+    /// Best effort: a lost marker only means one extra pass.
+    fn record_pass(&self, derived: &Derived) {
+        let offset = derived
+            .artifacts
+            .values()
+            .map(|artifact| artifact.latest_at)
+            .max()
+            .map_or(UtcOffset::UTC, OffsetDateTime::offset);
+        let marker = PassMarker {
+            date: OffsetDateTime::now_utc()
+                .to_offset(offset)
+                .date()
+                .to_string(),
+            offset_seconds: offset.whole_seconds(),
+            root: self.storage.root.clone(),
+            root_identity: self.root_identity.clone(),
+            artifacts_dir: self.storage.artifacts_dir.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&marker)
+            && fs::read(self.pass_marker_path()).ok().as_deref() != Some(bytes.as_slice())
+            && let Err(error) = atomic_write(&self.pass_marker_path(), &bytes)
+        {
+            eprintln!("{NAMESPACE}: warning: could not record artifact pass: {error:#}");
+        }
     }
 
     fn load_or_rebuild(&self) -> Result<IndexState> {
@@ -349,18 +609,39 @@ impl ArtifactIndex {
     }
 
     fn load_current_state(&self) -> Result<(IndexState, bool)> {
-        let (mut state, rebuild) = match read_state(&self.state_path()) {
-            Ok(Some(state)) if self.state_matches(&state) => (state, false),
-            Ok(_) | Err(_) => (self.empty_state(), true),
+        let (mut state, rebuild) = match self.read_current_state() {
+            Some((state, migrated)) => (state, migrated),
+            None => (self.empty_state(), true),
         };
         let changed = self.catch_up_logs(&mut state)?;
-        let publish = rebuild || changed || !self.database_path().is_file();
+        // Ref resolution follows the current adapters, so a policy change
+        // republishes index.db's edges even when no log changed.
+        let adapters = self.adapters_fingerprint();
+        let resolution_changed = state.adapters != adapters;
+        state.adapters = adapters;
+        let publish = rebuild || changed || resolution_changed || !self.database_path().is_file();
         Ok((state, publish))
     }
 
-    fn state_matches(&self, state: &IndexState) -> bool {
-        state.version == STATE_VERSION
-            && state.root == self.storage.root
+    /// The cache for this root and layout, if any. A version 4 cache is
+    /// migrated in place; the flag reports that it must be republished.
+    fn read_current_state(&self) -> Option<(IndexState, bool)> {
+        let mut state = read_state(&self.state_path()).ok()??;
+        if !self.state_location_matches(&state) {
+            return None;
+        }
+        match state.version {
+            STATE_VERSION => Some((state, false)),
+            4 => {
+                migrate_v4_state(&mut state);
+                Some((state, true))
+            }
+            _ => None,
+        }
+    }
+
+    fn state_location_matches(&self, state: &IndexState) -> bool {
+        state.root == self.storage.root
             && state.root_identity == self.root_identity
             && state.log_dir == self.storage.log_dir
             && state.artifacts_dir == self.storage.artifacts_dir
@@ -374,6 +655,11 @@ impl ArtifactIndex {
             log_dir: self.storage.log_dir.clone(),
             artifacts_dir: self.storage.artifacts_dir.clone(),
             events: BTreeMap::new(),
+            positions: BTreeMap::new(),
+            sequence: BTreeMap::new(),
+            next_sequence: 0,
+            adapters: self.adapters_fingerprint(),
+            conflicts: BTreeMap::new(),
             dirty: BTreeSet::new(),
             logs: BTreeMap::new(),
         }
@@ -383,6 +669,28 @@ impl ArtifactIndex {
         let mut state = self.empty_state();
         self.catch_up_logs(&mut state)?;
         Ok(state)
+    }
+
+    /// A full scan that keeps, for a reused event ID, the body a valid cache
+    /// already chose when that body is still in the logs. Log position is
+    /// not arrival order (capture can append a backdated duplicate to an
+    /// earlier-dated log), so only a scan with no usable cache falls back to
+    /// the earliest position. Also returns that cache.
+    fn rescan_logs(&self) -> Result<(IndexState, Option<IndexState>)> {
+        let mut state = self.scan_logs()?;
+        let previous = self.read_current_state().map(|(previous, _)| previous);
+        if let Some(previous) = &previous {
+            for (id, seen) in std::mem::take(&mut state.conflicts) {
+                if let Some(winner) = previous.events.get(&id)
+                    && seen.contains(winner)
+                    && let Some(chosen) = state.events.insert(id, winner.clone())
+                {
+                    state.dirty.insert(chosen.artifact_id().to_owned());
+                    state.dirty.insert(winner.artifact_id().to_owned());
+                }
+            }
+        }
+        Ok((state, previous))
     }
 
     /// Called under the native host's configuration/write lock. Limit the
@@ -404,13 +712,17 @@ impl ArtifactIndex {
         let mut files = Vec::new();
         collect_markdown(&logs, Path::new(""), 0, &mut files)?;
         files.sort();
+        let shown = |relative: &Path| log_dir.join(relative).display().to_string();
         let mut checkpoints = BTreeMap::new();
         for relative in files {
             let metadata = logs
                 .symlink_metadata(&relative)
-                .context("checking artifact log file")?;
+                .with_context(|| format!("checking artifact log file {}", shown(&relative)))?;
             if !metadata.is_file() {
-                bail!("artifact history is unavailable: log is not a regular file");
+                bail!(
+                    "artifact history is unavailable: {} is not a regular file",
+                    shown(&relative)
+                );
             }
             checkpoints.insert(relative, LogCheckpoint::read(&metadata)?);
         }
@@ -431,43 +743,41 @@ impl ArtifactIndex {
                 continue;
             }
             if checkpoint.bytes > MAX_LOG_BYTES {
-                bail!("artifact history is unavailable: log exceeds its 32 MiB limit");
+                bail!(
+                    "artifact history is unavailable: log exceeds its 32 MiB limit: {}",
+                    shown(relative)
+                );
             }
             scanned += checkpoint.bytes;
             if scanned > MAX_SCAN_BYTES {
                 bail!("artifact history is unavailable: catch-up exceeds its 64 MiB limit");
             }
-            let mut file = logs.open(relative).context("opening artifact log file")?;
+            let mut file = logs
+                .open(relative)
+                .with_context(|| format!("opening artifact log file {}", shown(relative)))?;
             let mut bytes = Vec::new();
             Read::by_ref(&mut file)
                 .take(checkpoint.bytes + 1)
                 .read_to_end(&mut bytes)
-                .context("reading artifact log file")?;
+                .with_context(|| format!("reading artifact log file {}", shown(relative)))?;
             if bytes.len() as u64 != checkpoint.bytes
                 || LogCheckpoint::read(&file.metadata()?)? != *checkpoint
             {
-                bail!("artifact history is unavailable: log changed during catch-up");
+                bail!(
+                    "artifact history is unavailable: {} changed during catch-up",
+                    shown(relative)
+                );
             }
             #[cfg(test)]
             LOG_BYTES_READ.with(|count| count.set(count.get() + bytes.len() as u64));
-            let text = std::str::from_utf8(&bytes).context("artifact log is not UTF-8")?;
+            // Markers are ASCII. A torn multibyte prose line (capture
+            // tolerates one and keeps appending) must not drop the whole day.
+            let text = String::from_utf8_lossy(&bytes);
             if !text.starts_with(LOG_HEADER) {
                 continue;
             }
-            for event in parse_log(text) {
-                let (id, artifact_id) = event_identity(&event);
-                match state.events.entry(id) {
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        entry.insert(event);
-                        state.dirty.insert(artifact_id);
-                    }
-                    std::collections::btree_map::Entry::Occupied(entry)
-                        if entry.get() != &event =>
-                    {
-                        bail!("artifact log reuses an event ID with different content");
-                    }
-                    std::collections::btree_map::Entry::Occupied(_) => {}
-                }
+            for (line, event) in parse_log_lines(&text) {
+                state.ingest(event, Some((relative.clone(), line)));
             }
         }
         state.logs = checkpoints;
@@ -475,13 +785,23 @@ impl ArtifactIndex {
     }
 
     fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
+        #[cfg(test)]
+        PUBLICATIONS.with(|count| count.set(count.get() + 1));
         fs::create_dir_all(&self.cache_dir).context("creating artifact index cache directory")?;
         let bytes = serde_json::to_vec(state).context("serializing artifact index state")?;
         if bytes.len() as u64 > MAX_STATE_BYTES {
             bail!("artifact index state exceeds its 64 MiB limit");
         }
-        let database = sqlite_snapshot(&derive(&state.events), &state.dirty)?;
-        atomic_write(&self.database_path(), &database)?;
+        let database = sqlite_snapshot(&self.derive(state), &state.dirty)?;
+        if database.skipped_rows > 0 {
+            // index.db is a derived snapshot; the log and the ingestion
+            // cache keep the event. One bad row never stops publication.
+            eprintln!(
+                "{NAMESPACE}: warning: left {} artifact index row(s) larger than one SQLite page out of index.db",
+                database.skipped_rows
+            );
+        }
+        atomic_write(&self.database_path(), &database.bytes)?;
         // Publish the checkpoint last. If either write fails, a subsequent
         // read still sees the older checkpoint and retries the catch-up.
         atomic_write(&self.state_path(), &bytes)
@@ -490,7 +810,7 @@ impl ArtifactIndex {
     /// Return the current derived record for one recognized artifact. The
     /// append-only log remains authoritative; this never trusts index.db.
     pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>> {
-        let derived = derive(&self.load_or_rebuild()?.events);
+        let derived = self.derive(&self.load_or_rebuild()?);
         Ok(derived.artifacts.get(artifact_id).map(|row| {
             artifact_view(
                 row,
@@ -520,19 +840,14 @@ impl ArtifactIndex {
     /// recognized artifact can have saved context before its first hourly
     /// activity is delivered.
     pub fn latest_why(&self, artifact_id: &str) -> Result<Option<String>> {
-        let events = &self.load_or_rebuild()?.events;
-        let mut latest: Option<(OffsetDateTime, String)> = None;
-        for event in events.values() {
-            if let CachedEvent::Why(why) = event
-                && why.artifact_id == artifact_id
-            {
-                let at = parsed_timestamp(&why.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
-                if latest.as_ref().is_none_or(|current| at >= current.0) {
-                    latest = Some((at, why.text.clone()));
-                }
-            }
-        }
-        Ok(latest.map(|(_, text)| text))
+        let state = self.load_or_rebuild()?;
+        Ok(ordered_events(&state)
+            .into_iter()
+            .rev()
+            .find_map(|event| match event {
+                CachedEvent::Why(why) if why.artifact_id == artifact_id => Some(why.text.clone()),
+                _ => None,
+            }))
     }
 
     /// One row per artifact and local day, newest day first and then by that
@@ -544,7 +859,7 @@ impl ArtifactIndex {
         title_query: Option<&str>,
         limit: usize,
     ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
-        let derived = derive(&self.load_or_rebuild()?.events);
+        let derived = self.derive(&self.load_or_rebuild()?);
         let types = derived
             .artifacts
             .values()
@@ -606,7 +921,7 @@ impl ArtifactIndex {
     /// Render a measured, agent-free summary for an inclusive range of local
     /// dates. Callers validate and bound the range before reaching here.
     pub fn worklog(&self, start: Date, end: Date) -> Result<(String, usize)> {
-        let derived = derive(&self.load_or_rebuild()?.events);
+        let derived = self.derive(&self.load_or_rebuild()?);
         let mut rows = BTreeMap::<String, WorklogRow>::new();
         for visit in &derived.visits {
             let Ok(date) = parse_date(&visit.local_date) else {
@@ -712,6 +1027,34 @@ impl ArtifactIndex {
     }
 }
 
+/// Upgrade a version 4 cache without rereading the logs: drop activity a
+/// log rescan would now skip (a title over capture's limit), and mark those
+/// artifacts and every M1 visit's artifact dirty so their owned files are
+/// regenerated with the v5 derivation (M1 visits count as opens).
+fn migrate_v4_state(state: &mut IndexState) {
+    let dropped = state
+        .events
+        .iter()
+        .filter(|(_, event)| {
+            matches!(event, CachedEvent::Activity(event) if !logged_activity_is_bounded(event))
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    for id in dropped {
+        if let Some(event) = state.events.remove(&id) {
+            state.dirty.insert(event.artifact_id().to_owned());
+        }
+        state.positions.remove(&id);
+        state.sequence.remove(&id);
+    }
+    for event in state.events.values() {
+        if let CachedEvent::Legacy(event) = event {
+            state.dirty.insert(event.artifact_id.clone());
+        }
+    }
+    state.version = STATE_VERSION;
+}
+
 fn saturating_u32(value: u64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
@@ -793,12 +1136,47 @@ fn event_identity(event: &CachedEvent) -> (String, String) {
     }
 }
 
-fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
+fn event_time(event: &CachedEvent) -> OffsetDateTime {
+    let at = match event {
+        CachedEvent::Activity(event) => &event.occurred_at,
+        CachedEvent::Why(event) => &event.occurred_at,
+        CachedEvent::Legacy(event) => &event.occurred_at,
+        CachedEvent::Summary(event) => &event.occurred_at,
+    };
+    parsed_timestamp(at).unwrap_or(OffsetDateTime::UNIX_EPOCH)
+}
+
+/// Events by instant, then durable log position, never by (random) event
+/// ID, so the latest title, mode, and context do not depend on UUID order.
+fn ordered_events(state: &IndexState) -> Vec<&CachedEvent> {
+    let mut ordered = state
+        .events
+        .iter()
+        .map(|(id, event)| {
+            let position = state.positions.get(id);
+            let sequence = state.sequence.get(id).copied().unwrap_or(u64::MAX);
+            (
+                (
+                    event_time(event),
+                    position.is_none(),
+                    position,
+                    sequence,
+                    id,
+                ),
+                event,
+            )
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.0.cmp(&right.0));
+    ordered.into_iter().map(|(_, event)| event).collect()
+}
+
+fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
     let mut artifacts = BTreeMap::<String, ArtifactRow>::new();
     let mut visits = Vec::new();
     let mut edges = BTreeMap::<(String, String, String), EdgeRow>::new();
     let mut whys = BTreeMap::<String, (OffsetDateTime, String)>::new();
-    for event in events.values() {
+    for event in ordered_events(state) {
         match event {
             CachedEvent::Activity(event) => {
                 let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -826,6 +1204,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         why: None,
                         activities: Vec::new(),
                         summaries: Vec::new(),
+                        legacy_visits: Vec::new(),
                         latest_at: at,
                     });
                 row.focused_secs = row
@@ -881,8 +1260,36 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         );
                     }
                 }
-                for reference in &event.refs {
-                    let target = format!("{}:{}", reference.artifact_type, reference.value);
+                let refs = event
+                    .refs
+                    .iter()
+                    .map(|reference| Ref {
+                        artifact_type: reference.artifact_type.clone(),
+                        value: reference.value.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                // Without a self ID the resolver keeps one output per ref,
+                // so a resolved self-reference is dropped here, not kept as
+                // an unresolved key.
+                let resolved = adapters.map(|document| document.resolve_refs(&refs, None));
+                let mut targets = BTreeSet::new();
+                for (index, reference) in refs.iter().enumerate() {
+                    // An unresolved key never equals a recorded artifact ID
+                    // (adapter-templates.md §10.1), so it is never shown.
+                    let target = resolved
+                        .as_ref()
+                        .and_then(|resolved| resolved.get(index))
+                        .and_then(|found| found.artifact_id.clone())
+                        .unwrap_or_else(|| {
+                            format!("{}:{}", reference.artifact_type, reference.value)
+                        });
+                    // The host checks each ref but not uniqueness; one event
+                    // is one mention of each target.
+                    if target != event.artifact_id {
+                        targets.insert(target);
+                    }
+                }
+                for target in targets {
                     add_edge(&mut edges, &event.artifact_id, &target, "mentions", &day);
                 }
             }
@@ -923,8 +1330,13 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         why: None,
                         activities: Vec::new(),
                         summaries: Vec::new(),
+                        legacy_visits: Vec::new(),
                         latest_at: at,
                     });
+                // An M1 visit entry recorded one navigation to the page:
+                // count it as one open, with no measured time.
+                row.opens = row.opens.saturating_add(1);
+                row.legacy_visits.push(at);
                 row.days.insert(day.clone());
                 if day < row.first_seen {
                     row.first_seen = day.clone();
@@ -944,7 +1356,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     local_date: day,
                     focused_secs: 0,
                     background_secs: 0,
-                    opens: 0,
+                    opens: 1,
                     mode: None,
                     title: event.title.clone(),
                     url: event.url.clone(),
@@ -976,6 +1388,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         why: None,
                         activities: Vec::new(),
                         summaries: Vec::new(),
+                        legacy_visits: Vec::new(),
                         latest_at: at,
                     });
                 row.days.insert(day.clone());
@@ -1094,12 +1507,21 @@ fn collect_markdown(
     Ok(())
 }
 
+#[cfg(test)]
 fn parse_log(text: &str) -> Vec<CachedEvent> {
+    parse_log_lines(text)
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect()
+}
+
+/// Owned events with their zero-based line numbers.
+fn parse_log_lines(text: &str) -> Vec<(u64, CachedEvent)> {
     let mut output = Vec::new();
     let mut previous = "";
-    for line in text.lines() {
+    for (number, line) in text.lines().enumerate() {
         if let Some(event) = parse_marker_event(line, previous) {
-            output.push(event);
+            output.push((number as u64, event));
         }
         previous = line;
     }
@@ -1130,7 +1552,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 return None;
             }
             let event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
-            if !activity_shape_is_bounded(&event)
+            if !logged_activity_is_bounded(&event)
                 || Uuid::parse_str(&event.event_id).is_err()
                 || event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
@@ -1386,6 +1808,52 @@ fn replace_artifact(
     Ok(ArtifactWrite::Written)
 }
 
+/// Each checkpoint rewrites the whole cache, so space them by at least four
+/// times the last one's cost: for a large index, checkpoints then take at
+/// most a fifth of the pass instead of dominating it.
+fn checkpoint_interval(minimum: Duration, last_publish: Duration) -> Duration {
+    minimum.max(last_publish.saturating_mul(4))
+}
+
+/// Subdirectories of `dir`, not following symlinks.
+fn subdirectories(dir: &Dir) -> Result<Vec<Dir>> {
+    let mut found = Vec::new();
+    for entry in dir.entries().context("listing artifacts directory")? {
+        let entry = entry.context("listing artifacts directory")?;
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            found.push(entry.open_dir().context("opening artifacts directory")?);
+        }
+    }
+    Ok(found)
+}
+
+fn sweep_temporaries_in(dir: &Dir, prefix: &str) -> Result<usize> {
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for entry in dir.entries().context("listing temporaries")? {
+        let entry = entry.context("listing temporaries")?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_generated_temporary(name, prefix) {
+            continue;
+        }
+        // Not following symlinks: a link is not ours, whatever its name.
+        let Ok(metadata) = dir.symlink_metadata(name) else {
+            continue;
+        };
+        let stale = metadata.is_file()
+            && metadata
+                .modified()
+                .ok()
+                .and_then(|modified| now.duration_since(modified.into_std()).ok())
+                .is_some_and(|elapsed| elapsed >= STALE_TEMPORARY_AGE);
+        if stale && dir.remove_file(name).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 fn owned_artifact(bytes: &[u8], artifact_id: &str) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
@@ -1529,7 +1997,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
             total_summaries - shown_summaries
         ));
     }
-    for period in timeline_rollups(&artifact.activities) {
+    for period in timeline_rollups(artifact) {
         out.push_str(&format!(
             "- {} · {}\n",
             period.label,
@@ -1559,12 +2027,20 @@ struct Rollup {
     last_date: Date,
 }
 
-fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
+/// Activity totals and M1 visit entries (one open each) by day.
+fn timeline_rollups(artifact: &ArtifactRow) -> Vec<Rollup> {
+    let activities = artifact.activities.iter().filter_map(|event| {
+        let at = OffsetDateTime::parse(&event.occurred_at, &Rfc3339).ok()?;
+        Some((
+            at,
+            u64::from(event.focused_seconds),
+            u64::from(event.background_seconds),
+            u64::from(event.opens),
+        ))
+    });
+    let legacy = artifact.legacy_visits.iter().map(|at| (*at, 0, 0, 1));
     let mut days = BTreeMap::<Date, Rollup>::new();
-    for event in events {
-        let Ok(at) = OffsetDateTime::parse(&event.occurred_at, &Rfc3339) else {
-            continue;
-        };
+    for (at, focused, background, opens) in activities.chain(legacy) {
         let date = at.date();
         let row = days.entry(date).or_insert_with(|| Rollup {
             label: date.to_string(),
@@ -1573,11 +2049,9 @@ fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
             opens: 0,
             last_date: date,
         });
-        row.focused = row.focused.saturating_add(u64::from(event.focused_seconds));
-        row.background = row
-            .background
-            .saturating_add(u64::from(event.background_seconds));
-        row.opens = row.opens.saturating_add(u64::from(event.opens));
+        row.focused = row.focused.saturating_add(focused);
+        row.background = row.background.saturating_add(background);
+        row.opens = row.opens.saturating_add(opens);
     }
     let dates = days.keys().copied().collect::<Vec<_>>();
     let recent = dates.len().saturating_sub(14);
@@ -1646,7 +2120,7 @@ struct SqlTable {
     rows: Vec<Vec<SqlValue>>,
 }
 
-fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<Vec<u8>> {
+fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<SqliteImage> {
     let artifacts = derived
         .artifacts
         .values()
@@ -1731,21 +2205,36 @@ fn sql_u64(value: u64) -> SqlValue {
     SqlValue::Integer(i64::try_from(value).unwrap_or(i64::MAX))
 }
 
+/// SQLite stores a table-leaf payload of up to U-35 bytes (U is the usable
+/// page size: the whole page, as no bytes are reserved) on the leaf itself.
+/// A larger payload must spill to overflow pages, which this writer does
+/// not emit, so such a row is left out instead of written unreadably.
+const SQLITE_MAX_LOCAL_PAYLOAD: usize = SQLITE_PAGE_SIZE - 35;
+
+struct SqliteImage {
+    bytes: Vec<u8>,
+    /// Rows left out because their payload would need overflow pages.
+    skipped_rows: usize,
+}
+
 /// Emit the small subset of the SQLite file format this append-derived
 /// snapshot needs: schema and rowid table B-trees, without secondary indexes
-/// or overflow records. A 64 KiB page keeps every bounded event row local.
-fn build_sqlite(tables: &[SqlTable]) -> Result<Vec<u8>> {
+/// or overflow records. A 64 KiB page keeps every bounded event row local;
+/// a row over the local payload limit is skipped and counted.
+fn build_sqlite(tables: &[SqlTable]) -> Result<SqliteImage> {
     let root_count = tables.len() + 1;
     let mut pages = vec![vec![0u8; SQLITE_PAGE_SIZE]; root_count];
     let mut next_page = root_count + 1;
+    let mut skipped_rows = 0;
     for (table_index, table) in tables.iter().enumerate() {
         let root_page = table_index + 2;
-        let cells = table
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| table_leaf_cell((index + 1) as u64, row))
-            .collect::<Result<Vec<_>>>()?;
+        let mut cells = Vec::with_capacity(table.rows.len());
+        for (index, row) in table.rows.iter().enumerate() {
+            match table_leaf_cell((index + 1) as u64, row)? {
+                Some(cell) => cells.push(cell),
+                None => skipped_rows += 1,
+            }
+        }
         let chunks = partition_cells(&cells, 8)?;
         if chunks.len() <= 1 {
             write_leaf_page(
@@ -1784,12 +2273,18 @@ fn build_sqlite(tables: &[SqlTable]) -> Result<Vec<u8>> {
     let schema_cells = schema_rows
         .iter()
         .enumerate()
-        .map(|(index, row)| table_leaf_cell((index + 1) as u64, row))
+        .map(|(index, row)| {
+            table_leaf_cell((index + 1) as u64, row)?
+                .context("SQLite schema row exceeds the local payload limit")
+        })
         .collect::<Result<Vec<_>>>()?;
     write_leaf_page(&mut pages[0], 100, &schema_cells)?;
     let page_count = pages.len() as u32;
     write_database_header(&mut pages[0], page_count);
-    Ok(pages.into_iter().flatten().collect())
+    Ok(SqliteImage {
+        bytes: pages.into_iter().flatten().collect(),
+        skipped_rows,
+    })
 }
 
 fn partition_cells(cells: &[Vec<u8>], header: usize) -> Result<Vec<Vec<Vec<u8>>>> {
@@ -1887,12 +2382,17 @@ fn write_interior_page(page: &mut [u8], children: &[(u32, u64)]) -> Result<()> {
     Ok(())
 }
 
-fn table_leaf_cell(rowid: u64, values: &[SqlValue]) -> Result<Vec<u8>> {
+/// One table-leaf cell, or `None` when its payload is too large to keep
+/// local (`SQLITE_MAX_LOCAL_PAYLOAD`).
+fn table_leaf_cell(rowid: u64, values: &[SqlValue]) -> Result<Option<Vec<u8>>> {
     let payload = sqlite_record(values)?;
+    if payload.len() > SQLITE_MAX_LOCAL_PAYLOAD {
+        return Ok(None);
+    }
     let mut cell = sqlite_varint(payload.len() as u64);
     cell.extend(sqlite_varint(rowid));
     cell.extend(payload);
-    Ok(cell)
+    Ok(Some(cell))
 }
 
 fn decode_cell_rowid(cell: &[u8]) -> Result<u64> {
@@ -2438,6 +2938,208 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(index.regenerate_dirty().unwrap().written, 1);
     }
 
+    fn typed_activity(id: u32, native_id: &str, artifact_type: &str) -> ActivityEvent {
+        let mut event = activity(
+            &format!("00000000-0000-4000-8000-{id:012}"),
+            native_id,
+            native_id,
+            "2026-10-15T12:00:00-07:00",
+        );
+        event.artifact_type = artifact_type.into();
+        event
+    }
+
+    fn dirty_ids(index: &ArtifactIndex) -> Vec<String> {
+        read_state(&index.state_path())
+            .unwrap()
+            .unwrap()
+            .dirty
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn an_unwritable_file_stays_dirty_while_the_pass_publishes_the_rest() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = [
+            typed_activity(1, "A", "work.item"),
+            typed_activity(2, "B", "blocked.item"),
+            typed_activity(3, "C", "work.item"),
+        ];
+        index.record_activities(events.iter(), &[]).unwrap();
+        // A file where B's type directory belongs makes B's write fail.
+        fs::create_dir_all(root.path().join("artifacts")).unwrap();
+        fs::write(root.path().join("artifacts/blocked-item"), "in the way").unwrap();
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.failed), (2, 1));
+        assert_eq!(
+            dirty_ids(&index),
+            ["work:example.com/B"],
+            "A's and C's completed writes are published; only B waits"
+        );
+        fs::remove_file(root.path().join("artifacts/blocked-item")).unwrap();
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged, report.failed), (1, 0, 0));
+    }
+
+    #[test]
+    fn a_pass_killed_midway_resumes_after_the_files_it_wrote() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = ["A", "B", "C", "D"]
+            .iter()
+            .zip(1..)
+            .map(|(name, id)| typed_activity(id, name, "work.item"))
+            .collect::<Vec<_>>();
+        index.record_activities(events.iter(), &[]).unwrap();
+        let (state, _) = index.load_current_state().unwrap();
+        // Chrome kills a host whose port closed; a panic stands in for that
+        // here, after the first file, with the first checkpoint due at once.
+        let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            index.regenerate_state_with(state, false, std::time::Duration::ZERO, |written| {
+                assert!(written < 1, "killed");
+            })
+        }));
+        assert!(killed.is_err());
+        assert_eq!(
+            dirty_ids(&index),
+            [
+                "work:example.com/B",
+                "work:example.com/C",
+                "work:example.com/D"
+            ]
+        );
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (3, 0));
+    }
+
+    #[test]
+    fn a_pass_ending_on_a_checkpoint_does_not_publish_twice() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        index
+            .record_activity(&typed_activity(1, "A", "work.item"), &[])
+            .unwrap();
+        let (state, _) = index.load_current_state().unwrap();
+        PUBLICATIONS.with(|count| count.set(0));
+        index
+            .regenerate_state_with(state, false, Duration::ZERO, |_| {})
+            .unwrap();
+        assert_eq!(PUBLICATIONS.with(|count| count.get()), 1);
+        assert!(dirty_ids(&index).is_empty());
+        // Nothing dirty and nothing to repair: nothing to publish.
+        let (state, _) = index.load_current_state().unwrap();
+        PUBLICATIONS.with(|count| count.set(0));
+        index
+            .regenerate_state_with(state, false, REGENERATION_CHECKPOINT, |_| {})
+            .unwrap();
+        assert_eq!(PUBLICATIONS.with(|count| count.get()), 0);
+    }
+
+    #[test]
+    fn checkpoints_back_off_when_publishing_the_cache_is_slow() {
+        let minimum = Duration::from_millis(500);
+        assert_eq!(
+            checkpoint_interval(minimum, Duration::from_millis(10)),
+            minimum
+        );
+        assert_eq!(
+            checkpoint_interval(minimum, Duration::from_millis(300)),
+            Duration::from_millis(1200)
+        );
+    }
+
+    #[test]
+    fn the_daily_pass_is_due_once_per_local_day() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let at = |text: &str| OffsetDateTime::parse(text, &Rfc3339).unwrap();
+        assert!(index.daily_pass_due(at("2026-10-15T20:00:00Z")));
+        index
+            .record_activity(&typed_activity(1, "A", "work.item"), &[])
+            .unwrap();
+        index.regenerate_dirty().unwrap();
+        // The pass ran today in the user's -07:00 offset (from their latest
+        // activity), so 23:30 local the same day is not a new day, even
+        // though UTC has already moved on.
+        let marker = fs::read_to_string(cache.path().join("regenerated.json")).unwrap();
+        let today = OffsetDateTime::now_utc()
+            .to_offset(time::UtcOffset::from_whole_seconds(-7 * 3600).unwrap())
+            .date();
+        assert!(marker.contains(&today.to_string()), "{marker}");
+        let local_late = today
+            .with_hms(23, 30, 0)
+            .unwrap()
+            .assume_offset(time::UtcOffset::from_whole_seconds(-7 * 3600).unwrap());
+        assert!(!index.daily_pass_due(local_late));
+        assert!(index.daily_pass_due(local_late + time::Duration::hours(1)));
+        // A pass for another home folder says nothing about this one.
+        let other_root = TempDir::new().unwrap();
+        let other =
+            ArtifactIndex::open_in(&storage(other_root.path()), None, cache.path()).unwrap();
+        assert!(other.daily_pass_due(local_late));
+        let mut moved = storage(root.path());
+        moved.artifacts_dir = "elsewhere".into();
+        let moved = ArtifactIndex::open_in(&moved, None, cache.path()).unwrap();
+        assert!(moved.daily_pass_due(local_late));
+        fs::write(cache.path().join("regenerated.json"), "not json").unwrap();
+        assert!(index.daily_pass_due(local_late));
+    }
+
+    #[test]
+    fn stale_artifact_and_index_temporaries_are_swept() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        index
+            .record_activity(&typed_activity(1, "A", "work.item"), &[])
+            .unwrap();
+        index.regenerate_dirty().unwrap();
+        let site = root.path().join("artifacts/work-item/example-com");
+        let old = crate::vault::STALE_TEMPORARY_AGE + std::time::Duration::from_secs(60);
+        let make = |dir: &Path, name: String, stale: bool| {
+            let path = dir.join(name);
+            fs::write(&path, "partial").unwrap();
+            if stale {
+                crate::vault::tests::age_file(&path, old);
+            }
+            path
+        };
+        let stale_artifact = make(
+            &site,
+            format!(".{NAMESPACE}-artifact-{}.tmp", Uuid::new_v4()),
+            true,
+        );
+        let fresh_artifact = make(
+            &site,
+            format!(".{NAMESPACE}-artifact-{}.tmp", Uuid::new_v4()),
+            false,
+        );
+        let user_file = make(&site, format!(".{NAMESPACE}-artifact-mine.tmp"), true);
+        let stale_index = make(
+            cache.path(),
+            format!(".{NAMESPACE}-index-{}.tmp", Uuid::new_v4()),
+            true,
+        );
+        let fresh_index = make(
+            cache.path(),
+            format!(".{NAMESPACE}-index-{}.tmp", Uuid::new_v4()),
+            false,
+        );
+        assert_eq!(index.sweep_stale_temporaries().unwrap(), 2);
+        assert!(!stale_artifact.exists());
+        assert!(!stale_index.exists());
+        assert!(fresh_artifact.exists());
+        assert!(fresh_index.exists());
+        assert!(user_file.exists());
+        assert_eq!(artifact_files(root.path()).len(), 1);
+    }
+
     #[test]
     fn an_unowned_file_at_the_artifact_path_is_never_adopted() {
         let root = TempDir::new().unwrap();
@@ -2450,7 +3152,7 @@ print(json.dumps([tables,row]))"#;
             "2026-10-15T12:00:00Z",
         );
         index.record_activity(&event, &[]).unwrap();
-        let derived = derive(&index.load_or_rebuild().unwrap().events);
+        let derived = derive(&index.load_or_rebuild().unwrap(), None);
         let artifact = derived.artifacts.get(&event.artifact_id).unwrap();
         let occupied = root.path().join(artifact_path("artifacts", artifact));
         fs::create_dir_all(occupied.parent().unwrap()).unwrap();
@@ -2571,7 +3273,7 @@ print(json.dumps([tables,row]))"#;
         carried.modes.clear();
         index.record_activities([&opened, &carried], &[]).unwrap();
 
-        let derived = derive(&index.load_or_rebuild().unwrap().events);
+        let derived = derive(&index.load_or_rebuild().unwrap(), None);
         let row = derived.artifacts.get(&opened.artifact_id).unwrap();
         assert_eq!(row.days.len(), 1);
         assert_eq!(row.last_mode.as_deref(), Some("view"));
@@ -2877,40 +3579,511 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
     }
 
+    fn write_log(root: &Path, name: &str, events: &[&ActivityEvent]) -> PathBuf {
+        let dir = root.join("log");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        let markers = events.iter().map(|event| activity_marker(event));
+        fs::write(
+            &path,
+            format!("{LOG_HEADER}\n{}", markers.collect::<String>()),
+        )
+        .unwrap();
+        path
+    }
+
     #[test]
-    fn reindex_refuses_conflicting_content_for_one_event_id() {
+    fn a_renamed_log_folder_is_rescanned_and_its_artifacts_regenerate_in_place() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let old = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000020",
+            "MOVED",
+            "Moved",
+            "2026-10-15T12:00:00Z",
+        );
+        write_log(root.path(), "2026-10-15.md", &[&event]);
+        assert_eq!(
+            old.artifact(&event.artifact_id).unwrap().unwrap().title,
+            "Moved"
+        );
+        old.regenerate_dirty().unwrap();
+        // The layout migration renames log/ to logs/ and records the new
+        // name; the cache that still names log/ must not hide the history.
+        fs::rename(root.path().join("log"), root.path().join("logs")).unwrap();
+        let mut renamed = storage(root.path());
+        renamed.log_dir = "logs".into();
+        let new = ArtifactIndex::open_in(&renamed, None, cache.path()).unwrap();
+        assert_eq!(
+            new.artifact(&event.artifact_id).unwrap().unwrap().title,
+            "Moved"
+        );
+        let files = artifact_files(root.path());
+        assert_eq!(files.len(), 1);
+        let before = fs::read(&files[0]).unwrap();
+        new.regenerate_dirty().unwrap();
+        assert_eq!(artifact_files(root.path()), files);
+        assert_eq!(fs::read(&files[0]).unwrap(), before);
+    }
+
+    #[test]
+    fn latest_metadata_follows_time_and_log_order_not_event_id_order() {
+        // A passive later hour (no title after a reload, no mode) whose
+        // random event ID sorts first must not hide the earlier hour's title
+        // and mode, in either ID order.
+        for (opened_id, passive_id) in [
+            (
+                "ffffffff-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002",
+            ),
+            (
+                "00000000-0000-4000-8000-000000000001",
+                "ffffffff-0000-4000-8000-000000000002",
+            ),
+        ] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let index = index(&root, &cache);
+            let mut opened = activity(opened_id, "SPEC", "Spec", "2026-10-15T10:00:00Z");
+            opened.modes[0].mode = "edit".into();
+            let mut passive = activity(passive_id, "SPEC", "ignored", "2026-10-15T11:00:00Z");
+            passive.title = None;
+            passive.opens = 0;
+            passive.modes.clear();
+            write_log(root.path(), "2026-10-15.md", &[&opened, &passive]);
+            let view = index.artifact(&opened.artifact_id).unwrap().unwrap();
+            assert_eq!(view.last_mode.as_deref(), Some("edit"), "{opened_id}");
+            assert_eq!(view.title, "Spec", "{opened_id}");
+        }
+
+        // Context is saved with one-second timestamps, so two saves in the
+        // same second keep the one appended last, whatever their IDs.
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "WHY",
+            "Why",
+            "2026-10-15T10:00:00Z",
+        );
+        index.record_activity(&event, &[]).unwrap();
+        for (id, text) in [
+            ("ffffffff-0000-4000-8000-000000000001", "first"),
+            ("00000000-0000-4000-8000-000000000003", "second"),
+        ] {
+            let why = WhyEvent {
+                event_id: id.into(),
+                artifact_id: event.artifact_id.clone(),
+                url: "https://example.com/items/WHY".into(),
+                occurred_at: "2026-10-15T10:30:00Z".into(),
+                incognito: false,
+                text: text.into(),
+            };
+            index.record_why(&why, &[]).unwrap();
+        }
+        assert_eq!(
+            index.latest_why(&event.artifact_id).unwrap().as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            index
+                .artifact(&event.artifact_id)
+                .unwrap()
+                .unwrap()
+                .why
+                .as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn equal_instants_across_logs_order_by_log_position_not_discovery() {
+        let why = |id: &str, at: &str, text: &str| WhyEvent {
+            event_id: id.into(),
+            artifact_id: "work:example.com/TIE".into(),
+            url: "https://example.com/items/TIE".into(),
+            occurred_at: at.into(),
+            incognito: false,
+            text: text.into(),
+        };
+        let marker = |event: &WhyEvent| {
+            format!(
+                "{MARKER_PREFIX}{} url={} at={} kind=why data={} -->\n",
+                sha256_hex(event.event_id.as_bytes()),
+                sha256_hex(event.url.as_bytes()),
+                event.occurred_at,
+                hex::encode(serde_json::to_vec(event).unwrap())
+            )
+        };
+        // One instant written with two offsets lands in two date files.
+        let early = why(
+            "00000000-0000-4000-8000-000000000001",
+            "2026-10-15T23:30:00-02:00",
+            "early path",
+        );
+        let late = why(
+            "00000000-0000-4000-8000-000000000002",
+            "2026-10-16T01:30:00Z",
+            "late path",
+        );
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let dir = root.path().join("log");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-16.md"),
+            format!("{LOG_HEADER}\n{}", marker(&late)),
+        )
+        .unwrap();
+        assert_eq!(
+            index.latest_why(&late.artifact_id).unwrap().as_deref(),
+            Some("late path")
+        );
+        // The earlier-sorting file is discovered later.
+        fs::write(
+            dir.join("2026-10-15.md"),
+            format!("{LOG_HEADER}\n{}", marker(&early)),
+        )
+        .unwrap();
+        let incremental = index.latest_why(&late.artifact_id).unwrap();
+        fs::remove_file(index.state_path()).unwrap();
+        let rebuilt = index.latest_why(&late.artifact_id).unwrap();
+        assert_eq!(incremental, rebuilt);
+        assert_eq!(rebuilt.as_deref(), Some("late path"));
+    }
+
+    #[test]
+    fn a_torn_multibyte_line_keeps_the_rest_of_that_days_log() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let before = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "BEFORE",
+            "Before",
+            "2026-10-15T10:00:00Z",
+        );
+        let after = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "AFTER",
+            "After",
+            "2026-10-15T11:00:00Z",
+        );
+        let path = write_log(root.path(), "2026-10-15.md", &[&before]);
+        // A crash tore an append inside an em dash; capture keeps appending.
+        let mut file = StdOpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"- 10:30 \xe2\x80\n").unwrap();
+        file.write_all(activity_marker(&after).as_bytes()).unwrap();
+        drop(file);
+        assert!(index.artifact(&before.artifact_id).unwrap().is_some());
+        assert!(index.artifact(&after.artifact_id).unwrap().is_some());
+        assert_eq!(index.reindex().unwrap().written, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_log_names_its_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "LOCKED",
+            "Locked",
+            "2026-10-15T10:00:00Z",
+        );
+        let path = write_log(root.path(), "2026-10-15.md", &[&event]);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let error = format!("{:#}", index.reindex().unwrap_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(error.contains("2026-10-15.md"), "{error}");
+    }
+
+    #[test]
+    fn a_reused_event_id_keeps_the_earliest_durable_event_and_the_rest_of_history() {
         let original = activity(
             "00000000-0000-4000-8000-000000000010",
             "REUSED",
             "Original",
-            "2026-10-15T12:00:00Z",
+            "2026-10-24T12:00:00Z",
         );
         let mut forged = original.clone();
         forged.title = Some("Forged".into());
-        let marker = |event: &ActivityEvent| {
-            let payload = hex::encode(serde_json::to_vec(event).unwrap());
-            format!(
-                "{MARKER_PREFIX}{} url={} at={} kind=activity data={payload} -->\n",
-                sha256_hex(event.event_id.as_bytes()),
-                sha256_hex(event.url.as_bytes()),
-                event.occurred_at,
-            )
-        };
-        for (day, event) in [("15", &original), ("16", &forged)] {
-            let dir = root.path().join("log/2026/10");
-            fs::create_dir_all(&dir).unwrap();
-            fs::write(
-                dir.join(format!("2026-10-{day}.md")),
-                format!("{LOG_HEADER}\n{}", marker(event)),
-            )
-            .unwrap();
+        forged.occurred_at = "2026-10-25T12:00:00Z".into();
+        let mut same_time = original.clone();
+        same_time.title = Some("Also forged".into());
+        // A later marker claiming an earlier time must not win either.
+        let mut backdated = original.clone();
+        backdated.title = Some("Backdated".into());
+        backdated.occurred_at = "2026-10-23T12:00:00Z".into();
+        let other = activity(
+            "00000000-0000-4000-8000-000000000011",
+            "OTHER",
+            "Other",
+            "2026-10-25T13:00:00Z",
+        );
+        // Full rebuilds and incremental catch-up agree on the winner.
+        for incremental in [false, true] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let index = index(&root, &cache);
+            write_log(root.path(), "2026-10-24.md", &[&original]);
+            if incremental {
+                assert!(index.artifact(&original.artifact_id).unwrap().is_some());
+            }
+            write_log(
+                root.path(),
+                "2026-10-25.md",
+                &[&forged, &same_time, &backdated, &other],
+            );
+            if !incremental {
+                index.reindex().unwrap();
+            }
+            let view = index.artifact(&original.artifact_id).unwrap().unwrap();
+            assert_eq!(view.title, "Original", "incremental={incremental}");
+            assert!(index.artifact(&other.artifact_id).unwrap().is_some());
+            assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 2);
+            // A later delivery backdated into an earlier-sorting log never
+            // replaces the body already indexed.
+            write_log(root.path(), "2026-10-23.md", &[&backdated]);
+            let view = index.artifact(&original.artifact_id).unwrap().unwrap();
+            assert_eq!(view.title, "Original", "incremental={incremental}");
+            assert!(index.record_activity(&backdated, &[]).is_err());
+            let view = index.artifact(&original.artifact_id).unwrap().unwrap();
+            assert_eq!(view.title, "Original", "incremental={incremental}");
+            // Rescans keep the winner a valid cache already recorded.
+            index.reconcile_from_logs().unwrap();
+            let view = index.artifact(&original.artifact_id).unwrap().unwrap();
+            assert_eq!(view.title, "Original", "incremental={incremental}");
+            index.reindex().unwrap();
+            let view = index.artifact(&original.artifact_id).unwrap().unwrap();
+            assert_eq!(view.title, "Original", "incremental={incremental}");
         }
+    }
 
-        let error = index.reindex().unwrap_err().to_string();
-        assert!(error.contains("reuses an event ID"), "{error}");
+    #[test]
+    fn reconciling_a_duplicate_keeps_the_dirty_set_and_external_edits() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = (1..=3)
+            .map(|n| {
+                activity(
+                    &format!("00000000-0000-4000-8000-{n:012}"),
+                    &format!("N{n}"),
+                    &format!("Item {n}"),
+                    "2026-10-15T10:00:00Z",
+                )
+            })
+            .collect::<Vec<_>>();
+        let path = write_log(root.path(), "2026-10-15.md", &[&events[0], &events[1]]);
+        assert_eq!(index.regenerate_dirty().unwrap().written, 2);
+        let edited = artifact_files(root.path())
+            .into_iter()
+            .find(|path| fs::read_to_string(path).unwrap().contains("Item 1"))
+            .unwrap();
+        let kept = format!("{}\nmy edit\n", fs::read_to_string(&edited).unwrap());
+        fs::write(&edited, &kept).unwrap();
+        // A drained legacy visit or duplicate retry reconciles from the log.
+        StdOpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(activity_marker(&events[2]).as_bytes())
+            .unwrap();
+        index.reconcile_from_logs().unwrap();
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().dirty,
+            BTreeSet::from([events[2].artifact_id.clone()])
+        );
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        assert_eq!(fs::read_to_string(&edited).unwrap(), kept);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_failing_artifact_path_does_not_block_the_others() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let blocked = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "AAA",
+            "Blocked",
+            "2026-10-15T10:00:00Z",
+        );
+        let mut open = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "BBB",
+            "Open",
+            "2026-10-15T10:00:00Z",
+        );
+        open.artifact_id = "work:other.example/BBB".into();
+        open.url = "https://other.example/items/BBB".into();
+        open.modes[0].url = open.url.clone();
+        index.record_activities([&blocked, &open], &[]).unwrap();
+        let derived = derive(&index.load_or_rebuild().unwrap(), None);
+        let relative = artifact_path("artifacts", &derived.artifacts[&blocked.artifact_id]);
+        let site = root.path().join(relative.parent().unwrap());
+        fs::create_dir_all(&site).unwrap();
+        fs::set_permissions(&site, fs::Permissions::from_mode(0o555)).unwrap();
+        let report = index.regenerate_dirty();
+        fs::set_permissions(&site, fs::Permissions::from_mode(0o755)).unwrap();
+        let report = report.unwrap();
+        assert_eq!(report.written, 1);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.failed_paths.len(), 1);
+        assert!(
+            report.failed_paths[0].contains("aaa"),
+            "{:?}",
+            report.failed_paths
+        );
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().dirty,
+            BTreeSet::from([blocked.artifact_id.clone()])
+        );
+        assert_eq!(artifact_files(root.path()).len(), 1);
+        // Once the path is writable again, the remaining artifact catches up.
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.failed), (1, 0));
+    }
+
+    #[test]
+    fn mentions_resolve_through_the_adapter_document() {
+        let document: adapter_templates::Value = serde_json::from_value(serde_json::json!({
+            "format": 1,
+            "artifacts": [{
+                "type": "jira.issue",
+                "origin": "https://acme.atlassian.net",
+                "match": [{"path": "/browse/{key:jira_key}"}],
+                "id": "jira:{host}/{key}",
+            }],
+        }))
+        .unwrap();
+        let document = adapter_templates::Document::from_value(&document).unwrap();
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let mut issue = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "PROJ-1",
+            "Issue",
+            "2026-10-15T10:00:00Z",
+        );
+        issue.artifact_id = "jira:acme.atlassian.net/PROJ-1".into();
+        issue.artifact_type = "jira.issue".into();
+        issue.url = "https://acme.atlassian.net/browse/PROJ-1".into();
+        issue.modes.clear();
+        // An artifact's title can name its own key; that is never a link.
+        issue.refs.push(ActivityRef {
+            artifact_type: "jira.issue".into(),
+            value: "PROJ-1".into(),
+        });
+        let mut pull = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "412",
+            "PROJ-1 Fix SBOM export pagination",
+            "2026-10-15T11:00:00Z",
+        );
+        pull.refs = ["PROJ-1", "PROJ-1", "UTF-8"]
+            .into_iter()
+            .map(|value| ActivityRef {
+                artifact_type: "jira.issue".into(),
+                value: value.into(),
+            })
+            .collect();
+        index.record_activities([&issue, &pull], &[]).unwrap();
+        for id in [&issue.artifact_id, &pull.artifact_id] {
+            assert_eq!(index.artifact(id).unwrap().unwrap().linked_count, 1, "{id}");
+        }
+        let query = |sql: &str| {
+            let output = Command::new("python3")
+                .args([
+                    "-c",
+                    "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])",
+                ])
+                .arg(index.database_path())
+                .arg(sql)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        let linked = "select count(*) from edges e join artifacts a on a.artifact_id = e.target_artifact_id where e.kind = 'mentions'";
+        assert_eq!(query(linked), "1");
+        // A repeated ref is one mention, not one per copy.
+        assert_eq!(
+            query("select max(weight) from edges where kind = 'mentions'"),
+            "1"
+        );
+        assert_eq!(
+            query(&format!(
+                "select count(*) from edges where source_artifact_id = '{}'",
+                issue.artifact_id
+            )),
+            "0"
+        );
+        // Without a document (or with an ambiguous one) a ref stays
+        // unresolved, and the published snapshot follows the change.
+        let unresolved = index.clone().with_adapters(None);
+        assert_eq!(
+            unresolved
+                .artifact(&issue.artifact_id)
+                .unwrap()
+                .unwrap()
+                .linked_count,
+            0
+        );
+        assert_eq!(query(linked), "0");
+    }
+
+    #[test]
+    fn a_valid_stale_cache_catches_up_events_appended_by_another_path() {
+        // brwr-ee5: deliver A and keep its cache; B reaches the durable log
+        // without an index update; the next delivery or query includes B.
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let a = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "A",
+            "A",
+            "2026-10-15T10:00:00Z",
+        );
+        let b = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "B",
+            "B",
+            "2026-10-15T11:00:00Z",
+        );
+        let c = activity(
+            "00000000-0000-4000-8000-000000000003",
+            "C",
+            "C",
+            "2026-10-16T11:00:00Z",
+        );
+        let path = write_log(root.path(), "2026-10-15.md", &[&a]);
+        index.record_activity(&a, &[]).unwrap();
+        let stale = fs::read(index.state_path()).unwrap();
+        StdOpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(activity_marker(&b).as_bytes())
+            .unwrap();
+        fs::write(index.state_path(), &stale).unwrap();
+        write_log(root.path(), "2026-10-16.md", &[&c]);
+        index.record_activity(&c, &[]).unwrap();
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 3);
+        // A restored stale cache on a later query (a restart) also catches up.
+        fs::write(index.state_path(), &stale).unwrap();
+        let restarted = ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap();
+        assert!(restarted.artifact(&b.artifact_id).unwrap().is_some());
     }
 
     fn page_summary(url: &str, occurred_at: &str) -> crate::summary::PageSummary {
@@ -3215,6 +4388,250 @@ print(json.dumps([tables,row]))"#;
             "a v1 cache must be rescanned, not trusted"
         );
         assert_eq!(artifact_files(root.path()).len(), 1);
+    }
+
+    /// Run SQLite's own integrity check on `path`, then one query whose
+    /// rows are printed one per line.
+    fn sqlite_check(path: &Path, query: &str) -> String {
+        let output = Command::new("python3")
+            .args([
+                "-c",
+                "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('pragma integrity_check').fetchone()[0]); [print(*r) for r in c.execute(sys.argv[2])]",
+            ])
+            .arg(path)
+            .arg(query)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Python writes \r\n on Windows.
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n")
+    }
+
+    #[test]
+    fn a_logged_title_over_the_capture_limit_is_skipped_without_stopping_the_index() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        // Capture refuses titles over 2048 bytes; an edited or crafted log
+        // line can still carry one inside an otherwise valid marker.
+        let crafted = activity(
+            "00000000-0000-4000-8000-0000000000a1",
+            "CRAFTED",
+            &"T".repeat(100_000),
+            "2026-10-15T10:00:00Z",
+        );
+        let longest = activity(
+            "00000000-0000-4000-8000-0000000000a2",
+            "LONGEST",
+            &"L".repeat(2048),
+            "2026-10-15T11:00:00Z",
+        );
+        let just_over = activity(
+            "00000000-0000-4000-8000-0000000000a4",
+            "OVER",
+            &"O".repeat(2049),
+            "2026-10-15T11:30:00Z",
+        );
+        write_log(
+            root.path(),
+            "2026-10-15.md",
+            &[&crafted, &longest, &just_over],
+        );
+        assert_eq!(index.reindex().unwrap().written, 1);
+        assert!(index.artifact(&crafted.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&just_over.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&longest.artifact_id).unwrap().is_some());
+        // Later deliveries keep updating index.db.
+        let later = activity(
+            "00000000-0000-4000-8000-0000000000a3",
+            "LATER",
+            "Later",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&later, &[]).unwrap();
+        assert_eq!(
+            sqlite_check(
+                &index.database_path(),
+                "select title from artifacts order by title"
+            ),
+            format!("ok\n{}\nLater\n", "L".repeat(2048))
+        );
+    }
+
+    #[test]
+    fn an_oversize_cached_row_is_left_out_of_index_db_without_stopping_publication() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        // Log parsing bounds titles, so only a hand-edited or otherwise
+        // unexpected cache can hold an event whose rows exceed one SQLite
+        // page. Publication must still survive it.
+        let oversize = activity(
+            "00000000-0000-4000-8000-0000000000b1",
+            "OVERSIZE",
+            &"T".repeat(100_000),
+            "2026-10-15T10:00:00Z",
+        );
+        let good = activity(
+            "00000000-0000-4000-8000-0000000000b2",
+            "GOOD",
+            "Good",
+            "2026-10-15T11:00:00Z",
+        );
+        let mut state = index.empty_state();
+        for event in [&oversize, &good] {
+            state.ingest(CachedEvent::Activity(event.clone()), None);
+        }
+        index.publish_state_and_database(&state).unwrap();
+        let later = activity(
+            "00000000-0000-4000-8000-0000000000b3",
+            "LATER",
+            "Later",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&later, &[]).unwrap();
+        assert_eq!(
+            sqlite_check(
+                &index.database_path(),
+                "select title from visits order by title"
+            ),
+            "ok\nGood\nLater\n"
+        );
+        assert_eq!(
+            sqlite_check(&index.database_path(), "select count(*) from artifacts"),
+            "ok\n2\n"
+        );
+        // Only index.db leaves the row out; the derived history keeps it.
+        assert!(index.artifact(&oversize.artifact_id).unwrap().is_some());
+        // A version 4 cache (from before log titles were bounded) drops
+        // the event while it migrates, as a log rescan now would.
+        let mut cached: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        cached["version"] = 4.into();
+        fs::write(index.state_path(), serde_json::to_vec(&cached).unwrap()).unwrap();
+        assert!(index.artifact(&oversize.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&good.artifact_id).unwrap().is_some());
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().version,
+            STATE_VERSION
+        );
+    }
+
+    #[test]
+    fn index_db_rows_up_to_the_local_payload_limit_are_readable_and_larger_ones_are_left_out() {
+        // A table-leaf payload over U-35 = 65,501 bytes must spill to
+        // overflow pages, which this writer does not emit. A one-column text
+        // record has a 4-byte header here, so 65,497 bytes is the limit.
+        let at_limit = "a".repeat(65_497);
+        let over_limit = "b".repeat(65_498);
+        let image = build_sqlite(&[SqlTable {
+            name: "t",
+            sql: "CREATE TABLE t(v TEXT)",
+            rows: vec![
+                vec![SqlValue::Text(at_limit.clone())],
+                vec![SqlValue::Text(over_limit)],
+                vec![SqlValue::Text("small".into())],
+            ],
+        }])
+        .unwrap();
+        assert_eq!(image.skipped_rows, 1);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("t.db");
+        fs::write(&path, image.bytes).unwrap();
+        assert_eq!(
+            sqlite_check(&path, "select length(v) from t order by rowid"),
+            "ok\n65497\n5\n"
+        );
+    }
+
+    #[test]
+    fn an_m1_legacy_visit_counts_one_open_with_a_dated_timeline_line() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://example.org/legacy-page";
+        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let url_hash = sha256_hex(url.as_bytes());
+        let legacy_line = format!(
+            "\n- 2026-10-20T10:00:00Z — Legacy page — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+            sha256_hex("legacy-marker-open".as_bytes()),
+        );
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!("{LOG_HEADER}\n{legacy_line}"),
+        )
+        .unwrap();
+        assert_eq!(index.reindex().unwrap().written, 1);
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(
+            markdown.contains("  opens: 1\n  days_opened: 1\n"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.ends_with("## Timeline\n\n- 2026-10-20 · opened 1×\n"),
+            "{markdown}"
+        );
+        assert_eq!(index.artifact(&artifact_id).unwrap().unwrap().opens, 1);
+        assert_eq!(index.recent(None, None, 32).unwrap().0[0].opens, 1);
+        let (worklog, _) = index
+            .worklog(
+                parse_date("2026-10-20").unwrap(),
+                parse_date("2026-10-20").unwrap(),
+            )
+            .unwrap();
+        assert!(worklog.starts_with("Opened 1 artifact,"), "{worklog}");
+        assert_eq!(
+            sqlite_check(&index.database_path(), "select opens from visits"),
+            "ok\n1\n"
+        );
+    }
+
+    #[test]
+    fn a_version_4_cache_migrates_so_existing_m1_artifact_files_gain_their_opens() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://example.org/legacy-page";
+        let url_hash = sha256_hex(url.as_bytes());
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!(
+                "{LOG_HEADER}\n\n- 2026-10-20T10:00:00Z — Legacy page — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+                sha256_hex("legacy-marker-upgrade".as_bytes()),
+            ),
+        )
+        .unwrap();
+        index.reindex().unwrap();
+        // Simulate the file and clean cache a version 4 build left: legacy
+        // visits rendered no open and no Timeline line.
+        let path = artifact_files(root.path()).pop().unwrap();
+        let current = fs::read_to_string(&path).unwrap();
+        let old = current
+            .replace("  opens: 1\n", "  opens: 0\n")
+            .replace("- 2026-10-20 · opened 1×\n", "");
+        assert_ne!(old, current);
+        fs::write(&path, &old).unwrap();
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        state["version"] = 4.into();
+        state["dirty"] = serde_json::json!([]);
+        fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+
+        // The migration keeps the checkpoints: no log is reread.
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        assert_eq!(fs::read_to_string(&path).unwrap(), current);
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {

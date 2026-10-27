@@ -8,7 +8,7 @@ const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
 const config = {
   storage: {
-    root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+    root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
     summaries_dir: "summaries", knowledge_base_dir: null,
   },
   capture_enabled: false, strip_params: [],
@@ -22,7 +22,7 @@ test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   assert.doesNotMatch(withFolder, /Review it below/);
   const withoutFolder = harnessFoundText("Claude Code", "2.1.284", false);
   assert.match(withoutFolder, /^Found Claude Code 2\.1\.284\./);
-  assert.match(withoutFolder, /Choose a notes folder first/);
+  assert.match(withoutFolder, /Choose a home folder first/);
   assert.doesNotMatch(withoutFolder, /then choose Set up harness\.$/);
   assert.match(harnessFoundText("Codex", null, true), /^Found Codex\. /);
 });
@@ -103,4 +103,33 @@ test("artifact list responses enforce the protocol type bound", () => {
     ...response,
     artifact_types: [...response.artifact_types, "type-64"],
   }), false);
+});
+
+test("run responses are checked against the RunView shape", () => {
+  const view = {
+    run_id: "00000000-0000-4000-8000-000000000001", state: "running", harness: "codex",
+    record_key: { kind: "url", value: "https://a.example/x" }, written_record_key: null,
+    url: "https://a.example/x", title: "T", cwd: null,
+    created_at: "2026-10-26T14:00:00-07:00", started_at: null, finished_at: null,
+    error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+    stream_bytes: 0, can_retry_save: false,
+  };
+  const fetched = { type: "run_fetched", run: view, stream_text: "x", next_offset: 1, more: false };
+  assert.equal(isResponseShape(fetched), true);
+  assert.equal(isResponseShape({ ...fetched, run: { ...view, state: "paused" } }), false);
+  assert.equal(isResponseShape({ ...fetched, run: { ...view, harness: "claude_code" } }), false);
+  assert.equal(isResponseShape({ ...fetched, run: { ...view, error_kind: "exploded" } }), false);
+  assert.equal(isResponseShape({
+    ...fetched, run: { ...view, state: "failed", error: "e", error_kind: "save_failed", can_retry_save: true },
+  }), true);
+  const { summary_path: _omitted, ...missing } = view;
+  assert.equal(isResponseShape({ ...fetched, run: missing }), false);
+  assert.equal(isResponseShape({ ...fetched, next_offset: -1 }), false);
+  assert.equal(isResponseShape({ type: "run_started", run: view, existing: true }), true);
+  assert.equal(isResponseShape({ type: "run_started", run: view }), false);
+  assert.equal(isResponseShape({ type: "run_updated", run: view }), true);
+  assert.equal(isResponseShape({ type: "runs_listed", runs: [view] }), true);
+  assert.equal(isResponseShape({ type: "runs_listed", runs: Array.from({ length: 21 }, () => view) }), false);
+  assert.equal(isResponseShape({ type: "service_ready", build_id: "b" }), false);
+  assert.equal(isResponseShape({ type: "error", code: "service_unavailable", message: "m" }), true);
 });

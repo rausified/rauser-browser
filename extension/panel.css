@@ -95,3 +95,9 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 .adapter-preview li { margin: 3px 0; }
 .adapter-preview .probe-match { color: #a34126; font-weight: 650; }
 .adapter-preview code { overflow-wrap: anywhere; }
+
+.check-label { display: flex; gap: 8px; align-items: center; }
+.check-label input { width: auto; margin: 0; }
+#capture-site-preview { overflow-wrap: anywhere; }
+#capture-site-preview details { margin: 12px 0; }
+#capture-site-preview details ul { max-height: 200px; overflow: auto; }

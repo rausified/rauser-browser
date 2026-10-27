@@ -17,12 +17,21 @@
 
       <section aria-labelledby="setup-heading">
         <h2 id="setup-heading">Capture setup</h2>
-        <p>Choose a notes folder, then add an adapter for each site you want logged. A site is on while it has at least one adapter; {{APP_NAME}} records nothing automatically anywhere else. Page notes work on every page either way.</p>
+        <p>Choose a home folder, then add an adapter for each site you want logged. A site is on while it has at least one adapter; {{APP_NAME}} records nothing automatically anywhere else. Page notes work on every page either way.</p>
 
         <div class="field">
-          <label>Notes folder</label>
+          <label>Home folder</label>
           <output id="folder-path">None selected</output>
-          <button id="choose-folder" type="button" disabled>Choose folder…</button>
+          <button id="choose-folder" type="button" disabled>Choose…</button>
+          <small>{{APP_NAME}} writes only inside this folder, in fixed folders it creates as needed:</small>
+          <ul id="home-layout" class="plain-list">
+            <li><code>notes/</code> page notes</li>
+            <li><code>logs/</code> daily artifact logs</li>
+            <li><code>artifacts/</code> one file per artifact</li>
+            <li><code>summaries/</code> page summaries</li>
+            <li><code>later/</code> read-later items (not used yet)</li>
+          </ul>
+          <small>Its settings, index, and recovery files stay in this computer's application folders, not here.</small>
         </div>
 
         <div class="field">
@@ -99,16 +108,10 @@
         </div>
 
         <div class="field">
-          <label for="summaries-dir">Summaries folder</label>
-          <input id="summaries-dir" type="text" value="summaries" spellcheck="false" autocomplete="off" />
-          <small>A folder inside the notes folder, separate from the visit log, page notes, and read-later folders.</small>
-        </div>
-
-        <div class="field">
           <label>Knowledge base folder</label>
-          <output id="kb-path">Same as the notes folder</output>
+          <output id="kb-path">Same as the home folder</output>
           <button id="choose-kb" type="button" class="secondary" disabled>Choose…</button>
-          <button id="kb-use-notes" type="button" class="secondary" disabled>Use notes folder</button>
+          <button id="kb-use-notes" type="button" class="secondary" disabled>Use home folder</button>
           <small>The folder a summary agent reads to judge how a page fits what you already know. {{APP_NAME}} never writes there.</small>
         </div>
 

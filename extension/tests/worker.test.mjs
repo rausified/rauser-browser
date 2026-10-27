@@ -1298,7 +1298,7 @@ test("a post-save folder issue suspends policy instead of installing a lease", a
     port.reply(configResult(request, origin, {
       revision: "r2",
       config: saved,
-      config_issue: "The selected notes folder is unavailable or changed.",
+      config_issue: "The selected home folder is unavailable or changed.",
     }));
     await saving;
 
@@ -1344,7 +1344,7 @@ test("unaddressed host errors and version mismatches reach the caller", async ()
 test("host config shape requires every v6 agent and adapter key and no retired privacy key", () => {
   const config = {
     storage: {
-      root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+      root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: null, knowledge_base_dir: null,
     },
     capture_enabled: false, strip_params: [],
@@ -1456,7 +1456,7 @@ function configResult(request, origin, overrides = {}) {
     revision: `host-revision:${origin}`,
     config: {
       storage: {
-        root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+        root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
         summaries_dir: null, knowledge_base_dir: null,
       },
       capture_enabled: true, strip_params: [],
@@ -1508,6 +1508,8 @@ test("with no extension page open, the worker freezes and delivers a completed a
   await flush();
   assert.ok(alarms.has(DELIVER_ALARM), "a capture schedules a delivery");
   assert.equal(ports.length, 0, "the current event does not start a host directly");
+  const before = (await send({ kind: "get_status" })).delivered_batches;
+  assert.equal(typeof before, "number");
   onAlarm({ name: DELIVER_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   const request = await sentOn(port, 1);
@@ -1518,7 +1520,11 @@ test("with no extension page open, the worker freezes and delivers a completed a
   port.reply(batchRecorded(request));
   await until(() => values.get(storageKey("queue_v1")).items.length === 0, "the queue to drain");
   await until(() => port.closed, "the host connection to close");
-  assert.equal((await send({ kind: "get_status" })).host_error, null);
+  const after = await send({ kind: "get_status" });
+  assert.equal(after.host_error, null);
+  // The panel refreshes its artifact card when this generation moves, since
+  // the queue length alone can be empty both before and after a delivery.
+  assert.equal(after.delivered_batches, before + 1);
 });
 
 test("a status wake hands off completed hours before reporting live activity", async () => {
@@ -1889,4 +1895,41 @@ test("pressure coalescing never grows the queue past its byte cap", async () => 
   assert.equal(after.items[0].event.opens, 1,
     "a refused merge leaves the original durable event unchanged");
   assert.ok(new TextEncoder().encode(JSON.stringify(after.items)).length <= MAX_QUEUE_BYTES);
+});
+
+test("installing Capture Site policy measures already-open pages without inventing opens", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://capture-site.example";
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    tabs.set(40, { id: 40, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, title: "Current work", incognito: false });
+    tabs.set(41, { id: 41, windowId: 1, active: false, url: `${origin}/items/private`, title: "Private", incognito: true });
+    tabs.set(42, { id: 42, windowId: 1, active: false, url: `${origin}/dashboard`, incognito: false });
+    tabs.set(43, { id: 43, windowId: 1, active: false, status: "loading", url: `${origin}/items/loading`, title: "Previous page title", incognito: false });
+    const installed = lease(origin);
+    await send({ kind: "install_policy", lease: installed, resume_after_confirmation: false, resume_after_pause_token: null });
+    const session = sessionValues.get(storageKey("activity_session_v1"));
+    assert.equal(session.tabs[40]?.artifact_id, "test:capture-site.example/current");
+    assert.equal(session.tabs[40].title, "Current work");
+    assert.equal(session.active_by_window[1], 40);
+    assert.equal(session.tabs[41], undefined);
+    assert.equal(session.tabs[42], undefined);
+    assert.equal(session.tabs[43].title, null, "a loading tab may still carry its previous title");
+    assert.deepEqual(values.get(storageKey("activity_totals_v1")).totals, []);
+    now += 15_000;
+    await send({ kind: "get_status" });
+    const totals = values.get(storageKey("activity_totals_v1")).totals;
+    assert.equal(totals.reduce((sum, total) => sum + total.focused_ms, 0), 15_000);
+    assert.equal(totals.reduce((sum, total) => sum + total.opens, 0), 0);
+    // Renewal must not remap a tab without its authoritative navigation event.
+    tabs.get(40).url = `${origin}/items/different`;
+    await send({ kind: "install_policy", lease: installed, resume_after_confirmation: false, resume_after_pause_token: null });
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[40].artifact_id, "test:capture-site.example/current");
+  } finally {
+    Date.now = realNow;
+  }
 });

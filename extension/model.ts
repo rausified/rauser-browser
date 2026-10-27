@@ -16,6 +16,15 @@ export const MAX_QUEUE_BYTES = 512 * 1_024;
 export const POLICY_STORAGE_KEY = storageKey("policy_v1");
 // The only extension pages whose messages the worker accepts.
 export const TRUSTED_PAGES = ["panel.html", "options.html"] as const;
+// The fixed folders the host keeps inside the home folder (DESIGN.md §6.1).
+// The host refuses any other names, so settings never chooses them.
+export const HOME_LAYOUT = {
+  pages_dir: "notes",
+  log_dir: "logs",
+  artifacts_dir: "artifacts",
+  summaries_dir: "summaries",
+  later_dir: "later",
+} as const;
 
 export interface PolicyLease {
   revision: string;
@@ -80,6 +89,9 @@ export interface WorkerStatus {
   // Why the worker's last background exchange with the host failed, or null
   // once one succeeds.
   host_error: string | null;
+  // Acknowledged delivery batches so far; changes whenever the host's
+  // artifact history may have.
+  delivered_batches: number;
 }
 
 export type WorkerRequest =

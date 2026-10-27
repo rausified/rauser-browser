@@ -6,13 +6,15 @@
 // access from install, so Chrome shows no permission prompt. --headless runs
 // the same flow with nothing on screen: headless Chrome and a scripted-dialogs
 // host build. Only --headless runs harness setup, with fake harnesses on a
-// pinned PATH and a cleared host environment.
+// pinned PATH and a cleared host environment, and only --headless starts the
+// agent service (never through launchd) to run, reattach, cancel, and fail
+// summary runs with a fake agent.
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
   access, chmod, lstat, mkdir, mkdtemp, open, readFile,
-  readdir, realpath, rename, symlink, unlink, writeFile,
+  readdir, realpath, rename, rm, symlink, unlink, writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -33,6 +35,10 @@ const SCRIPTED_HOST = path.join(REPO, "target", "scripted-dialogs", "debug", BIN
 // runner looks even when run from host/.
 const SCRIPTED_BUILD = `cargo build --locked -p ${BINARY_NAME} --features scripted-dialogs --target-dir ${shellQuote(path.dirname(path.dirname(SCRIPTED_HOST)))}`;
 const SCRIPTED_DIALOGS_ENV = `${BINARY_NAME.toUpperCase()}_SCRIPTED_DIALOGS`;
+// Keep in step with FAKE_HARNESS_ENV in host/src/brand.rs. The wrapper never
+// sets SERVICE_SPAWN_ENV: the smoke starts the service itself, and SERVICE_LABEL
+// is never passed to launchctl.
+const FAKE_HARNESS_ENV = `${BINARY_NAME.toUpperCase()}_FAKE_HARNESS`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
@@ -302,7 +308,40 @@ exit 1`),
   }
   await symlink(path.join(fakeInstall, "good", "claude"), path.join(fakeBin, "claude"));
   await symlink(path.join(fakeInstall, "codex", "codex"), path.join(fakeBin, "codex"));
-  return { fakeBin, fakeInstall, argvLog };
+  // The service's summary harness (FAKE_HARNESS_ENV): one run per turn with
+  // the page path as $1 and the prompt on stdin. $HOME/fake-agent.mode picks
+  // ok, slow, or fail. It sits outside fake-bin, so discovery never sees it.
+  // PR 2 accepts only stdout that is one JSON object, so "working" streams
+  // inside the answer rather than on its own line.
+  const fakeAgent = path.join(fakeInstall, "fake-agent");
+  await writeFile(fakeAgent, `#!/bin/sh
+/bin/cat > /dev/null
+echo 'fake agent diagnostics' >&2
+mode=$(/bin/cat "$HOME/fake-agent.mode" 2>/dev/null)
+case "$mode" in
+  slow) /bin/sleep 60 ;;
+  fail) echo 'fake failure' >&2; exit 3 ;;
+esac
+echo 'session: smoke-session'
+echo '{"progress":"working","ok":true}'
+`, { mode: 0o700 });
+  await chmod(fakeAgent, 0o700);
+  return { fakeBin, fakeInstall, argvLog, fakeAgent };
+}
+
+// Every file a finished run keeps in its record directory.
+const RUN_FILES = ["status.json", "page.md", "stream.txt", "result.json", "run.log"];
+
+// RFC 3339 to the second in UTC, as start_run's requested_at requires.
+const requestedAt = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+async function stopService(service) {
+  if (!service || service.exitCode !== null || service.signalCode !== null) return;
+  const exited = new Promise((resolve) => service.once("exit", resolve));
+  service.kill("SIGKILL");
+  await Promise.race([exited, delay(5_000).then(() => {
+    throw new Error(`The service process ${service.pid} did not exit`);
+  })]);
 }
 
 // Re-point fake-bin/claude in one rename, so discovery never sees it missing.
@@ -711,7 +750,12 @@ async function run() {
   });
 
   const runDir = await mkdtemp(path.join(os.tmpdir(), `${BINARY_NAME}-smoke-macos-`));
-  const testHome = path.join(runDir, "home");
+  // The service socket lives under HOME, and a Unix socket path must fit in
+  // sun_path (104 bytes), so the home is a short /tmp directory of its own.
+  // It is removed at the end; everything else stays in runDir.
+  const testHome = await mkdtemp("/tmp/bsh-");
+  let service = null;
+  let lingeringGroup = null;
   const profile = path.join(runDir, "chrome-profile");
   const notes = path.join(runDir, "notes");
   const knowledgeBase = path.join(runDir, "knowledge-base");
@@ -937,7 +981,7 @@ async function run() {
   }
 
   try {
-    await Promise.all([mkdir(testHome), mkdir(notes), mkdir(knowledgeBase), mkdir(profile)]);
+    await Promise.all([mkdir(notes), mkdir(knowledgeBase), mkdir(profile)]);
     if (options.headless) {
       await mkdir(dialogs, { mode: 0o700 });
       await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-windows.swift"), "-o", windowCheck]);
@@ -945,14 +989,15 @@ async function run() {
     // PATH is pinned in every mode, so harness discovery finds only the fakes,
     // never a real harness. Headless also clears the environment: the host
     // sees a fake credential and one name setup must never pass on.
-    const { fakeBin, fakeInstall, argvLog } = await installFakeHarnesses(runDir);
+    const { fakeBin, fakeInstall, argvLog, fakeAgent } = await installFakeHarnesses(runDir);
     const fakeInstallReal = await realpath(fakeInstall);
     const hostPath = `${fakeBin}:/usr/bin:/bin`;
     const secret = `smoke-secret-${caseId}`;
     const wrapperBody = options.headless
       ? `exec /usr/bin/env -i HOME=${shellQuote(testHome)} PATH=${shellQuote(hostPath)} ` +
         `ANTHROPIC_API_KEY=${shellQuote(secret)} SMOKE_NOT_ALLOWED=x ` +
-        `${SCRIPTED_DIALOGS_ENV}=${shellQuote(dialogs)} ${shellQuote(options.host)} "$@"\n`
+        `${SCRIPTED_DIALOGS_ENV}=${shellQuote(dialogs)} ${FAKE_HARNESS_ENV}=${shellQuote(fakeAgent)} ` +
+        `${shellQuote(options.host)} "$@"\n`
       : `export HOME=${shellQuote(testHome)}\nexport PATH=${shellQuote(hostPath)}\nexec ${shellQuote(options.host)} "$@"\n`;
     await writeFile(wrapper, `#!/bin/sh\n${wrapperBody}`, { mode: 0o700 });
     await chmod(wrapper, 0o700);
@@ -995,7 +1040,7 @@ async function run() {
 
     console.log(`\nSmoke artifacts: ${runDir}`);
     console.log(`Fixture: ${origin}${options.defaultPort ? " (port 80, entered as " + siteInput + ")" : ""}`);
-    console.log(`Notes folder: ${notes}`);
+    console.log(`Home folder: ${notes}`);
     console.log(`Extension folder: ${dist}`);
     console.log(`Loading the unpacked extension into the isolated ${options.headless ? "headless " : ""}Chrome profile.`);
     chrome = spawn(options.chrome, [
@@ -1037,7 +1082,7 @@ async function run() {
       await waitFor(() => onPanel(async (page) => {
         requireCondition(await page.hidden("#setup-warning") === false, "Setup warning is hidden");
         const reason = await page.text("#setup-reason");
-        requireCondition(reason === "No notes folder is chosen.", `Setup warning says: ${reason}`);
+        requireCondition(reason === "No home folder is chosen.", `Setup warning says: ${reason}`);
       }));
       const reply = await hostConfig(wrapper);
       requireCondition(reply.config.storage === null && !reply.config.capture_enabled,
@@ -1075,7 +1120,7 @@ async function run() {
         async () => {
           const reply = await hostConfig(wrapper);
           const saved = reply.config.storage?.root;
-          requireCondition(saved, "The host has no notes folder yet");
+          requireCondition(saved, "The host has no home folder yet");
           const chosen = await realpath(saved);
           const entries = (await readdir(chosen)).filter((name) => name !== ".DS_Store");
           if (notesRoot === null && entries.length) {
@@ -1084,10 +1129,24 @@ async function run() {
           notesRoot = chosen;
           requireCondition(!reply.config.capture_enabled && reply.config.adapters.artifacts.length === 0,
             "Saving the folder changed adapters or the capture switch");
+          const { root: _root, knowledge_base_dir: _kb, ...layout } = reply.config.storage;
+          requireCondition(JSON.stringify(layout) === JSON.stringify({
+            profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
+            artifacts_dir: "artifacts", summaries_dir: "summaries",
+          }), `The host saved the layout ${JSON.stringify(layout)}`);
           const status = await settingsStatus();
           requireCondition(status?.startsWith("No site has an adapter yet."), `Settings page says: ${status}`);
         }, () => pickFolder(notes));
-      console.log(`  Using notes folder ${notesRoot}`);
+      console.log(`  Using home folder ${notesRoot}`);
+      // Settings shows the fixed layout and offers no folder names to edit.
+      await onSettings(async (page) => {
+        const shown = await page.text("#home-layout");
+        for (const folder of ["notes/", "logs/", "artifacts/", "summaries/", "later/"]) {
+          requireCondition(shown?.includes(folder), `Settings shows the layout as: ${shown}`);
+        }
+        requireCondition(await page.evaluate('document.getElementById("summaries-dir") === null'),
+          "Settings still offers a summaries folder name");
+      });
       // Having no adapters is a choice, not a setup problem.
       await waitFor(() => onPanel(async (page) =>
         requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")));
@@ -1107,7 +1166,7 @@ async function run() {
           const saved = reply.config.storage?.knowledge_base_dir;
           requireCondition(saved, "The host has no knowledge base folder yet");
           requireCondition(await realpath(saved) === expected, `The host saved ${saved} as the knowledge base`);
-          requireCondition(await sameFolder(reply.config.storage.root), "Choosing the knowledge base changed the notes folder");
+          requireCondition(await sameFolder(reply.config.storage.root), "Choosing the knowledge base changed the home folder");
           const status = await settingsStatus();
           requireCondition(status?.startsWith("Knowledge base folder saved."), `Settings page says: ${status}`);
           const shown = await onSettings((page) => page.text("#kb-path"));
@@ -1135,7 +1194,7 @@ async function run() {
         requireCondition(await page.hidden("#note-editor") === false, "The note editor is hidden");
         requireCondition(await page.enabled("#note-body"), "The note editor is disabled");
       }), { timeout: 20_000 });
-      const pages = await markdownFiles(path.join(notesRoot, "pages"));
+      const pages = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(pages.length === 0, "Showing a page's note editor wrote a note");
     });
 
@@ -1228,14 +1287,14 @@ async function run() {
     });
 
     const logRows = async () => {
-      const files = await markdownFiles(path.join(notesRoot, "log"));
+      const files = await markdownFiles(path.join(notesRoot, "logs"));
       return { files, rows: files.flatMap((file) => file.text.split("\n").filter((line) => line.startsWith("- "))) };
     };
 
     // An activity entry is a "- " row naming the URL, followed by its
     // `<!-- brauser:visit ... kind=activity data=... -->` marker line.
     const activityRows = (rows, url) => rows.filter((line) => line.includes(`<${url}>`));
-    const logs = async () => (await markdownFiles(path.join(notesRoot, "log"))).map((file) => file.text);
+    const logs = async () => (await markdownFiles(path.join(notesRoot, "logs"))).map((file) => file.text);
     const activityMarkers = async () => (await logs()).join("\n").split("\n")
       .filter((line) => line.startsWith("<!-- brauser:visit ") && line.includes(" kind=activity ")).length;
 
@@ -1319,7 +1378,7 @@ async function run() {
       // Autosave debounces ~1s after typing stops (§5.3); 20s covers that plus
       // the native round trip with room to spare.
       await waitForNoteStatus("Saved");
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1, "Expected exactly one page note");
       requireCondition(files[0].text.includes(title) && files[0].text.includes(firstBody) &&
         files[0].text.includes(allowed), "Page note content does not match the fixture page");
@@ -1336,7 +1395,7 @@ async function run() {
       await waitForNoteStatus("Saved");
       const shown = await fieldValue("note-body");
       requireCondition(shown === appended, `Note editor shows: ${shown}`);
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1 && files[0].text.includes(appended),
         "Navigating away and back did not preserve the saved note");
     });
@@ -1363,7 +1422,7 @@ async function run() {
       const [unsaved, shown] = await Promise.all([fieldValue("note-unsaved"), fieldValue("note-body")]);
       requireCondition(unsaved === unsavedLocalEdit, `Unsaved copy-out shows: ${unsaved}`);
       requireCondition(shown === externalBody, `Note editor shows: ${shown}`);
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1 && files[0].text.includes(externalBody) &&
         !files[0].text.includes(unsavedLocalEdit), "The refused save must not have changed the note file");
     });
@@ -1372,7 +1431,7 @@ async function run() {
       const recovered = `${externalBody} plus the recovered edit ${caseId}`;
       await typeNote(recovered);
       await waitForNoteStatus("Saved");
-      const files = await markdownFiles(path.join(notesRoot, "pages"));
+      const files = await markdownFiles(path.join(notesRoot, "notes"));
       requireCondition(files.length === 1 && files[0].text.includes(recovered),
         "The recovered edit was not saved after the conflict");
     });
@@ -1604,6 +1663,127 @@ async function run() {
       });
     }
 
+    // The agent service: the host forwards run messages over the service's
+    // socket. Only a scripted-dialogs host honors FAKE_HARNESS_ENV, and a
+    // normal build would ask launchd, so guided runs skip these steps. The
+    // smoke starts `service` itself through the wrapper's cleared environment.
+    const support = path.dirname(configPath);
+    const runDirOf = (runId) => path.join(support, "runs", runId);
+    const setAgentMode = (mode) => atomicWrite(path.join(testHome, "fake-agent.mode"), `${mode}\n`);
+    const startRun = (url) => agentRequest({
+      type: "start_run", url, title: `${APP_NAME} smoke run`, content: `# Smoke run\n\n${caseId}\n`,
+      selection: null, harness: null, record_key: null, requested_at: requestedAt(),
+    });
+    const getRun = (runId) => agentRequest({ type: "get_run", run_id: runId, since_offset: 0 });
+    async function startedRun(url) {
+      const reply = await startRun(url);
+      requireCondition(reply.type === "run_started", `start_run answered ${JSON.stringify(reply)}`);
+      return reply;
+    }
+    const runIn = (runId, states) => waitFor(async () => {
+      const reply = await getRun(runId);
+      requireCondition(reply.type === "run_fetched", `get_run answered ${JSON.stringify(reply)}`);
+      requireCondition(states.includes(reply.run.state), `Run ${runId} is ${reply.run.state}`);
+      return reply;
+    }, { timeout: 30_000, interval: 300, signal: abort.signal });
+    const runPages = {
+      ok: `${origin}/run/ok?case=${caseId}`,
+      slow: `${origin}/run/slow?case=${caseId}`,
+      fail: `${origin}/run/fail?case=${caseId}`,
+    };
+    const runIds = {};
+
+    if (!options.headless) {
+      console.log("\nAgent service steps skipped: they run with --headless only.");
+    } else {
+      await step("Without the service, a run is service_unavailable", async () => {
+        await setAgentMode("ok");
+        const reply = await startRun(runPages.ok);
+        requireCondition(reply.type === "error" && reply.code === "service_unavailable",
+          `start_run answered ${JSON.stringify(reply)}`);
+        requireCondition(!(await maybeLstat(path.join(support, "service.sock"))), "A service socket appeared");
+      });
+
+      await step("The service starts and listens", async () => {
+        const log = await open(path.join(runDir, "service.log"), "a", 0o600);
+        try {
+          service = spawn(wrapper, ["service"], { stdio: ["ignore", log.fd, log.fd] });
+        } finally {
+          await log.close();
+        }
+        service.on("error", () => undefined);
+        await waitFor(async () => {
+          requireCondition(service.exitCode === null && service.signalCode === null,
+            `The service exited early (${service.exitCode ?? service.signalCode}); see service.log`);
+          const socket = await maybeLstat(path.join(support, "service.sock"));
+          requireCondition(socket?.isSocket(), "service.sock is not there yet");
+        }, { timeout: 15_000, interval: 200, signal: abort.signal });
+      });
+
+      await step("A run succeeds and keeps its record", async () => {
+        await setAgentMode("ok");
+        const started = await startedRun(runPages.ok);
+        requireCondition(started.existing === false, "A first run was reported as existing");
+        runIds.ok = started.run.run_id;
+        const done = await runIn(runIds.ok, ["succeeded", "failed", "canceled"]);
+        requireCondition(done.run.state === "succeeded", `The run ended ${JSON.stringify(done.run)}`);
+        requireCondition(done.stream_text.includes("working"), `The run streamed: ${done.stream_text}`);
+        requireCondition(done.run.session_id === "smoke-session", `The run's session: ${done.run.session_id}`);
+        for (const file of RUN_FILES) {
+          requireCondition((await maybeLstat(path.join(runDirOf(runIds.ok), file)))?.isFile(),
+            `The run record has no ${file}`);
+        }
+      });
+
+      await step("A second start reattaches, and cancel ends the process group", async () => {
+        await setAgentMode("slow");
+        const first = await startedRun(runPages.slow);
+        runIds.slow = first.run.run_id;
+        const again = await startedRun(runPages.slow);
+        requireCondition(again.existing === true && again.run.run_id === runIds.slow,
+          `A second start on the same page answered ${JSON.stringify(again)}`);
+        await runIn(runIds.slow, ["running"]);
+        const group = await waitFor(async () => {
+          const status = JSON.parse(await readFile(path.join(runDirOf(runIds.slow), "status.json"), "utf8"));
+          requireCondition(Number.isInteger(status.process_group) && status.process_group > 1,
+            "The running run has no process group yet");
+          return status.process_group;
+        }, { timeout: 15_000, interval: 200, signal: abort.signal });
+        lingeringGroup = group;
+        process.kill(-group, 0);
+        const canceled = await agentRequest({ type: "cancel_run", run_id: runIds.slow });
+        requireCondition(canceled.type === "run_updated", `cancel_run answered ${JSON.stringify(canceled)}`);
+        const done = await runIn(runIds.slow, ["canceled", "succeeded", "failed"]);
+        requireCondition(done.run.state === "canceled", `The canceled run ended ${JSON.stringify(done.run)}`);
+        await waitFor(() => {
+          try {
+            process.kill(-group, 0);
+          } catch (error) {
+            if (error.code === "ESRCH") return;
+            throw error;
+          }
+          throw new Error(`Process group ${group} is still alive`);
+        }, { timeout: 5_000, interval: 100, signal: abort.signal });
+        lingeringGroup = null;
+      });
+
+      await step("A failing harness fails the run with its stderr", async () => {
+        await setAgentMode("fail");
+        runIds.fail = (await startedRun(runPages.fail)).run.run_id;
+        const done = await runIn(runIds.fail, ["succeeded", "failed", "canceled"]);
+        requireCondition(done.run.state === "failed" && done.run.error_kind === "harness_failed" &&
+          done.run.error?.includes("fake failure"), `The failing run ended ${JSON.stringify(done.run)}`);
+      });
+
+      await step("list_runs shows every run", async () => {
+        const listed = await agentRequest({ type: "list_runs" });
+        requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
+        const ids = new Set(listed.runs.map((run) => run.run_id));
+        requireCondition(Object.values(runIds).length === 3 && Object.values(runIds).every((id) => ids.has(id)),
+          `list_runs shows ${JSON.stringify([...ids])}; expected ${JSON.stringify(runIds)}`);
+      });
+    }
+
     await step("Site removal", async () => {
       await inSettings((page) => page.click(`button[aria-label="Remove site ${origin}"]`));
       await waitFor(async () => {
@@ -1635,6 +1815,15 @@ async function run() {
       await openSettingsTab();
       requireCondition(!(await activityTotals()).some((total) => total.url === afterRemoval),
         "Activity was measured after site removal");
+    });
+
+    await step("The home folder holds only the fixed folders", async () => {
+      const fixed = new Set(["notes", "logs", "artifacts", "summaries", "later"]);
+      const entries = (await readdir(notesRoot)).filter((name) => name !== ".DS_Store");
+      requireCondition(entries.every((name) => fixed.has(name)),
+        `The home folder holds ${entries.join(", ")}`);
+      requireCondition(entries.includes("notes") && entries.includes("logs"),
+        `The run's notes and logs are not in the home folder: ${entries.join(", ")}`);
     });
 
     if (options.headless) {
@@ -1676,6 +1865,23 @@ async function run() {
     try { await stopChrome(chrome); } catch (error) {
       failed = true;
       console.error(`Could not stop the isolated Chrome process group: ${error.message}`);
+    }
+    // The service, then any harness group a failed cancel step left running.
+    try { await stopService(service); } catch (error) {
+      failed = true;
+      console.error(`Could not stop the service: ${error.message}`);
+    }
+    if (lingeringGroup) {
+      try { process.kill(-lingeringGroup, "SIGKILL"); } catch (error) {
+        if (error.code !== "ESRCH") {
+          failed = true;
+          console.error(`Could not stop harness process group ${lingeringGroup}: ${error.message}`);
+        }
+      }
+    }
+    try { await rm(testHome, { recursive: true, force: true }); } catch (error) {
+      failed = true;
+      console.error(`Could not remove the temporary home ${testHome}: ${error.message}`);
     }
     if (installedManifest) {
       try {
