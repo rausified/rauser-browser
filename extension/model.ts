@@ -23,6 +23,8 @@ export const TRUSTED_PAGES = ["panel.html", "options.html"] as const;
 export const PANEL_NOTICE_KEY = storageKey("panel_notice_v1");
 // The panel shows a stored notice only this soon after it was written.
 export const PANEL_NOTICE_MAX_AGE_MS = 2 * 60_000;
+// The site access the manifest grants at install (host_permissions).
+export const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 
 export type PanelNotice =
   | { kind: "run_started"; run_id: string; tab_id: number; at: number }

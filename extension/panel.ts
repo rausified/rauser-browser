@@ -1,6 +1,7 @@
 import {
   PANEL_NOTICE_KEY,
   PANEL_NOTICE_MAX_AGE_MS,
+  SITE_ACCESS_ORIGINS,
   isHttpUrl,
   isPanelNotice,
   localTimestamp,
@@ -8,11 +9,11 @@ import {
   type WorkerStatus,
 } from "./model.js";
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
-import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
-import { SETUP_WARNING, serviceSetupText } from "./agent.js";
-import { summarizeTab } from "./summarize.js";
+import { SETUP_WARNING } from "./agent.js";
+import { summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards } from "./run-card.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import {
@@ -106,8 +107,6 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
 const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
-// The site access the manifest grants at install (host_permissions).
-const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
 const SUMMARIZE_NEEDS_HARNESS = "Set up a summary harness in settings first.";
 
@@ -661,12 +660,6 @@ async function showSetupWarningOnce(): Promise<void> {
   runArea.replaceChildren(box, ...Array.from(runArea.children));
 }
 
-function summarizeFailure(error: unknown): string {
-  if (error instanceof HostError && (error.code === "unreadable" || error.code === "page_changed")) return error.message;
-  if (error instanceof HostError && error.code === "service_unavailable") return serviceSetupText(error.message);
-  return `Could not start the summary: ${describe(error)}`;
-}
-
 async function summarize(): Promise<void> {
   const page = currentPage;
   if (summarizing || !page || page.tabId === undefined) return;
@@ -689,7 +682,7 @@ async function summarize(): Promise<void> {
   } catch (error) {
     // The panel may follow another tab by now (a slow cold start); this
     // line is about the tab that was summarized, so it is dropped.
-    if (followedTabId === tabId) showRunLine(tabId, summarizeFailure(error), true);
+    if (followedTabId === tabId) showRunLine(tabId, summarizeFailureText(error), true);
   } finally {
     summarizing = false;
     updateControls();

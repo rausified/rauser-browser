@@ -2,6 +2,7 @@
 // panel button, the `summarize` shortcut, and the context menu all use
 // summarizeTab; the host and the service check every field again.
 import type { RunView } from "../protocol/ts/generated.js";
+import { serviceSetupText } from "./agent.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
 import { localTimestamp } from "./model.js";
@@ -11,6 +12,8 @@ export const SUMMARIZE_MENU_ID = `${BINARY_NAME}-summarize`;
 export const SUMMARIZE_MENU_TITLE = `Summarize with ${APP_NAME}`;
 export const UNREADABLE_MESSAGE = `${APP_NAME} can't read this page's content.`;
 export const NOT_A_WEB_PAGE_MESSAGE = "Summaries work on http(s) pages.";
+export const SITE_ACCESS_NEEDED_MESSAGE =
+  `${APP_NAME} needs site access to summarize this page — re-enable it in Chrome's extension settings for ${APP_NAME}.`;
 export const PAGE_CHANGED_MESSAGE = "The page changed before it could be read. Summarize it again.";
 // The start_run schema's title bound.
 const MAX_TITLE_CHARS = 2048;
@@ -19,6 +22,14 @@ export interface SummarizeDeps {
   scripting: typeof chrome.scripting;
   host: Pick<HostClient, "call">;
   now(): Date;
+}
+
+/** What a failed summarizeTab tells the user, the same on every path: the
+ * panel button, the shortcut, and the context menu. */
+export function summarizeFailureText(error: unknown): string {
+  if (error instanceof HostError && (error.code === "unreadable" || error.code === "page_changed")) return error.message;
+  if (error instanceof HostError && error.code === "service_unavailable") return serviceSetupText(error.message);
+  return `Could not start the summary: ${error instanceof Error ? error.message : String(error)}`;
 }
 
 /** At most MAX_TITLE_CHARS UTF-16 units, never ending on half a pair. */

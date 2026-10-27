@@ -12,6 +12,7 @@ import {
   isQueuedVisit,
   leaseActive,
   PANEL_NOTICE_KEY,
+  SITE_ACCESS_ORIGINS,
   type PanelNotice,
   type PolicyLease,
   type QueuedVisit,
@@ -26,7 +27,8 @@ import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
 import {
-  NOT_A_WEB_PAGE_MESSAGE, SUMMARIZE_MENU_ID, SUMMARIZE_MENU_TITLE, summarizeTab,
+  NOT_A_WEB_PAGE_MESSAGE, SITE_ACCESS_NEEDED_MESSAGE, SUMMARIZE_MENU_ID, SUMMARIZE_MENU_TITLE,
+  summarizeFailureText, summarizeTab,
 } from "./summarize.js";
 import {
   activateTab, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
@@ -1308,7 +1310,8 @@ async function summaryNotice(tab: ChromeTab, tabId: number): Promise<PanelNotice
   } catch {
     url = null;
   }
-  if (raw === undefined || url === null || !isHttpUrl(url)) return failed(NOT_A_WEB_PAGE_MESSAGE);
+  if (raw === undefined) return failed(await noAddressMessage());
+  if (url === null || !isHttpUrl(url)) return failed(NOT_A_WEB_PAGE_MESSAGE);
   const host = new HostClient();
   try {
     const { run } = await summarizeTab(
@@ -1317,10 +1320,23 @@ async function summaryNotice(tab: ChromeTab, tabId: number): Promise<PanelNotice
     );
     return { kind: "run_started", run_id: run.run_id, tab_id: tabId, at: Date.now() };
   } catch (error) {
-    return failed(describe(error));
+    return failed(summarizeFailureText(error));
   } finally {
     host.disconnect();
   }
+}
+
+/** Why a tab has no address. Without `tabs`, Chrome gives no URL for a page
+ * outside Brauser's site access: one it never covers (chrome://, New Tab), or
+ * any page once the user withdrew that access in Chrome. Unlike capture, this
+ * one user-started check asks Chrome, as the panel's banner does. */
+async function noAddressMessage(): Promise<string> {
+  try {
+    if (!await chrome.permissions.contains({ origins: SITE_ACCESS_ORIGINS })) return SITE_ACCESS_NEEDED_MESSAGE;
+  } catch {
+    // Without an answer, show the ordinary message rather than a false alarm.
+  }
+  return NOT_A_WEB_PAGE_MESSAGE;
 }
 
 async function publishNotice(notice: PanelNotice): Promise<void> {
