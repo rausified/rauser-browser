@@ -71,7 +71,11 @@ Never let a UI-free run find or start the real program, and never make a real mo
 - Remember any search locations the code adds beyond `PATH` (Brauser adds `$HOME/.local/bin`); a temporary `HOME` keeps those empty.
 - Before clicking anything that runs a program, check that every offered program's resolved path is inside the fake install directory, and stop the run if not.
 
-Reference: `scripts/smoke-macos.mjs` (`installFakeHarnesses`, `onlyFakeHarnesses`).
+- **The Brauser service.** Never let a test reach launchd: no `launchctl bootstrap`, `kickstart`, or `bootout`, and nothing under the real `~/Library`. The headless runner starts the service child itself, as `<host wrapper> service` with the same cleared environment and temporary `HOME`, logging to `service.log` in the run directory, and waits for `service.sock`. Before that, the host runs without the test-only spawn seam, so a `start_run` must answer `service_unavailable` and no socket may appear. The Rust integration test `host/tests/service.rs` instead lets the host spawn the service directly through the `BRAUSER_SERVICE_SPAWN` seam; unit tests inject the launch function. `scripts/register-dev-host.mjs` and `scripts/dev-service.mjs` take an injectable `run` so their tests (`npm run test:scripts`) record launchctl argv without running it.
+- **The fake agent.** Service runs use one test-only harness named by `BRAUSER_FAKE_HARNESS` (honored only in `scripted-dialogs` builds): a `/bin/sh` script outside the fake `PATH` directory, so harness discovery never sees it. It reads a mode file in the temporary `HOME` (answer, slow, or fail), writes a diagnostic line to stderr so `run.log` exists, and prints a JSON answer.
+- **A short `HOME` under `/tmp`.** The service socket lives in the support directory under `HOME`, and a Unix socket path must fit in `sun_path` (104 bytes on macOS). A temporary directory under `$TMPDIR` (`/var/folders/...`) is long enough to break that, so the runner and the Rust service tests make their `HOME` with a short prefix directly under `/tmp` (`mkdtemp("/tmp/bsh-")`, `tempdir_in("/tmp")`) and remove it at the end.
+
+Reference: `scripts/smoke-macos.mjs` (`installFakeHarnesses`, `onlyFakeHarnesses`, the agent service steps) and `host/tests/service.rs`.
 
 ### Prove the run stayed invisible
 
@@ -84,6 +88,7 @@ Don't just assume headless means invisible; check it. List on-screen windows (`C
 - Browser-startup ordering for an installed extension: whether Chrome loads it, with its listeners, before restored tabs commit, and `runtime.onStartup` (see the `--load-extension` and Chrome for Testing notes above). A loaded extension with a stopped worker does get restored tabs' commits; one loaded during startup misses the active tab's.
 - Real idle and screen-lock transitions: the headless run has no way to drive them, and `chrome.idle.queryState` reported `active` throughout.
 - Visual or OS-level effects such as focus, cursors, and window lifetime (for example, the macOS busy cursor, or whether the real folder picker closes when the host goes away).
+- launchd: that `launchctl bootstrap` loads the dev LaunchAgent, that `launchctl kickstart` starts it on demand and `kickstart -k` replaces a stale build, that it exits after its idle timeout, and the environment launchd gives it. A release install's `SMAppService` registration (M5) is not built or tested at all. Real harness logins (Codex's stored login, Claude Code on Bedrock through `agent.env`) are not exercised either.
 
 Cover these in real-UI acceptance, and don't claim them from a headless pass.
 
@@ -99,6 +104,7 @@ Real-UI checks run on a desktop, so:
 Checks of this kind in this repo:
 
 - `npm run smoke:macos -- --auto`: the full flow with the real folder picker, answered through UI scripting. It takes keyboard focus.
+- **[human] The Brauser service under launchd** (PR 2 of the open-access spec; also tracked as `brwr-sv2` in BOSUN_FEATURE_BACKLOG.md). It changes the user's own launchd domain, so a person runs it: (1) register the dev build with `node scripts/register-dev-host.mjs <extension ID> "$(pwd)/target/debug/brauser"` and close Chrome; (2) reopen Chrome and send a `start_run` from the panel's DevTools console; (3) confirm that `launchctl print gui/$UID/com.rauser.brauser.service` shows the service, and that it exits after 10 idle minutes; (4) confirm that `agent.env` values reach a run (this needs a real runner, so it waits for PR 3); (5) confirm that a rebuild plus a request restarts the service. *Not yet run.*
 
 ## Changing this document
 
@@ -123,3 +129,4 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-16: Branch `ship-overnight-20261016`. Overnight cycle 3 added the fixture-adapter confirmation (dialog 14) without updating the runner's dialog count, and nothing caught it: the overnight gate runs on Linux, where the smoke runner refuses to start, and CI did not run it. CI's macOS build job now builds the scripted-dialogs host and runs `npm run smoke:macos:headless`, so a change that breaks the end-to-end run fails its PR. *Not yet confirmed on a GitHub-hosted runner.*
 - 2026-10-26: Branch `feat/open-access-pr1`. The native Yes/No confirmation is gone; the folder picker is the only native dialog. Removed the `macos-alert` crate and `scripts/check-macos-alert.mjs`.
 - 2026-10-26: Branch `feat/open-access-pr1`. Install-time HTTP(S) access means the UI-free run no longer grants anything ahead of time, and the folder picker (notes and knowledge base) is the only dialog left. The dialog-counter rule is now explicit: `dialogsShown` must equal the scripted answers the runner gives, and the last check compares it with the dialog log's line count, never a hard-coded total, because overnight cycle 3 once added a dialog without updating a fixed count.
+- 2026-10-26: Branch `feat/agent-service-pr2`. A Unix socket path must fit in `sun_path`, 104 bytes on macOS, and a socket in a support directory under a `$TMPDIR`-based temporary `HOME` (`/var/folders/...`) can exceed it, so binding fails. The service refuses a too-long path outright instead of moving the socket, and the smoke runner and service tests now use a short `HOME` directly under `/tmp`. Tests also never call `launchctl`: the runner starts the service child itself, and the host's spawn seam replaces `kickstart` in the Rust integration tests.

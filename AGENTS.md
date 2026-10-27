@@ -55,6 +55,27 @@ checks and probe; the argv templates and cleared environment remain until the
 service runners replace them (PR 3). The headless smoke run covers setup with
 fake harnesses on a pinned `PATH` and a cleared host environment.
 
+The Brauser service skeleton (PR 2 of the open-access spec, DESIGN.md §12.2
+step 10.2) is built on `feat/agent-service-pr2` in `host/src/service/`
+(macOS only; it compiles out elsewhere). `brauser service` is a per-user
+LaunchAgent (`com.rauser.brauser.service`) that listens on a Unix socket in
+Brauser's support directory with the native-messaging framing, and exits after
+10 idle minutes. The short-lived native host forwards `start_run`, `get_run`,
+`list_runs`, `cancel_run`, and `retry_save` (`host/src/service/client.rs`),
+resolving the record key itself; it starts a missing service with
+`launchctl kickstart`, checks the service's build identity with
+`service_hello`, and answers `service_unavailable` when the service is not
+installed or stays on another build. The service keeps one record directory
+per run under `runs/`, runs at most two at once with one queued-or-running run
+per record key, times runs out after 10 minutes, kills the process group on
+cancel, marks orphaned runs failed on restart, prunes old records, and overlays
+an optional `agent.env` on each run's environment. The panel will poll
+`get_run`; there is no host-side streaming protocol. No real harness is
+registered yet: only the test-only fake harness (`scripted-dialogs` builds)
+runs, so a normal build answers `start_run` with `not_configured` until PR 3.
+`node scripts/register-dev-host.mjs` now also writes and bootstraps the dev
+LaunchAgent; `--no-service` skips it and `--unregister-service` removes it.
+
 M1.5a is built on top of that. The adapter-template language
 (`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a
 TypeScript twin (`extension/adapter-templates.ts`) checked against each other
@@ -142,4 +163,8 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - Scope every AI harness run's environment to exactly the names discovery offered as required or requested-and-offered for that adapter, and run it with a cleared environment in its own fresh host-owned 0700 work directory, in its own process group killed on timeout, output overflow, or normal exit, under capped stdout/stderr (host/src/harness_setup.rs `requested_env`; host/src/harness.rs `run_bounded`). These lockdown rules hold until the service runners replace them (PR 3 of the open-access spec).
 - Before trusting a harness binary — at discovery, setup, probe, and every run — verify it and its parent directory are not symlinks, are owned by the current user or root, and are not group/world-writable, and that its path/size/mtime/inode identity hasn't changed since last checked; treat any mismatch as "harness changed" and refuse the action (host/src/harness.rs `check_install`, `identity`).
 - Run a harness only with its single, hardcoded, security-reviewed argument template for the detected adapter and (for Codex) version; refuse an unreviewed Codex version outright, and never pass page or prompt content as a command-line argument — only as standard input (host/src/harness.rs `template_args`, `template_matches`, `codex_args`).
+- The Brauser service (`host/src/service/`) runs as the user, never root, as a per-user LaunchAgent started on demand. Its support directory must be a real directory owned by the user with mode 0700 (refuse a symlink or another owner, `ServicePaths::ensure_private`), its socket is mode 0600, and the service refuses a support path too long for a Unix socket rather than moving the socket elsewhere. Only the native host talks to it; the host accepts no `service_hello` from the extension and always chooses the run's record key itself.
+- `agent.env` is read at the start of every run and must be a regular, non-symlink file of mode 0600, or the run fails before it starts (host/src/service/agent_env.rs). Never put a value from it in an error, log line, protocol message, or settings view; settings may show its names only.
+- Before forwarding a run message, the host compares the service's `service_hello` `build_id` with its own and restarts a stale service once; a persistent mismatch is `service_unavailable`, never a request sent to old code (host/src/service/client.rs).
+- Tests never call `launchctl` or touch the real `~/Library`: they use temp support directories, an injected launch function, and the test-only `BRAUSER_SERVICE_SPAWN` seam (scripted-dialogs builds only) that spawns the service directly. `scripts/register-dev-host.mjs` takes an injectable `run` for the same reason.
 - Do not claim an installer, browser extension, or agent mode works until it has been built and exercised.

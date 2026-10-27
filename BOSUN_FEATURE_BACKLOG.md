@@ -170,11 +170,18 @@ order. They supersede the denylist, harness-token, `activeTab`, and per-site
 grant parts of the items below wherever those conflict. PR 1 (open access
 and the protocol v6 removals) is done; see Shipped.
 
-- [ ] `brwr-sv2` **Open access PR 2: the Brauser service skeleton.** `brauser
+- [x] `brwr-sv2` **Open access PR 2: the Brauser service skeleton.** `brauser
   service` on a 0700 Unix socket under launchd, run records, the queue,
   timeout, cancel, recovery and retention, the host proxy with build-identity
   check and `service_unavailable`, dev LaunchAgent registration, and `agent.env`,
-  all against a fake harness (spec §5; plan Tasks 12-27).
+  all against a fake harness (spec §5; plan Tasks 12-27). Done on
+  `feat/agent-service-pr2` (2026-10-26); see Shipped. Still to do, **[human]**
+  (TESTING.md "Real-UI acceptance"): (1) register the dev build and close
+  Chrome; (2) run `start_run` from the panel console; (3) confirm that
+  `launchctl print gui/$UID/com.rauser.brauser.service` shows the service and
+  that it exits after 10 idle minutes; (4) confirm that `agent.env` values
+  reach a run (needs PR 3's real runners); (5) confirm that a rebuild plus a
+  request restarts the service.
 - [ ] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
   card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
   with a validated structured answer, pinned Readability extraction, the
@@ -251,20 +258,29 @@ and the protocol v6 removals) is done; see Shipped.
   tests, and clippy, plus the extension checks. Fix code and tests that have
   assumed macOS/Unix since 2026-10-15, and keep the existing Windows code
   paths. Interactive Windows checks are separate **[human]** work.
-- [ ] `brwr-9yc` **[human] Decide how a Chrome-spawned host authenticates the
+- [x] `brwr-9yc` **[human] Decide how a Chrome-spawned host authenticates the
   AI harness** (DESIGN §14 open M2 question; it affects John's Bedrock setup).
-  Cookie may write an options proposal in §14; John decides. Blocks 8.2.
+  Closed 2026-10-26: decided by John as `agent.env` (spec §5.1). The per-user
+  Brauser service runs agents with its LaunchAgent environment plus an
+  optional 0600 `agent.env` overlaid at each run, built in `brwr-sv2` and
+  recorded in DESIGN.md §14. The queue's bead still needs `bd close`.
 - [ ] `brwr-6wz` **M2 step 8.2 — Host invocation, now the Brauser service
   runners.** Rewritten 2026-10-26: agent runs move to the per-user Brauser
   service with full-access Codex or Claude Code runs (`docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §5-§6), built
   as open access PRs 2-3 (`brwr-sv2`, `brwr-sr3`). The allowlisted-environment,
   templated-argv, and §7.1 canary design it described is replaced.
-- [ ] `brwr-jfe` **Concurrent native message loop (before 8.3).** Refactor
+- [x] `brwr-jfe` **Superseded 2026-10-26 by `get_run` polling** (spec §5.3,
+  built in `brwr-sv2`): the host answers one short request at a time and never
+  waits on a run, so no concurrent loop is needed. The queue's bead still needs
+  `bd close`. Was: **Concurrent native message loop (before 8.3).** Refactor
   `serve_with_context` into a stdin reader thread, a worker for long requests,
   and one serialized writer, reusing `run_bounded`'s thread/mpsc pattern. No
   protocol change. A short request must be answered while a long one runs,
   and stdin EOF must tear both down.
-- [ ] `brwr-0cj` **M2 step 8.3 — Streaming protocol.** A reader that stays responsive
+- [x] `brwr-0cj` **Superseded 2026-10-26 by `get_run` polling** (spec §5.3,
+  built in `brwr-sv2`): the panel polls `get_run` with a byte offset, so there
+  is no host-side streaming protocol. The queue's bead still needs `bd close`.
+  Was: **M2 step 8.3 — Streaming protocol.** A reader that stays responsive
   while a harness runs; chunk, `rejected`, error, `cancel`, and
   `summary_result` messages correlated by `request_id` under the 900 KiB cap;
   stdin EOF kills the harness. Takes the next protocol version after v5.
@@ -348,9 +364,11 @@ and the protocol v6 removals) is done; see Shipped.
 
 ## In Progress / This Iteration
 
-- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1`; the next plan item is open access PR 2 (`brwr-sv2`). `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1` and PR 2 (`brwr-sv2`) on `feat/agent-service-pr2`, with its launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`). `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Feature. `brwr-sv2` **Open access PR 2: the Brauser service skeleton (2026-10-26).** `brauser service` runs as an on-demand per-user LaunchAgent on a 0600 Unix socket in the 0700 support directory and exits after 10 idle minutes. The native host forwards the v6 run messages (`start_run`, `get_run`, `list_runs`, `cancel_run`, `retry_save`), resolves the record key itself, starts the service with `launchctl kickstart`, restarts a stale build after a `service_hello` build-identity mismatch, and answers `service_unavailable` otherwise. Run records, a two-run FIFO queue with one run per record key, a 10-minute timeout, process-group cancel, restart recovery, 30-day/200-run retention, and the 0600 `agent.env` overlay are covered against a fake harness only; `scripts/register-dev-host.mjs` registers, replaces, and (`--unregister-service`) removes the dev LaunchAgent. `brwr-9yc` decided (`agent.env`); `brwr-jfe` and `brwr-0cj` superseded by polling. The launchd checks are **[human]**.
 
 - **Category:** Security & Privacy. `brwr-oa1` **Open access PR 1: standing HTTP(S) access and protocol v6 (2026-10-26).** Brauser now holds HTTP(S) access from install, so a note can be typed on any page at once, and a site is on exactly when it has an adapter. The native confirmation, the `macos-alert` crate, the AI denylist, `log_incognito`, grant reconciliation, the sync caution, and the harness token are gone; harness setup detects and probes; a knowledge base folder is chosen with the native picker; v5 config files load unchanged. `brwr-ahb` closed as obsolete: the consent identity it would have unified no longer exists.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
