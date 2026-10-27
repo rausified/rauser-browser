@@ -531,11 +531,10 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, quarantine recovery on `90f88b4`):
-  recovered cycle 4's documentation from its quarantine branch; the driver
-  rejected it for a missing `.bosun_commit_msg`, which is now written.
+  Latest verification (2026-10-27, health recheck on clean `4342a18`):
+  no quarantine failure file or incomplete changes were present.
   Protocol generation, workspace build, format, both Clippy configurations,
-  cached offline npm install, typecheck, lint, extension build, all 13 extension
+  npm ci, typecheck, lint, extension build, all 13 extension
   test files and current-state checks pass. The unfiltered Rust gate remains
   red: 26 adapter-template tests pass, then 447 host tests pass and 32 fail in
   service/IPC tests. The repaired dialog fixture passes its 60 exchanges.
@@ -544,7 +543,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   8 passes, 1 failure and 1 platform skip. No product or test changes, skipped
   coverage, feature work or history reset. Keep this bead open until a runner
   permitting local IPC verifies the complete gate; logs are under ignored
-  `target/overnight-health/`.
+  `target/overnight-health/cycle-6-*.log`. The commit message is prepared.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -903,3 +902,8 @@ were folded into `brwr-q7e` above rather than given their own item.
   `brwr-t40` blocker. The next useful product increment remains host drafting
   with selectable rules and example artifact grouping, using the existing
   private pattern inputs; additional pattern diagnostics do not complete it.
+- Rechecked clean `4342a18`: the same 32 service failures and independent
+  AF_UNIX/Node EPERM probes persist. All other required gates pass, including
+  all 13 extension test files. No feature or test changes were made. The driver
+  should preserve its external full-gate result in the next handoff: the
+  absence of a quarantine file alone does not establish a passing baseline.
