@@ -1219,7 +1219,9 @@ fn note_context(
                     )
                 };
                 let mut candidates = std::collections::BTreeSet::new();
-                let note_candidates = vault.note_candidates().map_err(|_| unavailable())?;
+                let note_candidates = vault
+                    .note_identity_candidates()
+                    .map_err(|_| unavailable())?;
                 candidates.extend(note_candidates.iter().filter_map(|contents| {
                     note::artifact_keyed_note_identity(contents, &canonical)
                 }));
@@ -1247,23 +1249,24 @@ fn note_context(
             }
         };
     let mut older_urls = vec![canonical.clone()];
-    if let Some(found) = matched
-        && include_older_notes
-    {
+    if key.kind == RecordKeyKind::Artifact && include_older_notes {
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-            && let Ok(urls) = index.artifact_urls(&found.artifact_id)
+            && let Ok(urls) = index.artifact_urls(&key.value)
         {
             older_urls.extend(urls);
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
+                if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key) {
+                    older_urls.push(candidate);
+                }
                 let Some(candidate) = note::url_keyed_note_url(&contents) else {
                     continue;
                 };
                 if config
                     .adapter_match(&candidate, None)
-                    .is_ok_and(|candidate_match| candidate_match.artifact_id == found.artifact_id)
+                    .is_ok_and(|candidate_match| candidate_match.artifact_id == key.value)
                 {
                     older_urls.push(candidate);
                 }
@@ -2770,6 +2773,574 @@ id = "jira:{host}/{key}"
         assert_eq!(browse_loaded.body, "same issue");
     }
 
+    mod note_policy_removal {
+        use super::*;
+
+        const EDIT: &str = "https://work.example/items/7/edit";
+        const VIEW: &str = "https://work.example/items/7/view";
+        const CONTEXT: &str = "https://work.example/items/7/context";
+
+        struct Session {
+            folder: tempfile::TempDir,
+            root: std::path::PathBuf,
+            path: std::path::PathBuf,
+        }
+
+        impl Session {
+            fn new() -> Self {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("notes");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                write_adapter_config(
+                    &path,
+                    &root,
+                    "https://work.example",
+                    r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}/edit", mode = "edit" }, { path = "/items/{id:int}/view", mode = "view" }, { path = "/items/{id:int}/context", mode = "view" }, { path = "/items/{id:int}/retained", mode = "view" }]
+id = "work:{host}/{id}"
+"#,
+                );
+                Self { folder, root, path }
+            }
+
+            // Exercise real request/response framing and reopen the host for
+            // every request, so config history and recovery must survive EOF.
+            fn call(&self, request: Request) -> Response {
+                let mut output = Vec::new();
+                serve_with_context(
+                    Cursor::new(encoded_request(request)),
+                    &mut output,
+                    loaded(&self.path),
+                    &SetupContext {
+                        env: &no_harnesses(self.folder.path()),
+                        confirm: no_dialog,
+                    },
+                )
+                .unwrap();
+                decoded_response(output)
+            }
+
+            fn load(&self, url: &str) -> NoteLoaded {
+                match self.call(Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "load-removal".into(),
+                    url: url.into(),
+                })) {
+                    Response::NoteLoaded(note) => note,
+                    other => panic!("expected note_loaded, got {other:?}"),
+                }
+            }
+
+            fn save(&self, url: &str, note: &NoteLoaded, body: &str) -> Response {
+                self.call(Request::SaveNote(brauser_protocol::SaveNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save-removal".into(),
+                    url: url.into(),
+                    title: "Shared note".into(),
+                    body: body.into(),
+                    expected_revision: note.revision.clone(),
+                    expected_key: note.key.clone(),
+                }))
+            }
+
+            fn policy(&self, removal: &str) {
+                let mut config = loaded(&self.path);
+                let mut next = config.snapshot().clone();
+                match removal {
+                    "adapter" => next.adapters.artifacts.clear(),
+                    "site" => {
+                        next.sites.clear();
+                        next.adapters.artifacts.clear();
+                        next.capture_enabled = false;
+                    }
+                    "narrow" => {
+                        next.adapters.artifacts[0]["match"] = serde_json::json!([{ "path": "/items/{id:int}/retained", "mode": "view" }]);
+                    }
+                    _ => panic!("unknown removal"),
+                }
+                let mut consent = ConsentAuthority::new();
+                // Editing a surviving adapter requires native confirmation.
+                // Replace only the dialog; retain real token minting and the
+                // revisioned update handler, as in the harness setup tests.
+                let consent_token = (removal == "narrow").then(|| {
+                    consent
+                        .confirm_config_with(
+                            config.snapshot(),
+                            config.revision(),
+                            &next,
+                            None,
+                            |text| {
+                                assert!(text.description.contains("work.item"));
+                                Ok(true)
+                            },
+                        )
+                        .unwrap()
+                        .unwrap()
+                        .consent_token
+                });
+                let request = Request::UpdateConfig(UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "remove-policy".into(),
+                    expected_revision: config.revision().into(),
+                    config: next,
+                    picker_token: None,
+                    consent_token,
+                    harness_token: None,
+                });
+                let response = if removal == "narrow" {
+                    dispatch(
+                        request,
+                        &mut config,
+                        &mut consent,
+                        &SetupContext {
+                            env: &no_harnesses(self.folder.path()),
+                            confirm: no_dialog,
+                        },
+                    )
+                } else {
+                    self.call(request)
+                };
+                assert!(
+                    matches!(response, Response::ConfigUpdated(_)),
+                    "{response:?}"
+                );
+            }
+
+            fn activity(&self) -> ActivityEvent {
+                ActivityEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: "work:work.example/7".into(),
+                    artifact_type: "work.item".into(),
+                    url: VIEW.into(),
+                    title: Some("Item 7".into()),
+                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    incognito: false,
+                    opens: 1,
+                    focused_seconds: 3,
+                    background_seconds: 0,
+                    modes: vec![ActivityMode {
+                        mode: "edit".into(),
+                        url: EDIT.into(),
+                    }],
+                    trails: Vec::new(),
+                    refs: Vec::new(),
+                }
+            }
+
+            fn index(&self) -> ArtifactIndex {
+                let config = loaded(&self.path);
+                ArtifactIndex::open_in(
+                    config.snapshot().storage.as_ref().unwrap(),
+                    config.root_identity(),
+                    &config.cache_dir().unwrap(),
+                )
+                .unwrap()
+            }
+        }
+
+        #[test]
+        fn removal_keeps_shared_and_older_route_notes_separate_across_rebuilds() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                // Separate URL notes already occupy both known routes.
+                for url in [EDIT, VIEW] {
+                    note::save_note(&vault, url, "Before adapters", url, "missing").unwrap();
+                }
+                let first = session.load(VIEW);
+                assert_eq!(first.key.kind, RecordKeyKind::Artifact);
+                let Response::NoteSaved(saved) = session.save(VIEW, &first, "Shared artifact text")
+                else {
+                    panic!("expected new shared artifact note")
+                };
+                let shared = session.load(VIEW);
+                assert_eq!(shared.older_notes.len(), 2);
+                let event = session.activity();
+                let response = session.call(Request::RecordActivity(RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "remember-routes".into(),
+                    event: event.clone(),
+                }));
+                assert!(
+                    matches!(
+                        response,
+                        Response::ActivityRecorded(ActivityRecorded {
+                            outcome: VisitOutcome::Persisted,
+                            ..
+                        })
+                    ),
+                    "{response:?}"
+                );
+                session.policy(removal);
+                let shared_path = session.root.join(saved.relative_path);
+                let original = std::fs::read(&shared_path).unwrap();
+                let log_path = session.root.join("log/2026/10/2026-10-16.md");
+                let original_log = std::fs::read(&log_path).unwrap();
+                for rebuild in ["existing", "deleted", "reindex"] {
+                    if rebuild == "deleted" {
+                        std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                    } else if rebuild == "reindex" {
+                        session.index().reindex().unwrap();
+                    }
+                    for url in [EDIT, VIEW] {
+                        let recovered = session.load(url);
+                        assert_eq!(recovered.key, shared.key, "{removal}/{rebuild}/{url}");
+                        assert_eq!(recovered.body, "Shared artifact text");
+                        assert_eq!(recovered.revision, shared.revision);
+                        assert_eq!(
+                            recovered.older_notes.len(),
+                            2,
+                            "{removal}/{rebuild}/{url}: both separate URL notes must stay listed"
+                        );
+                        for older in &recovered.older_notes {
+                            let viewed = session.call(Request::ViewOlderNote(
+                                brauser_protocol::ViewOlderNoteRequest {
+                                    protocol_version: PROTOCOL_VERSION,
+                                    request_id: "view-separate".into(),
+                                    url: url.into(),
+                                    source_url: older.canonical_url.clone(),
+                                },
+                            ));
+                            assert!(
+                                matches!(viewed, Response::NoteLoaded(note) if note.body == older.canonical_url)
+                            );
+                            // An explicit migration also cannot clobber the
+                            // existing shared note or delete its source.
+                            assert!(
+                                matches!(session.call(Request::UseArtifactNote(brauser_protocol::UseArtifactNoteRequest {
+                                protocol_version: PROTOCOL_VERSION,
+                                request_id: "no-merge".into(),
+                                url: url.into(),
+                                source_url: older.canonical_url.clone(),
+                                expected_revision: older.revision.clone(),
+                            })), Response::Error(reply) if reply.code == ErrorCode::Conflict)
+                            );
+                            assert_eq!(
+                                note::load_note(&vault, &older.canonical_url)
+                                    .unwrap()
+                                    .revision,
+                                older.revision
+                            );
+                        }
+                        // A stale URL key must not redirect an autosave.
+                        let wrong_key = NoteLoaded {
+                            key: crate::vault::url_record_key(url).unwrap(),
+                            ..recovered
+                        };
+                        assert!(
+                            matches!(session.save(url, &wrong_key, "Keep this copy-out"),
+                            Response::NoteConflict(reply) if reply.reason == "key_changed" && reply.body == "Shared artifact text")
+                        );
+                    }
+                    assert_eq!(std::fs::read(&shared_path).unwrap(), original);
+                    let response = session.call(Request::RecordActivity(RecordActivityRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "must-stay-off".into(),
+                        event: ActivityEvent {
+                            event_id: uuid::Uuid::new_v4().to_string(),
+                            ..event.clone()
+                        },
+                    }));
+                    assert!(
+                        matches!(response, Response::ActivityRecorded(reply) if reply.outcome == VisitOutcome::Suppressed)
+                    );
+                    assert_eq!(std::fs::read(&log_path).unwrap(), original_log);
+                }
+                assert!(matches!(
+                    session.save(EDIT, &shared, "Edit after removal"),
+                    Response::NoteSaved(_)
+                ));
+                assert_eq!(session.load(VIEW).body, "Edit after removal");
+            }
+        }
+
+        #[test]
+        fn context_only_routes_recover_the_note_without_creating_activity() {
+            let session = Session::new();
+            let first = session.load(VIEW);
+            assert!(matches!(
+                session.save(VIEW, &first, "Note with context only"),
+                Response::NoteSaved(_)
+            ));
+            let shared = session.load(VIEW);
+            assert!(matches!(
+                session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "context-route".into(),
+                    event: brauser_protocol::WhyEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        artifact_id: shared.key.value.clone(),
+                        url: CONTEXT.into(),
+                        occurred_at: "2026-10-16T13:00:00Z".into(),
+                        incognito: false,
+                        text: "Preparing the review".into(),
+                    },
+                })),
+                Response::WhyRecorded(WhyRecorded {
+                    outcome: VisitOutcome::Persisted,
+                    ..
+                })
+            ));
+            session.policy("adapter");
+            for rebuild in [false, true] {
+                if rebuild {
+                    std::fs::remove_dir_all(loaded(&session.path).cache_dir().unwrap()).unwrap();
+                    session.index().reindex().unwrap();
+                }
+                let recovered = session.load(CONTEXT);
+                assert_eq!(recovered.key, shared.key);
+                assert_eq!(recovered.body, shared.body);
+                assert!(
+                    session
+                        .index()
+                        .artifact(&shared.key.value)
+                        .unwrap()
+                        .is_none(),
+                    "note recovery cannot invent measured activity"
+                );
+            }
+        }
+
+        #[test]
+        fn recovered_routes_keep_the_older_note_on_the_shared_notes_creation_url() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                note::save_note(
+                    &vault,
+                    VIEW,
+                    "Before adapters",
+                    "Separate URL text",
+                    "missing",
+                )
+                .unwrap();
+                let first = session.load(VIEW);
+                assert!(matches!(
+                    session.save(VIEW, &first, "Shared artifact text"),
+                    Response::NoteSaved(_)
+                ));
+                let shared = session.load(VIEW);
+                assert_eq!(shared.older_notes.len(), 1);
+                assert!(matches!(
+                    session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "remember-context-route".into(),
+                        event: brauser_protocol::WhyEvent {
+                            event_id: uuid::Uuid::new_v4().to_string(),
+                            artifact_id: shared.key.value.clone(),
+                            url: CONTEXT.into(),
+                            occurred_at: "2026-10-16T13:00:00Z".into(),
+                            incognito: false,
+                            text: "Preparing the review".into(),
+                        },
+                    })),
+                    Response::WhyRecorded(WhyRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                ));
+                session.policy(removal);
+                for rebuild in [false, true] {
+                    if rebuild {
+                        std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                        session.index().reindex().unwrap();
+                    }
+                    let recovered = session.load(CONTEXT);
+                    assert_eq!(recovered.key, shared.key);
+                    assert_eq!(recovered.revision, shared.revision);
+                    assert_eq!(recovered.older_notes, shared.older_notes, "{removal}");
+                    assert!(matches!(
+                        session.call(Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "view-creation-url".into(),
+                            url: CONTEXT.into(),
+                            source_url: VIEW.into(),
+                        })),
+                        Response::NoteLoaded(note) if note.body == "Separate URL text"
+                    ));
+                    assert_eq!(
+                        note::load_note(&vault, VIEW).unwrap().body,
+                        "Separate URL text"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_note_without_delivered_history_survives_each_policy_removal() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let first = session.load(VIEW);
+                assert!(matches!(
+                    session.save(VIEW, &first, "No activity required"),
+                    Response::NoteSaved(_)
+                ));
+                let saved = session.load(VIEW);
+                session.policy(removal);
+                std::fs::remove_dir_all(loaded(&session.path).cache_dir().unwrap()).unwrap();
+                let recovered = session.load(VIEW);
+                assert_eq!(recovered.key, saved.key);
+                assert_eq!(recovered.body, saved.body);
+                assert_eq!(recovered.revision, saved.revision);
+                assert!(matches!(
+                    session.save(VIEW, &recovered, "Still editable"),
+                    Response::NoteSaved(_)
+                ));
+                assert!(
+                    matches!(session.save(VIEW, &saved, "Stale text for copy-out"),
+                    Response::NoteConflict(reply) if reply.reason == "stale" && reply.body == "Still editable")
+                );
+                assert!(
+                    !session.root.join("log").exists(),
+                    "notes cannot restart capture"
+                );
+            }
+        }
+
+        #[test]
+        fn ambiguous_removed_notes_never_replace_an_occupied_url_note() {
+            let session = Session::new();
+            let config = loaded(&session.path);
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            // Two historical artifacts once used the same canonical form.
+            let keys = ["work:work.example/7", "work:other.example/8"];
+            let mut originals = Vec::new();
+            for id in keys {
+                let key = RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: id.into(),
+                };
+                note::save_keyed_note(&vault, EDIT, &key, "Separate artifact", id, "missing")
+                    .unwrap();
+                originals.push((key.clone(), vault.read_note(&key, EDIT).unwrap().unwrap()));
+            }
+            note::save_note(&vault, EDIT, "URL note", "Separate URL text", "missing").unwrap();
+            let url_key = crate::vault::url_record_key(EDIT).unwrap();
+            let url_bytes = vault.read_note(&url_key, EDIT).unwrap().unwrap();
+            session.policy("adapter");
+            for rebuild in [false, true] {
+                if rebuild {
+                    std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                    session.index().reindex().unwrap();
+                }
+                let current = session.load(EDIT);
+                assert_eq!(current.key, url_key);
+                assert_eq!(current.body, "Separate URL text");
+                for (key, bytes) in &originals {
+                    let stale = NoteLoaded {
+                        key: key.clone(),
+                        ..current.clone()
+                    };
+                    assert!(matches!(session.save(EDIT, &stale, "Keep copy-out"),
+                        Response::NoteConflict(reply) if reply.reason == "key_changed" && reply.body == current.body));
+                    assert_eq!(vault.read_note(key, EDIT).unwrap().as_ref(), Some(bytes));
+                }
+                assert_eq!(vault.read_note(&url_key, EDIT).unwrap().unwrap(), url_bytes);
+            }
+        }
+
+        #[test]
+        fn an_incomplete_note_scan_cannot_choose_an_autosave_target() {
+            for fault in ["count", "file bytes", "total bytes", "unreadable"] {
+                let session = Session::new();
+                let first = session.load(EDIT);
+                let Response::NoteSaved(saved) = session.save(EDIT, &first, "Keep original text")
+                else {
+                    panic!("expected saved note")
+                };
+                let current = session.load(EDIT);
+                session.policy("adapter");
+                let note_path = session.root.join(saved.relative_path);
+                let original = std::fs::read(&note_path).unwrap();
+                let pages = session.root.join("pages");
+                let mut faults = Vec::new();
+                match fault {
+                    "count" => {
+                        // A conflicting identity sorts after the scan cap.
+                        // The first artifact remains in the truncated set.
+                        let config = loaded(&session.path);
+                        let vault =
+                            Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                        let hidden_key = RecordKey {
+                            kind: RecordKeyKind::Artifact,
+                            value: "zzz:work.example/8".into(),
+                        };
+                        note::save_keyed_note(
+                            &vault,
+                            EDIT,
+                            &hidden_key,
+                            "Other artifact",
+                            "Keep other text",
+                            "missing",
+                        )
+                        .unwrap();
+                        let path = session
+                            .root
+                            .join(vault.note_relative_path(&hidden_key, EDIT).unwrap());
+                        assert!(
+                            path > note_path,
+                            "the conflicting note must sort after the original"
+                        );
+                        faults.push(path);
+                        for number in 0..4095 {
+                            let path = pages.join(format!("000-{number:04}.md"));
+                            std::fs::write(&path, b"").unwrap();
+                            faults.push(path);
+                        }
+                    }
+                    "file bytes" => {
+                        let path = pages.join("000-large.md");
+                        std::fs::File::create(&path)
+                            .unwrap()
+                            .set_len(4 * 1024 * 1024 + 1)
+                            .unwrap();
+                        faults.push(path);
+                    }
+                    "total bytes" => {
+                        for number in 0..4 {
+                            let path = pages.join(format!("000-large-{number}.md"));
+                            std::fs::write(&path, vec![b'x'; 4 * 1024 * 1024]).unwrap();
+                            faults.push(path);
+                        }
+                    }
+                    "unreadable" => {
+                        let path = pages.join("000-non-utf8.md");
+                        std::fs::write(&path, [0xff]).unwrap();
+                        faults.push(path);
+                    }
+                    _ => unreachable!(),
+                }
+                let response = session.call(Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "incomplete-scan".into(),
+                    url: EDIT.into(),
+                }));
+                assert!(
+                    matches!(response, Response::Error(reply) if reply.request_id == "incomplete-scan" && reply.message.contains("note identity is unavailable")),
+                    "{fault}"
+                );
+                assert!(
+                    matches!(session.save(EDIT, &current, "Must not autosave"), Response::Error(reply) if reply.message.contains("note identity is unavailable")),
+                    "{fault}"
+                );
+                assert_eq!(std::fs::read(&note_path).unwrap(), original);
+                // The optional discovery list retains its best-effort behavior.
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                assert!(vault.note_candidates().is_ok());
+                for path in faults {
+                    std::fs::remove_file(path).unwrap();
+                }
+                assert_eq!(session.load(EDIT).body, "Keep original text");
+            }
+        }
+    }
+
     #[test]
     fn saved_context_appears_before_the_first_activity_is_delivered() {
         let folder = tempfile::tempdir().unwrap();
@@ -3685,7 +4256,9 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
 
     #[test]
     fn unavailable_history_cannot_select_a_partial_note_identity() {
-        for publication_failure in [false, true] {
+        for (publication_failure, context_only) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let folder = tempfile::tempdir().unwrap();
             let root = folder.path().join("notes");
             std::fs::create_dir(&root).unwrap();
@@ -3737,20 +4310,45 @@ id = "work:{host}/{id}"
             let mut event = activity_for_invalid_policy();
             event.url = "https://work.example/items?item=2".into();
             event.artifact_id = second.key.value;
-            assert!(matches!(
-                record_activity(
-                    RecordActivityRequest {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: "history".into(),
-                        event,
-                    },
-                    &mut config
-                ),
-                Response::ActivityRecorded(ActivityRecorded {
-                    outcome: VisitOutcome::Persisted,
-                    ..
-                })
-            ));
+            let persisted = if context_only {
+                matches!(
+                    record_why(
+                        brauser_protocol::RecordWhyRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "history-context".into(),
+                            event: brauser_protocol::WhyEvent {
+                                event_id: event.event_id,
+                                artifact_id: event.artifact_id,
+                                url: event.url,
+                                occurred_at: event.occurred_at,
+                                incognito: false,
+                                text: "Context on the shared canonical URL".into(),
+                            },
+                        },
+                        &mut config
+                    ),
+                    Response::WhyRecorded(WhyRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                )
+            } else {
+                matches!(
+                    record_activity(
+                        RecordActivityRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "history".into(),
+                            event,
+                        },
+                        &mut config
+                    ),
+                    Response::ActivityRecorded(ActivityRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                )
+            };
+            assert!(persisted);
             write_config("");
             assert_eq!(
                 note_load(&mut config, canonical).key.kind,

@@ -103,6 +103,28 @@ enum CachedEvent {
     Legacy(LegacyVisit),
 }
 
+impl CachedEvent {
+    fn artifact_id(&self) -> &str {
+        match self {
+            Self::Activity(event) => &event.artifact_id,
+            Self::Why(event) => &event.artifact_id,
+            Self::Legacy(event) => &event.artifact_id,
+        }
+    }
+
+    /// Only URLs durably attributed to this artifact, never trail sources
+    /// (which belong to another artifact). Share this evidence in both note
+    /// lookup directions so primary recovery and older-note discovery agree.
+    fn urls(&self) -> impl Iterator<Item = &str> {
+        let (url, modes): (&str, &[brauser_protocol::ActivityMode]) = match self {
+            Self::Activity(event) => (&event.url, &event.modes),
+            Self::Why(event) => (&event.url, &[]),
+            Self::Legacy(event) => (&event.url, &[]),
+        };
+        std::iter::once(url).chain(modes.iter().map(|mode| mode.url.as_str()))
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LegacyVisit {
@@ -446,25 +468,25 @@ impl ArtifactIndex {
         }))
     }
 
-    /// Canonical URLs previously recorded for an artifact. Note lookup uses
-    /// these to discover URL-keyed M1 notes without scanning arbitrary files.
+    /// Canonical URLs previously recorded for an artifact, including mode
+    /// evidence and explicit context before any measured activity. Note
+    /// lookup uses these to discover URL-keyed M1 notes.
     pub fn artifact_urls(&self, artifact_id: &str) -> Result<Vec<String>> {
-        let derived = derive(&self.load_or_rebuild()?.events);
-        let mut urls = derived
-            .visits
-            .iter()
-            .filter(|visit| visit.artifact_id == artifact_id)
-            .map(|visit| visit.url.clone())
-            .collect::<BTreeSet<_>>();
-        if let Some(row) = derived.artifacts.get(artifact_id) {
-            urls.insert(row.url.clone());
-        }
-        Ok(urls.into_iter().collect())
+        Ok(self
+            .load_or_rebuild()?
+            .events
+            .values()
+            .filter(|event| event.artifact_id() == artifact_id)
+            .flat_map(CachedEvent::urls)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
     }
 
     /// Every distinct artifact previously recorded for a canonical URL,
-    /// checking both an activity's own URL and any mode-evidence URL hourly
-    /// coalescing may have folded into a later event's primary URL (so an
+    /// checking explicit context, an activity's own URL and any mode-evidence
+    /// URL hourly coalescing may have folded into a later event's primary URL (so an
     /// alternate route such as `/edit` is not lost once a visit's primary
     /// URL settles on `/view`). Note lookup falls back to this when no
     /// adapter currently recognizes the URL (for example, the adapter that
@@ -479,25 +501,15 @@ impl ArtifactIndex {
     /// (`web.page`, a reserved synthetic scheme no real adapter may use) is
     /// always excluded from the candidates.
     pub fn artifact_candidates_for_url(&self, url: &str) -> Result<BTreeSet<String>> {
-        let events = &self.load_or_rebuild()?.events;
-        let is_legacy = |id: &str| id.starts_with("web:");
-        let mut candidates = BTreeSet::new();
-        for event in events.values() {
-            match event {
-                CachedEvent::Activity(activity) if !is_legacy(&activity.artifact_id) => {
-                    if activity.url == url || activity.modes.iter().any(|mode| mode.url == url) {
-                        candidates.insert(activity.artifact_id.clone());
-                    }
-                }
-                CachedEvent::Legacy(legacy)
-                    if !is_legacy(&legacy.artifact_id) && legacy.url == url =>
-                {
-                    candidates.insert(legacy.artifact_id.clone());
-                }
-                _ => {}
-            }
-        }
-        Ok(candidates)
+        Ok(self
+            .load_or_rebuild()?
+            .events
+            .values()
+            .filter(|event| {
+                !event.artifact_id().starts_with("web:") && event.urls().any(|seen| seen == url)
+            })
+            .map(|event| event.artifact_id().to_owned())
+            .collect())
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of

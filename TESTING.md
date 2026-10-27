@@ -115,6 +115,34 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced an older URL note disappearing
+  from a recovered context-only route when the shared note's creation route
+  had no delivered activity. Older-note discovery now uses the shared note's
+  ownership-checked creation URL as well as log evidence. The failing-first
+  native regression covers adapter removal, rule narrowing, site removal,
+  cache deletion/reindex, read-only viewing and unchanged note revisions.
+  No browser or native dialog is involved. Full workspace and scripted-dialogs
+  suites pass, as do extension checks. The Node differential runner stalled in
+  this sandbox; the same 5,000 generated requests, with its U+2028/U+2029
+  escaping and generator-health checks, passed through separate bounded Python
+  subprocess calls to the Rust and TypeScript engines (2,355 matches, 426
+  invalid documents). macOS smoke cannot run on Linux, and offline fuzz
+  compilation lacks the cached `libfuzzer-sys` dependency.
+- 2026-10-27: The note-removal matrix uses framed native requests with a fresh
+  host store per request for save/load, adapter and site removal, older-note
+  viewing, migration refusal and capture suppression. Rule narrowing replaces
+  only the confirmation dialog through `confirm_config_with`; real consent
+  tokens, revision checks and the update handler still run. It covers edit/view
+  routes, mode-only evidence, context without measured activity, notes without
+  delivered history, occupied URL notes, ambiguous mappings, stale keys and
+  versions, deleted caches and reindex. Separate file-count, per-file byte,
+  aggregate-byte and non-UTF-8 fixtures prove incomplete primary scans refuse
+  loads and autosaves without changing notes; optional older-note scans stay
+  best effort. Three regressions failed before their fixes (initial fixture
+  errors used invalid adapter syntax and a future timestamp and were corrected
+  first). The existing unavailable-history test now exercises both activity
+  and `why` evidence hiding a conflicting identity. No real browser or native
+  dialog is involved; the macOS smoke expectation stays 14 dialogs.
 - 2026-10-27: Independent review reproduced a wrong-note load and overwrite
   when log catch-up failed and note recovery silently ignored the missing
   historical candidates. The regression creates two artifacts sharing a
