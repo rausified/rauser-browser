@@ -14,6 +14,7 @@ import {
   worker,
 } from "./settings.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { sitePatternControls } from "./site-pattern-settings.js";
 import { hostBuildText } from "./build-info.js";
 import {
   SETUP_WARNING,
@@ -174,6 +175,7 @@ function updateControls(): void {
   // Resume is offered only while a finished setup is paused.
   resumeButton.hidden = !capturePaused(session.config, session.configIssue ?? session.adapterIssue);
   for (const button of sitesList.querySelectorAll("button")) {
+    if (button.dataset.patternControl === "true") continue;
     button.disabled = !connected || busy || repairing || repairingAdapters;
   }
   newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters;
@@ -760,6 +762,7 @@ function renderConfig(): void {
     remove.setAttribute("aria-label", `Remove site ${origin}`);
     remove.addEventListener("click", () => void removeSite(origin));
     item.append(remove);
+    item.append(sitePatternControls(origin));
     sitesList.append(item);
   }
   renderStarterGallery();

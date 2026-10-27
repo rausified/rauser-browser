@@ -84,6 +84,21 @@ notes on pages no current adapter recognizes refuse to load or save until it
 is fixed or removed; removing it forgets those adapters. Notes alone do not
 turn capture back on.
 
+Expand **Page patterns** in the panel and choose **Review page patterns** to
+inspect the current address and same-site link patterns, including on sites
+without capture rules. It reads up to 500 anchors only on that click, replaces
+identifier and query values with placeholders, and generalizes route words
+seen in only one link shape. Short lowercase route words remain readable;
+closing, collapsing, leaving or reloading the page forgets its link patterns. This is
+a preview and does not enable capture on an unknown site.
+
+While capture is on, Brauser keeps up to 20 visited URL patterns per configured
+site for seven days in trusted extension storage, including patterns of pages
+that capture skips. Page titles are excluded, and these samples never enter
+your worklog or notes folder. In settings, expand a site's **Page patterns**
+to show or clear them. Clearing leaves capture on, so later navigations can
+add patterns again; pausing or removing the site clears them and stops sampling.
+
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows is in scope but has no accepted run yet (DESIGN.md §13, §14); the public package remains a later release milestone.
 
 ## License

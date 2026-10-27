@@ -270,8 +270,52 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
   a global pause. A pending local pause or removal blocks setup. Policy
   verification/publication failures after commit are reported as saved with
   status unavailable, so no automatic second save occurs. Unknown origins
-  still use advanced settings: the shaper, samples, top-frame link shapes,
-  host structural drafter, rule-selection review and re-keying remain unbuilt.
+  still use advanced settings for capture. The input/review slice below is
+  built; host structural drafting, rule-selection capture and re-keying remain
+  unbuilt.
+
+  **As built (2026-10-27 — private page-pattern review, `brwr-b39`).**
+  The panel's collapsed **Page patterns** review works on any public HTTP(S)
+  tab. It uses a self-contained function, shared with the worker shaper, in
+  the isolated top frame (`frameIds: [0]`). It checks exact URL, origin and
+  top-frame identity before reading hrefs and rechecks URL/origin afterward;
+  the panel checks the active tab both before and after the call and discards
+  canceled or superseded results. It scans at most the first 500 anchors,
+  including off-origin anchors in that budget, keeps only same-origin links,
+  and returns at most 50 counted shapes. Singleton route literals are judged
+  across distinct shapes, so duplicating one planted link cannot preserve
+  its literal. Link shapes remain only in the live review and are cleared on
+  navigation, close or collapse, with no storage-session handoff yet.
+
+  The worker samples real top-frame navigations on enabled origins after
+  excluding incognito tabs, even when no adapter matches the page. Sampling
+  does not widen activity capture. The bounded table, separate from activity
+  and delivery, stores only shape, capped count and last-seen timestamp; it
+  keeps the 20 most recently seen shapes per origin (ties sort by shape),
+  expires them after seven days, and purges on pause, policy suspension or
+  removal. Startup, maintenance alarms and explicit reads also prune it;
+  inactive policy cannot authorize sampling. Settings offers local show and
+  clear controls, including while the host needs repair. A clear reports a
+  storage failure; best-effort sampling/maintenance failures cannot interrupt
+  artifact capture. Samples never go to the host or notes folder in this slice.
+
+  Shaping refuses credentials, non-HTTP(S) URLs and inputs over 8,192 characters,
+  32 path segments, eight query pairs or 2,048 shape characters. Query order
+  is canonical; fragments disappear. Counts saturate at 1,000,000; total
+  origins cannot exceed the 64-adapter limit. Validation strips unknown stored
+  metadata and drops malformed/expired shapes. Short lowercase route words
+  remain visible in the review. The review creates no adapter, draft token,
+  native message or agent run. `brwr-t40` stays open for the host drafter,
+  per-rule safety/selection, pending shared-origin scope, identity cases and
+  recurring-page hint; known-site Capture Site retains its current flow.
+
+  **Drafting contract follow-up (`brwr-gf1`).** Step 7.6 names bare and
+  title-prefixed Notion page paths as a shared-ID success case, but those
+  paths have no literal before the first identifier and therefore fail the
+  current draft structure rule. This input slice shapes both correctly; it
+  does not relax that rule or claim either form can be structurally drafted.
+  Resolve the contradiction explicitly with host checker tests before
+  accepting the remaining unknown-site drafter.
 
   Create adapter with the structural drafter needs no agent, only `scripting`, which arrives with Tier 1 (§12.2 step 7.3). It is built in step 7.6. Agent drafting (step 7.7) needs M2 host invocation (step 8.2).
 
@@ -1121,7 +1165,7 @@ The plan follows Chrome's current [optional-permission rules](https://developer.
    3. Tier 1 fields in the worker while the page is live. This step adds `scripting` to the manifest (§8); M2 content extraction (step 8.4) reuses it. The policy lease carries the confirmed Tier 1 selectors, and the host drops any undeclared Tier 1 field a compromised worker delivers. The smoke run checks that fields are captured with the panel closed, including a late-rendering SPA field that needs the retry.
    4. Worklog files: the optional Brauser-owned daily or weekly files (§5.1), off by default, behind the sync caution.
    5. The remaining starter adapters for the common tools, each checked against the live tool on the date it records and each with its documentation page (spec §11.1).
-   6. **Partly built (2026-10-27):** the panel reviews and enables the known Jira, SharePoint/OneDrive and separately scoped GitHub starters without JSON. The remaining unknown-site work is `brwr-t40`; the parent Capture Site item stays open. Create adapter with the structural drafter (§5.1), after Tier 1 (step 7.3) brings `scripting`; no agent. This step adds the URL-shape sample and the recurring-pages hint, the panel button and the "Create adapter for this site" context-menu entry, the link-shape function, the host's structural drafter, and the review in the settings page's adapter editor. Shaper tests feed real URL forms from every shipped starter adapter, plus Confluence `/display/SPACE/Title`, SharePoint `sourcedoc` GUIDs, Notion `Title-<32 hex>` pages, percent-encoded names, and long mixed-case slugs, and check that no stored shape contains a digit outside a placeholder name, an uppercase letter, a segment over 20 characters, a query value, or any title. Link-shape tests check that the function runs only in the top frame of the document the panel saw, rechecks the origin, reads only same-origin `href`s, stops at 500 links, turns a literal seen in only one link into `{slug}`, returns at most 50 shapes and no raw URL, and that nothing it returns is stored, sampled, or delivered. Drafter tests feed the shapes of every shipped starter adapter's recorded URLs and check that the draft matches those URLs with one adapter per kind of page, unique types, and no `web` scheme. Named cases: a GitHub pull request and its `/files` tab become one adapter keyed by owner, repository, and number; Notion pages with and without a title slug share one `hex(32)@tail` ID; SharePoint's `sourcedoc` GUID, not `15`, becomes the ID; and Google Docs' `/u/0/` never enters an ID. They also feed planted links steering toward `/{*}`, a root match, a search page, an auth or capability route, an ID from a search or paging parameter, an ID-less rule, or a new alternative on a visited rule, and check that each is dropped, or kept in a separate unchecked rule, before the review. A `token`-only rule starts unchecked, and a draft overlapping an existing adapter loses only the overlapping rules. Flow tests cover starting from the context menu on an ungranted tab, a canceled or expired flow removing the newly granted origin but keeping it when a note was taken there meanwhile, a link-shape run that returns nothing after the tab navigated, a shared origin whose tenant position becomes a capture with scope pending and Enable disabled until the user chooses, a draft unchecked down to one rule, and a user edit turning only the edited rule into user-written config whose draft-rule failures only warn.
+   6. **Partly built (2026-10-27):** the panel reviews and enables the known Jira, SharePoint/OneDrive and separately scoped GitHub starters without JSON. `brwr-b39` additionally builds private URL shaping, bounded worker samples, click-only link shapes and a read-only panel/settings review (§5.1). The remaining host drafting and unknown-site capture work is `brwr-t40`; the parent Capture Site item stays open. Create adapter with the structural drafter (§5.1), after Tier 1 (step 7.3) brings `scripting`; no agent. This step adds the URL-shape sample and the recurring-pages hint, the panel button and the "Create adapter for this site" context-menu entry, the link-shape function, the host's structural drafter, and the review in the settings page's adapter editor. Shaper tests feed real URL forms from every shipped starter adapter, plus Confluence `/display/SPACE/Title`, SharePoint `sourcedoc` GUIDs, Notion `Title-<32 hex>` pages, percent-encoded names, and long mixed-case slugs, and check that no stored shape contains a digit outside a placeholder name, an uppercase letter, a segment over 20 characters, a query value, or any title. Link-shape tests check that the function runs only in the top frame of the document the panel saw, rechecks the origin, reads only same-origin `href`s, stops at 500 links, turns a literal seen in only one link into `{slug}`, returns at most 50 shapes and no raw URL, and that nothing it returns is stored, sampled, or delivered. Drafter tests feed the shapes of every shipped starter adapter's recorded URLs and check that the draft matches those URLs with one adapter per kind of page, unique types, and no `web` scheme. Named cases: a GitHub pull request and its `/files` tab become one adapter keyed by owner, repository, and number; Notion pages with and without a title slug share one `hex(32)@tail` ID; SharePoint's `sourcedoc` GUID, not `15`, becomes the ID; and Google Docs' `/u/0/` never enters an ID. They also feed planted links steering toward `/{*}`, a root match, a search page, an auth or capability route, an ID from a search or paging parameter, an ID-less rule, or a new alternative on a visited rule, and check that each is dropped, or kept in a separate unchecked rule, before the review. A `token`-only rule starts unchecked, and a draft overlapping an existing adapter loses only the overlapping rules. Flow tests cover starting from the context menu on an ungranted tab, a canceled or expired flow removing the newly granted origin but keeping it when a note was taken there meanwhile, a link-shape run that returns nothing after the tab navigated, a shared origin whose tenant position becomes a capture with scope pending and Enable disabled until the user chooses, a draft unchecked down to one rule, and a user edit turning only the edited rule into user-written config whose draft-rule failures only warn.
    7. Agent drafting, after M2 host invocation (step 8.2), using the same harness isolation, for the hint and for **Improve with AI** in the review. Draft tests give the fake harness the step 7.6 planted inputs and check that its drafts are held to the same per-rule checks. They also cover a draft carrying Tier 1 fields, a title template, or a `scope`, and a draft that does not parse; the host must reject each before the preview, and the preview must list every non-artifact shape a borderline draft matches.
 8. **Build the rest of M2** after M1.5a, in this order, each step reviewed and merged separately. The sub-steps keep M2's step numbers, so step 8.2 is M2 step 2.
    2. Host invocation: an environment of only the allowlisted variables, argv from the template, page content on stdin inside the untrusted-data block, the host-owned working directory, a timeout, output cap, and process-tree kill, and the confirmed-install-location prefix check (§7.1). Test with fake harness binaries on both OSes, including one whose symlink target changes between runs (identity re-check), one moved outside the confirmed install location, one that emits a tool call or an unknown Codex event, and one that reports `is_error`. Run the §7.1 canary for each shipped harness template, including a prompt-injected page that asks Codex to read a planted file; it passes if the contents appear in no forwarded chunk or summary and any non-allowlisted event ends the run as `rejected`.

@@ -262,6 +262,16 @@ and the protocol v6 removals) is done; see Shipped.
   per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
   panel review; all named planted-link, shared-origin and identity tests remain
   required. This is the remaining portion of Capture Site after known sites.
+  **Cycle split (2026-10-27):** the private input layer and an inspectable,
+  review-only panel/settings surface shipped first (see Shipped). The parent remains
+  open for the host structural drafter, per-rule checks, shared-origin scope,
+  selected-rule capture and all named identity/flow cases. A pattern preview
+  must never imply that unknown-site capture is enabled.
+- [ ] `brwr-gf1` **Resolve the bare-Notion draft-rule contradiction.** The
+  named Notion identity success case has no route literal before its first
+  identifier, while the draft checker requires one. Document and test a
+  consistent outcome before closing `brwr-t40`; keep the host's leading-route
+  safety requirement intact until an explicit, tested design replaces it.
 - [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
   hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
   existing activity, notes, and index rows through explicit append-only
@@ -437,6 +447,11 @@ main, check the item off as "not reproduced" and say why. The last item,
 
 ### Cookie's own proposals (only after the plan work above)
 
+- [ ] `brwr-vny` **Explain why the current page is outside capture.** Use
+  the compiled policy to distinguish a paused site, pending removal, tenant
+  scope and an unmatched page rule, with the relevant settings/review action.
+  Link patterns must never become evidence that a page was visited.
+
 - [ ] `brwr-r88` **Show ambiguous historical notes for explicit read-only viewing.**
   When several artifacts share a canonical URL after removal, list the
   verified preserved notes in the panel so a person can read one deliberately.
@@ -534,6 +549,8 @@ main, check the item off as "not reproduced" and say why. The last item,
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Feature. **Inspect private page patterns from the panel and settings (2026-10-27).** A collapsed panel review shows the shaped current address and same-origin link patterns only after a click, including on unknown sites. The shared shaper removes identifier/query values and title-like segments; the isolated top-frame reader checks page identity, scans at most 500 anchors and returns at most 50 shapes, generalizing singleton literals. Configured sites retain at most 20 visited shapes for seven days with local show/clear controls, including during host repair; incognito tabs, pauses and removals stay excluded, and samples never enter delivery or the vault. Closing, collapsing or navigating drops link results. This completes `brwr-b39`; unknown-site host drafting and enabling remain in `brwr-t40`. **Metrics:** 332 Rust tests and 11 extension test files passing; 21 new shaper, worker and composed UI scenarios; full required gate, both Clippy configurations and queue consistency green. macOS smoke unavailable on Linux; no scripted-dialog or smoke-step changes. Salvaged onto main by hand after the overnight rebase failed; the independent review pass also stopped attention timing on the previous artifact after an oversized same-origin navigation.
 
 - [x] `brwr-hme` **One Brauser home folder (2026-10-27, #82).** The user picks one home folder; Brauser keeps `notes/`, `artifacts/`, `summaries/` and `logs/` inside it in a fixed layout, migrating older layouts once (`pages/` → `notes/`, `log/` → `logs/`, no-clobber). Machine state stays in OS directories.
 - **Category:** New Capability. **Start capturing known work sites from the current page (2026-10-27).** The panel now reviews and enables Jira Cloud, SharePoint/OneDrive and separately scoped GitHub pull requests/issues without opening JSON. It shows the actual page's match, labeled illustrative examples and all fixed safety probes, preserves configured sites and pauses, and refuses stale reviews or pending removals. Existing note edits save before identity changes, with copy-out on failure; page-installed policy starts attention on already-open artifacts without inventing cold opens or suppressing real opens during background renewal. Unknown-site drafting stays queued in `brwr-t40`, and the parent remains open. **Metrics:** 332 Rust tests and 10 extension test files passing; 26 new model, composed-panel and worker regressions; full required gate, both Clippy configurations and queue consistency green. macOS smoke refused on Linux; 14 scripted dialogs unchanged.
@@ -729,3 +746,19 @@ main, check the item off as "not reproduced" and say why. The last item,
 - Cross-page adapter edits can safely follow `(origin, type, id)` plus an unchanged structural snapshot today. If M1.5b aliases introduce persistent adapter or rule identifiers, carry those identifiers into the editor target instead of weakening this fail-closed conflict check; same-identity ambiguity must never fall back to array position.
 - Consent deltas now use the same `(origin, type, id)` identity as the settings editor but deliberately keep precedence as a separate ordered concern. If persistent adapter IDs arrive with aliases, migrate both consumers together and retain explicit reorder detection; conflating identity with array position was the root cause of two independent deploy blockers.
 - A Chrome revocation can leave a rule for that origin inside an unsupported adapter document because the host's repair exception permits only an exact echo. Capture remains suspended and the host site allowlist is narrowed immediately; `brwr-jnj`'s replacement workspace should call out and remove these now-orphaned rules when the user converts the document to a supported format.
+
+### Cycle observations (2026-10-27 — page-pattern review)
+
+- `brwr-b39` completes the private input and user inspection surface; continue
+  `brwr-t40` for a real unknown-site draft and enable flow rather than adding
+  another diagnostic view. The parent remains open, and the external
+  open-access service work remains outside this cycle.
+- Review the Notion contract in `brwr-gf1` before implementing kind grouping: a
+  bare fixed-shape identifier has no leading route literal. The existing
+  checker must not be bypassed to make a named success case appear green.
+- Short lowercase route words survive shaping by design. Keep the disclosure
+  concrete; patterns are useful drafting evidence, not guaranteed anonymous
+  data. Link counts are not visits, and link-only candidates must remain
+  unchecked in the future rule review.
+- `brwr-vny` is a later product idea: help a person understand a skipped page
+  using an actual policy reason, after the ordered Capture Site work.

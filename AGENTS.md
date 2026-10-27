@@ -162,8 +162,19 @@ reviews, and saves old note edits before reloading their host-derived identity.
 Installing policy from a page seeds already-open recognized tabs for attention
 measurement without inventing cold opens; background renewals retain their
 normal navigation accounting.
-Unknown-site URL shaping, link shapes and the host structural drafter are still
-unbuilt (`brwr-t40`); starter live-tool certification remains human work.
+The separate **Page patterns** panel review now inspects a URL and up to 500
+same-page anchors on an explicit click, in the top frame's isolated world.
+Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier
+and query values with fixed placeholders, keeps only short lowercase route
+words, generalizes link-only singleton literals and returns at most 50 link
+shapes. Link shapes stay only in the review and are discarded on navigation,
+close or collapse. The worker independently samples at most 20 visited shapes
+per actively enabled origin for seven days in trusted-only local storage;
+settings can show or clear them without the host. Private tabs are excluded,
+pauses/removals purge samples, and samples never enter delivery or the vault.
+This is the input/review slice of `brwr-t40`, not unknown-site capture: the
+host structural drafter, selected-rule enable flow and recurring-page hint
+remain unbuilt; starter live-tool certification remains human work.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on

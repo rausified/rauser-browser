@@ -62,6 +62,14 @@ interface ChromeContextMenuClickInfo {
 }
 
 interface ChromeApi {
+  scripting: {
+    executeScript<T>(injection: {
+      target: { tabId: number; frameIds: [0] };
+      world: "ISOLATED";
+      func: (expectedUrl: string, readLinks: boolean) => T;
+      args: [string, boolean];
+    }): Promise<{ frameId: number; result?: T }[]>;
+  };
   runtime: {
     id: string;
     getURL(path: string): string;

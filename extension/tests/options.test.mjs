@@ -245,6 +245,55 @@ const lastUpdate = () => env.requests.findLast((request) => request.type === "up
 // Each site row is its origin followed by a Remove site button.
 const siteRows = () => env.elements.get("sites-list").children.map((item) => item.children[0]?.textContent ?? item.textContent);
 
+test("settings inspect and clear local page patterns without saving configuration", async () => {
+  const origin = "https://patterns.example";
+  let rows = [{ shape: "/items/{num}", count: 3, last_seen: Date.now() }];
+  install({ adapters: [artifactFor(origin)], worker: {
+    get_site_patterns: (request) => { assert.equal(request.origin, origin); return rows; },
+    clear_site_patterns: (request) => { assert.equal(request.origin, origin); rows = []; return rows; },
+  } });
+  await openSettings();
+  const site = env.elements.get("sites-list").children[0];
+  const details = site.children.find((child) => child.tagName === "DETAILS");
+  assert.ok(details);
+  const [show, clear] = details.querySelectorAll("button");
+  assert.equal(show.textContent, "Show patterns");
+  assert.equal(clear.textContent, "Clear patterns");
+  assert.equal(env.workerRequests.some((request) => request.kind === "get_site_patterns"), false, "samples load only on request");
+  const requestsBefore = env.requests.length;
+  show.click();
+  await until(() => !show.disabled, "patterns to load");
+  assert.match(details.querySelectorAll("li")[0].textContent, /\/items\/\{num\} · 3 navigations/);
+  clear.click();
+  await until(() => !clear.disabled, "patterns to clear");
+  assert.equal(details.querySelectorAll("li").length, 0);
+  assert.ok(details.children.some((child) => child.textContent.startsWith("Patterns cleared.")));
+  assert.equal(env.requests.length, requestsBefore, "no native request for reading or clearing samples");
+  assert.equal(env.config.capture_enabled, true);
+  assert.deepEqual(env.permissionCalls, []);
+});
+
+test("pattern controls report worker failures and remain usable during host repair", async () => {
+  const origin = "https://pattern-repair.example";
+  install({ adapters: [artifactFor(origin)], worker: {
+    get_site_patterns: () => { throw new Error("Pattern storage unavailable"); },
+    clear_site_patterns: () => [],
+  } });
+  env.configIssue = "Repair the host configuration";
+  await openSettings();
+  const details = env.elements.get("sites-list").children[0].children.find((child) => child.tagName === "DETAILS");
+  const [show, clear] = details.querySelectorAll("button");
+  assert.equal(show.disabled, false);
+  assert.equal(clear.disabled, false);
+  show.click();
+  await until(() => !show.disabled, "the failed pattern read");
+  assert.ok(details.children.some((child) => child.textContent.includes("Pattern storage unavailable")));
+  clear.click();
+  await until(() => !clear.disabled, "local clearing during repair");
+  assert.ok(details.children.some((child) => child.textContent.startsWith("Patterns cleared.")));
+  assert.equal(env.requests.some((request) => request.type === "update_config"), false);
+});
+
 async function openSettings({ connected = true } = {}) {
   loads += 1;
   await import(`../dist/options.js?load=${loads}`);
@@ -258,7 +307,7 @@ function typeSite(url) {
 }
 
 async function removeListedSite(index = 0) {
-  const remove = env.elements.get("sites-list").querySelectorAll("button")[index];
+  const remove = env.elements.get("sites-list").querySelectorAll("button").filter((button) => button.textContent === "Remove site")[index];
   remove.click();
   await until(() => statusText().startsWith("Removed ") && idle(), "the removal to finish");
 }
