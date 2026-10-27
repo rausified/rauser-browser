@@ -22,6 +22,14 @@ export class SitePatternPanel {
       this.cancel();
       this.start.focus();
     });
+    // A reload or document replacement keeps the tab ID and can keep the URL,
+    // so the URL alone cannot tell the review that its links are stale. Any
+    // new load or URL change in the reviewed tab discards the review,
+    // including one still in flight (an A-to-B-to-A navigation).
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+      if (this.target && tabId === this.target.tabId &&
+        (changeInfo.status === "loading" || changeInfo.url !== undefined)) this.cancel();
+    });
   }
 
   render(page: PatternPage | null, busy: boolean): void {

@@ -179,6 +179,9 @@ This standard is meant to improve with use. When you change it:
   shapes in the panel. The link reader now walks the lazy `document.links`
   collection and never reads its length, so the 500-link cap also bounds work
   on a hostile page; the site-pattern test's mock fails if length is read.
+  A same-URL reload kept a completed review's link shapes, since the panel
+  compared only tab ID and URL; any `loading` or URL update in the reviewed
+  tab now discards the review, held reads included.
 - 2026-10-27: Independent review reproduced an oversized same-origin
   navigation leaving the previous artifact mapped for attention measurement.
   The worker regression starts on a recognized artifact, navigates to a

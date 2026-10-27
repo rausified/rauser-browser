@@ -80,7 +80,7 @@ inspect the current address and same-site link patterns, including on sites
 without capture rules. It reads up to 500 anchors only on that click, replaces
 identifier and query values with placeholders, and generalizes route words
 seen in only one link shape. Short lowercase route words remain readable;
-closing, collapsing or leaving the review forgets its link patterns. This is
+closing, collapsing, leaving or reloading the page forgets its link patterns. This is
 a preview and does not enable capture on an unknown site.
 
 While capture is on, Brauser keeps up to 20 visited URL patterns per configured

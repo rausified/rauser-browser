@@ -257,6 +257,9 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
       state.tab = { ...state.tab, url, id, incognito: false };
       for (const listener of tabActivated.registered) listener({ tabId: id, windowId: 1 });
     },
+    tabUpdated(changeInfo, id = state.tab?.id ?? 1) {
+      for (const listener of tabUpdated.registered) listener(id, changeInfo, { ...state.tab, id });
+    },
     policyChanged() {
       for (const listener of chrome.storage.onChanged.registered) {
         listener({ [POLICY_STORAGE_KEY]: { newValue: null } }, "local");
@@ -388,6 +391,31 @@ test("page-pattern review on an unknown site reads links only on click without c
   page.el("site-pattern-close").click();
   assert.equal(page.el("site-pattern-result").hidden, true);
   assert.equal(page.el("site-pattern-rows").textContent, "");
+});
+
+test("reloading the reviewed page discards its link patterns, including a held read", async () => {
+  const url = "https://unknown.example/items/1";
+  const page = await install({ tab: { id: 1, url, title: "A" },
+    script: async () => ({ current: "/items/{num}", links: [{ shape: "/items/{num}/{slug}", count: 2 }] }) });
+  await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  page.tabUpdated({ status: "loading" });
+  assert.equal(page.el("site-pattern-result").hidden, true);
+  assert.equal(page.el("site-pattern-rows").textContent, "");
+
+  let finish;
+  const held = new Promise((resolve) => { finish = resolve; });
+  const second = await install({ tab: { id: 1, url, title: "A" }, script: () => held });
+  await until(() => !second.el("site-pattern-review").disabled, "pattern review ready");
+  second.el("site-pattern-review").click();
+  await until(() => second.state.scripts.length === 1, "the held script");
+  second.tabUpdated({ url: "https://unknown.example/items/2" });
+  second.tabUpdated({ url });
+  finish({ current: "/items/{num}", links: [{ shape: "/stale/{num}", count: 1 }] });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(second.el("site-pattern-result").hidden, true);
+  assert.equal(second.el("site-pattern-rows").textContent, "");
 });
 
 test("a failed visited-pattern read still shows the page's own patterns", async () => {
