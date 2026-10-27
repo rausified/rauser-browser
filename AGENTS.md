@@ -166,7 +166,11 @@ frozen-ID check (`validate_adapter_transition_with_history`, via
 `retired_by_hand`). An unusable state file makes identity on every page the
 current policy does not recognize unavailable (`NoteKeyRule::StateUnavailable`,
 whose refusal names the file), and refuses adapter additions until it is
-repaired; a damaged entry does both for its origin only. Those contracts alone decide an origin they
+repaired; a damaged entry does both for its origin only. `config_result`
+reports it as `adopted_state` (issue, revision, and recording warnings), and
+settings' **Forget recorded adapters** (`forget_adopted_contracts`,
+`ConfigStore::forget_adopted_contracts`, `extension/adopted-state-settings.ts`)
+backs the file up and records afresh under the config lock. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL
