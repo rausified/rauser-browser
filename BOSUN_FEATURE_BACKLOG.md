@@ -872,7 +872,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `46f17b3`)
+### Current health handoff (2026-10-27 — baseline `bdbbbb4`)
 
 - Clean workspace; no quarantine failure file. The unfiltered opening gate
   again passes 26 adapter-template tests and 447 host tests, then fails 32
@@ -881,16 +881,16 @@ were folded into `brwr-q7e` above rather than given their own item.
   configurations, npm install, typecheck, lint, extension build, current-state
   validation and queue consistency. The repaired dialog fixture completes its
   60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
-- Independent workspace AF_UNIX bind and connect both return errno 1 EPERM.
+- An independent workspace AF_UNIX bind returns errno 1 EPERM.
   A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
   The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
   and 1 platform skip, with the win32 simulation unable to parse empty output.
   TESTING.md documents that diagnostic and the restriction. Keep all tests
   enabled and do not change production IPC to fit this runner.
 - The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9` and `46f17b3`. No commit among the last
-  five is verified green in this runner, so no history reset was attempted. Earlier quarantine recovery
-  is retained; this cycle introduces no product or test change and claims no
+  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3` and `bdbbbb4`.
+  No commit among the last five is verified green in this runner, so no
+  history reset was attempted. Earlier quarantine recovery is retained; this cycle introduces no product or test change and claims no
   shipped feature.
 - The driver needs to carry the baseline SHA and an unfiltered external
   gate result into its next handoff, and provide a runner permitting local
@@ -903,9 +903,11 @@ were folded into `brwr-q7e` above rather than given their own item.
   preview which example pages share an artifact still belongs in this review;
   no additional diagnostic view or self-directed feature is needed first.
 
-- Baseline `46f17b3` was checked again without test exclusions. Raw Rust
+- Baseline `bdbbbb4` was checked again without test exclusions. Raw Rust
   output is retained locally at
-  `target/overnight-health/baseline-46f17b3/cargo-test.log` (gitignored).
+  `target/overnight-health/baseline-bdbbbb4/cargo-test.log` (gitignored).
+  The script gate and its diagnostic output are beside it as
+  `scripts-test.log` and `scripts-diagnostic.log`.
   The first denied fixture bind is `host/src/service/client.rs:436`;
   server fixtures subsequently time out waiting for the unavailable listener.
   No product or test changes can grant the missing runner capability.
