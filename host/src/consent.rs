@@ -95,6 +95,33 @@ pub struct Authorized {
     pub harness_commit: Option<HarnessCommit>,
 }
 
+/// The config a change starts from, with what the host knows about it that
+/// the snapshot cannot say. Every grant also binds the file revision, which
+/// changes whenever this does.
+#[derive(Clone, Copy)]
+pub struct Current<'a> {
+    pub config: &'a ConfigSnapshot,
+    /// `storage.artifacts_dir` is the host's proposal for a config written
+    /// before that key existed, never a folder the user chose
+    /// (`ConfigStore::artifacts_dir_proposed`).
+    pub artifacts_dir_proposed: bool,
+}
+
+impl<'a> Current<'a> {
+    pub fn new(config: &'a ConfigSnapshot, artifacts_dir_proposed: bool) -> Self {
+        Self {
+            config,
+            artifacts_dir_proposed,
+        }
+    }
+}
+
+impl<'a> From<&'a ConfigSnapshot> for Current<'a> {
+    fn from(config: &'a ConfigSnapshot) -> Self {
+        Self::new(config, false)
+    }
+}
+
 pub struct HarnessConfirmation {
     pub harness_token: String,
     pub config: ConfigSnapshot,
@@ -160,9 +187,9 @@ impl ConsentAuthority {
 
     /// The dialog text is derived only from the actual policy delta. A caller
     /// supplied string never appears in the native confirmation as a claim.
-    pub fn confirm_config(
+    pub fn confirm_config<'c>(
         &mut self,
-        current: &ConfigSnapshot,
+        current: impl Into<Current<'c>>,
         revision: &str,
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
@@ -170,18 +197,20 @@ impl ConsentAuthority {
         self.confirm_config_with(current, revision, next, picker_token, dialog::confirm)
     }
 
-    pub(crate) fn confirm_config_with(
+    pub(crate) fn confirm_config_with<'c>(
         &mut self,
-        current: &ConfigSnapshot,
+        current: impl Into<Current<'c>>,
         revision: &str,
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
         confirm: fn(DialogText<'_>) -> Result<bool>,
     ) -> Result<Option<ConfigConfirmation>> {
+        let view = current.into();
+        let current = view.config;
         config::validate_update(current, next)?;
         self.check_picker(current, revision, next, picker_token)?;
         check_agent_fields(current, next)?;
-        let changes = approval_lines(current, next);
+        let changes = approval_lines(view, next);
         let summary = if changes.is_empty() {
             "No additional capture access is requested.".to_owned()
         } else {
@@ -266,9 +295,9 @@ impl ConsentAuthority {
     /// Show the host-authored harness confirmation, then run one test prompt.
     /// The offer is spent first, so it is single-use even when a later step
     /// fails. `Ok(None)` means the user canceled; nothing was minted.
-    pub fn confirm_harness_setup(
+    pub fn confirm_harness_setup<'c>(
         &mut self,
-        current: &ConfigSnapshot,
+        current: impl Into<Current<'c>>,
         revision: &str,
         request: &ConfirmHarnessSetupRequest,
         env: &HarnessEnv,
@@ -277,14 +306,16 @@ impl ConsentAuthority {
     }
 
     /// `confirm_harness_setup` with the dialog injected, for tests.
-    pub(crate) fn confirm_harness_setup_with(
+    pub(crate) fn confirm_harness_setup_with<'c>(
         &mut self,
-        current: &ConfigSnapshot,
+        current: impl Into<Current<'c>>,
         revision: &str,
         request: &ConfirmHarnessSetupRequest,
         env: &HarnessEnv,
         confirm: impl FnOnce(DialogText<'_>) -> Result<bool>,
     ) -> Result<Option<HarnessConfirmation>, SetupError> {
+        let view = current.into();
+        let current = view.config;
         let Some(grant) = self.offer_grants.remove(&request.offer_id) else {
             return Err(SetupError::unauthorized(
                 "harness offer is unknown or already used; detect again",
@@ -356,7 +387,7 @@ impl ConsentAuthority {
         };
         config::validate_update(current, &after)
             .map_err(|error| SetupError::new(ErrorCode::InvalidConfig, error.to_string()))?;
-        let (title, summary) = harness_confirmation_text(&candidate, &after, current)
+        let (title, summary) = harness_confirmation_text(&candidate, &after, view)
             .map_err(|error| SetupError::new(ErrorCode::InvalidConfig, error.to_string()))?;
         let confirmed = confirm(DialogText {
             title: &title,
@@ -411,15 +442,17 @@ impl ConsentAuthority {
 
     /// Validate grants immediately before the revision-checked config write.
     /// Grants are removed only after the write succeeds.
-    pub fn authorize_update(
+    pub fn authorize_update<'c>(
         &self,
-        current: &ConfigSnapshot,
+        current: impl Into<Current<'c>>,
         revision: &str,
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
         consent_token: Option<&str>,
         harness_token: Option<&str>,
     ) -> Result<Authorized> {
+        let view = current.into();
+        let current = view.config;
         config::validate_update(current, next)?;
         if let Some(token) = harness_token {
             if picker_token.is_some() || consent_token.is_some() {
@@ -429,7 +462,7 @@ impl ConsentAuthority {
         }
         let selected_identity = self.check_picker(current, revision, next, picker_token)?;
         check_agent_fields(current, next)?;
-        if !approval_lines(current, next).is_empty() {
+        if !approval_lines(view, next).is_empty() {
             let token =
                 consent_token.context("native confirmation is required for this config change")?;
             let Some(grant) = self.consent_grants.get(token) else {
@@ -682,10 +715,10 @@ fn bounded(mut text: String, max: usize) -> String {
 /// instructions and skills reach it. The settings page says the same.
 pub const CODEX_DISCLOSURE: &str = "Codex uses your own Codex home and login, so your AGENTS.md and skills can shape answers. Claude Code is recommended.";
 
-pub fn harness_confirmation_text(
+pub fn harness_confirmation_text<'c>(
     candidate: &Candidate,
     after: &ConfigSnapshot,
-    current: &ConfigSnapshot,
+    current: impl Into<Current<'c>>,
 ) -> Result<(String, String)> {
     let name = candidate.adapter.display_name();
     let agent = after
@@ -846,7 +879,11 @@ fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result
     Ok(())
 }
 
-fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String> {
+fn approval_lines<'c>(current: impl Into<Current<'c>>, next: &ConfigSnapshot) -> Vec<String> {
+    let Current {
+        config: current,
+        artifacts_dir_proposed,
+    } = current.into();
     let mut lines = Vec::new();
     // A hand-edited but unusable config is not a trusted prior grant. Repair
     // must ask again before it makes any of those rules effective.
@@ -962,9 +999,12 @@ fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String
                 old_storage.map(|value| value.later_dir.as_str()),
                 Some(next_storage.later_dir.as_str()),
             ),
+            // A proposed folder was never chosen: saving it is choosing it.
             (
                 "artifact files folder",
-                old_storage.map(|value| value.artifacts_dir.as_str()),
+                old_storage
+                    .filter(|_| !artifacts_dir_proposed)
+                    .map(|value| value.artifacts_dir.as_str()),
                 Some(next_storage.artifacts_dir.as_str()),
             ),
             // Clearing the summaries folder only turns summaries off.
@@ -1269,6 +1309,56 @@ mod tests {
         );
         assert!(approval_lines(&with(Some("summaries")), &with(None)).is_empty());
         assert!(authorize(&with(None), &with(Some("summaries")), None, None).is_err());
+    }
+
+    #[test]
+    fn saving_a_proposed_artifact_folder_needs_confirmation() {
+        // A config from before artifacts_dir carries only a host proposal.
+        // The first save that would persist it must name it, even unchanged.
+        let folder = tempfile::tempdir().unwrap();
+        let current = ConfigSnapshot {
+            storage: Some(StorageConfig {
+                root: folder.path().to_string_lossy().into_owned(),
+                profile: "neutral".into(),
+                log_dir: "log".into(),
+                pages_dir: "pages".into(),
+                later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
+                summaries_dir: None,
+            }),
+            ..crate::config::empty_config()
+        };
+        let proposed = Current::new(&current, true);
+        assert_eq!(
+            approval_lines(proposed, &current),
+            vec!["Set artifact files folder to \"artifacts\".".to_owned()]
+        );
+        assert!(approval_lines(Current::from(&current), &current).is_empty());
+        assert!(
+            ConsentAuthority::new()
+                .authorize_update(proposed, "revision", &current, None, None, None)
+                .is_err()
+        );
+        let mut authority = ConsentAuthority::new();
+        let confirmed = authority
+            .confirm_config_with(proposed, "revision", &current, None, |text| {
+                assert!(text.description.contains("artifact files folder"));
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+        assert!(
+            authority
+                .authorize_update(
+                    proposed,
+                    "revision",
+                    &current,
+                    None,
+                    Some(&confirmed.consent_token),
+                    None,
+                )
+                .is_ok()
+        );
     }
 
     #[test]

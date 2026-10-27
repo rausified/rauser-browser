@@ -105,7 +105,7 @@ esac
         fs::write(
             &self.config,
             format!(
-                "root_picker_confirmed = true\nroot_identity = {:?}\nagent_denylist = [\"bank.example\"]\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n",
+                "root_picker_confirmed = true\nroot_identity = {:?}\nagent_denylist = [\"bank.example\"]\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\nartifacts_dir = \"artifacts\"\n",
                 identity,
                 root.to_str().unwrap(),
             ),

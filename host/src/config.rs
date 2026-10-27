@@ -66,6 +66,7 @@ pub struct ConfigStore {
     adapter_issue: Option<String>,
     adapter_warnings: Option<Vec<AdapterWarning>>,
     adapter_document: Option<AdapterTemplates>,
+    artifacts_dir_proposed: bool,
 }
 
 struct DiskState {
@@ -73,6 +74,7 @@ struct DiskState {
     revision: String,
     issue: Option<String>,
     needs_backup: bool,
+    artifacts_dir_proposed: bool,
     root_identity: Option<String>,
     agent: AgentView,
     adapter_extensions: BTreeMap<String, toml::Value>,
@@ -265,6 +267,7 @@ impl ConfigStore {
         self.adapter_issue = None;
         self.adapter_warnings = Some(Vec::new());
         self.adapter_document = None;
+        self.artifacts_dir_proposed = false;
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -310,6 +313,7 @@ impl ConfigStore {
             adapter_issue: None,
             adapter_warnings: Some(Vec::new()),
             adapter_document: Some(AdapterTemplates::default()),
+            artifacts_dir_proposed: false,
         }
     }
 
@@ -321,6 +325,7 @@ impl ConfigStore {
         self.root_identity = state.root_identity;
         self.agent = state.agent;
         self.adapter_extensions = state.adapter_extensions;
+        self.artifacts_dir_proposed = state.artifacts_dir_proposed;
         if revision_changed {
             self.set_adapter_policy(false);
         }
@@ -328,6 +333,14 @@ impl ConfigStore {
 
     pub fn snapshot(&self) -> &ConfigSnapshot {
         &self.config
+    }
+
+    /// True while `storage.artifacts_dir` is only the host's proposal for a
+    /// config.toml written before that key existed. Nothing writes artifact
+    /// files there, and the first save names it for confirmation, so the
+    /// user chooses it like any other folder (§2 principle 7).
+    pub fn artifacts_dir_proposed(&self) -> bool {
+        self.artifacts_dir_proposed
     }
 
     pub fn revision(&self) -> &str {
@@ -788,6 +801,7 @@ impl ConfigStore {
         self.root_identity = next_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
+        self.artifacts_dir_proposed = false;
         self.set_adapter_policy(true);
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
@@ -901,7 +915,7 @@ impl From<StoredStorage> for StorageConfig {
         }
         let artifacts_dir = value
             .artifacts_dir
-            .unwrap_or_else(|| unused_artifacts_dir(&occupied));
+            .unwrap_or_else(|| unused_artifacts_dir(Path::new(&value.root), &occupied));
         Self {
             root: value.root,
             profile: value.profile,
@@ -914,11 +928,19 @@ impl From<StoredStorage> for StorageConfig {
     }
 }
 
-/// Older configs did not name an artifact directory. Preserve their existing
-/// layout even when one of its configurable locations already uses the usual
-/// `artifacts` name; adopting a colliding default would make the whole config
-/// unreadable before the user had any way to choose a different location.
-fn unused_artifacts_dir(occupied: &[&Path]) -> String {
+/// Generated names tried, beyond those other locations can block, before the
+/// proposal stops avoiding folders that already exist in the notes root.
+const EXISTING_FOLDER_PROBES: usize = 8;
+
+/// Older configs did not name an artifact directory, so the host proposes
+/// one for the user to confirm (`ConfigStore::artifacts_dir_proposed`).
+/// Preserve their existing layout even when one of its configurable
+/// locations already uses the usual `artifacts` name; adopting a colliding
+/// default would make the whole config unreadable before the user had any
+/// way to choose a different location. Skip names already present in the
+/// notes root too: such a folder is the user's own, and on a
+/// case-insensitive volume `Artifacts` is the same folder as `artifacts`.
+fn unused_artifacts_dir(root: &Path, occupied: &[&Path]) -> String {
     // An empty location has no components and would block every name;
     // validation rejects it later. Every other location blocks at most the
     // one single-component name matching its first component, so one of
@@ -928,20 +950,34 @@ fn unused_artifacts_dir(occupied: &[&Path]) -> String {
         .map(|path| lower_components(path))
         .filter(|parts| !parts.is_empty())
         .collect();
-    for suffix in 0..=occupied.len() {
-        let candidate = match suffix {
-            0 => "artifacts".to_owned(),
-            1 => "brauser-artifacts".to_owned(),
-            value => format!("brauser-artifacts-{value}"),
-        };
-        let candidate_parts = lower_components(Path::new(&candidate));
-        if occupied.iter().all(|parts| {
+    let candidate = |suffix: usize| match suffix {
+        0 => "artifacts".to_owned(),
+        1 => "brauser-artifacts".to_owned(),
+        value => format!("brauser-artifacts-{value}"),
+    };
+    let free_of_locations = |candidate: &str| {
+        let candidate_parts = lower_components(Path::new(candidate));
+        occupied.iter().all(|parts| {
             !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(parts)
-        }) {
-            return candidate;
-        }
-    }
-    unreachable!("a finite set of content paths cannot occupy every generated name")
+        })
+    };
+    // Any error other than NotFound counts as present: the proposal must
+    // never guess that an unreadable entry is free. A relative root fails
+    // validation later; never probe the host's working directory for it.
+    let absent = |candidate: &str| {
+        !root.is_absolute()
+            || fs::symlink_metadata(root.join(candidate))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    };
+    (0..=occupied.len() + EXISTING_FOLDER_PROBES)
+        .map(candidate)
+        .find(|name| free_of_locations(name) && absent(name))
+        .or_else(|| {
+            (0..=occupied.len())
+                .map(candidate)
+                .find(|name| free_of_locations(name))
+        })
+        .expect("a finite set of content paths cannot occupy every generated name")
 }
 
 /// `[agent]` as §7.1 shows it: the chosen harness and its entry.
@@ -1066,6 +1102,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 revision: MISSING_REVISION.into(),
                 issue: None,
                 needs_backup: false,
+                artifacts_dir_proposed: false,
                 root_identity: None,
                 agent: AgentView::default(),
                 adapter_extensions: BTreeMap::new(),
@@ -1106,6 +1143,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             revision,
             issue: Some("Configuration exceeds 64 KiB. Choose a notes folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
+            artifacts_dir_proposed: false,
             root_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
@@ -1122,6 +1160,10 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
             let root_unconfirmed = stored.storage.is_some()
                 && (!stored.root_picker_confirmed || root_identity.is_none());
+            let artifacts_dir_proposed = stored
+                .storage
+                .as_ref()
+                .is_some_and(|storage| storage.artifacts_dir.is_none());
             let agent = AgentView::parse(stored.agent.take(), stored.harness_record.take());
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent.clone();
@@ -1136,6 +1178,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     revision,
                     issue: Some(issue.to_owned()),
                     needs_backup: true,
+                    artifacts_dir_proposed: false,
                     root_identity: None,
                     agent,
                     adapter_extensions: BTreeMap::new(),
@@ -1159,6 +1202,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 revision,
                 issue: folder_changed.then(|| "The selected notes folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned()),
                 needs_backup: false,
+                artifacts_dir_proposed,
                 root_identity,
                 agent,
                 adapter_extensions,
@@ -1170,6 +1214,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             revision,
             issue: Some("Configuration is invalid or from a newer version. Choose a notes folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
+            artifacts_dir_proposed: false,
             root_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
@@ -1959,8 +2004,25 @@ pub(crate) mod fixtures {
     }
 
     /// A config with storage under `root`. `keys` go at the top level and
-    /// `tables` after `[storage]`.
+    /// `tables` after `[storage]`. The artifact folder defaults to the
+    /// confirmed `artifacts` unless `storage_extra` names one.
     pub(crate) fn write(path: &Path, root: &Path, storage_extra: &str, keys: &str, tables: &str) {
+        let storage_extra = if storage_extra.contains("artifacts_dir") {
+            storage_extra.to_owned()
+        } else {
+            format!("artifacts_dir = \"artifacts\"\n{storage_extra}")
+        };
+        write_legacy(path, root, &storage_extra, keys, tables);
+    }
+
+    /// Like `write`, but as a host from before `artifacts_dir` wrote it.
+    pub(crate) fn write_legacy(
+        path: &Path,
+        root: &Path,
+        storage_extra: &str,
+        keys: &str,
+        tables: &str,
+    ) {
         let identity = selected_root_identity(root).unwrap();
         let body = format!(
             "root_picker_confirmed = true\nroot_identity = {}\n{keys}\n[storage]\nroot = {}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n{storage_extra}\n{tables}",
@@ -2105,7 +2167,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         // An M1 file: storage without summaries_dir and no privacy keys.
-        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
         let store = loaded(&path);
         assert_eq!(store.config_issue(), None);
         assert!(store.configured());
@@ -2133,7 +2195,7 @@ mod tests {
     fn old_config_gets_a_non_overlapping_artifact_directory() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
         let body = fs::read_to_string(&path)
             .unwrap()
             .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"");
@@ -2147,6 +2209,68 @@ mod tests {
     }
 
     #[test]
+    fn old_config_artifact_directory_is_only_proposed_until_saved() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
+        let mut store = loaded(&path);
+        assert!(store.artifacts_dir_proposed());
+
+        let next = store.snapshot().clone();
+        let revision = store.revision().to_owned();
+        assert!(store.update(next, &revision).unwrap().is_some());
+        assert!(!store.artifacts_dir_proposed());
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("artifacts_dir = \"artifacts\"")
+        );
+        assert!(!loaded(&path).artifacts_dir_proposed());
+
+        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        assert!(!loaded(&path).artifacts_dir_proposed());
+    }
+
+    #[test]
+    fn old_config_does_not_propose_an_existing_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
+        fs::create_dir(folder.path().join("artifacts")).unwrap();
+        fs::write(folder.path().join("artifacts/Q3 deliverables.md"), "mine").unwrap();
+        assert_eq!(
+            loaded(&path)
+                .snapshot()
+                .storage
+                .as_ref()
+                .unwrap()
+                .artifacts_dir,
+            "brauser-artifacts"
+        );
+        fs::write(folder.path().join("brauser-artifacts"), "a file").unwrap();
+        assert_eq!(
+            loaded(&path)
+                .snapshot()
+                .storage
+                .as_ref()
+                .unwrap()
+                .artifacts_dir,
+            "brauser-artifacts-2"
+        );
+        // A chosen folder is kept even when it already exists.
+        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        assert_eq!(
+            loaded(&path)
+                .snapshot()
+                .storage
+                .as_ref()
+                .unwrap()
+                .artifacts_dir,
+            "artifacts"
+        );
+    }
+
+    #[test]
     fn old_config_with_an_empty_location_reports_the_usual_issue() {
         // An empty location must not stall the artifact-name search; the
         // file should fail validation exactly as it does with artifacts_dir.
@@ -2155,7 +2279,7 @@ mod tests {
             std::thread::spawn(move || {
                 let folder = tempfile::tempdir().unwrap();
                 let path = folder.path().join("config.toml");
-                fixtures::write(&path, folder.path(), storage_extra, "", "");
+                fixtures::write_legacy(&path, folder.path(), storage_extra, "", "");
                 let (field, _) = line.split_once(" = ").unwrap();
                 let body = fs::read_to_string(&path)
                     .unwrap()

@@ -288,11 +288,22 @@ impl ArtifactIndex {
     /// artifact file. This is the explicit repair path for a deleted or
     /// corrupt cache and intentionally replaces user edits to owned files.
     pub fn reindex(&self) -> Result<RegenerationReport> {
+        let state = self.rebuild_state()?;
+        self.regenerate_state(state)
+    }
+
+    /// The cache half of `reindex`: every artifact is left dirty, so its file
+    /// is rewritten by the next regeneration pass.
+    pub fn rebuild(&self) -> Result<()> {
+        self.rebuild_state().map(drop)
+    }
+
+    fn rebuild_state(&self) -> Result<IndexState> {
         let mut state = self.scan_logs()?;
         let derived = derive(&state.events);
         state.dirty = derived.artifacts.keys().cloned().collect();
         self.publish_state_and_database(&state)?;
-        self.regenerate_state(state)
+        Ok(state)
     }
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.

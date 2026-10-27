@@ -16,10 +16,10 @@ use brauser_protocol::{
 use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore};
-use crate::consent::ConsentAuthority;
+use crate::consent::{ConsentAuthority, Current};
 use crate::dialog::{self, DialogText};
 use crate::harness::HarnessEnv;
-use crate::index::ArtifactIndex;
+use crate::index::{ArtifactIndex, RegenerationReport};
 use crate::note;
 use crate::privacy;
 use crate::vault::Vault;
@@ -245,7 +245,7 @@ fn dispatch(
             let previous = config.snapshot().clone();
             let previous_revision = config.revision().to_owned();
             let authorized = match consent.authorize_update(
-                &previous,
+                Current::new(&previous, config.artifacts_dir_proposed()),
                 &previous_revision,
                 &value.config,
                 value.picker_token.as_deref(),
@@ -352,7 +352,7 @@ fn dispatch(
                 );
             }
             match consent.confirm_config(
-                config.snapshot(),
+                Current::new(config.snapshot(), config.artifacts_dir_proposed()),
                 config.revision(),
                 &value.config,
                 value.picker_token.as_deref(),
@@ -449,7 +449,7 @@ fn confirm_harness_setup(
     }
     let current = config.snapshot().clone();
     match consent.confirm_harness_setup_with(
-        &current,
+        Current::new(&current, config.artifacts_dir_proposed()),
         config.revision(),
         &value,
         context.env,
@@ -1141,7 +1141,12 @@ fn regenerate_artifacts(config: &mut ConfigStore) {
     let Ok(_lock) = config.lock_current() else {
         return;
     };
-    if config.refresh().is_err() || config.config_issue().is_some() {
+    // A proposed artifact folder is not one the user chose. The index keeps
+    // the artifacts dirty, so their files follow once a save confirms it.
+    if config.refresh().is_err()
+        || config.config_issue().is_some()
+        || config.artifacts_dir_proposed()
+    {
         return;
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
@@ -1153,6 +1158,31 @@ fn regenerate_artifacts(config: &mut ConfigStore) {
     {
         eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
     }
+}
+
+/// `brauser reindex`: rebuild the index from the logs, then rewrite every
+/// artifact file. `None` means the files were left alone because the artifact
+/// folder is still only proposed; they follow the save that confirms it.
+pub fn reindex(config: &mut ConfigStore) -> Result<Option<RegenerationReport>> {
+    // Serialize the scan and cache replacement with capture/config updates.
+    // Otherwise a concurrent delivery can publish a newer cache and then be
+    // silently replaced by the reindex snapshot that started first.
+    let _lock = config.lock_current()?;
+    config.refresh()?;
+    if let Some(issue) = config.config_issue() {
+        bail!("configuration needs repair: {issue}");
+    }
+    let storage = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .context("choose a notes folder before reindexing")?;
+    let index = ArtifactIndex::open_in(storage, config.root_identity(), &config.cache_dir()?)?;
+    if config.artifacts_dir_proposed() {
+        index.rebuild()?;
+        return Ok(None);
+    }
+    index.reindex().map(Some)
 }
 
 /// Resolve the canonical URL and vault shared by `load_note` and `save_note`.
@@ -1770,6 +1800,13 @@ fn refresh_artifacts(
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
+    if config.artifacts_dir_proposed() {
+        return error(
+            &value.request_id,
+            ErrorCode::NotConfigured,
+            "save settings to confirm the artifact files folder first",
+        );
+    }
     match index.regenerate_dirty() {
         Ok(report) => Response::ArtifactsRefreshed(ArtifactsRefreshed {
             protocol_version: PROTOCOL_VERSION,
@@ -4684,6 +4721,91 @@ id = "work:{host}/{id}"
             assert_eq!(duplicate.reason.as_deref(), Some("duplicate_event"));
             assert_eq!(std::fs::read(log_path).unwrap(), durable_bytes);
         }
+    }
+
+    #[test]
+    fn proposed_artifact_folder_gets_no_files_until_saved() {
+        // A config from before artifacts_dir: the host only proposes the
+        // folder, so it must not write artifact files there (§2 principle 7).
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write_legacy(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_minute(0)
+            .unwrap()
+            .replace_second(0)
+            .unwrap()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let mut config = loaded(&path);
+        assert!(config.artifacts_dir_proposed());
+        let recorded = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "activity-1".into(),
+                event: ActivityEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: "work:work.example/7".into(),
+                    artifact_type: "work.item".into(),
+                    url: "https://work.example/items/7".into(),
+                    title: Some("Work item".into()),
+                    occurred_at,
+                    incognito: false,
+                    opens: 1,
+                    focused_seconds: 3,
+                    background_seconds: 0,
+                    modes: Vec::new(),
+                    trails: Vec::new(),
+                    refs: Vec::new(),
+                },
+            },
+            &mut config,
+        );
+        assert!(
+            matches!(&recorded, Response::ActivityRecorded(value) if value.outcome == VisitOutcome::Persisted),
+            "{recorded:?}"
+        );
+
+        regenerate_artifacts(&mut config);
+        assert!(!root.join("artifacts").exists());
+        let refreshed = refresh_artifacts(
+            brauser_protocol::RefreshArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "refresh-1".into(),
+            },
+            &mut config,
+        );
+        assert!(
+            matches!(&refreshed, Response::Error(value) if value.code == ErrorCode::NotConfigured),
+            "{refreshed:?}"
+        );
+        assert!(reindex(&mut config).unwrap().is_none());
+        assert!(!root.join("artifacts").exists());
+
+        // Saving settings confirms the folder; the deferred files follow.
+        let next = config.snapshot().clone();
+        let revision = config.revision().to_owned();
+        assert!(config.update(next, &revision).unwrap().is_some());
+        regenerate_artifacts(&mut config);
+        assert!(root.join("artifacts").is_dir());
     }
 
     #[test]
