@@ -30,6 +30,16 @@ const MAX_CONSENT_SUMMARY_BYTES: usize = 8192;
 /// scroll, so it has the consent dialog's bound and is refused, never
 /// truncated, over it.
 pub const MAX_HARNESS_SUMMARY_BYTES: usize = MAX_CONSENT_SUMMARY_BYTES;
+/// The byte bound alone admits an alert far taller than the screen: the Codex
+/// setup alert once reached about 45 lines. Tests also hold a realistic
+/// harness confirmation (a few exclusions, one change) to
+/// [`HARNESS_DIALOG_LINE_BUDGET`] rows, counting the title and each explicit
+/// line word-wrapped at [`DIALOG_WRAP_COLUMNS`] characters, an estimate of
+/// the macOS alert's width. Shorten the wording rather than raise the budget.
+#[cfg(test)]
+const DIALOG_WRAP_COLUMNS: usize = 60;
+#[cfg(test)]
+const HARNESS_DIALOG_LINE_BUDGET: usize = 30;
 const MAX_OFFERS: usize = 8;
 const MAX_REFUSAL_BYTES: usize = 512;
 const MAX_OFFER_PATH_BYTES: usize = 4096;
@@ -1858,6 +1868,148 @@ mod tests {
         assert!(
             lines[0].contains("read pages on \"bank.example\""),
             "{lines:?}"
+        );
+    }
+
+    /// Rows `text` takes in the alert: each explicit line, greedily
+    /// word-wrapped at [`DIALOG_WRAP_COLUMNS`] characters, with a word too
+    /// long for one row split across rows.
+    fn visual_lines(text: &str) -> usize {
+        text.split('\n')
+            .map(|line| {
+                let mut rows = 1;
+                let mut column = 0;
+                for word in line.split(' ') {
+                    let width = word.chars().count();
+                    let needed = if column == 0 {
+                        width
+                    } else {
+                        column + 1 + width
+                    };
+                    if needed <= DIALOG_WRAP_COLUMNS {
+                        column = needed;
+                    } else if column == 0 {
+                        rows += (width - 1) / DIALOG_WRAP_COLUMNS;
+                        column = (width - 1) % DIALOG_WRAP_COLUMNS + 1;
+                    } else {
+                        rows += 1 + width.saturating_sub(1) / DIALOG_WRAP_COLUMNS;
+                        column = width.saturating_sub(1) % DIALOG_WRAP_COLUMNS + 1;
+                    }
+                }
+                rows
+            })
+            .sum()
+    }
+
+    #[test]
+    fn visual_lines_wraps_at_the_documented_width() {
+        assert_eq!(visual_lines(""), 1);
+        assert_eq!(visual_lines("a\n\nb"), 3);
+        assert_eq!(visual_lines(&"x".repeat(DIALOG_WRAP_COLUMNS)), 1);
+        assert_eq!(visual_lines(&"x".repeat(DIALOG_WRAP_COLUMNS + 1)), 2);
+        // Two half-width words and the space between them overflow a row.
+        let word = "w".repeat(DIALOG_WRAP_COLUMNS / 2);
+        assert_eq!(visual_lines(&format!("{word} {word}")), 2);
+        let word = "w".repeat(DIALOG_WRAP_COLUMNS / 2 - 1);
+        assert_eq!(visual_lines(&format!("{word} {word}")), 1);
+        assert_eq!(visual_lines(&format!("{word} {word} {word}")), 2);
+        assert_eq!(
+            visual_lines(&format!("ab {}", "x".repeat(2 * DIALOG_WRAP_COLUMNS))),
+            3
+        );
+        // Characters, not bytes.
+        assert_eq!(visual_lines(&"é".repeat(DIALOG_WRAP_COLUMNS)), 1);
+    }
+
+    /// A realistic first setup: four exclusions and one change (choosing the
+    /// first summaries folder), on typical install and notes paths.
+    fn realistic_setup(adapter: Adapter) -> (Candidate, ConfigSnapshot, ConfigSnapshot) {
+        let (found_at, real_path, version, args, env_allow) = match adapter {
+            Adapter::ClaudeCode => (
+                "/Users/someone/.local/bin/claude",
+                "/Users/someone/.local/share/claude/versions/2.1.284",
+                "2.1.284",
+                harness::template_args(Adapter::ClaudeCode),
+                denylist(&["HOME", "PATH", "ANTHROPIC_API_KEY"]),
+            ),
+            Adapter::Codex => (
+                "/opt/homebrew/bin/codex",
+                "/opt/homebrew/Caskroom/codex/0.144.4/codex-aarch64-apple-darwin",
+                "0.144.4",
+                harness::codex_args("0.144.4").unwrap(),
+                denylist(&["HOME", "PATH", "CODEX_HOME"]),
+            ),
+        };
+        let candidate = Candidate {
+            adapter,
+            harness_id: adapter.harness_id().into(),
+            found_at: found_at.into(),
+            identity: Some(harness::BinaryIdentity {
+                real_path: real_path.into(),
+                ..hand_candidate().identity.unwrap()
+            }),
+            version: Some(version.into()),
+            args: args.clone(),
+            ..hand_candidate()
+        };
+        let exclusions = denylist(&[
+            "bank.example",
+            "mail.google.com",
+            "health.example.org",
+            "intranet.corp.example",
+        ]);
+        let notes = Path::new("/Users/someone/Documents/Notes");
+        let current = ConfigSnapshot {
+            storage: Some(storage_at(notes, None)),
+            agent_denylist: exclusions.clone(),
+            ..crate::config::empty_config()
+        };
+        let next = ConfigSnapshot {
+            storage: Some(storage_at(notes, Some("summaries"))),
+            agent_denylist_confirmed: true,
+            agent: Some(brauser_protocol::AgentConfig {
+                harness_id: adapter.harness_id().into(),
+                adapter: adapter.into(),
+                binary: found_at.into(),
+                args,
+                env_allow,
+                ..agent()
+            }),
+            ..current.clone()
+        };
+        assert_eq!(approval_lines(&current, &next).len(), 1);
+        (candidate, current, next)
+    }
+
+    /// Rows the realistic `adapter` setup's title and description take.
+    fn realistic_rows(adapter: Adapter) -> (usize, String) {
+        let (candidate, current, next) = realistic_setup(adapter);
+        let (title, body) = harness_confirmation_text(&candidate, &next, &current).unwrap();
+        (
+            visual_lines(&title) + visual_lines(&body),
+            format!("{title}\n{body}"),
+        )
+    }
+
+    /// The bytes bound alone allowed a 45-line Codex alert.
+    #[test]
+    fn claude_code_confirmation_fits_the_dialog_line_budget() {
+        let (rows, text) = realistic_rows(Adapter::ClaudeCode);
+        assert!(
+            rows <= HARNESS_DIALOG_LINE_BUDGET,
+            "{rows} rows, over {HARNESS_DIALOG_LINE_BUDGET}:\n{text}"
+        );
+    }
+
+    /// Codex's reviewed arguments alone wrap to 12 rows, and its disclosure
+    /// to 3 more; fitting needs a wording decision, not a larger budget.
+    #[test]
+    #[ignore = "the realistic Codex confirmation is 40 rows, over the 30-row budget"]
+    fn codex_confirmation_fits_the_dialog_line_budget() {
+        let (rows, text) = realistic_rows(Adapter::Codex);
+        assert!(
+            rows <= HARNESS_DIALOG_LINE_BUDGET,
+            "{rows} rows, over {HARNESS_DIALOG_LINE_BUDGET}:\n{text}"
         );
     }
 
