@@ -131,8 +131,14 @@ impl IndexState {
     /// delivery (which capture can append to an earlier-dated log), so one
     /// bad duplicate neither replaces durable history nor makes the rest of
     /// it unavailable. A full rebuild, having only the logs, keeps the copy
-    /// at the earliest log position. Returns false on such a conflict.
-    fn ingest(&mut self, event: CachedEvent, position: Option<(PathBuf, u64)>) -> bool {
+    /// at the earliest log position (`earliest_wins`), whichever pass read it
+    /// first. Returns false on such a conflict.
+    fn ingest(
+        &mut self,
+        event: CachedEvent,
+        position: Option<(PathBuf, u64)>,
+        earliest_wins: bool,
+    ) -> bool {
         let (id, artifact_id) = event_identity(&event);
         let Some(previous) = self.events.get(&id) else {
             self.sequence.insert(id.clone(), self.next_sequence);
@@ -145,7 +151,26 @@ impl IndexState {
             return true;
         };
         if previous != &event {
+            let earlier = earliest_wins
+                && position.as_ref().is_some_and(|position| {
+                    self.positions
+                        .get(&id)
+                        .is_some_and(|indexed| position < indexed)
+                });
+            let (event, position) = if earlier {
+                // A rebuild resumed over several passes can read an
+                // earlier-sorting log after a later one.
+                let rejected_at = self.positions.insert(id.clone(), position.clone().unwrap());
+                let rejected = self.events.insert(id.clone(), event).unwrap();
+                self.dirty.insert(artifact_id);
+                self.dirty.insert(rejected.artifact_id().to_owned());
+                (rejected, rejected_at)
+            } else {
+                (event, position)
+            };
+            let chosen = &self.events[&id];
             let seen = self.conflicts.entry(id).or_default();
+            seen.retain(|(body, _)| body != chosen);
             if let Some((_, earliest)) = seen.iter_mut().find(|(body, _)| body == &event) {
                 if let Some(position) = position
                     && earliest.as_ref().is_none_or(|indexed| &position < indexed)
@@ -455,7 +480,7 @@ impl ArtifactIndex {
                     state.dirty.insert(artifact_id);
                 }
                 None => {
-                    state.ingest(event, None);
+                    state.ingest(event, None, false);
                 }
             }
         }
@@ -740,7 +765,7 @@ impl ArtifactIndex {
         rebuild: &mut bool,
         reconcile: bool,
     ) -> Result<CatchUp> {
-        let pass = self.catch_up_logs(state)?;
+        let pass = self.catch_up_logs(state, *rebuild)?;
         *rebuild |= pass.reset;
         if !pass.complete {
             self.save_pending(state, *rebuild, reconcile)?;
@@ -872,7 +897,7 @@ impl ArtifactIndex {
     /// in sorted order, so a rebuild split over several passes ingests the
     /// logs in the same order as one pass; `state` then checkpoints only the
     /// logs it read. Callers never publish an incomplete pass.
-    fn catch_up_logs(&self, state: &mut IndexState) -> Result<LogPass> {
+    fn catch_up_logs(&self, state: &mut IndexState, rebuild: bool) -> Result<LogPass> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let log_dir = checked_relative_dir(&self.storage.log_dir)?;
@@ -965,7 +990,7 @@ impl ArtifactIndex {
                 continue;
             }
             for (line, event) in parse_log_lines(&text) {
-                state.ingest(event, Some((relative.clone(), line)));
+                state.ingest(event, Some((relative.clone(), line)), rebuild || reset);
             }
         }
         if complete {
@@ -3886,6 +3911,56 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
+    fn a_rebuild_split_over_passes_keeps_the_earliest_logged_body() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let original = activity(
+            "00000000-0000-4000-8000-000000000010",
+            "REUSED",
+            "Original",
+            "2026-10-20T12:00:00Z",
+        );
+        let mut backdated = original.clone();
+        backdated.title = Some("Backdated".into());
+        let other = activity(
+            "00000000-0000-4000-8000-000000000011",
+            "OTHER",
+            "Other",
+            "2026-10-25T12:00:00Z",
+        );
+        let size = fs::metadata(write_log(root.path(), "2026-10-20.md", &[&original]))
+            .unwrap()
+            .len();
+        write_log(root.path(), "2026-10-25.md", &[&other]);
+        // One log per pass, with no cache to keep a winner from.
+        let limit = size * 3 / 2;
+        SCAN_LIMIT.with(|value| value.set(limit));
+        assert!(index.recent(None, None, 32).is_err());
+        // An earlier-dated log lands between passes.
+        write_log(root.path(), "2026-10-15.md", &[&backdated]);
+        let (recent, _) = bounded_passes(limit, || index.recent(None, None, 32));
+        assert_eq!(recent.0.len(), 2);
+        let bounded = index
+            .artifact(&original.artifact_id)
+            .unwrap()
+            .unwrap()
+            .title;
+        // The same logs rebuilt in one pass without a cache.
+        SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
+        fs::remove_file(index.state_path()).unwrap();
+        let single = index
+            .artifact(&original.artifact_id)
+            .unwrap()
+            .unwrap()
+            .title;
+        assert_eq!(
+            (bounded.as_str(), single.as_str()),
+            ("Backdated", "Backdated")
+        );
+    }
+
+    #[test]
     fn a_reset_catch_up_keeps_the_conflict_winner_the_cache_chose() {
         let original = activity(
             "00000000-0000-4000-8000-000000000010",
@@ -4893,7 +4968,7 @@ print(json.dumps([tables,row]))"#;
         );
         let mut state = index.empty_state();
         for event in [&oversize, &good] {
-            state.ingest(CachedEvent::Activity(event.clone()), None);
+            state.ingest(CachedEvent::Activity(event.clone()), None, false);
         }
         index.publish_state_and_database(&state).unwrap();
         let later = activity(
