@@ -66,12 +66,12 @@ jobs:
     if: always() && needs.macos-starvation-check.outputs.starved == 'true'
     uses: ./.github/workflows/build-os.yml
     with:
-      os: macos-14
+      os: macos-15-intel
 
   # Branch protection requires a check named exactly "Build and check"; the
   # per-OS jobs report under their own names, so this job stands for all of
   # them. Pass needs Windows plus macOS, where macOS is either the macos-15
-  # build or, only when that job was starved of a runner, the macos-14
+  # build or, only when that job was starved of a runner, the macos-15-intel (x64)
   # fallback.
   build-gate:
     name: Build and check
@@ -86,7 +86,7 @@ jobs:
           STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
-          echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-14 fallback: $FALLBACK"
+          echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
           test "$WINDOWS" = success
           if [ "$MACOS" = success ]; then exit 0; fi
           case "$MACOS" in cancelled|abandoned) ;; *) exit 1 ;; esac

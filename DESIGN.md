@@ -1076,7 +1076,7 @@ The layout above is the planned release layout. The repository currently contain
 - **Host:** unit tests, property tests on URL normalization and slug generation, and fuzzing (`cargo-fuzz`) on the message parser, frontmatter parser, and path handling.
 - **Extension:** unit tests, plus Playwright end-to-end tests running the real extension against a real host and a fixture vault.
 - **Round-trip tests:** every profile writes, reads back, and re-writes page notes and summary files with no diff, and user content outside managed blocks survives unchanged.
-- **CI on every PR:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, ESLint, TypeScript strict, dependency review, and the full test suite on macOS and Windows (`macos-15` and `windows-latest`, with `macos-14` as a fallback only when GitHub cancels a starved `macos-15` job; the headless smoke run and the adapter-template fuzz-target compile check are macOS-only).
+- **CI on every PR:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, ESLint, TypeScript strict, dependency review, and the full test suite on macOS and Windows (`macos-15` and `windows-latest`, with `macos-15-intel` (x64) as a fallback only when GitHub cancels a starved `macos-15` job; the headless smoke run and the adapter-template fuzz-target compile check are macOS-only).
 
 ## 11. Distribution
 
