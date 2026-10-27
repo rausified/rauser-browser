@@ -7,7 +7,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::Duration;
 
@@ -19,6 +19,12 @@ use super::harness_api::{ProcessSlot, has_exited};
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 /// The largest stderr chunk delivered at once.
 const STDERR_CHUNK: usize = 64 * 1024;
+/// How many lines or chunks may wait between the readers and the consumer.
+/// A full queue blocks the readers, so the pipes fill and a child that
+/// writes faster than its output is consumed blocks too: a backlog stays
+/// within this many messages (16 MiB of stdout at most) plus what the pipes
+/// hold, however much the child writes.
+const QUEUE_CAPACITY: usize = 16;
 
 /// Something the child wrote, or the end of its output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +59,7 @@ impl LineChild {
             .stderr(Stdio::piped());
         let mut child = slot.spawn(&mut command)?;
         let stdin = child.stdin.take();
-        let (sender, lines) = mpsc::channel();
+        let (sender, lines) = mpsc::sync_channel(QUEUE_CAPACITY);
         let open = Arc::new(AtomicUsize::new(2));
         match child.stdout.take() {
             Some(stdout) => reader(sender.clone(), Arc::clone(&open), move |send| {
@@ -131,19 +137,31 @@ impl LineChild {
     }
 
     /// Close stdin and wait for the child to exit, then reap it and forget
-    /// its group in the slot.
-    pub fn wait(mut self) -> io::Result<ExitStatus> {
-        self.close_stdin();
-        match self.status {
+    /// its group in the slot. Output not yet consumed is discarded first:
+    /// the readers stop and close the pipes, so a child still writing sees a
+    /// broken pipe rather than blocking on a full one forever.
+    pub fn wait(self) -> io::Result<ExitStatus> {
+        let Self {
+            mut child,
+            slot,
+            status,
+            stdin,
+            lines,
+        } = self;
+        drop(stdin);
+        drop(lines);
+        match status {
             Some(status) => Ok(status),
-            None => self.slot.reap(&mut self.child),
+            None => slot.reap(&mut child),
         }
     }
 }
 
 /// Run `read` on its own thread; the last pipe to finish sends `Closed`.
+/// A send blocks while the queue is full and fails once the receiver is
+/// gone, which ends the thread and closes its pipe.
 fn reader(
-    sender: Sender<ChildLine>,
+    sender: SyncSender<ChildLine>,
     open: Arc<AtomicUsize>,
     read: impl FnOnce(&dyn Fn(ChildLine) -> bool) + Send + 'static,
 ) {
@@ -153,7 +171,7 @@ fn reader(
     });
 }
 
-fn finish(sender: &Sender<ChildLine>, open: &AtomicUsize) {
+fn finish(sender: &SyncSender<ChildLine>, open: &AtomicUsize) {
     if open.fetch_sub(1, Ordering::AcqRel) == 1 {
         let _ = sender.send(ChildLine::Closed);
     }
@@ -381,6 +399,112 @@ mod tests {
             LineChild::spawn(&slot, sh("true"))
                 .is_err_and(|e| e.kind() == io::ErrorKind::Interrupted)
         );
+    }
+
+    /// The last counter `name` holds, written by a flooding child.
+    fn produced(dir: &std::path::Path, name: &str) -> usize {
+        // The child rewrites the file each line, so a read may catch it empty.
+        loop {
+            if let Ok(text) = std::fs::read_to_string(dir.join(name))
+                && let Ok(count) = text.trim().parse()
+            {
+                return count;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A child writing 1000-byte lines to both pipes as fast as it can,
+    /// counting them in `out` and `err`, gets ahead of a slow consumer by no
+    /// more than the queue, the pipes and the readers' buffers hold.
+    #[test]
+    fn a_flooding_child_is_held_back_by_a_slow_consumer() {
+        let slot = ProcessSlot::default();
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = sh("line=$(printf '%999s' '' | tr ' ' x); \
+             (i=0; while :; do i=$((i+1)); echo \"$line\" >&2; echo $i > err; done) & \
+             i=0; while :; do i=$((i+1)); echo \"$line\"; echo $i > out; done");
+        command.current_dir(dir.path());
+        let child = LineChild::spawn(&slot, command).unwrap();
+        let (mut lines, mut stderr_bytes) = (0, 0);
+        let slow = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < slow {
+            match child.next(Duration::from_millis(50)) {
+                Some(ChildLine::Stdout(_)) => lines += 1,
+                Some(ChildLine::Stderr(bytes)) => stderr_bytes += bytes.len(),
+                Some(ChildLine::Closed) => panic!("the flooding child closed its pipes"),
+                None => {}
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let (out, err) = (produced(dir.path(), "out"), produced(dir.path(), "err"));
+        slot.kill();
+        // Queue, a 64 KiB pipe, the 8 KiB line buffer and the line in hand.
+        let out_bound = QUEUE_CAPACITY + 64 + 8 + 2;
+        assert!(
+            out <= lines + out_bound,
+            "stdout ran {} lines ahead of the consumer",
+            out - lines
+        );
+        // Queue of 64 KiB chunks, the pipe and the chunk in hand.
+        let err_bound = (QUEUE_CAPACITY + 1) * 64 + 64 + 2;
+        let consumed = stderr_bytes / 1000;
+        assert!(
+            err <= consumed + err_bound,
+            "stderr ran {} lines ahead of the consumer",
+            err - consumed
+        );
+        let lines = collect(&child);
+        assert!(lines.len() <= 2 * QUEUE_CAPACITY + 200, "{}", lines.len());
+        assert!(!child.wait().unwrap().success());
+    }
+
+    /// Killing a child that floods both pipes, while nothing reads them,
+    /// ends its output promptly instead of after a backlog.
+    #[test]
+    fn a_killed_flooding_child_closes_promptly() {
+        let slot = ProcessSlot::default();
+        let child = LineChild::spawn(&slot, sh("yes >&2 & echo started; yes")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(Instant::now() < deadline, "the child never started");
+            if child.next(Duration::from_millis(50)) == Some(ChildLine::Stdout("started".into())) {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+        let killed = Instant::now();
+        slot.kill();
+        let lines = collect(&child);
+        assert!(
+            killed.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            killed.elapsed()
+        );
+        assert_eq!(lines.last(), Some(&ChildLine::Closed));
+        assert!(
+            lines.len() <= 2 * QUEUE_CAPACITY + 64 * 1024,
+            "{}",
+            lines.len()
+        );
+        assert!(!child.wait().unwrap().success());
+    }
+
+    /// Waiting on a child that is still flooding its pipes, with nothing
+    /// reading them, stops the readers so the child sees a broken pipe and
+    /// the wait ends.
+    #[test]
+    fn waiting_on_an_unread_flooding_child_ends() {
+        let slot = ProcessSlot::default();
+        let child = LineChild::spawn(&slot, sh("yes >&2 & yes")).unwrap();
+        thread::sleep(Duration::from_millis(300));
+        let (done, waited) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = done.send(child.wait());
+        });
+        let status = waited.recv_timeout(Duration::from_secs(5));
+        slot.kill();
+        assert!(status.is_ok(), "the wait never ended");
     }
 
     /// Once its leader is reaped, a group's id can be reused, so the slot
