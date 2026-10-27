@@ -16,14 +16,17 @@ use brauser_protocol::HarnessId;
 use rustix::process::{Pid, Signal, kill_process_group};
 use uuid::Uuid;
 
+use super::claude::ClaudeRunner;
+use super::codex::CodexRunner;
+use crate::harness::search_path;
+
 /// Everything a runner needs to start one run.
 #[derive(Debug, Clone)]
 pub struct RunSpec {
     pub run_id: Uuid,
     pub harness: HarnessId,
     pub title: String,
-    /// The harness's working directory. PR 2: `storage.root`; PR 3 (Task 31):
-    /// the knowledge base directory.
+    /// The harness's working directory: the knowledge base folder.
     pub cwd: PathBuf,
     /// Absolute path to the run's `page.md`.
     pub page_path: PathBuf,
@@ -182,27 +185,35 @@ impl HarnessRegistry {
         Self::from_lookup(|name| std::env::var_os(name))
     }
 
-    /// PR 2 registers no production runner, so `start_run` reports
-    /// `not_configured`. Test builds register a [`CommandRunner`] for both
-    /// harness ids when `FAKE_HARNESS_ENV` names an absolute executable.
+    /// The real runners, Codex first, each looking its program up on the
+    /// service's `PATH` plus `$HOME/.local/bin`. Test builds instead register
+    /// a [`CommandRunner`] for both harness ids when `FAKE_HARNESS_ENV` names
+    /// an absolute executable, so no test can reach a real harness that way.
     ///
     /// [`CommandRunner`]: super::command_runner::CommandRunner
     pub fn from_lookup(get: impl Fn(&str) -> Option<OsString>) -> Self {
-        #[allow(unused_mut)]
-        let mut runners: Vec<Box<dyn HarnessRunner>> = Vec::new();
         #[cfg(any(test, feature = "scripted-dialogs"))]
         if let Some(program) = fake_harness(&get) {
             use super::command_runner::CommandRunner;
-            for harness in [HarnessId::Codex, HarnessId::Claude] {
-                runners.push(Box::new(CommandRunner {
-                    harness,
-                    program: program.clone(),
-                }));
-            }
+            let runners = [HarnessId::Codex, HarnessId::Claude]
+                .into_iter()
+                .map(|harness| {
+                    Box::new(CommandRunner {
+                        harness,
+                        program: program.clone(),
+                    }) as Box<dyn HarnessRunner>
+                })
+                .collect();
+            return Self { runners };
         }
-        #[cfg(not(any(test, feature = "scripted-dialogs")))]
-        let _ = get;
-        Self { runners }
+        let home = get("HOME").map(PathBuf::from);
+        let search_path = search_path(get("PATH").as_deref(), home.as_deref());
+        Self {
+            runners: vec![
+                Box::new(CodexRunner::new(search_path.clone(), None)),
+                Box::new(ClaudeRunner::new(search_path)),
+            ],
+        }
     }
 }
 
@@ -235,24 +246,96 @@ mod tests {
 
     use crate::brand::FAKE_HARNESS_ENV;
 
-    #[test]
-    fn registry_is_empty_without_fake_env() {
-        let registry = HarnessRegistry::from_lookup(|_| None);
-        assert!(registry.get(None).is_none());
-        assert!(registry.get(Some(HarnessId::Codex)).is_none());
-        assert!(registry.get(Some(HarnessId::Claude)).is_none());
+    fn spec(cwd: &Path) -> RunSpec {
+        RunSpec {
+            run_id: Uuid::new_v4(),
+            harness: HarnessId::Codex,
+            title: "Page".into(),
+            cwd: cwd.to_path_buf(),
+            page_path: cwd.join("page.md"),
+            prompt: "prompt".into(),
+            env: Vec::new(),
+        }
+    }
 
-        // A relative path or a missing file does not register a fake either.
-        let relative = HarnessRegistry::from_lookup(|name| {
-            (name == FAKE_HARNESS_ENV).then(|| OsString::from("fake-harness"))
-        });
-        assert!(relative.get(None).is_none());
+    /// The error a runner's `start` gives, or `None` when it started.
+    fn start_error(registry: &HarnessRegistry, id: HarnessId, cwd: &Path) -> Option<String> {
+        match registry
+            .get(Some(id))
+            .unwrap()
+            .start(&spec(cwd), &ProcessSlot::default())
+        {
+            Ok(session) => {
+                session.close();
+                None
+            }
+            Err(error) => Some(format!("{error:#}")),
+        }
+    }
+
+    #[test]
+    fn production_registry_serves_codex_and_claude() {
         let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("bin");
+        std::fs::create_dir(&empty).unwrap();
+        // `claude` is found only under $HOME/.local/bin, so a found claude
+        // proves the looked-up HOME was searched. It is never run.
+        let home = dir.path().join("home");
+        let local_bin = home.join(".local").join("bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        let claude = local_bin.join("claude");
+        std::fs::write(&claude, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let lookup = |name: &str| match name {
+            "PATH" => Some(empty.clone().into_os_string()),
+            "HOME" => Some(home.clone().into_os_string()),
+            _ => None,
+        };
+        let registry = HarnessRegistry::from_lookup(lookup);
+        assert_eq!(
+            registry.get(Some(HarnessId::Codex)).unwrap().harness(),
+            HarnessId::Codex
+        );
+        assert_eq!(
+            registry.get(Some(HarnessId::Claude)).unwrap().harness(),
+            HarnessId::Claude
+        );
+        // Codex is preferred when the request names no harness.
+        assert_eq!(registry.get(None).unwrap().harness(), HarnessId::Codex);
+        // Codex is looked up on the given PATH only, never the test's own.
+        let codex = start_error(&registry, HarnessId::Codex, dir.path()).unwrap();
+        assert!(
+            codex.contains("codex is not on the service's PATH"),
+            "{codex}"
+        );
+        assert_eq!(start_error(&registry, HarnessId::Claude, dir.path()), None);
+
+        // A relative or missing fake does not replace the real runners.
+        let relative = HarnessRegistry::from_lookup(|name| {
+            if name == FAKE_HARNESS_ENV {
+                Some(OsString::from("fake-harness"))
+            } else {
+                lookup(name)
+            }
+        });
+        let codex = start_error(&relative, HarnessId::Codex, dir.path()).unwrap();
+        assert!(
+            codex.contains("codex is not on the service's PATH"),
+            "{codex}"
+        );
         let missing = dir.path().join("missing");
         let absent = HarnessRegistry::from_lookup(|name| {
-            (name == FAKE_HARNESS_ENV).then(|| missing.clone().into_os_string())
+            if name == FAKE_HARNESS_ENV {
+                Some(missing.clone().into_os_string())
+            } else {
+                lookup(name)
+            }
         });
-        assert!(absent.get(None).is_none());
+        let codex = start_error(&absent, HarnessId::Codex, dir.path()).unwrap();
+        assert!(
+            codex.contains("codex is not on the service's PATH"),
+            "{codex}"
+        );
     }
 
     #[test]
@@ -274,12 +357,17 @@ mod tests {
         );
         assert!(registry.get(None).is_some());
 
-        // A file that is not executable is ignored.
+        // A file that is not executable is ignored, leaving the real
+        // runners, which find nothing on an empty PATH.
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o644)).unwrap();
         let registry = HarnessRegistry::from_lookup(|name| {
             (name == FAKE_HARNESS_ENV).then(|| fake.clone().into_os_string())
         });
-        assert!(registry.get(None).is_none());
+        let codex = start_error(&registry, HarnessId::Codex, dir.path()).unwrap();
+        assert!(
+            codex.contains("codex is not on the service's PATH"),
+            "{codex}"
+        );
     }
 
     #[test]

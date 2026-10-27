@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ErrorCode, PROTOCOL_VERSION, Request, Response, RunFetched, RunStarted, RunUpdated, RunsListed,
-    ServiceReady,
+    ErrorCode, HarnessId, PROTOCOL_VERSION, Request, Response, RunFetched, RunStarted, RunUpdated,
+    RunsListed, ServiceReady,
 };
 use uuid::Uuid;
 
@@ -26,13 +26,17 @@ use super::paths::{self, ServicePaths};
 use super::record::check_start_run;
 use super::supervisor::{EnvSource, ServiceOptions, StartRun, Supervisor};
 use crate::brand::NAMESPACE;
-use crate::config::ConfigStore;
+use crate::config::{ConfigStore, harness_id};
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::native::{error, parse_envelope};
+use crate::vault::selected_root_identity;
 
 /// How often the accept loop checks for a connection and for idle exit.
 const ACCEPT_POLL: Duration = Duration::from_millis(250);
 pub const NOT_CONFIGURED: &str = "Choose a notes folder in Brauser settings first.";
+pub const SET_UP_HARNESS: &str = "Set up a summary harness in Brauser settings first.";
+pub const KNOWLEDGE_BASE_CHANGED: &str =
+    "The knowledge base folder changed or is missing. Choose it again in settings.";
 
 /// Why [`serve`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,8 +269,8 @@ impl Server {
                 ) {
                     return error(&id, ErrorCode::InvalidRequest, message);
                 }
-                let cwd = match self.run_cwd() {
-                    Ok(cwd) => cwd,
+                let setup = match self.run_setup(value.harness) {
+                    Ok(setup) => setup,
                     Err((code, message)) => return error(&id, code, message),
                 };
                 // Checked now so a bad agent.env is reported at the click;
@@ -279,10 +283,11 @@ impl Server {
                     title: value.title,
                     content: value.content,
                     selection: value.selection,
-                    harness: value.harness,
+                    harness: Some(setup.harness),
                     record_key,
                     requested_at: value.requested_at,
-                    cwd,
+                    cwd: setup.cwd,
+                    timeout: setup.timeout,
                 }) {
                     Ok((run, existing)) => Response::RunStarted(RunStarted {
                         protocol_version: PROTOCOL_VERSION,
@@ -330,9 +335,15 @@ impl Server {
         }
     }
 
-    /// PR 2 runs the harness in the notes folder, read from the service's own
-    /// configuration under the config lock.
-    fn run_cwd(&self) -> Result<PathBuf, (ErrorCode, &'static str)> {
+    /// The harness, working directory, and time limit for a new run, read
+    /// from the service's own configuration under the config lock. The
+    /// request's harness wins over the configured entry. The harness runs in
+    /// the knowledge base folder, which must still be the folder the user
+    /// picked.
+    fn run_setup(
+        &self,
+        requested: Option<HarnessId>,
+    ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
         let _config_lock = config.lock_current().map_err(|_| {
             (
@@ -346,11 +357,34 @@ impl Server {
                 "The configuration is unavailable or needs repair in Brauser settings.",
             ));
         }
-        match config.snapshot().storage.as_ref() {
-            Some(storage) if config.configured() => Ok(PathBuf::from(&storage.root)),
-            _ => Err((ErrorCode::NotConfigured, NOT_CONFIGURED)),
+        let knowledge_base = match config.knowledge_base_dir() {
+            Some(folder) if config.configured() => folder,
+            _ => return Err((ErrorCode::NotConfigured, NOT_CONFIGURED)),
+        };
+        let agent = config.snapshot().agent.as_ref();
+        let harness = requested
+            .or(agent.map(|agent| harness_id(agent.adapter)))
+            .ok_or((ErrorCode::NotConfigured, SET_UP_HARNESS))?;
+        let timeout = agent.map(|agent| Duration::from_secs(agent.timeout_secs.into()));
+        // `selected_root_identity` fails on anything but a folder.
+        let unchanged = selected_root_identity(&knowledge_base)
+            .is_ok_and(|actual| Some(actual.as_str()) == config.knowledge_base_identity());
+        if !unchanged {
+            return Err((ErrorCode::NotConfigured, KNOWLEDGE_BASE_CHANGED));
         }
+        Ok(RunSetup {
+            harness,
+            cwd: knowledge_base,
+            timeout,
+        })
     }
+}
+
+/// What [`Server::run_setup`] resolved for a new run.
+struct RunSetup {
+    harness: HarnessId,
+    cwd: PathBuf,
+    timeout: Option<Duration>,
 }
 
 fn parse_run_id(run_id: &str) -> Option<Uuid> {
@@ -398,11 +432,13 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use brauser_protocol::{
-        ErrorCode, GetRunRequest, HelloRequest, ListRunsRequest, PROTOCOL_VERSION, RecordKey,
-        RecordKeyKind, Request, Response, RunState, ServiceHelloRequest, StartRunRequest,
+        ErrorCode, GetRunRequest, HarnessId, HelloRequest, ListRunsRequest, PROTOCOL_VERSION,
+        RecordKey, RecordKeyKind, Request, Response, RunErrorKind, RunState, ServiceHelloRequest,
+        StartRunRequest,
     };
 
     use crate::brand::FAKE_HARNESS_ENV;
+    use crate::config::fixtures;
     use crate::frame::{read_frame, write_request};
     use crate::service::harness_api::HarnessRegistry;
     use crate::service::paths::build_id;
@@ -420,30 +456,36 @@ mod tests {
     }
 
     impl World {
+        /// A notes folder and a Claude Code harness entry.
         fn new(body: &str) -> Self {
             let world = Self::unconfigured(body);
-            let mut store = world.config();
-            let snapshot = brauser_protocol::ConfigSnapshot {
-                storage: Some(brauser_protocol::StorageConfig {
-                    root: world.notes.to_string_lossy().into_owned(),
-                    profile: "neutral".into(),
-                    log_dir: "log".into(),
-                    pages_dir: "pages".into(),
-                    later_dir: "later".into(),
-                    artifacts_dir: "artifacts".into(),
-                    summaries_dir: None,
-                    knowledge_base_dir: None,
-                }),
-                capture_enabled: false,
-                strip_params: Vec::new(),
-                ..crate::config::empty_config()
-            };
-            let identity = crate::vault::selected_root_identity(&world.notes).unwrap();
-            store
-                .update_with_root_identity(snapshot, "missing", Some(&identity))
-                .unwrap()
-                .unwrap();
+            world.configure(Some(""), None);
             world
+        }
+
+        /// Write config.toml for the notes folder. `agent` adds a Claude Code
+        /// entry with these extra keys; `knowledge_base` is a separately
+        /// picked knowledge base folder, recorded with its current identity.
+        fn configure(&self, agent: Option<&str>, knowledge_base: Option<&Path>) {
+            let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
+            let (storage_extra, keys) = knowledge_base.map_or_else(Default::default, |folder| {
+                let identity = crate::vault::selected_root_identity(folder).unwrap();
+                (
+                    format!("knowledge_base_dir = {}", quoted(&folder.to_string_lossy())),
+                    format!("knowledge_base_identity = {}", quoted(&identity)),
+                )
+            });
+            let tables = agent.map_or_else(String::new, |extra| {
+                let binary = fixtures::absent_binary("claude");
+                format!("{}{extra}", fixtures::agent_table(Path::new(&binary)))
+            });
+            fixtures::write(
+                &self.support.join("config.toml"),
+                &self.notes,
+                &storage_extra,
+                &keys,
+                &tables,
+            );
         }
 
         fn unconfigured(body: &str) -> Self {
@@ -480,6 +522,7 @@ mod tests {
         fn options(paths: &ServicePaths, idle_exit: Duration) -> ServiceOptions {
             ServiceOptions {
                 run_timeout: DEFAULT_RUN_TIMEOUT,
+                forced_run_timeout: None,
                 idle_exit,
                 service_pid: std::process::id(),
                 run_env: env_source(paths),
@@ -724,6 +767,119 @@ mod tests {
         let (code, message) = error_of(world.start_run(Some(url_key())));
         assert_eq!(code, ErrorCode::NotConfigured);
         assert_eq!(message, "Choose a notes folder in Brauser settings first.");
+    }
+
+    #[test]
+    fn start_run_uses_the_knowledge_base_folder_as_cwd() {
+        let world = World::unconfigured("printf '{\"cwd\": \"%s\"}\\n' \"$(pwd -P)\"\n");
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        world.start(Duration::from_secs(600));
+        let run_id = world.started_run_id();
+        let fetched = world.wait_finished(&run_id);
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+        // The configured Claude Code entry picks the harness.
+        assert_eq!(fetched.run.harness, HarnessId::Claude);
+        let expected = std::fs::canonicalize(&knowledge_base).unwrap();
+        assert!(
+            fetched
+                .stream_text
+                .contains(&format!("\"cwd\": \"{}\"", expected.display())),
+            "{fetched:?}"
+        );
+    }
+
+    #[test]
+    fn start_run_without_agent_or_harness_is_not_configured() {
+        let world = World::unconfigured(ANSWER);
+        world.configure(None, None);
+        world.start(Duration::from_secs(600));
+        let (code, message) = error_of(world.start_run(Some(url_key())));
+        assert_eq!(code, ErrorCode::NotConfigured);
+        assert_eq!(
+            message,
+            "Set up a summary harness in Brauser settings first."
+        );
+        // A request that names its harness needs no configured entry.
+        let mut request = StartRunRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "named".into(),
+            url: "https://example.com/a".into(),
+            title: "Page A".into(),
+            content: "Body text".into(),
+            selection: None,
+            harness: Some(HarnessId::Codex),
+            record_key: Some(url_key()),
+            requested_at: "2026-10-26T10:00:00Z".into(),
+        };
+        match world.call(&Request::StartRun(request.clone())) {
+            Response::RunStarted(started) => assert_eq!(started.run.harness, HarnessId::Codex),
+            other => panic!("unexpected response: {other:?}"),
+        }
+        request.harness = None;
+        request.record_key = Some(RecordKey {
+            kind: RecordKeyKind::Url,
+            value: "https://example.com/b".into(),
+        });
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(request))).0,
+            ErrorCode::NotConfigured
+        );
+    }
+
+    #[test]
+    fn replaced_knowledge_base_folder_is_refused() {
+        let world = World::unconfigured(ANSWER);
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        world.start(Duration::from_secs(600));
+        let refused =
+            "The knowledge base folder changed or is missing. Choose it again in settings.";
+        // Missing, then a different folder at the same path.
+        std::fs::remove_dir(&knowledge_base).unwrap();
+        assert_eq!(
+            error_of(world.start_run(Some(url_key()))),
+            (ErrorCode::NotConfigured, refused.to_string())
+        );
+        std::fs::create_dir(&knowledge_base).unwrap();
+        assert_eq!(
+            error_of(world.start_run(Some(url_key()))),
+            (ErrorCode::NotConfigured, refused.to_string())
+        );
+        // A file in its place is not a folder either.
+        std::fs::remove_dir(&knowledge_base).unwrap();
+        std::fs::write(&knowledge_base, "not a folder").unwrap();
+        assert_eq!(
+            error_of(world.start_run(Some(url_key()))),
+            (ErrorCode::NotConfigured, refused.to_string())
+        );
+        assert!(
+            !world.paths.runs().exists()
+                || std::fs::read_dir(world.paths.runs())
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
+    }
+
+    #[test]
+    fn agent_timeout_secs_bounds_the_run() {
+        // The service's own limit is 10 minutes; the entry's 1 second wins.
+        let world = World::unconfigured("exec sleep 30\n");
+        world.configure(Some("timeout_secs = 1\n"), None);
+        world.start(Duration::from_secs(600));
+        let started = Instant::now();
+        let run_id = world.started_run_id();
+        let fetched = world.wait_finished(&run_id);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(fetched.run.state, RunState::Failed, "{fetched:?}");
+        assert_eq!(fetched.run.error_kind, Some(RunErrorKind::TimedOut));
+        assert_eq!(
+            fetched.run.error.as_deref(),
+            Some("Timed out after 1 second")
+        );
     }
 
     #[test]

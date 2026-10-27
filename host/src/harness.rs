@@ -214,7 +214,7 @@ const WORK_DIR_PREFIXES: [&str; 2] = ["run", "codex-home"];
 /// The absolute entries of `PATH` plus `$HOME/.local/bin`, first occurrence
 /// only. No other install location is added, so a test `PATH` finds only
 /// what the test put there.
-fn search_path(path: Option<&OsStr>, home: Option<&Path>) -> OsString {
+pub(crate) fn search_path(path: Option<&OsStr>, home: Option<&Path>) -> OsString {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let listed = path.map(|path| std::env::split_paths(path).collect::<Vec<_>>());
     for dir in listed

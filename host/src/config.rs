@@ -2003,6 +2003,18 @@ pub(crate) fn has_unsafe_display_chars(value: &str) -> bool {
     })
 }
 
+/// The service runner for a configured harness entry. Both types live in the
+/// protocol crate, so this is a function rather than `From`. Temporary: Task
+/// 34 replaces the adapter entry with the service's own harness record.
+#[cfg(unix)]
+pub(crate) fn harness_id(adapter: HarnessAdapter) -> brauser_protocol::HarnessId {
+    use brauser_protocol::HarnessId;
+    match adapter {
+        HarnessAdapter::Codex => HarnessId::Codex,
+        HarnessAdapter::ClaudeCode => HarnessId::Claude,
+    }
+}
+
 pub(crate) fn adapter_for(harness_id: &str) -> Option<HarnessAdapter> {
     match harness_id {
         "claude-code" => Some(HarnessAdapter::ClaudeCode),
@@ -3473,6 +3485,14 @@ mod tests {
             env_allow: vec!["HOME".into()],
             timeout_secs: DEFAULT_TIMEOUT_SECS,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn harness_adapter_maps_to_harness_id() {
+        use brauser_protocol::HarnessId;
+        assert_eq!(harness_id(HarnessAdapter::Codex), HarnessId::Codex);
+        assert_eq!(harness_id(HarnessAdapter::ClaudeCode), HarnessId::Claude);
     }
 
     #[test]

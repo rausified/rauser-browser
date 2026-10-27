@@ -134,7 +134,11 @@ pub type EnvSource = Arc<dyn Fn() -> Result<Vec<(OsString, OsString)>, String> +
 
 #[derive(Clone)]
 pub struct ServiceOptions {
+    /// The limit for a run that brings none of its own.
     pub run_timeout: Duration,
+    /// Set only by the scripted `RUN_TIMEOUT_SECS_ENV` seam: this limit
+    /// beats every run's own, so a smoke can time out a configured harness.
+    pub forced_run_timeout: Option<Duration>,
     /// How long the service stays up with nothing queued or running.
     pub idle_exit: Duration,
     /// Recorded in each run's `status.json` for recovery.
@@ -145,10 +149,19 @@ pub struct ServiceOptions {
     pub run_env: EnvSource,
 }
 
+impl ServiceOptions {
+    /// The limit for a run whose harness entry asks for `requested`.
+    fn timeout_for(&self, requested: Option<Duration>) -> Duration {
+        self.forced_run_timeout
+            .unwrap_or_else(|| requested.unwrap_or(self.run_timeout))
+    }
+}
+
 impl fmt::Debug for ServiceOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceOptions")
             .field("run_timeout", &self.run_timeout)
+            .field("forced_run_timeout", &self.forced_run_timeout)
             .field("idle_exit", &self.idle_exit)
             .field("service_pid", &self.service_pid)
             .finish_non_exhaustive()
@@ -169,6 +182,9 @@ pub struct StartRun {
     pub record_key: RecordKey,
     pub requested_at: String,
     pub cwd: PathBuf,
+    /// The harness entry's `timeout_secs`; `None` uses
+    /// [`ServiceOptions::run_timeout`].
+    pub timeout: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +208,8 @@ struct Launch {
 /// The in-memory side of one queued or running run.
 struct RunControl {
     slot: ProcessSlot,
+    /// How long the run may take once it is running.
+    timeout: Duration,
     stop: Mutex<StopState>,
     launch: Mutex<Option<Launch>>,
     done: Mutex<bool>,
@@ -199,9 +217,10 @@ struct RunControl {
 }
 
 impl RunControl {
-    fn new(launch: Launch) -> Self {
+    fn new(launch: Launch, timeout: Duration) -> Self {
         Self {
             slot: ProcessSlot::default(),
+            timeout,
             stop: Mutex::new(StopState::default()),
             launch: Mutex::new(Some(launch)),
             done: Mutex::new(false),
@@ -344,7 +363,9 @@ impl Supervisor {
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
-                    let control = RunControl::new(Launch { cwd });
+                    // The run's own limit was not recorded; use the service's.
+                    let timeout = inner.options.timeout_for(None);
+                    let control = RunControl::new(Launch { cwd }, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
                 Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
@@ -410,7 +431,8 @@ impl Supervisor {
                     "The run could not be recorded.".to_string(),
                 ));
             }
-            let control = RunControl::new(Launch { cwd: req.cwd });
+            let timeout = inner.options.timeout_for(req.timeout);
+            let control = RunControl::new(Launch { cwd: req.cwd }, timeout);
             lock(&inner.runs).insert(id, Arc::new(control));
         }
         Inner::pump(inner);
@@ -731,7 +753,7 @@ impl Inner {
             (Some(Stop::Cancel), _) => Finish::fail(RunErrorKind::Canceled, None),
             (Some(Stop::Timeout), _) => Finish::fail(
                 RunErrorKind::TimedOut,
-                Some(timeout_message(this.options.run_timeout)),
+                Some(timeout_message(control.timeout)),
             ),
             (None, Err(reason)) => Finish::fail(RunErrorKind::HarnessFailed, Some(reason)),
             (None, Ok(final_text)) => this.conclude(id, &status, &final_text),
@@ -837,7 +859,7 @@ impl Inner {
 
     /// Refresh the heartbeat until the run is done; kill it at the deadline.
     fn watch(&self, id: Uuid, control: &RunControl) {
-        let deadline = Instant::now() + self.options.run_timeout;
+        let deadline = Instant::now() + control.timeout;
         let mut next_beat = Instant::now() + HEARTBEAT;
         let mut timed_out = false;
         loop {
@@ -1188,6 +1210,7 @@ mod tests {
             let source = env.clone();
             let options = ServiceOptions {
                 run_timeout,
+                forced_run_timeout: None,
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
@@ -1229,6 +1252,7 @@ mod tests {
                 },
                 requested_at: "2026-10-26T10:00:00Z".to_string(),
                 cwd: self.dir.path().to_path_buf(),
+                timeout: None,
             }
         }
 
@@ -1531,6 +1555,23 @@ mod tests {
         fixture.wait_finished(id);
         let status = restarted.status(id).unwrap();
         assert_eq!(status.state, RunState::Failed);
+    }
+
+    #[test]
+    fn a_runs_own_timeout_wins_unless_the_seam_forces_one() {
+        let mut options = ServiceOptions {
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
+            idle_exit: Duration::from_secs(600),
+            service_pid: std::process::id(),
+            run_env: Arc::new(|| Ok(Vec::new())),
+        };
+        let own = Duration::from_secs(5);
+        assert_eq!(options.timeout_for(None), DEFAULT_RUN_TIMEOUT);
+        assert_eq!(options.timeout_for(Some(own)), own);
+        options.forced_run_timeout = Some(Duration::from_secs(2));
+        assert_eq!(options.timeout_for(Some(own)), Duration::from_secs(2));
+        assert_eq!(options.timeout_for(None), Duration::from_secs(2));
     }
 
     #[test]
@@ -2033,6 +2074,7 @@ mod tests {
     fn service_options_debug_names_no_environment() {
         let options = ServiceOptions {
             run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
             run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),

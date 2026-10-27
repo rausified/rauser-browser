@@ -317,7 +317,8 @@ fn start_run_request() -> Value {
         "title": "An article",
         "content": "# An article\n\nSome text.\n",
         "selection": null,
-        "harness": null,
+        // The config has no harness entry, so the request names one.
+        "harness": "codex",
         "record_key": null,
         "requested_at": OffsetDateTime::now_utc()
             .replace_nanosecond(0)

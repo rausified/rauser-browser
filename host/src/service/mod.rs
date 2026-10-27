@@ -61,6 +61,7 @@ fn options(paths: &ServicePaths) -> ServiceOptions {
     #[allow(unused_mut)]
     let mut options = ServiceOptions {
         run_timeout: DEFAULT_RUN_TIMEOUT,
+        forced_run_timeout: None,
         idle_exit: DEFAULT_IDLE_EXIT,
         service_pid: std::process::id(),
         run_env: server::env_source(paths),
@@ -71,8 +72,10 @@ fn options(paths: &ServicePaths) -> ServiceOptions {
         if let Some(idle) = seconds_from_env(SERVICE_IDLE_SECS_ENV) {
             options.idle_exit = idle;
         }
+        // It also beats a run's own `timeout_secs`.
         if let Some(timeout) = seconds_from_env(RUN_TIMEOUT_SECS_ENV) {
             options.run_timeout = timeout;
+            options.forced_run_timeout = Some(timeout);
         }
     }
     options
