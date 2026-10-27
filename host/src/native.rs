@@ -6569,7 +6569,20 @@ id = "work:{host}/{id}"
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
             let link = link(fake::socket_in(&dir), never);
-            for requested_at in ["yesterday", "2026-10-26 00:00:00Z", "2001-01-01T00:00:00Z"] {
+            // A current time with fractional seconds, as new Date().toISOString()
+            // gives, is refused too: the schema's pattern admits whole seconds only.
+            let fractional = time::OffsetDateTime::now_utc()
+                .replace_millisecond(452)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            assert!(fractional.ends_with(".452Z"), "{fractional}");
+            for requested_at in [
+                "yesterday",
+                "2026-10-26 00:00:00Z",
+                "2001-01-01T00:00:00Z",
+                fractional.as_str(),
+            ] {
                 let response = call(
                     &mut config,
                     &link,
