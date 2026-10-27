@@ -6,7 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use adapter_templates::{Document as AdapterTemplates, Value as AdapterValue};
+use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
@@ -66,6 +66,10 @@ pub struct ConfigStore {
     adapter_issue: Option<String>,
     adapter_warnings: Option<Vec<AdapterWarning>>,
     adapter_document: Option<AdapterTemplates>,
+    /// Superseded recognition contracts from `[[adapter_id_history]]`.
+    retired_adapter_contracts: Vec<serde_json::Value>,
+    /// Note-only identity rules; see `note_key_rule`.
+    note_key_documents: Vec<AdapterTemplates>,
 }
 
 struct DiskState {
@@ -265,6 +269,8 @@ impl ConfigStore {
         self.adapter_issue = None;
         self.adapter_warnings = Some(Vec::new());
         self.adapter_document = None;
+        self.retired_adapter_contracts.clear();
+        self.note_key_documents.clear();
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -310,6 +316,8 @@ impl ConfigStore {
             adapter_issue: None,
             adapter_warnings: Some(Vec::new()),
             adapter_document: Some(AdapterTemplates::default()),
+            retired_adapter_contracts: Vec::new(),
+            note_key_documents: Vec::new(),
         }
     }
 
@@ -321,6 +329,7 @@ impl ConfigStore {
         self.root_identity = state.root_identity;
         self.agent = state.agent;
         self.adapter_extensions = state.adapter_extensions;
+        self.retired_adapter_contracts = state.retired_adapter_contracts;
         if revision_changed {
             self.set_adapter_policy(false);
         }
@@ -415,6 +424,39 @@ impl ConfigStore {
             .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
     }
 
+    /// Note identity for a URL the capture policy does not recognize. Record
+    /// keys outlive capture (DESIGN.md §6.2): removing a site or adapter,
+    /// narrowing its rules, or an adapter document this host cannot apply
+    /// stops capture but must not split a note across a document's routes.
+    /// The retired contracts in `[[adapter_id_history]]`, and the current
+    /// document while it is inert, therefore still name artifacts for note
+    /// keys only; they never authorize capture. Every recorded artifact URL
+    /// was matched by one of these contracts or by the current policy, so an
+    /// origin they cover is decided by them alone: a stripped canonical URL
+    /// that happens to equal another page's is never identity evidence.
+    pub(crate) fn note_key_rule(&self, url: &str) -> NoteKeyRule {
+        let mut covered = self.adapter_document.as_ref().is_some_and(|document| {
+            !matches!(document.evaluate(url, None), Err(NoMatch::NoAdapter))
+        });
+        let mut ids = std::collections::BTreeSet::new();
+        for document in &self.note_key_documents {
+            match document.evaluate(url, None) {
+                Ok(found) => {
+                    covered = true;
+                    ids.insert(found.artifact_id);
+                }
+                Err(NoMatch::NoAdapter) => {}
+                Err(_) => covered = true,
+            }
+        }
+        match ids.len() {
+            0 if covered => NoteKeyRule::Unrecognized,
+            0 => NoteKeyRule::Uncovered,
+            1 => NoteKeyRule::Artifact(ids.into_iter().next().expect("checked len == 1")),
+            _ => NoteKeyRule::Ambiguous,
+        }
+    }
+
     fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()
@@ -422,6 +464,15 @@ impl ConfigStore {
     }
 
     fn set_adapter_policy(&mut self, include_warnings: bool) {
+        self.set_capture_adapter_policy(include_warnings);
+        self.note_key_documents = note_key_documents(
+            &self.config,
+            self.adapter_document.is_none(),
+            &self.retired_adapter_contracts,
+        );
+    }
+
+    fn set_capture_adapter_policy(&mut self, include_warnings: bool) {
         if !self.adapter_extensions.is_empty() {
             let keys = self
                 .adapter_extensions
@@ -747,7 +798,7 @@ impl ConfigStore {
             &next,
             next_identity.clone(),
             &agent,
-            retired_adapter_contracts,
+            retired_adapter_contracts.clone(),
             adapter_extensions.clone(),
         ))
         .context("serializing config TOML")?;
@@ -788,6 +839,7 @@ impl ConfigStore {
         self.root_identity = next_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
+        self.retired_adapter_contracts = retired_adapter_contracts;
         self.set_adapter_policy(true);
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
@@ -1387,6 +1439,57 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
 fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
     let document = compile_validated_adapters(config)?;
     Ok(adapter_warnings(&document))
+}
+
+/// See `ConfigStore::note_key_rule`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NoteKeyRule {
+    /// Exactly one note-only contract names this artifact.
+    Artifact(String),
+    /// Several contracts name different artifacts; use the URL key.
+    Ambiguous,
+    /// A current or retired contract covers this origin and none names the
+    /// URL, so it is not an artifact page.
+    Unrecognized,
+    /// No contract has ever covered this origin, as far as config.toml
+    /// still records.
+    Uncovered,
+}
+
+/// Compile the note-only identity rules. Retired contracts are compiled
+/// alone, as the history validator does, because their shapes may overlap
+/// one another. An inert current document is used whole when it compiles
+/// (only capture-specific checks failed), keeping first-match and scope
+/// semantics, and otherwise per contract when its format is still format 1.
+fn note_key_documents(
+    config: &ConfigSnapshot,
+    current_inert: bool,
+    retired: &[serde_json::Value],
+) -> Vec<AdapterTemplates> {
+    let single = |contract: &serde_json::Value| {
+        compile_adapters(&ConfigSnapshot {
+            adapters: AdapterDocument {
+                format: 1,
+                artifacts: vec![contract.clone()],
+            },
+            ..empty_config()
+        })
+        .ok()
+    };
+    let mut documents = Vec::new();
+    if current_inert {
+        match compile_adapters(config) {
+            Ok(document) => documents.push(document),
+            Err(_) if config.adapters.format == 1 => documents.extend(
+                individually_valid_adapter_contracts(config)
+                    .iter()
+                    .filter_map(single),
+            ),
+            Err(_) => {}
+        }
+    }
+    documents.extend(retired.iter().filter_map(single));
+    documents
 }
 
 fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
@@ -2050,6 +2153,56 @@ mod tests {
         let mut store = ConfigStore::for_test(path.to_path_buf());
         store.refresh().unwrap();
         store
+    }
+
+    #[test]
+    fn retired_contracts_name_note_keys_but_overlapping_ids_are_ambiguous() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        let history = |artifact_type: &str, path: &str, id: &str| {
+            format!(
+                "[[adapter_id_history]]\ntype = {artifact_type:?}\norigin = \"https://work.example\"\nmatch = [{{ path = {path:?} }}]\nid = {id:?}\n\n"
+            )
+        };
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "",
+            &format!(
+                "{}{}{}",
+                history("work.doc", "/docs/{id:int}", "doc:{host}/{id}"),
+                history("work.item", "/items/{id:int}", "work:{host}/{id}"),
+                // An overlapping shape with another ID, as two once-active
+                // overlapping adapters would leave behind.
+                history("work.other", "/items/{n:int}", "other:{host}/{n}"),
+            ),
+        );
+        let store = loaded(&path);
+        assert!(store.config_issue().is_none());
+        assert!(
+            store
+                .adapter_match("https://work.example/docs/8", None)
+                .is_err()
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/docs/8"),
+            NoteKeyRule::Artifact("doc:work.example/8".into())
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/items/7"),
+            NoteKeyRule::Ambiguous
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/boards/1"),
+            NoteKeyRule::Unrecognized
+        );
+        assert_eq!(
+            store.note_key_rule("https://elsewhere.example/items/8"),
+            NoteKeyRule::Uncovered
+        );
     }
 
     fn adapter(origin: &str, artifact_type: &str, path: &str, id: &str) -> serde_json::Value {

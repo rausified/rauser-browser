@@ -115,6 +115,17 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Review reproduced, against the native handlers, a bare Jira
+  board reading and autosaving into an issue's note because `strip_params`
+  made the modal's stored canonical URL equal the board URL; the board's URL
+  note listed as an "older note" of every modal issue and migratable into
+  one; and site removal or an inert adapter document splitting a note across
+  routes with no recorded activity. Failing-first native tests
+  (`stripped_identity_collisions`, `note_policy_removal`) and a config unit
+  test for `note_key_rule` now cover them. Tests that exercise history-only
+  recovery remove `[[adapter_id_history]]` first, as a config repair would,
+  because recorded contracts otherwise decide the key. Note-removal fixtures
+  are dated from the clock, since capture rejects events older than 30 days.
 - 2026-10-27: Independent review reproduced an older URL note disappearing
   from a recovered context-only route when the shared note's creation route
   had no delivered activity. Older-note discovery now uses the shared note's

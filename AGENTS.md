@@ -85,10 +85,17 @@ to host-derived artifact keys (with guarded migration of older URL-keyed
 notes), and settings can regenerate artifact files while reporting every
 unowned-path conflict it leaves untouched.
 
-After adapter/site removal or recognition narrowing, notes recover their
-artifact key from complete note identities and recorded activity, mode URLs,
-or explicit context; separate older URL notes remain viewable. Ambiguous
-history falls back to the URL key, while unavailable history or an incomplete
+After adapter/site removal, recognition narrowing, or while the adapter
+document is inert, note keys come from the note-only contracts config.toml
+still records (`[[adapter_id_history]]` and the inert document; never
+capture), so every route a contract matched keeps one note
+(`ConfigStore::note_key_rule`). Those contracts alone decide an origin they
+cover, so a stripped canonical URL shared with another page (a Jira board and
+its issue modal) is never identity evidence, and older-note candidates must
+map to the same artifact. Only an origin with no recorded contract falls back
+to complete note identities and recorded activity, mode URLs, or explicit
+context; separate older URL notes remain viewable. Ambiguous contracts or
+history fall back to the URL key, while unavailable history or an incomplete
 bounded note scan refuses loads and saves instead of guessing an autosave target.
 
 The service worker delivers buffered events and renews its policy lease

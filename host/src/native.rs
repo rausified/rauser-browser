@@ -15,7 +15,7 @@ use brauser_protocol::{
 
 use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
-use crate::config::{self, ConfigStore};
+use crate::config::{self, ConfigStore, NoteKeyRule};
 use crate::consent::ConsentAuthority;
 use crate::dialog::{self, DialogText};
 use crate::harness::HarnessEnv;
@@ -1190,20 +1190,33 @@ fn note_context(
     // requires must still be visible here, or this path and capture would
     // disagree on whether the page is recognized.
     let matched = config.adapter_match(url, None).ok();
-    let key =
-        match matched.as_ref() {
-            Some(found) => RecordKey {
+    // Whether the key came from the legacy history fallback below, for an
+    // origin config.toml no longer records any adapter contract for.
+    let mut recovered_from_history = false;
+    let key = match matched.as_ref() {
+        Some(found) => RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: found.artifact_id.clone(),
+        },
+        None => match config.note_key_rule(url) {
+            NoteKeyRule::Artifact(artifact_id) => RecordKey {
                 kind: RecordKeyKind::Artifact,
-                value: found.artifact_id.clone(),
+                value: artifact_id,
             },
-            // No adapter currently recognizes this URL (for example, its
-            // adapter or last enabled site was removed). Before falling back to
-            // a fresh URL key, check whether it was previously recorded under an
-            // artifact, so that artifact's existing shared note stays reachable
-            // instead of appearing empty. The note's stored identity
-            // survives even without delivered activity; indexed history
-            // also recovers notes created on a different alternate route.
-            None => {
+            // A covered origin is decided by its contracts alone; an
+            // ambiguous one keeps the URL note rather than guessing.
+            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => {
+                crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
+            }
+            // No recorded contract covers this origin (for example, a
+            // config repair discarded its history). Before falling back to
+            // a fresh URL key, check whether it was previously recorded
+            // under an artifact, so that artifact's existing shared note
+            // stays reachable instead of appearing empty. The note's stored
+            // identity survives even without delivered activity; indexed
+            // history also recovers notes created on a different alternate
+            // route.
+            NoteKeyRule::Uncovered => {
                 // Collect every distinct match from BOTH sources into one set
                 // before deciding uniqueness: stripped query identity can make
                 // two different artifacts share the same canonical URL, and
@@ -1236,18 +1249,41 @@ fn note_context(
                         .map_err(|_| unavailable())?,
                 );
                 match candidates.len() {
-                    1 => RecordKey {
-                        kind: RecordKeyKind::Artifact,
-                        value: candidates
-                            .into_iter()
-                            .next()
-                            .expect("checked len == 1 above"),
-                    },
+                    1 => {
+                        recovered_from_history = true;
+                        RecordKey {
+                            kind: RecordKeyKind::Artifact,
+                            value: candidates
+                                .into_iter()
+                                .next()
+                                .expect("checked len == 1 above"),
+                        }
+                    }
                     _ => crate::vault::url_record_key(&canonical)
                         .expect("canonical HTTP URL has a key"),
                 }
             }
-        };
+        },
+    };
+    // `older_urls` is both the older-note list and the only authorization
+    // for viewing or migrating one, so every candidate must name this
+    // artifact itself. Recorded URLs are stripped canonical forms: the
+    // page's own canonical URL, an indexed modal route, or a note's creation
+    // URL can equal an unrelated page's URL once `strip_params` removed the
+    // query value that identified the artifact.
+    let names_artifact = |candidate: &str| {
+        if config
+            .adapter_match(candidate, None)
+            .is_ok_and(|found| found.artifact_id == key.value)
+        {
+            return true;
+        }
+        match config.note_key_rule(candidate) {
+            NoteKeyRule::Artifact(artifact_id) => artifact_id == key.value,
+            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => false,
+            NoteKeyRule::Uncovered => recovered_from_history,
+        }
+    };
     let mut older_urls = vec![canonical.clone()];
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
         if let Ok(cache_dir) = config.cache_dir()
@@ -1261,17 +1297,12 @@ fn note_context(
                 if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key) {
                     older_urls.push(candidate);
                 }
-                let Some(candidate) = note::url_keyed_note_url(&contents) else {
-                    continue;
-                };
-                if config
-                    .adapter_match(&candidate, None)
-                    .is_ok_and(|candidate_match| candidate_match.artifact_id == key.value)
-                {
+                if let Some(candidate) = note::url_keyed_note_url(&contents) {
                     older_urls.push(candidate);
                 }
             }
         }
+        older_urls.retain(|candidate| names_artifact(candidate));
         older_urls.sort();
         older_urls.dedup();
     }
@@ -2773,6 +2804,213 @@ id = "jira:{host}/{key}"
         assert_eq!(browse_loaded.body, "same issue");
     }
 
+    /// `strip_params` can remove the query value that is a Jira board modal's
+    /// whole artifact identity, so the stored canonical URL of the modal's
+    /// note is the bare board URL. That shared canonical form is never
+    /// evidence that the board, or another issue's modal, is the same page.
+    mod stripped_identity_collisions {
+        use super::*;
+
+        const BOARD: &str = "https://acme.atlassian.net/jira/software/projects/ABC/boards/1";
+        const ABC_123: &str =
+            "https://acme.atlassian.net/jira/software/projects/ABC/boards/1?selectedIssue=ABC-123";
+        const ABC_456: &str =
+            "https://acme.atlassian.net/jira/software/projects/ABC/boards/1?selectedIssue=ABC-456";
+        const BROWSE_123: &str = "https://acme.atlassian.net/browse/ABC-123";
+        const JIRA: &str = r#"[[artifacts]]
+type = "jira.issue"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/browse/{key:jira_key}" }, { path = "/jira/{*}", query = { selectedIssue = "{key:jira_key}" } }]
+id = "jira:{host}/{key}"
+"#;
+
+        fn jira_store(folder: &tempfile::TempDir) -> (std::path::PathBuf, ConfigStore) {
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            config::fixtures::write(
+                &path,
+                &root,
+                "artifacts_dir = \"artifacts\"",
+                "capture_enabled = true\nsites = [{ origin = \"https://acme.atlassian.net\", path_prefix = \"/\" }]\nstrip_params = [\"selectedIssue\"]",
+                &format!("[adapters]\nformat = 1\n\n{JIRA}"),
+            );
+            let config = loaded(&path);
+            (root, config)
+        }
+
+        fn save(config: &mut ConfigStore, url: &str, body: &str) -> NoteSaved {
+            let current = note_load(config, url);
+            match note_save(config, url, body, &current.revision, current.key) {
+                Response::NoteSaved(saved) => saved,
+                other => panic!("expected note_saved on {url}, got {other:?}"),
+            }
+        }
+
+        fn record_modal_activity(config: &mut ConfigStore, url: &str, issue: &str) {
+            let occurred_at = time::OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            let response = record_activity(
+                RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "modal-activity".into(),
+                    event: ActivityEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        artifact_id: format!("jira:acme.atlassian.net/{issue}"),
+                        artifact_type: "jira.issue".into(),
+                        url: url.into(),
+                        title: Some(issue.into()),
+                        occurred_at,
+                        incognito: false,
+                        opens: 1,
+                        focused_seconds: 3,
+                        background_seconds: 0,
+                        modes: Vec::new(),
+                        trails: Vec::new(),
+                        refs: Vec::new(),
+                    },
+                },
+                config,
+            );
+            assert!(
+                matches!(
+                    response,
+                    Response::ActivityRecorded(ActivityRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                ),
+                "{response:?}"
+            );
+        }
+
+        fn older(config: &mut ConfigStore, url: &str) -> Vec<String> {
+            note_load(config, url)
+                .older_notes
+                .into_iter()
+                .map(|note| note.canonical_url)
+                .collect()
+        }
+
+        #[test]
+        fn the_bare_board_never_reads_or_autosaves_into_a_modal_issues_note() {
+            let folder = tempfile::tempdir().unwrap();
+            let (root, mut config) = jira_store(&folder);
+            let issue = save(&mut config, ABC_123, "ABC-123 text");
+            let issue_path = root.join(&issue.relative_path);
+            let issue_bytes = std::fs::read(&issue_path).unwrap();
+
+            for activity in [false, true] {
+                if activity {
+                    // Delivered modal history for one issue, then another,
+                    // must not flip the board's key either way.
+                    record_modal_activity(&mut config, ABC_123, "ABC-123");
+                }
+                let board = note_load(&mut config, BOARD);
+                assert_eq!(board.key.kind, RecordKeyKind::Url, "activity={activity}");
+                assert!(!board.exists, "activity={activity}");
+                assert!(board.body.is_empty(), "activity={activity}");
+            }
+            let board = save(&mut config, BOARD, "Notes about the whole board");
+            assert_eq!(board.key.kind, RecordKeyKind::Url);
+            assert_ne!(board.relative_path, issue.relative_path);
+            assert_eq!(std::fs::read(&issue_path).unwrap(), issue_bytes);
+
+            record_modal_activity(&mut config, ABC_456, "ABC-456");
+            let board = note_load(&mut config, BOARD);
+            assert_eq!(board.key.kind, RecordKeyKind::Url);
+            assert_eq!(board.body, "Notes about the whole board");
+            assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 text");
+            assert_eq!(note_load(&mut config, BROWSE_123).body, "ABC-123 text");
+        }
+
+        #[test]
+        fn after_adapter_removal_another_issues_modal_does_not_load_the_first_issues_note() {
+            let folder = tempfile::tempdir().unwrap();
+            let (root, mut config) = jira_store(&folder);
+            let issue = save(&mut config, ABC_123, "ABC-123 text");
+            let issue_bytes = std::fs::read(root.join(&issue.relative_path)).unwrap();
+            let mut next = config.snapshot().clone();
+            next.adapters.artifacts.clear();
+            let revision = config.revision().to_owned();
+            config.update(next, &revision).unwrap().unwrap();
+
+            let other = note_load(&mut config, ABC_456);
+            assert_ne!(other.body, "ABC-123 text");
+            assert!(
+                other.key.value != issue.key.value,
+                "ABC-456 must not resolve to ABC-123's key: {:?}",
+                other.key
+            );
+            let board = note_load(&mut config, BOARD);
+            assert_eq!(board.key.kind, RecordKeyKind::Url);
+            assert!(!board.exists);
+            // The issue's own routes keep its note.
+            assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 text");
+            assert_eq!(note_load(&mut config, BROWSE_123).body, "ABC-123 text");
+            assert_eq!(
+                std::fs::read(root.join(&issue.relative_path)).unwrap(),
+                issue_bytes
+            );
+        }
+
+        #[test]
+        fn a_board_url_note_is_not_an_older_note_of_any_issue_in_its_modal() {
+            let folder = tempfile::tempdir().unwrap();
+            let (root, mut config) = jira_store(&folder);
+            let board = save(&mut config, BOARD, "Notes about the whole board");
+            assert_eq!(board.key.kind, RecordKeyKind::Url);
+            let board_path = root.join(&board.relative_path);
+            let board_bytes = std::fs::read(&board_path).unwrap();
+            let board_revision = note_load(&mut config, BOARD).revision;
+
+            for modal in [ABC_456, ABC_123] {
+                assert!(older(&mut config, modal).is_empty(), "{modal}");
+            }
+            record_modal_activity(&mut config, ABC_123, "ABC-123");
+            assert!(older(&mut config, BROWSE_123).is_empty());
+            assert!(older(&mut config, ABC_123).is_empty());
+
+            for url in [ABC_456, ABC_123, BROWSE_123] {
+                let viewed = view_older_note(
+                    brauser_protocol::ViewOlderNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "view-board".into(),
+                        url: url.into(),
+                        source_url: BOARD.into(),
+                    },
+                    &mut config,
+                );
+                assert!(
+                    matches!(&viewed, Response::Error(reply) if reply.code == ErrorCode::Unauthorized),
+                    "{url}: {viewed:?}"
+                );
+                let migrated = use_artifact_note(
+                    brauser_protocol::UseArtifactNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "migrate-board".into(),
+                        url: url.into(),
+                        source_url: BOARD.into(),
+                        expected_revision: board_revision.clone(),
+                    },
+                    &mut config,
+                );
+                assert!(
+                    matches!(&migrated, Response::Error(reply) if reply.code == ErrorCode::Unauthorized),
+                    "{url}: {migrated:?}"
+                );
+            }
+            assert_eq!(std::fs::read(&board_path).unwrap(), board_bytes);
+            assert_eq!(
+                note_load(&mut config, BOARD).body,
+                "Notes about the whole board"
+            );
+        }
+    }
+
     mod note_policy_removal {
         use super::*;
 
@@ -2784,6 +3022,9 @@ id = "jira:{host}/{key}"
             folder: tempfile::TempDir,
             root: std::path::PathBuf,
             path: std::path::PathBuf,
+            // Capture rejects events more than 30 days old, so fixtures are
+            // dated from the clock rather than a literal.
+            at: time::OffsetDateTime,
         }
 
         impl Session {
@@ -2803,7 +3044,33 @@ match = [{ path = "/items/{id:int}/edit", mode = "edit" }, { path = "/items/{id:
 id = "work:{host}/{id}"
 "#,
                 );
-                Self { folder, root, path }
+                let at = time::OffsetDateTime::now_utc()
+                    .replace_nanosecond(0)
+                    .unwrap();
+                Self {
+                    folder,
+                    root,
+                    path,
+                    at,
+                }
+            }
+
+            fn occurred_at(&self) -> String {
+                self.at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            }
+
+            fn log_path(&self) -> std::path::PathBuf {
+                let date = self.at.date();
+                self.root.join(format!(
+                    "log/{:04}/{:02}/{:04}-{:02}-{:02}.md",
+                    date.year(),
+                    u8::from(date.month()),
+                    date.year(),
+                    u8::from(date.month()),
+                    date.day()
+                ))
             }
 
             // Exercise real request/response framing and reopen the host for
@@ -2909,6 +3176,21 @@ id = "work:{host}/{id}"
                 );
             }
 
+            /// A config repair or hand edit can discard `[[adapter_id_history]]`;
+            /// note identity then falls back to recorded history.
+            fn forget_policy_history(&self) {
+                let mut table: toml::Table =
+                    toml::from_str(&std::fs::read_to_string(&self.path).unwrap()).unwrap();
+                assert!(table.remove("adapter_id_history").is_some());
+                std::fs::write(&self.path, toml::to_string(&table).unwrap()).unwrap();
+                let config = loaded(&self.path);
+                assert!(config.config_issue().is_none());
+                assert_eq!(
+                    config.note_key_rule(EDIT),
+                    crate::config::NoteKeyRule::Uncovered
+                );
+            }
+
             fn activity(&self) -> ActivityEvent {
                 ActivityEvent {
                     event_id: uuid::Uuid::new_v4().to_string(),
@@ -2916,7 +3198,7 @@ id = "work:{host}/{id}"
                     artifact_type: "work.item".into(),
                     url: VIEW.into(),
                     title: Some("Item 7".into()),
-                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    occurred_at: self.occurred_at(),
                     incognito: false,
                     opens: 1,
                     focused_seconds: 3,
@@ -2978,7 +3260,7 @@ id = "work:{host}/{id}"
                 session.policy(removal);
                 let shared_path = session.root.join(saved.relative_path);
                 let original = std::fs::read(&shared_path).unwrap();
-                let log_path = session.root.join("log/2026/10/2026-10-16.md");
+                let log_path = session.log_path();
                 let original_log = std::fs::read(&log_path).unwrap();
                 for rebuild in ["existing", "deleted", "reindex"] {
                     if rebuild == "deleted" {
@@ -3075,7 +3357,7 @@ id = "work:{host}/{id}"
                         event_id: uuid::Uuid::new_v4().to_string(),
                         artifact_id: shared.key.value.clone(),
                         url: CONTEXT.into(),
-                        occurred_at: "2026-10-16T13:00:00Z".into(),
+                        occurred_at: session.occurred_at(),
                         incognito: false,
                         text: "Preparing the review".into(),
                     },
@@ -3134,7 +3416,7 @@ id = "work:{host}/{id}"
                             event_id: uuid::Uuid::new_v4().to_string(),
                             artifact_id: shared.key.value.clone(),
                             url: CONTEXT.into(),
-                            occurred_at: "2026-10-16T13:00:00Z".into(),
+                            occurred_at: session.occurred_at(),
                             incognito: false,
                             text: "Preparing the review".into(),
                         },
@@ -3203,6 +3485,61 @@ id = "work:{host}/{id}"
         }
 
         #[test]
+        fn turning_a_site_off_does_not_split_a_note_across_routes_without_history() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                // The note exists only on its creation route; nothing was
+                // ever recorded for the other route.
+                let first = session.load(EDIT);
+                assert!(matches!(
+                    session.save(EDIT, &first, "One note for item 7"),
+                    Response::NoteSaved(_)
+                ));
+                let shared = session.load(EDIT);
+                session.policy(removal);
+                let view = session.load(VIEW);
+                assert_eq!(view.key, shared.key, "{removal}");
+                assert_eq!(view.body, "One note for item 7", "{removal}");
+                // A document first noted after the removal still gets one note.
+                let new_edit = "https://work.example/items/8/edit";
+                let new_view = "https://work.example/items/8/view";
+                let created = session.load(new_edit);
+                assert_eq!(created.key.kind, RecordKeyKind::Artifact, "{removal}");
+                assert!(matches!(
+                    session.save(new_edit, &created, "Item 8"),
+                    Response::NoteSaved(_)
+                ));
+                let other_route = session.load(new_view);
+                assert_eq!(other_route.key, created.key, "{removal}");
+                assert_eq!(other_route.body, "Item 8", "{removal}");
+                assert!(
+                    !session.root.join("log").exists(),
+                    "{removal}: note keys never restart capture"
+                );
+            }
+        }
+
+        #[test]
+        fn an_unsupported_adapter_table_key_does_not_split_a_note() {
+            let session = Session::new();
+            let first = session.load(EDIT);
+            assert!(matches!(
+                session.save(EDIT, &first, "One note for item 7"),
+                Response::NoteSaved(_)
+            ));
+            let shared = session.load(EDIT);
+            let text = std::fs::read_to_string(&session.path).unwrap();
+            let edited = text.replacen("[adapters]\n", "[adapters]\nfuture_key = true\n", 1);
+            assert_ne!(edited, text, "fixture must contain an adapters table");
+            std::fs::write(&session.path, edited).unwrap();
+            assert!(loaded(&session.path).adapter_issue().is_some());
+
+            let view = session.load(VIEW);
+            assert_eq!(view.key, shared.key);
+            assert_eq!(view.body, "One note for item 7");
+        }
+
+        #[test]
         fn ambiguous_removed_notes_never_replace_an_occupied_url_note() {
             let session = Session::new();
             let config = loaded(&session.path);
@@ -3223,6 +3560,39 @@ id = "work:{host}/{id}"
             let url_key = crate::vault::url_record_key(EDIT).unwrap();
             let url_bytes = vault.read_note(&url_key, EDIT).unwrap().unwrap();
             session.policy("adapter");
+            // While config.toml still records the removed contract, it alone
+            // names EDIT's artifact. The competing URL note stays separate:
+            // listed and viewable, never merged over the artifact note.
+            let current = session.load(EDIT);
+            assert_eq!(current.key, originals[0].0);
+            assert_eq!(current.body, "work:work.example/7");
+            assert_eq!(current.older_notes.len(), 1);
+            assert_eq!(current.older_notes[0].key, url_key);
+            assert!(matches!(
+                session.call(Request::UseArtifactNote(brauser_protocol::UseArtifactNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "no-merge".into(),
+                    url: EDIT.into(),
+                    source_url: EDIT.into(),
+                    expected_revision: current.older_notes[0].revision.clone(),
+                })),
+                Response::Error(reply) if reply.code == ErrorCode::Conflict
+            ));
+            assert!(matches!(
+                session.call(Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "view-url-note".into(),
+                    url: EDIT.into(),
+                    source_url: EDIT.into(),
+                })),
+                Response::NoteLoaded(note) if note.body == "Separate URL text"
+            ));
+            for (key, bytes) in &originals {
+                assert_eq!(vault.read_note(key, EDIT).unwrap().as_ref(), Some(bytes));
+            }
+            assert_eq!(vault.read_note(&url_key, EDIT).unwrap().unwrap(), url_bytes);
+            // Without that history, two recorded identities are ambiguous.
+            session.forget_policy_history();
             for rebuild in [false, true] {
                 if rebuild {
                     std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
@@ -3255,6 +3625,7 @@ id = "work:{host}/{id}"
                 };
                 let current = session.load(EDIT);
                 session.policy("adapter");
+                session.forget_policy_history();
                 let note_path = session.root.join(saved.relative_path);
                 let original = std::fs::read(&note_path).unwrap();
                 let pages = session.root.join("pages");
