@@ -87,59 +87,76 @@ pub fn serve_with_context<R: Read, W: Write>(
     }
 }
 
-/// Read the common envelope before the version-specific request. A newer
-/// extension may add fields or message types this host cannot deserialize.
 fn dispatch_json(
     body: &[u8],
     config: &mut ConfigStore,
     consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
+    match parse_envelope(body) {
+        Ok((_, request)) => dispatch(request, config, consent, context),
+        Err(response) => response,
+    }
+}
+
+/// Read the common envelope before the version-specific request. A newer
+/// peer may add fields or message types this build cannot deserialize, so
+/// the request id and version are checked first and a mismatch answers
+/// `unsupported_protocol_version`. Shared by the native host and the
+/// service; the error is the response to send.
+// The error is the response itself, sent as is; boxing it would only add an
+// allocation to the rare refusal path.
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_envelope(body: &[u8]) -> std::result::Result<(String, Request), Response> {
     let envelope: serde_json::Value = match serde_json::from_slice(body) {
         Ok(value) => value,
-        Err(_) => return error("", ErrorCode::InvalidRequest, "invalid request JSON"),
+        Err(_) => return Err(error("", ErrorCode::InvalidRequest, "invalid request JSON")),
     };
     let Some(object) = envelope.as_object() else {
-        return error(
+        return Err(error(
             "",
             ErrorCode::InvalidRequest,
             "request must be a JSON object",
-        );
+        ));
     };
     let Some(id) = object.get("request_id").and_then(serde_json::Value::as_str) else {
-        return error("", ErrorCode::InvalidRequest, "request_id is required");
+        return Err(error(
+            "",
+            ErrorCode::InvalidRequest,
+            "request_id is required",
+        ));
     };
     if !valid_request_id(id) {
-        return error(
+        return Err(error(
             "",
             ErrorCode::InvalidRequest,
             "request_id must be 1–128 non-control characters",
-        );
+        ));
     }
     let Some(version) = object
         .get("protocol_version")
         .and_then(serde_json::Value::as_u64)
     else {
-        return error(
+        return Err(error(
             id,
             ErrorCode::InvalidRequest,
             "protocol_version is required",
-        );
+        ));
     };
     if version != u64::from(PROTOCOL_VERSION) {
-        return error(
+        return Err(error(
             id,
             ErrorCode::UnsupportedProtocolVersion,
             "extension and host protocol versions differ",
-        );
+        ));
     }
     match serde_json::from_slice::<Request>(body) {
-        Ok(request) => dispatch(request, config, consent, context),
-        Err(_) => error(
+        Ok(request) => Ok((id.to_owned(), request)),
+        Err(_) => Err(error(
             id,
             ErrorCode::InvalidRequest,
             "invalid or unsupported request JSON",
-        ),
+        )),
     }
 }
 
@@ -1748,7 +1765,7 @@ fn local_date(value: &str) -> Option<time::Date> {
     time::Date::parse(value, &format).ok()
 }
 
-fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
+pub(crate) fn error(request_id: &str, code: ErrorCode, message: &str) -> Response {
     Response::Error(ErrorResponse {
         protocol_version: PROTOCOL_VERSION,
         request_id: request_id.to_owned(),
