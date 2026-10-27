@@ -15,6 +15,7 @@ import {
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import {
+  SETUP_WARNING,
   agentStateText,
   harnessFoundText,
   harnessOfferNote,
@@ -66,6 +67,7 @@ const offersList = element<HTMLUListElement>("harness-offers");
 const envList = element<HTMLUListElement>("harness-env");
 const summariesInput = element<HTMLInputElement>("summaries-dir");
 const setupButton = element<HTMLButtonElement>("setup-harness");
+const harnessWarning = element<HTMLParagraphElement>("harness-warning");
 const removeHarnessButton = element<HTMLButtonElement>("remove-harness");
 
 let picker: { path: string; token: string } | null = null;
@@ -78,9 +80,10 @@ let preflight: {
   apiGranted: boolean;
   originGranted: boolean;
 } | null = null;
-// Harness offers are single-use and bound to the revision they were found at.
+// What Detect harnesses last found. Setup names one by harness_id, and the
+// host detects and checks it again before running anything.
 let offers: HarnessOffer[] = [];
-let selectedOfferId: string | null = null;
+let selectedHarnessId: string | null = null;
 const envChoices = new Map<string, boolean>();
 let summariesEdited = false;
 type AdapterEdit =
@@ -90,30 +93,23 @@ type AdapterEdit =
 let adapterEdit: AdapterEdit | null = null;
 let githubScopeText = "";
 
-// The host binds a folder selection and each harness offer to the revision it
-// was made at, so any save, from this page or another, makes them unusable.
+// The host binds a folder selection to the revision it was made at, so any
+// save, from this page or another, makes it unusable.
 const session = new ConfigSession(renderConfig, () => {
   picker = null;
-  clearOffers();
 });
 
-// A folder selection's token and harness offers live only in the host process
-// that issued them. After that process exits, the next call starts a new one
-// that would refuse them, so the folder must be chosen, or harnesses
-// detected, again.
+// A folder selection's token lives only in the host process that issued it.
+// After that process exits, the next call starts a new one that would refuse
+// it, so the folder must be chosen again.
 session.host.onHostExit(() => {
-  const hadPicker = picker !== null;
-  const hadOffers = offers.length > 0;
-  if (!hadPicker && !hadOffers) return;
+  if (picker === null) return;
   picker = null;
-  clearOffers();
   renderConfig();
-  const lost = [
-    ...(hadPicker ? ["the folder selection was lost. Choose the folder again."] : []),
-    ...(hadOffers ? ["the detected harnesses were lost. Detect harnesses again."] : []),
-  ];
-  show(`The native host restarted, so ${lost.join(" Also, ")}`, true);
+  show("The native host restarted, so the folder selection was lost. Choose the folder again.", true);
 });
+
+harnessWarning.textContent = SETUP_WARNING;
 
 function show(message: string, warning = false): void {
   status.textContent = message;
@@ -190,17 +186,16 @@ function harnessName(adapter: HarnessAdapter): string {
 
 function clearOffers(): void {
   offers = [];
-  selectedOfferId = null;
+  selectedHarnessId = null;
   envChoices.clear();
 }
 
 function selectedOffer(): HarnessOffer | null {
-  return offers.find((offer) => offer.offer_id !== null && offer.refusal === null &&
-    offer.offer_id === selectedOfferId) ?? null;
+  return offers.find((offer) => offer.refusal === null && offer.harness_id === selectedHarnessId) ?? null;
 }
 
-function selectOffer(offerId: string | null): void {
-  selectedOfferId = offerId;
+function selectOffer(harnessId: string | null): void {
+  selectedHarnessId = harnessId;
   envChoices.clear();
   // Credentials the host has are proposed; the user can untick any of them.
   for (const env of selectedOffer()?.env_optional ?? []) envChoices.set(env.name, env.present);
@@ -221,7 +216,7 @@ function renderAgent(): void {
     offersList.append(item);
   }
   for (const [index, offer] of offers.entries()) {
-    const ready = offer.offer_id !== null && offer.refusal === null;
+    const ready = offer.refusal === null;
     const item = document.createElement("li");
     item.dataset.adapter = offer.adapter;
     item.dataset.ready = String(ready);
@@ -231,11 +226,11 @@ function renderAgent(): void {
     radio.type = "radio";
     radio.name = "harness-offer";
     radio.id = `harness-offer-${index}`;
-    radio.value = offer.offer_id ?? "";
+    radio.value = offer.harness_id;
     radio.dataset.ready = String(ready);
-    radio.checked = ready && offer.offer_id === selectedOfferId;
+    radio.checked = ready && offer.harness_id === selectedHarnessId;
     radio.addEventListener("change", () => {
-      selectOffer(offer.offer_id);
+      selectOffer(offer.harness_id);
       renderConfig();
     });
     const version = offer.version ? ` ${offer.version}` : "";
@@ -1099,8 +1094,8 @@ async function detectHarnesses(): Promise<void> {
   updateControls();
   try {
     offers = await session.discoverHarnesses();
-    const ready = offers.find((offer) => offer.offer_id !== null && offer.refusal === null);
-    selectOffer(ready?.offer_id ?? null);
+    const ready = offers.find((offer) => offer.refusal === null);
+    selectOffer(ready?.harness_id ?? null);
     if (ready) {
       show(harnessFoundText(harnessName(ready.adapter), ready.version, !!session.config?.storage));
     } else {
@@ -1111,7 +1106,6 @@ async function detectHarnesses(): Promise<void> {
   } catch (error) {
     clearOffers();
     show(`Could not detect harnesses: ${describe(error)}`, true);
-    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
     busy = false;
     renderConfig();
@@ -1120,7 +1114,7 @@ async function detectHarnesses(): Promise<void> {
 
 async function setupHarness(): Promise<void> {
   const offer = selectedOffer();
-  if (busy || !offer?.offer_id) return;
+  if (busy || !offer) return;
   if (!session.config?.storage) {
     show("Choose a notes folder first.", true);
     return;
@@ -1135,18 +1129,13 @@ async function setupHarness(): Promise<void> {
   updateControls();
   try {
     await withConfigMutationLock(() =>
-      session.setupHarness(offer.offer_id!, envNames, summaries));
+      session.setupHarness(offer.harness_id, envNames, summaries));
     summariesEdited = false;
     show(`${harnessName(offer.adapter)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
-    // Until harness setup loses its dialog, a cancel here is the dialog's.
-    const reason = error instanceof HostError && error.code === "cancelled"
-      ? "Canceled. No settings were changed." : describe(error);
-    show(`Harness setup did not finish: ${reason}`, true);
+    show(`Harness setup did not finish: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
-    // The host spends an offer on every attempt, including a cancel.
-    clearOffers();
     busy = false;
     renderConfig();
   }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 const { storageKey } = await import("../dist/brand.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
@@ -116,7 +117,7 @@ function install({
     ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
     ["summaries-dir", "input"],
-    ["setup-harness", "button"], ["remove-harness", "button"],
+    ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
@@ -815,28 +816,62 @@ test("a host restart drops a folder selection only the old host knew", async () 
   await until(() => statusText().startsWith("Capture enabled") && idle(), "setup to finish");
 });
 
-test("a host restart drops harness offers only the old host knew", async () => {
-  const offer = {
-    offer_id: "offer-1", adapter: "claude_code", harness_id: "claude-code",
-    binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-    args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"], env_optional: [], refusal: null,
+const CLAUDE_OFFER = {
+  adapter: "claude_code", harness_id: "claude-code",
+  binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
+  args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
+  env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
+};
+
+test("harness setup sends set_up_harness and no confirmation", async () => {
+  const agent = {
+    harness_id: "claude-code", adapter: "claude_code", binary: CLAUDE_OFFER.binary,
+    args: CLAUDE_OFFER.args, env_allow: ["HOME", "PATH", "ANTHROPIC_API_KEY"], timeout_secs: 120,
   };
   const state = install({
     host: {
-      discover_harnesses: (_request, current) =>
-        ({ type: "harnesses_discovered", offers: [{ ...offer, offer_id: `offer-${current.connects}` }] }),
+      discover_harnesses: () => ({ type: "harnesses_discovered", offers: [CLAUDE_OFFER] }),
+      set_up_harness: (request, current) => {
+        current.config = {
+          ...current.config, agent,
+          storage: { ...current.config.storage, summaries_dir: request.summaries_dir },
+        };
+        current.revision += 1;
+        return { type: "config_updated", revision: String(current.revision), config: current.config };
+      },
     },
   });
   await openSettings();
+  state.requests.length = 0;
   env.elements.get("detect-harnesses").click();
   await until(() => !env.elements.get("setup-harness").disabled, "Set up to become available");
+  assert.doesNotMatch(statusText(), /Review it below/);
+  env.elements.get("setup-harness").click();
+  await until(() => statusText().startsWith("Claude Code is set up") && idle(), "setup to finish");
+  const hostTypes = () => state.requests.map((request) => request.type);
+  assert.ok(hostTypes().includes("set_up_harness"));
+  assert.ok(!hostTypes().includes("confirm_harness_setup"));
+  assert.ok(!hostTypes().includes("update_config"));
+  assert.ok(state.requests.every((request) => !("harness_token" in request)));
+  const discover = state.requests.find((request) => request.type === "discover_harnesses");
+  assert.equal("expected_revision" in discover, false);
+  const setUp = state.requests.find((request) => request.type === "set_up_harness");
+  assert.equal(setUp.harness_id, "claude-code");
+  assert.equal(setUp.expected_revision, "1");
+  assert.deepEqual(setUp.env_names, ["ANTHROPIC_API_KEY"]);
+  assert.equal(setUp.summaries_dir, "summaries");
+  assert.equal(state.config.agent.harness_id, "claude-code");
+});
 
-  state.exitHost();
-  assert.match(statusText(), /detected harnesses were lost\. Detect harnesses again/);
-  assert.equal(env.elements.get("setup-harness").disabled, true);
-
-  env.elements.get("detect-harnesses").click();
-  await until(() => !env.elements.get("setup-harness").disabled, "Set up after detecting again");
+test("settings shows the exact setup warning", async () => {
+  install();
+  await openSettings();
+  const { SETUP_WARNING } = await import("../dist/agent.js");
+  assert.equal(env.elements.get("harness-warning").textContent, SETUP_WARNING);
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  assert.ok(html.includes(`<p id="harness-warning">${SETUP_WARNING}</p>`));
+  assert.ok(html.includes(">Set up harness</button>"));
+  assert.ok(!html.includes("Set up harness…"));
 });
 
 test("manual artifact refresh reports unowned path conflicts", async () => {

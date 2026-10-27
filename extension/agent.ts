@@ -3,17 +3,13 @@
 // these only let the settings page explain a problem before sending.
 import type { AgentStatus, HarnessOffer } from "../protocol/ts/generated.js";
 
-/** DESIGN §14: Codex runs with the user's own HOME and CODEX_HOME. The host's
- * setup confirmation says the same (host/src/consent.rs CODEX_DISCLOSURE). */
-export const CODEX_DISCLOSURE =
-  "Codex runs with your normal Codex home and login, so your own Codex instructions (AGENTS.md) and skills can shape its answers. Claude Code is the recommended harness.";
+/** Shown above Set up harness (spec §6). Summaries run with full access. */
+export const SETUP_WARNING =
+  "Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.";
 
-/** The note under a detected harness: whether it can be set up and, for
- * Codex, what sharing the user's Codex home means. */
+/** The note under a detected harness: whether it can be set up. */
 export function harnessOfferNote(offer: HarnessOffer): string {
-  const ready = offer.offer_id !== null && offer.refusal === null;
-  const state = ready ? "Ready to set up." : `Cannot be set up: ${offer.refusal ?? "detect again"}.`;
-  return offer.adapter === "codex" ? `${state} ${CODEX_DISCLOSURE}` : state;
+  return offer.refusal === null ? "Ready to set up." : `Cannot be set up: ${offer.refusal}.`;
 }
 
 /** What Detect harnesses reports for a ready offer. Set up harness needs a
@@ -21,7 +17,7 @@ export function harnessOfferNote(offer: HarnessOffer): string {
 export function harnessFoundText(name: string, version: string | null, hasNotesFolder: boolean): string {
   const found = `Found ${name}${version ? ` ${version}` : ""}.`;
   return hasNotesFolder
-    ? `${found} Review it below, then choose Set up harness.`
+    ? `${found} Choose Set up harness to run a test prompt.`
     : `${found} Choose a notes folder first, then set up the harness.`;
 }
 

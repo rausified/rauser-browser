@@ -36,8 +36,6 @@ pub struct UpdateConfigRequest {
     pub config: ConfigSnapshot,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub picker_token: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub harness_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -637,16 +635,15 @@ pub enum NoteSaveOutcome {
 pub struct DiscoverHarnessesRequest {
     pub protocol_version: u32,
     pub request_id: String,
-    pub expected_revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConfirmHarnessSetupRequest {
+pub struct SetUpHarnessRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub expected_revision: String,
-    pub offer_id: String,
+    pub harness_id: String,
     pub env_names: Vec<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summaries_dir: Option<String>,
@@ -662,19 +659,7 @@ pub struct HarnessesDiscovered {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HarnessSetupConfirmed {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub harness_token: String,
-    pub config: ConfigSnapshot,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct HarnessOffer {
-    #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub offer_id: Option<String>,
     pub adapter: HarnessAdapter,
     pub harness_id: String,
     pub binary: String,
@@ -717,7 +702,7 @@ pub enum Request {
     RefreshArtifacts(RefreshArtifactsRequest),
     CheckAgent(CheckAgentRequest),
     DiscoverHarnesses(DiscoverHarnessesRequest),
-    ConfirmHarnessSetup(ConfirmHarnessSetupRequest),
+    SetUpHarness(SetUpHarnessRequest),
 }
 
 impl Request {
@@ -741,7 +726,7 @@ impl Request {
             Self::RefreshArtifacts(value) => value.protocol_version,
             Self::CheckAgent(value) => value.protocol_version,
             Self::DiscoverHarnesses(value) => value.protocol_version,
-            Self::ConfirmHarnessSetup(value) => value.protocol_version,
+            Self::SetUpHarness(value) => value.protocol_version,
         }
     }
 
@@ -765,7 +750,7 @@ impl Request {
             Self::RefreshArtifacts(value) => &value.request_id,
             Self::CheckAgent(value) => &value.request_id,
             Self::DiscoverHarnesses(value) => &value.request_id,
-            Self::ConfirmHarnessSetup(value) => &value.request_id,
+            Self::SetUpHarness(value) => &value.request_id,
         }
     }
 }
@@ -790,7 +775,6 @@ pub enum Response {
     ArtifactsRefreshed(ArtifactsRefreshed),
     AgentChecked(AgentChecked),
     HarnessesDiscovered(HarnessesDiscovered),
-    HarnessSetupConfirmed(HarnessSetupConfirmed),
     Error(ErrorResponse),
 }
 
@@ -814,7 +798,6 @@ impl Response {
             Self::ArtifactsRefreshed(value) => value.protocol_version,
             Self::AgentChecked(value) => value.protocol_version,
             Self::HarnessesDiscovered(value) => value.protocol_version,
-            Self::HarnessSetupConfirmed(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
     }
@@ -838,7 +821,6 @@ impl Response {
             Self::ArtifactsRefreshed(value) => &value.request_id,
             Self::AgentChecked(value) => &value.request_id,
             Self::HarnessesDiscovered(value) => &value.request_id,
-            Self::HarnessSetupConfirmed(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }
     }

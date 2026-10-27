@@ -1,8 +1,9 @@
-//! Native harness setup end to end: the built host serves real frames, its
-//! confirmation dialog answers from scripted files, and the only harness on
-//! its search path is a fake `#!/bin/sh` script. The host runs with a cleared
-//! environment and a temp `HOME`, so it never sees the user's real config,
-//! harness, or screen. Without the feature this file is empty.
+//! Native harness setup end to end: the built host serves real frames, and
+//! the only harness on its search path is a fake `#!/bin/sh` script. Setup
+//! shows no dialog; the scripted-dialog directory only proves that. The host
+//! runs with a cleared environment and a temp `HOME`, so it never sees the
+//! user's real config, harness, or screen. Without the feature this file is
+//! empty.
 #![cfg(all(feature = "scripted-dialogs", unix))]
 
 use std::fs;
@@ -114,14 +115,6 @@ esac
         .unwrap();
     }
 
-    fn answer(&self, reply: &str) {
-        fs::write(
-            self.path("dialogs").join("answer"),
-            format!(r#"{{"dialog":"confirm","reply":"{reply}"}}"#),
-        )
-        .unwrap();
-    }
-
     fn shown(&self) -> Vec<Value> {
         fs::read_to_string(self.path("dialogs").join("shown.jsonl"))
             .unwrap_or_default()
@@ -195,8 +188,8 @@ impl Host {
 
     /// The fake claude's offer. Every offer must come from the fake
     /// directory; anything else means a real harness was found.
-    fn claude_offer(&mut self, revision: &str) -> String {
-        let reply = self.call(json!({"type": "discover_harnesses", "expected_revision": revision}));
+    fn claude_offer(&mut self) -> Value {
+        let reply = self.call(json!({"type": "discover_harnesses"}));
         assert_eq!(reply["type"], "harnesses_discovered", "{reply}");
         let offers = reply["offers"].as_array().unwrap();
         for offer in offers {
@@ -206,22 +199,24 @@ impl Host {
                 "a harness outside the fake directory was found: {}",
                 binary.display()
             );
+            assert!(offer.get("offer_id").is_none(), "{offer}");
         }
         let claude = offers
             .iter()
             .find(|offer| offer["harness_id"] == "claude-code")
             .unwrap_or_else(|| panic!("fake Claude offer was missing: {reply}"));
-        claude["offer_id"]
-            .as_str()
-            .unwrap_or_else(|| panic!("fake Claude offer was refused: {claude}"))
-            .to_owned()
+        assert!(
+            claude["refusal"].is_null(),
+            "fake Claude was refused: {claude}"
+        );
+        claude.clone()
     }
 
-    fn confirm(&mut self, revision: &str, offer_id: &str) -> Value {
+    fn set_up(&mut self, revision: &str) -> Value {
         self.call(json!({
-            "type": "confirm_harness_setup",
+            "type": "set_up_harness",
             "expected_revision": revision,
-            "offer_id": offer_id,
+            "harness_id": "claude-code",
             "env_names": [],
             "summaries_dir": null,
         }))
@@ -259,41 +254,25 @@ fn assert_secret_absent(world: &World) {
 }
 
 #[test]
-fn harness_setup_confirms_and_commits_harness() {
+fn harness_setup_commits_after_probe() {
     let world = World::new(PASSING_BODY);
     let mut host = world.serve();
     let revision = host.revision();
-    let offer = host.claude_offer(&revision);
-    world.answer("confirmed");
-    let confirmed = host.confirm(&revision, &offer);
-    assert_eq!(confirmed["type"], "harness_setup_confirmed", "{confirmed}");
-
-    let shown = world.shown();
-    assert_eq!(shown.len(), 1);
-    assert_eq!(shown[0]["dialog"], "confirm");
-    let text = shown[0]["text"].as_str().unwrap();
-    assert!(
-        text.starts_with(
-            "Set up Claude Code for Brauser AI commands\nHarness: Claude Code 2.1.284\n"
-        ),
-        "{text}"
-    );
-    assert!(
-        text.contains("Summaries folder: \"summaries\" in "),
-        "{text}"
-    );
-    assert!(text.contains(&format!(
-        "Program: {:?}",
-        world.path("bin").join("claude").to_str().unwrap()
-    )));
-    assert!(
-        !text.contains("bank.example") && !text.contains("privacy"),
-        "{text}"
+    host.claude_offer();
+    let updated = host.set_up(&revision);
+    assert_eq!(updated["type"], "config_updated", "{updated}");
+    assert_ne!(updated["revision"], json!(revision));
+    let agent = &updated["config"]["agent"];
+    assert_eq!(agent["harness_id"], "claude-code");
+    assert_eq!(
+        agent["binary"].as_str(),
+        world.path("bin").join("claude").to_str()
     );
     assert_eq!(
-        confirmed["summary"].as_str(),
-        text.split_once('\n').map(|(_, body)| body)
+        updated["config"]["storage"]["summaries_dir"].as_str(),
+        Some("summaries")
     );
+    assert!(world.shown().is_empty(), "{:?}", world.shown());
 
     // The probe ran with only the allowlisted names.
     let names = probe_env(&world);
@@ -305,74 +284,45 @@ fn harness_setup_confirms_and_commits_harness() {
         Some("Brauser setup test.")
     );
 
-    let updated = host.call(json!({
-        "type": "update_config",
-        "expected_revision": revision,
-        "config": confirmed["config"],
-        "picker_token": null,
-        "harness_token": confirmed["harness_token"],
-    }));
-    assert_eq!(updated["type"], "config_updated", "{updated}");
     let checked = host.call(json!({"type": "check_agent"}));
     assert_eq!(checked["type"], "agent_checked", "{checked}");
     assert_eq!(checked["harness_version"], "2.1.284");
     assert!(checked.get("url_allowed").is_none(), "{checked}");
+    let status = host.call(json!({"type": "get_config"}));
+    assert_eq!(status["agent_status"]["state"], "ready", "{status}");
     host.close();
 
     let saved = fs::read_to_string(&world.config).unwrap();
     assert!(!saved.contains("agent_denylist"), "{saved}");
     assert!(saved.contains("[harness_record]"), "{saved}");
     assert!(saved.contains("summaries_dir = \"summaries\""), "{saved}");
+    assert!(world.shown().is_empty());
     assert_secret_absent(&world);
 }
 
 #[test]
-fn canceled_harness_setup_leaves_config_unchanged_and_runs_no_probe() {
-    let world = World::new(PASSING_BODY);
-    let before = fs::read(&world.config).unwrap();
-    let mut host = world.serve();
-    let revision = host.revision();
-    let offer = host.claude_offer(&revision);
-    world.answer("canceled");
-    let reply = host.confirm(&revision, &offer);
-    assert_eq!(reply["type"], "error", "{reply}");
-    assert_eq!(reply["code"], "cancelled");
-    assert_eq!(world.shown().len(), 1);
-    // The canceled offer is spent.
-    let again = host.confirm(&revision, &offer);
-    assert_eq!(again["code"], "unauthorized", "{again}");
-    let status = host.call(json!({"type": "get_config"}));
-    assert_eq!(status["agent_status"]["state"], "not_set_up");
-    host.close();
-
-    assert_eq!(fs::read(&world.config).unwrap(), before);
-    assert_eq!(world.log("stdin.log"), None);
-    // Only --version and --help ran.
-    assert_eq!(world.log("argv.log").unwrap().lines().count(), 2);
-    assert_secret_absent(&world);
-}
-
-#[test]
-fn failing_probe_is_refused_after_confirmation() {
+fn failing_probe_is_refused() {
     let world = World::new("exit 3");
     let before = fs::read(&world.config).unwrap();
     let mut host = world.serve();
     let revision = host.revision();
-    let offer = host.claude_offer(&revision);
-    world.answer("confirmed");
-    let reply = host.confirm(&revision, &offer);
+    host.claude_offer();
+    let reply = host.set_up(&revision);
     assert_eq!(reply["type"], "error", "{reply}");
     assert_eq!(reply["code"], "invalid_config");
     assert_eq!(
         reply["message"],
         "Claude Code failed its test run (test run failed (exit 3)); AI commands stay off"
     );
-    assert_eq!(world.shown().len(), 1);
+    assert!(world.shown().is_empty(), "{:?}", world.shown());
     let status = host.call(json!({"type": "get_config"}));
     assert_eq!(status["agent_status"]["state"], "not_set_up");
+    assert_eq!(host.revision(), revision);
     host.close();
 
     assert_eq!(fs::read(&world.config).unwrap(), before);
-    assert_eq!(world.log("argv.log").unwrap().lines().count(), 3);
+    // Discovery ran --version and --help, then setup rediscovered and probed.
+    assert_eq!(world.log("argv.log").unwrap().lines().count(), 5);
+    assert!(world.shown().is_empty());
     assert_secret_absent(&world);
 }

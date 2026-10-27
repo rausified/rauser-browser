@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // Run after build:extension. agent.js is pure: no chrome or DOM access.
-const {
-  CODEX_DISCLOSURE, agentStateText, harnessFoundText, harnessOfferNote,
-} = await import("../dist/agent.js");
+const agent = await import("../dist/agent.js");
+const { SETUP_WARNING, agentStateText, harnessFoundText, harnessOfferNote } = agent;
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
 const config = {
@@ -19,8 +18,8 @@ const config = {
 
 test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   const withFolder = harnessFoundText("Claude Code", "2.1.284", true);
-  assert.match(withFolder, /^Found Claude Code 2\.1\.284\./);
-  assert.match(withFolder, /choose Set up harness/);
+  assert.equal(withFolder, "Found Claude Code 2.1.284. Choose Set up harness to run a test prompt.");
+  assert.doesNotMatch(withFolder, /Review it below/);
   const withoutFolder = harnessFoundText("Claude Code", "2.1.284", false);
   assert.match(withoutFolder, /^Found Claude Code 2\.1\.284\./);
   assert.match(withoutFolder, /Choose a notes folder first/);
@@ -28,18 +27,23 @@ test("harness_found_text_asks_for_a_notes_folder_before_setup", () => {
   assert.match(harnessFoundText("Codex", null, true), /^Found Codex\. /);
 });
 
-test("codex_offer_note_discloses_shared_codex_home", () => {
+test("harness offer notes carry no offer id and no Codex disclosure", () => {
   const offer = {
-    offer_id: "offer-1", adapter: "codex", harness_id: "codex", binary: "/bin/codex",
+    adapter: "codex", harness_id: "codex", binary: "/bin/codex",
     real_path: "/bin/codex", version: "0.144.4", args: [], env_required: ["HOME", "PATH"],
     env_optional: [], refusal: null,
   };
-  assert.match(CODEX_DISCLOSURE, /instructions \(AGENTS\.md\) and skills can shape/);
-  assert.equal(harnessOfferNote(offer), `Ready to set up. ${CODEX_DISCLOSURE}`);
-  assert.equal(harnessOfferNote({ ...offer, offer_id: null, refusal: "Codex 0.1.0 has not been reviewed" }),
-    `Cannot be set up: Codex 0.1.0 has not been reviewed. ${CODEX_DISCLOSURE}`);
+  assert.equal("CODEX_DISCLOSURE" in agent, false);
+  assert.equal(harnessOfferNote(offer), "Ready to set up.");
+  assert.equal(harnessOfferNote({ ...offer, refusal: "Codex 0.1.0 has not been reviewed" }),
+    "Cannot be set up: Codex 0.1.0 has not been reviewed.");
   const claude = { ...offer, adapter: "claude_code", harness_id: "claude-code" };
   assert.equal(harnessOfferNote(claude), "Ready to set up.");
+});
+
+test("the setup warning is the exact full-access text", () => {
+  assert.equal(SETUP_WARNING,
+    "Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.");
 });
 
 test("agentStateText_describes_each_state", () => {
@@ -69,7 +73,7 @@ test("isConfig requires exactly the v6 keys", () => {
 
 test("isResponseShape_accepts_new_responses_and_rejects_unknown", () => {
   const offer = {
-    offer_id: "offer-1", adapter: "claude_code", harness_id: "claude-code",
+    adapter: "claude_code", harness_id: "claude-code",
     binary: "/bin/claude", real_path: "/opt/claude", version: "2.1.284", args: ["-p", "{prompt}"],
     env_required: ["HOME", "PATH"], env_optional: [{ name: "ANTHROPIC_API_KEY", present: false }],
     refusal: null,
@@ -77,7 +81,8 @@ test("isResponseShape_accepts_new_responses_and_rejects_unknown", () => {
   assert.equal(isResponseShape({ type: "harnesses_discovered", offers: [offer] }), true);
   assert.equal(isResponseShape({
     type: "harness_setup_confirmed", harness_token: "t", config, summary: "s",
-  }), true);
+  }), false);
+  assert.equal(isResponseShape({ type: "config_updated", config, revision: "r" }), true);
   assert.equal(isResponseShape({
     type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.284",
   }), true);

@@ -81,6 +81,14 @@ documented as they land (to be completed with the open-access work).
 `ready`. `check_agent` carries no `url`, `agent_checked` no `url_allowed`, and
 `confirm_harness_setup` no denylist. A version 5 `config.toml` that still has
 those keys loads unchanged, and the host drops them on its next save.
+Harness setup has no native dialog and no token: `confirm_harness_setup`,
+`harness_setup_confirmed`, `update_config.harness_token`,
+`HarnessOffer.offer_id`, and `discover_harnesses.expected_revision` are gone.
+`set_up_harness` names a detected `harness_id` with `expected_revision`,
+`env_names`, and `summaries_dir`; the host detects that harness again, runs
+one test prompt, and commits it, answering `config_updated`. A failed test
+run is `invalid_config` and changes nothing; `update_config` still cannot set
+a harness entry.
 
 `load_note` returns the host-derived `RecordKey` and any bounded older
 URL-keyed notes that now resolve to the same artifact. `save_note` must echo

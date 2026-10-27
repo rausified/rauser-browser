@@ -7,18 +7,17 @@ use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityRecorded, AgentChecked, ArtifactListResult, ArtifactResult, ArtifactView,
     ArtifactsRefreshed, BatchEventResult, BatchRecorded, CaptureEventKind, ConfigResult,
-    ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen, HarnessSetupConfirmed,
-    HarnessesDiscovered, HelloResult, NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION,
-    RecordKey, RecordKeyKind, Request, Response, VisitOutcome, VisitRecorded, WhyRecorded,
-    WorklogResult,
+    ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen, HarnessesDiscovered, HelloResult,
+    NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION, RecordKey, RecordKeyKind, Request,
+    Response, VisitOutcome, VisitRecorded, WhyRecorded, WorklogResult,
 };
 
 use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore};
 use crate::consent::ConsentAuthority;
-use crate::dialog::{self, DialogText};
 use crate::harness::HarnessEnv;
+use crate::harness_setup;
 use crate::index::ArtifactIndex;
 use crate::note;
 use crate::vault::Vault;
@@ -37,19 +36,15 @@ pub fn serve(config: ConfigStore) -> Result<()> {
 }
 
 /// What harness setup may use from the host process. Built once per
-/// connection; tests build it by hand with a fake search path and dialog.
+/// connection; tests build it by hand with a fake search path.
 pub struct SetupContext<'a> {
     pub env: &'a HarnessEnv,
-    pub confirm: fn(DialogText<'_>) -> Result<bool>,
 }
 
 /// Process requests until the browser closes the native messaging pipe.
 pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore) -> Result<()> {
     let env = HarnessEnv::from_process(config.dir()?);
-    let context = SetupContext {
-        env: &env,
-        confirm: dialog::confirm,
-    };
+    let context = SetupContext { env: &env };
     serve_with_context(input, output, config, &context)
 }
 
@@ -248,7 +243,6 @@ fn dispatch(
                 &previous_revision,
                 &value.config,
                 value.picker_token.as_deref(),
-                value.harness_token.as_deref(),
             ) {
                 Ok(authorized) => authorized,
                 Err(authority_error) => {
@@ -263,7 +257,7 @@ fn dispatch(
                 value.config.clone(),
                 &value.expected_revision,
                 authorized.selected_identity.as_deref(),
-                authorized.harness_commit,
+                None,
             ) {
                 Ok(Some(revision)) => {
                     consent.consume_update(
@@ -271,7 +265,6 @@ fn dispatch(
                         &previous_revision,
                         &value.config,
                         value.picker_token.as_deref(),
-                        value.harness_token.as_deref(),
                     );
                     Response::ConfigUpdated(ConfigUpdated {
                         protocol_version: PROTOCOL_VERSION,
@@ -338,85 +331,29 @@ fn dispatch(
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         Request::CheckAgent(value) => check_agent(value, config),
-        Request::DiscoverHarnesses(value) => {
-            if config.refresh().is_err() {
-                return error(
-                    &value.request_id,
-                    ErrorCode::InvalidConfig,
-                    "configuration file is unavailable",
-                );
-            }
-            if value.expected_revision != config.revision() {
-                return error(
-                    &value.request_id,
-                    ErrorCode::Conflict,
-                    "configuration changed; read it again before setting up AI",
-                );
-            }
-            let offers = consent.discover_harnesses(config.revision(), context.env);
-            Response::HarnessesDiscovered(HarnessesDiscovered {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: value.request_id,
-                offers,
-            })
-        }
-        Request::ConfirmHarnessSetup(value) => {
-            confirm_harness_setup(value, config, consent, context)
-        }
+        Request::DiscoverHarnesses(value) => Response::HarnessesDiscovered(HarnessesDiscovered {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            offers: harness_setup::offers(context.env),
+        }),
+        Request::SetUpHarness(value) => set_up_harness(value, config, context),
     }
 }
 
-/// Native harness setup (§7.3): the host shows its own dialog and runs one
-/// test prompt. The returned token authorizes exactly the returned config.
-fn confirm_harness_setup(
-    value: brauser_protocol::ConfirmHarnessSetupRequest,
+/// Harness setup: rediscover, probe, and commit in one request. There is no
+/// dialog and no token; success is the same `config_updated` a save returns.
+fn set_up_harness(
+    value: brauser_protocol::SetUpHarnessRequest,
     config: &mut ConfigStore,
-    consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
-    if config.refresh().is_err() {
-        return error(
-            &value.request_id,
-            ErrorCode::InvalidConfig,
-            "configuration file is unavailable",
-        );
-    }
-    if value.expected_revision != config.revision() {
-        return error(
-            &value.request_id,
-            ErrorCode::Conflict,
-            "configuration changed; read it again before setting up AI",
-        );
-    }
-    // Setup rewrites the whole file from this snapshot, so it must be the
-    // file's own content, not a stand-in for one that needs repair.
-    if config.config_issue().is_some() {
-        return error(
-            &value.request_id,
-            ErrorCode::InvalidConfig,
-            "configuration needs repair before AI setup",
-        );
-    }
-    let current = config.snapshot().clone();
-    match consent.confirm_harness_setup_with(
-        &current,
-        config.revision(),
-        &value,
-        context.env,
-        context.confirm,
-    ) {
-        Ok(Some(confirmed)) => Response::HarnessSetupConfirmed(HarnessSetupConfirmed {
+    match harness_setup::set_up(config, &value, context.env) {
+        Ok(revision) => Response::ConfigUpdated(ConfigUpdated {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
-            harness_token: confirmed.harness_token,
-            config: confirmed.config,
-            summary: confirmed.summary,
+            config: config.snapshot().clone(),
+            revision,
         }),
-        Ok(None) => error(
-            &value.request_id,
-            ErrorCode::Cancelled,
-            "harness setup was canceled",
-        ),
         Err(setup_error) => error(&value.request_id, setup_error.code, &setup_error.message),
     }
 }
@@ -1907,7 +1844,6 @@ mod tests {
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
-                harness_token: None,
             }),
         ];
         let input: Vec<u8> = requests.into_iter().flat_map(encoded_request).collect();
@@ -1961,7 +1897,6 @@ mod tests {
                 expected_revision: "missing".into(),
                 config: snapshot.clone(),
                 picker_token: None,
-                harness_token: None,
             }),
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -1973,7 +1908,6 @@ mod tests {
                 expected_revision: "missing".into(),
                 config: snapshot,
                 picker_token: None,
-                harness_token: None,
             }),
         ];
         let input: Vec<u8> = requests.into_iter().flat_map(encoded_request).collect();
@@ -2026,10 +1960,7 @@ mod tests {
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext {
-            env: &env,
-            confirm: no_dialog,
-        };
+        let context = SetupContext { env: &env };
 
         let updated = dispatch(
             Request::UpdateConfig(UpdateConfigRequest {
@@ -2038,7 +1969,6 @@ mod tests {
                 expected_revision: revision,
                 config: next,
                 picker_token: None,
-                harness_token: None,
             }),
             &mut config,
             &mut consent,
@@ -2121,10 +2051,7 @@ mod tests {
         let mut config = ConfigStore::for_test(folder.path().join("config.toml"));
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext {
-            env: &env,
-            confirm: no_dialog,
-        };
+        let context = SetupContext { env: &env };
         for root in [existing.clone(), folder.path().join("absent")] {
             let snapshot = ConfigSnapshot {
                 storage: Some(brauser_protocol::StorageConfig {
@@ -2149,7 +2076,6 @@ mod tests {
                     expected_revision: "missing".into(),
                     config: snapshot,
                     picker_token: None,
-                    harness_token: None,
                 }),
                 &mut config,
                 &mut consent,
@@ -2175,7 +2101,6 @@ mod tests {
             expected_revision: revision.into(),
             config,
             picker_token: None,
-            harness_token: None,
         })
     }
 
@@ -2185,10 +2110,7 @@ mod tests {
         let mut config = configured_store(folder.path());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext {
-            env: &env,
-            confirm: no_dialog,
-        };
+        let context = SetupContext { env: &env };
         let read = dispatch(
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -2239,10 +2161,7 @@ mod tests {
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext {
-            env: &env,
-            confirm: no_dialog,
-        };
+        let context = SetupContext { env: &env };
         match dispatch(
             update_request("stale", next),
             &mut config,
@@ -2879,7 +2798,6 @@ id = "work:{host}/{id}"
             &mut ConsentAuthority::new(),
             &SetupContext {
                 env: &no_harnesses(folder.path()),
-                confirm: no_dialog,
             },
         );
         match response {
@@ -2973,7 +2891,6 @@ id = "work:{host}/{id}"
             &mut ConsentAuthority::new(),
             &SetupContext {
                 env: &no_harnesses(folder.path()),
-                confirm: no_dialog,
             },
         ) {
             Response::NoteSaved(value) => value,
@@ -3041,10 +2958,7 @@ id = "work:{host}/{id}"
         let mut config = configured_store(&notes);
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext {
-            env: &env,
-            confirm: no_dialog,
-        };
+        let context = SetupContext { env: &env };
         let save = |config: &mut ConfigStore,
                     consent: &mut ConsentAuthority,
                     body: &str,
@@ -3107,21 +3021,10 @@ id = "work:{host}/{id}"
         }
     }
 
-    fn no_dialog(_: DialogText<'_>) -> Result<bool> {
-        bail!("no dialog is expected in this test")
-    }
-
     fn served(requests: &[String], config: ConfigStore) -> Vec<Response> {
         let folder = tempfile::tempdir().unwrap();
         let env = no_harnesses(folder.path());
-        served_with(
-            requests,
-            config,
-            &SetupContext {
-                env: &env,
-                confirm: no_dialog,
-            },
-        )
+        served_with(requests, config, &SetupContext { env: &env })
     }
 
     fn served_with(
@@ -3648,13 +3551,13 @@ id = "work:{host}/{id}"
     }
 
     /// Native harness setup against fake harnesses on an injected search
-    /// path. No real harness is ever found or run.
+    /// path. No real harness is ever found or run, and no dialog exists.
     #[cfg(unix)]
     mod harness_setup {
         use super::*;
         use crate::harness::fake::{Fake, PASSING_BODY};
         use brauser_protocol::{
-            AgentState, ConfirmHarnessSetupRequest, DiscoverHarnessesRequest, HarnessOffer,
+            AgentState, DiscoverHarnessesRequest, HarnessOffer, SetUpHarnessRequest,
         };
 
         struct Session {
@@ -3663,10 +3566,6 @@ id = "work:{host}/{id}"
             path: std::path::PathBuf,
             config: ConfigStore,
             consent: ConsentAuthority,
-        }
-
-        fn accept(_: DialogText<'_>) -> Result<bool> {
-            Ok(true)
         }
 
         fn session(body: &str) -> Session {
@@ -3687,15 +3586,8 @@ id = "work:{host}/{id}"
         }
 
         impl Session {
-            fn call(
-                &mut self,
-                request: Request,
-                confirm: fn(DialogText<'_>) -> Result<bool>,
-            ) -> Response {
-                let context = SetupContext {
-                    env: &self.env,
-                    confirm,
-                };
+            fn call(&mut self, request: Request) -> Response {
+                let context = SetupContext { env: &self.env };
                 dispatch(request, &mut self.config, &mut self.consent, &context)
             }
 
@@ -3704,97 +3596,159 @@ id = "work:{host}/{id}"
                 self.config.revision().to_owned()
             }
 
-            fn discover(&mut self, revision: &str) -> Response {
-                self.call(
-                    Request::DiscoverHarnesses(DiscoverHarnessesRequest {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: "discover-1".into(),
-                        expected_revision: revision.into(),
-                    }),
-                    no_dialog,
-                )
-            }
-
             fn offers(&mut self) -> Vec<HarnessOffer> {
-                let revision = self.revision();
-                match self.discover(&revision) {
+                match self.call(Request::DiscoverHarnesses(DiscoverHarnessesRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "discover-1".into(),
+                })) {
                     Response::HarnessesDiscovered(value) => value.offers,
                     other => panic!("expected harnesses_discovered, got {other:?}"),
                 }
             }
 
-            fn claude_offer(&mut self) -> String {
-                self.offers()
-                    .into_iter()
-                    .find(|offer| offer.harness_id == "claude-code")
-                    .and_then(|offer| offer.offer_id)
-                    .expect("the fake claude is offered")
-            }
-
-            fn confirm(
+            fn set_up_harness(
                 &mut self,
                 revision: &str,
-                offer_id: &str,
+                harness_id: &str,
                 summaries_dir: Option<&str>,
-                confirm: fn(DialogText<'_>) -> Result<bool>,
             ) -> Response {
-                self.call(
-                    Request::ConfirmHarnessSetup(ConfirmHarnessSetupRequest {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: "confirm-1".into(),
-                        expected_revision: revision.into(),
-                        offer_id: offer_id.into(),
-                        env_names: Vec::new(),
-                        summaries_dir: summaries_dir.map(str::to_owned),
-                    }),
-                    confirm,
-                )
+                self.call(Request::SetUpHarness(SetUpHarnessRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "setup-1".into(),
+                    expected_revision: revision.into(),
+                    harness_id: harness_id.into(),
+                    env_names: Vec::new(),
+                    summaries_dir: summaries_dir.map(str::to_owned),
+                }))
             }
 
-            fn update(&mut self, next: ConfigSnapshot, harness_token: Option<&str>) -> Response {
+            fn update(&mut self, next: ConfigSnapshot) -> Response {
                 let revision = self.revision();
-                self.call(
-                    Request::UpdateConfig(UpdateConfigRequest {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: "write-1".into(),
-                        expected_revision: revision,
-                        config: next,
-                        picker_token: None,
-                        harness_token: harness_token.map(str::to_owned),
-                    }),
-                    no_dialog,
-                )
+                self.call(Request::UpdateConfig(UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "write-1".into(),
+                    expected_revision: revision,
+                    config: next,
+                    picker_token: None,
+                }))
             }
 
-            /// Discover, confirm, and commit the fake claude.
-            fn set_up(&mut self) {
-                let offer = self.claude_offer();
+            /// Discover, then set up the fake claude.
+            fn set_up(&mut self) -> Response {
+                let offers = self.offers();
+                assert!(offers.iter().any(|offer| offer.harness_id == "claude-code"));
                 let revision = self.revision();
-                let confirmed = match self.confirm(&revision, &offer, None, accept) {
-                    Response::HarnessSetupConfirmed(value) => value,
-                    other => panic!("expected harness_setup_confirmed, got {other:?}"),
-                };
-                match self.update(confirmed.config.clone(), Some(&confirmed.harness_token)) {
-                    Response::ConfigUpdated(_) => {}
-                    other => panic!("expected config_updated, got {other:?}"),
-                }
-                // The token was consumed by the commit.
-                let again = self.update(confirmed.config, Some(&confirmed.harness_token));
-                assert_eq!(refused(&again).0, ErrorCode::Unauthorized);
+                self.set_up_harness(&revision, "claude-code", None)
             }
 
             fn status(&mut self) -> brauser_protocol::AgentStatus {
-                match self.call(
-                    Request::GetConfig(GetConfigRequest {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: "read-1".into(),
-                    }),
-                    no_dialog,
-                ) {
+                match self.call(Request::GetConfig(GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "read-1".into(),
+                })) {
                     Response::ConfigResult(value) => value.agent_status,
                     other => panic!("expected config_result, got {other:?}"),
                 }
             }
+        }
+
+        #[test]
+        fn set_up_harness_probes_and_commits_without_a_dialog() {
+            let mut session = session(PASSING_BODY);
+            let before = session.revision();
+            let response = session.set_up();
+            let Response::ConfigUpdated(updated) = &response else {
+                panic!("expected config_updated, got {response:?}");
+            };
+            let agent = updated.config.agent.as_ref().unwrap();
+            assert_eq!(agent.harness_id, "claude-code");
+            assert_eq!(
+                agent.binary,
+                session.fake.path("bin").join("claude").to_string_lossy()
+            );
+            assert_eq!(agent.env_allow, ["HOME", "PATH"]);
+            assert_eq!(
+                updated
+                    .config
+                    .storage
+                    .as_ref()
+                    .unwrap()
+                    .summaries_dir
+                    .as_deref(),
+                Some("summaries")
+            );
+            assert_ne!(updated.revision, before);
+            assert_eq!(updated.revision, session.revision());
+            assert!(session.fake.log("claude", "stdin.log").is_some());
+            let status = session.status();
+            assert_eq!(status.state, AgentState::Ready);
+            assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
+        }
+
+        #[test]
+        fn set_up_harness_refuses_a_failing_probe_and_leaves_config_unchanged() {
+            let mut session = session("exit 3");
+            let before = std::fs::read(&session.path).unwrap();
+            let revision = session.revision();
+            let response = session.set_up();
+            let (code, message) = refused(&response);
+            assert_eq!(code, ErrorCode::InvalidConfig);
+            assert_eq!(
+                message,
+                "Claude Code failed its test run (test run failed (exit 3)); AI commands stay off"
+            );
+            assert_eq!(session.revision(), revision);
+            assert_eq!(std::fs::read(&session.path).unwrap(), before);
+            assert_eq!(session.status().state, AgentState::NotSetUp);
+        }
+
+        #[test]
+        fn set_up_harness_on_a_stale_revision_is_a_conflict() {
+            let mut session = session(PASSING_BODY);
+            let response = session.set_up_harness("stale", "claude-code", None);
+            assert_eq!(refused(&response).0, ErrorCode::Conflict);
+            assert_eq!(session.fake.log("claude", "stdin.log"), None);
+        }
+
+        #[test]
+        fn set_up_harness_refuses_an_unknown_or_refused_harness() {
+            let mut session = session(PASSING_BODY);
+            session
+                .fake
+                .install("codex", "codex-cli 0.130.0", "", "exit 0");
+            let revision = session.revision();
+            let response = session.set_up_harness(&revision, "other", None);
+            let (code, message) = refused(&response);
+            assert_eq!(code, ErrorCode::Unauthorized);
+            assert!(message.contains("detect again"), "{message}");
+            let response = session.set_up_harness(&revision, "codex", None);
+            let (code, message) = refused(&response);
+            assert_eq!(code, ErrorCode::Unauthorized);
+            assert!(message.contains("has not been reviewed"), "{message}");
+            assert_eq!(session.revision(), revision);
+            assert_eq!(session.fake.log("claude", "stdin.log"), None);
+        }
+
+        #[test]
+        fn update_config_cannot_set_an_agent() {
+            let mut session = session(PASSING_BODY);
+            let mut next = session.config.snapshot().clone();
+            next.agent = Some(brauser_protocol::AgentConfig {
+                harness_id: "claude-code".into(),
+                adapter: brauser_protocol::HarnessAdapter::ClaudeCode,
+                binary: session
+                    .fake
+                    .path("bin")
+                    .join("claude")
+                    .to_string_lossy()
+                    .into_owned(),
+                args: crate::harness::template_args(crate::harness::Adapter::ClaudeCode),
+                env_allow: vec!["HOME".into(), "PATH".into()],
+                timeout_secs: 120,
+            });
+            let response = session.update(next);
+            assert_eq!(refused(&response).0, ErrorCode::Unauthorized);
+            assert_eq!(session.status().state, AgentState::NotSetUp);
         }
 
         #[test]
@@ -3803,13 +3757,13 @@ id = "work:{host}/{id}"
             session
                 .fake
                 .install("codex", "codex-cli 0.130.0", "", "exit 0");
+            let revision = session.revision();
             let offers = session.offers();
             assert_eq!(offers.len(), 2);
             let claude = offers
                 .iter()
                 .find(|offer| offer.harness_id == "claude-code")
                 .unwrap();
-            assert!(claude.offer_id.is_some());
             assert_eq!(claude.refusal, None);
             assert_eq!(claude.version.as_deref(), Some("2.1.284"));
             assert_eq!(
@@ -3820,7 +3774,6 @@ id = "work:{host}/{id}"
                 .iter()
                 .find(|offer| offer.harness_id == "codex")
                 .unwrap();
-            assert_eq!(codex.offer_id, None);
             assert_eq!(
                 codex.refusal.as_deref(),
                 Some("Codex 0.130.0 has not been reviewed for Brauser")
@@ -3831,66 +3784,36 @@ id = "work:{host}/{id}"
                 Some("[--version]\n")
             );
             // Discovery never writes config.
-            assert_eq!(session.revision(), loaded(&session.path).revision());
-            assert_eq!(refused(&session.discover("stale")).0, ErrorCode::Conflict);
-        }
-
-        #[test]
-        fn confirm_harness_setup_rejects_unknown_or_stale_offer() {
-            let mut session = session(PASSING_BODY);
-            let revision = session.revision();
-            let response = session.confirm(&revision, "forged", None, no_dialog);
-            assert_eq!(refused(&response).0, ErrorCode::Unauthorized);
-
-            let offer = session.claude_offer();
-            let stale = session.revision();
-            let next = ConfigSnapshot {
-                ..session.config.snapshot().clone()
-            };
-            assert!(matches!(
-                session.update(next, None),
-                Response::ConfigUpdated(_)
-            ));
-            let response = session.confirm(&stale, &offer, None, no_dialog);
-            assert_eq!(refused(&response).0, ErrorCode::Conflict);
-            // An offer minted before the change is bound to the old revision.
-            let current = session.revision();
-            let response = session.confirm(&current, &offer, None, no_dialog);
-            assert_eq!(refused(&response).0, ErrorCode::Unauthorized);
-            assert_eq!(session.fake.log("claude", "stdin.log"), None);
+            assert_eq!(session.revision(), revision);
         }
 
         #[test]
         fn summaries_overlap_at_setup_is_recoverable_invalid_config() {
             let mut session = session(PASSING_BODY);
             let before = std::fs::read(&session.path).unwrap();
-            let offer = session.claude_offer();
             let revision = session.revision();
-            let response = session.confirm(&revision, &offer, Some("log"), no_dialog);
+            let response = session.set_up_harness(&revision, "claude-code", Some("log"));
             let (code, message) = refused(&response);
             assert_eq!(code, ErrorCode::InvalidConfig);
             assert!(message.contains("must not overlap"), "{message}");
             assert_eq!(std::fs::read(&session.path).unwrap(), before);
-            // Detect again and choose a different folder.
-            let offer = session.claude_offer();
-            let response = session.confirm(&revision, &offer, Some("ai"), accept);
+            assert_eq!(session.fake.log("claude", "stdin.log"), None);
+            // Choose a different folder and set up again.
+            let response = session.set_up_harness(&revision, "claude-code", Some("ai"));
             match response {
-                Response::HarnessSetupConfirmed(value) => assert_eq!(
+                Response::ConfigUpdated(value) => assert_eq!(
                     value.config.storage.unwrap().summaries_dir.as_deref(),
                     Some("ai")
                 ),
-                other => panic!("expected harness_setup_confirmed, got {other:?}"),
+                other => panic!("expected config_updated, got {other:?}"),
             }
         }
 
         #[test]
         fn check_agent_reports_harness_after_setup() {
             let mut session = session(PASSING_BODY);
-            session.set_up();
-            match session.call(
-                serde_json::from_str(&check_agent_json()).unwrap(),
-                no_dialog,
-            ) {
+            assert!(matches!(session.set_up(), Response::ConfigUpdated(_)));
+            match session.call(serde_json::from_str(&check_agent_json()).unwrap()) {
                 Response::AgentChecked(value) => {
                     assert_eq!(value.harness_id, "claude-code");
                     assert_eq!(value.harness_version, "2.1.284");
@@ -3903,7 +3826,7 @@ id = "work:{host}/{id}"
         fn get_config_reports_agent_status_states() {
             let mut session = session(PASSING_BODY);
             assert_eq!(session.status().state, AgentState::NotSetUp);
-            session.set_up();
+            assert!(matches!(session.set_up(), Response::ConfigUpdated(_)));
             let status = session.status();
             assert_eq!(status.state, AgentState::Ready);
             assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));

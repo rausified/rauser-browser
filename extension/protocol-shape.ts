@@ -39,8 +39,7 @@ function isEnvName(value: unknown): boolean {
 function isHarnessOffer(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const offer = value as Record<string, unknown>;
-  return stringOrNull(offer.offer_id) &&
-    (offer.adapter === "claude_code" || offer.adapter === "codex") &&
+  return (offer.adapter === "claude_code" || offer.adapter === "codex") &&
     typeof offer.harness_id === "string" && typeof offer.binary === "string" &&
     stringOrNull(offer.real_path) && stringOrNull(offer.version) &&
     isStringArray(offer.args) && isStringArray(offer.env_required) &&
@@ -203,9 +202,6 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.harness_id === "string" && typeof value.harness_version === "string";
     case "harnesses_discovered":
       return Array.isArray(value.offers) && value.offers.every(isHarnessOffer);
-    case "harness_setup_confirmed":
-      return typeof value.harness_token === "string" && isConfig(value.config) &&
-        typeof value.summary === "string";
     default:
       return false;
   }

@@ -220,8 +220,6 @@ export class ConfigSession {
       expected_revision: this.revision,
       config: next,
       picker_token: pickerToken,
-      // Only native harness setup mints a harness grant (§7.3).
-      harness_token: null,
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);
@@ -236,53 +234,38 @@ export class ConfigSession {
     await this.refreshStatus();
   }
 
-  /** The harnesses the host found, each offer bound to this revision. */
+  /** The harnesses the host found on its own search path. */
   async discoverHarnesses(): Promise<HarnessOffer[]> {
-    if (!this.revision) throw new Error("Host configuration has not loaded");
     const reply = await this.host.call({
       type: "discover_harnesses",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
-      expected_revision: this.revision,
     }, "harnesses_discovered", 60_000);
     return reply.offers;
   }
 
   /**
-   * Native harness setup (§7.3). The host builds the whole new config from
-   * the offer, shows its own confirmation, and runs one test prompt; its
-   * single-use token authorizes exactly that config. The extension never
-   * sends a harness path or arguments. Call while holding the config
-   * mutation lock.
+   * Harness setup. The host rediscovers `harnessId` on its own search path,
+   * runs one test prompt through it, and commits the harness only when the
+   * test passes. The extension never sends a harness path or arguments.
+   * Call while holding the config mutation lock.
    */
   async setupHarness(
-    offerId: string,
+    harnessId: string,
     envNames: string[],
     summariesDir: string | null,
   ): Promise<void> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
-    const expectedRevision = this.revision;
-    // The host closes its dialog at 270 seconds (host/src/dialog.rs), then
-    // runs a test prompt of up to 60 seconds, so wait past both.
-    const confirmed = await this.host.call({
-      type: "confirm_harness_setup",
+    // Discovery plus a test prompt of up to the harness timeout.
+    const updated = await this.host.call({
+      type: "set_up_harness",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
-      expected_revision: expectedRevision,
-      offer_id: offerId,
+      expected_revision: this.revision,
+      harness_id: harnessId,
       env_names: envNames,
       summaries_dir: summariesDir,
-    }, "harness_setup_confirmed", 6 * 60_000);
-    // The harness token authorizes exactly the confirmed harness config.
-    const updated = await this.host.call({
-      type: "update_config",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      expected_revision: expectedRevision,
-      config: confirmed.config,
-      picker_token: null,
-      harness_token: confirmed.harness_token,
-    }, "config_updated");
+    }, "config_updated", 6 * 60_000);
     this.config = updated.config;
     this.setRevision(updated.revision);
     this.onChange();

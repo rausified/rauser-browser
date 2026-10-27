@@ -42,6 +42,8 @@ const MAX_ENV_NAME_BYTES: usize = 64;
 const MAX_TIMEOUT_SECS: u32 = 600;
 const MAX_ADAPTER_WARNINGS: usize = 256;
 pub(crate) const DEFAULT_TIMEOUT_SECS: u32 = 120;
+/// The summaries folder harness setup uses when none is chosen.
+pub(crate) const DEFAULT_SUMMARIES_DIR: &str = "summaries";
 pub(crate) const PROMPT_PLACEHOLDER: &str = "{prompt}";
 const MISSING_REVISION: &str = "missing";
 /// Never a real revision, so no update can be based on an unreadable file.
@@ -189,8 +191,10 @@ impl HarnessRecord {
     }
 }
 
-/// What native harness setup commits in one write (§7.3): the harness entry
-/// and its checked record.
+/// What harness setup commits in one write: the harness entry and its
+/// checked record. Host-internal: only `harness_setup::set_up` builds one,
+/// after its probe passes, and passes it to `update_with_grants`. Nothing
+/// on the wire can carry or authorize one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommit {
     pub agent: AgentConfig,
@@ -601,8 +605,9 @@ impl ConfigStore {
     }
 
     /// Native dispatch calls this only after `ConsentAuthority` has checked
-    /// every grant. The agent checks below repeat that decision against the
-    /// file itself, under the lock, as defense in depth.
+    /// the folder grant; `harness_commit` comes only from `harness_setup`.
+    /// The agent checks below repeat that decision against the file itself,
+    /// under the lock, as defense in depth.
     pub(crate) fn update_with_grants(
         &mut self,
         next: ConfigSnapshot,

@@ -11,7 +11,7 @@ fn config(storage: &str) -> String {
 
 fn update(config: &str) -> String {
     format!(
-        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"harness_token":null,"config":{config}}}"#
+        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"config":{config}}}"#
     )
 }
 
@@ -33,7 +33,7 @@ fn omitted_storage_is_not_interpreted_as_explicit_null() {
 #[test]
 fn config_updates_require_a_revision_precondition() {
     let missing_revision = format!(
-        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","picker_token":null,"harness_token":null,"config":{}}}"#,
+        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","picker_token":null,"config":{}}}"#,
         config(r#""storage":null,"#)
     );
     assert!(serde_json::from_str::<Request>(&missing_revision).is_err());
@@ -42,8 +42,8 @@ fn config_updates_require_a_revision_precondition() {
 #[test]
 fn v6_retires_config_confirmation() {
     let with_consent = update(&config(r#""storage":null,"#)).replace(
-        r#""harness_token":null"#,
-        r#""consent_token":null,"harness_token":null"#,
+        r#""picker_token":null"#,
+        r#""picker_token":null,"consent_token":null"#,
     );
     assert!(serde_json::from_str::<Request>(&with_consent).is_err());
     let confirm = format!(
@@ -141,9 +141,14 @@ fn v6_config_requires_agent_and_adapter_keys() {
 }
 
 #[test]
-fn update_config_requires_harness_token_key() {
-    let without = update(&config(r#""storage":null,"#)).replace(r#""harness_token":null,"#, "");
-    assert!(serde_json::from_str::<Request>(&without).is_err());
+fn update_config_refuses_a_harness_token() {
+    let plain = update(&config(r#""storage":null,"#));
+    assert!(serde_json::from_str::<Request>(&plain).is_ok());
+    let with_token = plain.replace(
+        r#""picker_token":null"#,
+        r#""picker_token":null,"harness_token":null"#,
+    );
+    assert!(serde_json::from_str::<Request>(&with_token).is_err());
 }
 
 fn with_agent(agent: &str) -> String {
@@ -176,11 +181,12 @@ fn check_agent_carries_no_url() {
 }
 
 #[test]
-fn confirm_harness_setup_requires_every_key() {
-    let full = r#"{"type":"confirm_harness_setup","protocol_version":6,"request_id":"r1","expected_revision":"missing","offer_id":"o1","env_names":["HOME"],"summaries_dir":null}"#;
+fn set_up_harness_requires_every_key() {
+    let full = r#"{"type":"set_up_harness","protocol_version":6,"request_id":"r1","expected_revision":"missing","harness_id":"claude-code","env_names":["HOME"],"summaries_dir":null}"#;
     assert!(serde_json::from_str::<Request>(full).is_ok());
     for key in [
-        r#","offer_id":"o1""#,
+        r#","expected_revision":"missing""#,
+        r#","harness_id":"claude-code""#,
         r#","env_names":["HOME"]"#,
         r#","summaries_dir":null"#,
     ] {
@@ -191,26 +197,37 @@ fn confirm_harness_setup_requires_every_key() {
     }
     // The extension never names a binary; an extra path key is refused.
     let with_binary = full.replace(
-        r#""offer_id":"o1""#,
-        r#""offer_id":"o1","binary":"/bin/sh""#,
+        r#""harness_id":"claude-code""#,
+        r#""harness_id":"claude-code","binary":"/bin/sh""#,
     );
     assert!(serde_json::from_str::<Request>(&with_binary).is_err());
 }
 
 #[test]
+fn v6_retires_confirm_harness_setup_and_offer_ids() {
+    let confirm = r#"{"type":"confirm_harness_setup","protocol_version":6,"request_id":"r1","expected_revision":"missing","offer_id":"o1","env_names":["HOME"],"summaries_dir":null}"#;
+    assert!(serde_json::from_str::<Request>(confirm).is_err());
+    let body = config(r#""storage":null,"#);
+    let confirmed = format!(
+        r#"{{"type":"harness_setup_confirmed","protocol_version":6,"request_id":"r1","harness_token":"h1","config":{body},"summary":"Set up"}}"#
+    );
+    assert!(serde_json::from_str::<Response>(&confirmed).is_err());
+    let discover = r#"{"type":"discover_harnesses","protocol_version":6,"request_id":"r1"}"#;
+    assert!(serde_json::from_str::<Request>(discover).is_ok());
+    let with_revision = r#"{"type":"discover_harnesses","protocol_version":6,"request_id":"r1","expected_revision":"missing"}"#;
+    assert!(serde_json::from_str::<Request>(with_revision).is_err());
+}
+
+#[test]
 fn harnesses_discovered_offers_require_nullable_keys() {
-    let offer = r#"{"offer_id":null,"adapter":"codex","harness_id":"codex","binary":"/usr/local/bin/codex","real_path":null,"version":null,"args":[],"env_required":["HOME","PATH"],"env_optional":[{"name":"OPENAI_API_KEY","present":false}],"refusal":"codex --version output was not recognized"}"#;
+    let offer = r#"{"adapter":"codex","harness_id":"codex","binary":"/usr/local/bin/codex","real_path":null,"version":null,"args":[],"env_required":["HOME","PATH"],"env_optional":[{"name":"OPENAI_API_KEY","present":false}],"refusal":"codex --version output was not recognized"}"#;
     let message = |offer: &str| {
         format!(
             r#"{{"type":"harnesses_discovered","protocol_version":6,"request_id":"r1","offers":[{offer}]}}"#
         )
     };
     assert!(serde_json::from_str::<Response>(&message(offer)).is_ok());
-    for key in [
-        r#""offer_id":null,"#,
-        r#""real_path":null,"#,
-        r#""version":null,"#,
-    ] {
+    for key in [r#""real_path":null,"#, r#""version":null,"#] {
         assert!(
             serde_json::from_str::<Response>(&message(&offer.replace(key, ""))).is_err(),
             "{key}"
@@ -218,19 +235,8 @@ fn harnesses_discovered_offers_require_nullable_keys() {
     }
     let with_help = offer.replace(r#""args":[]"#, r#""args":[],"help":"usage""#);
     assert!(serde_json::from_str::<Response>(&message(&with_help)).is_err());
-}
-
-#[test]
-fn harness_setup_confirmed_carries_token_config_and_summary() {
-    let body = config(r#""storage":null,"#);
-    let present = format!(
-        r#"{{"type":"harness_setup_confirmed","protocol_version":6,"request_id":"r1","harness_token":"h1","config":{body},"summary":"Set up"}}"#
-    );
-    assert!(serde_json::from_str::<Response>(&present).is_ok());
-    let without = present.replace(r#""harness_token":"h1","#, "");
-    assert!(serde_json::from_str::<Response>(&without).is_err());
-    let discover = r#"{"type":"discover_harnesses","protocol_version":6,"request_id":"r1","expected_revision":"missing"}"#;
-    assert!(serde_json::from_str::<Request>(discover).is_ok());
+    let with_offer_id = offer.replace(r#""adapter""#, r#""offer_id":null,"adapter""#);
+    assert!(serde_json::from_str::<Response>(&message(&with_offer_id)).is_err());
 }
 
 #[test]

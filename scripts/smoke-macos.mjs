@@ -21,6 +21,7 @@ import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { APP_NAME, BINARY_NAME, NATIVE_HOST_NAME, storageKey } from "../extension/brand.ts";
+import { SETUP_WARNING } from "../extension/agent.ts";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DIST = path.join(REPO, "extension", "dist");
@@ -1246,7 +1247,7 @@ async function run() {
         });
         port.postMessage({
           type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
-          expected_revision: expectedRevision, config, picker_token: null, harness_token: null,
+          expected_revision: expectedRevision, config, picker_token: null,
         });
       }))()`));
       await saving;
@@ -1408,9 +1409,9 @@ async function run() {
         "The recovered edit was not saved after the conflict");
     });
 
-    // AI harness setup (§7.1-§7.3) runs only the fakes under fake-install.
-    // Guided runs skip it: their dialogs would need a person for five more
-    // prompts, and the headless run already covers the host's side.
+    // AI harness setup runs only the fakes under fake-install. It shows no
+    // dialog: the host detects the harness again, runs one test prompt, and
+    // commits it. Guided runs skip it; the headless run covers the host's side.
     const probeArgv = PROBE_ARGV.map((arg) => `[${arg}]`).join("");
     const agentRequest = (fields) => hostRequest(wrapper, {
       protocol_version: PROTOCOL_VERSION, request_id: randomUUID(), ...fields,
@@ -1453,14 +1454,8 @@ async function run() {
       requireCondition(status?.startsWith(prefix), `Settings page says: ${status}`);
       return status;
     }, { timeout: 60_000 });
-    function describesSetup(text) {
-      for (const expected of [`${fakeInstallReal}/`, `"${fakeBin}/claude"`, "--disallowedTools", "{prompt}",
-        "HOME", "PATH", "ANTHROPIC_API_KEY", "\"summaries\""]) {
-        requireCondition(text.includes(expected), `The setup dialog does not show ${expected}: ${JSON.stringify(text)}`);
-      }
-      requireCondition(!text.includes(secret) && !text.includes("SMOKE_NOT_ALLOWED"),
-        "The setup dialog shows an environment value or a name it must not pass");
-    }
+    const noNewDialog = async (before) => requireCondition((await dialogLogLines()).length === before,
+      "Harness setup opened a native dialog");
 
     if (!options.headless) {
       console.log("\nAI harness setup steps skipped: they run with --headless only.");
@@ -1471,11 +1466,11 @@ async function run() {
         const codex = rows.find((row) => row.adapter === "codex");
         requireCondition(claude?.ready && claude.text.includes("Claude Code 2.1.284"),
           `Claude Code offer: ${JSON.stringify(claude)}`);
-        // Codex passes its checks, and the page says it shares the user's
-        // own Codex instructions and skills (DESIGN §14).
-        requireCondition(codex?.ready && codex.text.includes("Codex 0.144.4") &&
-          codex.text.includes("instructions (AGENTS.md) and skills can shape its answers"),
-        `Codex offer: ${JSON.stringify(codex)}`);
+        requireCondition(codex?.ready && codex.text.includes("Codex 0.144.4"),
+          `Codex offer: ${JSON.stringify(codex)}`);
+        // The full-access warning sits above Set up harness.
+        const warning = await onSettings((page) => page.text("#harness-warning"));
+        requireCondition(warning === SETUP_WARNING, `The setup warning says: ${warning}`);
         const runs = await harnessRuns(argvLog);
         requireCondition(runs.length > 0 && runs.every((run) => ["claude-good", "codex"].includes(run.program) &&
           isCheckRun(run) && run.env.join(",") ===
@@ -1493,24 +1488,14 @@ async function run() {
           "The settings page shows an environment name or value it must not");
       });
 
-      await step("Harness setup canceled", async () => {
-        const before = await hostConfig(wrapper);
-        await startSetup();
-        describesSetup(await scriptedDialog("confirm", "canceled"));
-        await settledStatus("Harness setup did not finish: Canceled");
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && after.config.agent === null,
-          "A canceled setup changed the config");
-        requireCondition((await probeRuns()).length === 0, "A canceled setup ran the harness");
-      });
-
       await step("Failing harness refused", async () => {
         await pointFakeClaude(fakeBin, fakeInstall, "bad");
         const before = await hostConfig(wrapper);
         await detect();
+        const dialogsBefore = (await dialogLogLines()).length;
         await startSetup();
-        await scriptedDialog("confirm", "confirmed");
         const status = await settledStatus("Harness setup did not finish");
+        await noNewDialog(dialogsBefore);
         requireCondition(status.includes("failed its test run"), `Settings page says: ${status}`);
         const after = await hostConfig(wrapper);
         requireCondition(after.revision === before.revision && after.config.agent === null,
@@ -1523,9 +1508,10 @@ async function run() {
       await step("Harness setup confirmed", async () => {
         await pointFakeClaude(fakeBin, fakeInstall, "good");
         await detect();
+        const dialogsBefore = (await dialogLogLines()).length;
         await startSetup();
-        describesSetup(await scriptedDialog("confirm", "confirmed"));
         await settledStatus("Claude Code is set up.");
+        await noNewDialog(dialogsBefore);
         const reply = await hostConfig(wrapper);
         requireCondition(reply.config.agent?.binary === `${fakeBin}/claude` &&
           reply.config.storage?.summaries_dir === "summaries",
@@ -1543,23 +1529,16 @@ async function run() {
           !("url_allowed" in checked), `check_agent answered ${JSON.stringify(checked)}`);
       });
 
-      // Codex runs under the user's own HOME (and CODEX_HOME when set), so
-      // its confirmation must say so and still recommend Claude Code (§14).
+      // Codex runs under the user's own HOME (and CODEX_HOME when set).
       await step("Codex setup confirmed", async () => {
         const probesBefore = (await probeRuns()).length;
         const rows = await detect();
         requireCondition(rows.find((row) => row.adapter === "codex")?.ready, "Codex is not offered");
         await inSettings((page) => page.click('#harness-offers li[data-adapter="codex"] input[type="radio"]'));
+        const dialogsBefore = (await dialogLogLines()).length;
         await startSetup();
-        const text = await scriptedDialog("confirm", "confirmed");
-        for (const expected of ["Codex runs with your normal Codex home and login",
-          "instructions (AGENTS.md) and skills can shape its answers", "Claude Code is the recommended harness",
-          `"${fakeBin}/codex"`, "--sandbox", "read-only", "--disable", "shell_tool", "{prompt}"]) {
-          requireCondition(text.includes(expected), `The Codex dialog does not show ${expected}: ${JSON.stringify(text)}`);
-        }
-        requireCondition(!text.includes(secret) && !text.includes("ANTHROPIC_API_KEY"),
-          "The Codex dialog shows an environment value or a Claude Code name");
         await settledStatus("Codex is set up.");
+        await noNewDialog(dialogsBefore);
         const reply = await hostConfig(wrapper);
         const agent = reply.config.agent;
         requireCondition(agent?.binary === `${fakeBin}/codex` && agent.env_allow.join(",") === "HOME,PATH",

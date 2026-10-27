@@ -20,7 +20,6 @@ export interface UpdateConfigRequest {
   expected_revision: string;
   config: ConfigSnapshot;
   picker_token: string | null;
-  harness_token: string | null;
 }
 
 export interface HelloResult {
@@ -471,15 +470,14 @@ export interface DiscoverHarnessesRequest {
   type: "discover_harnesses";
   protocol_version: 6;
   request_id: string;
-  expected_revision: string;
 }
 
-export interface ConfirmHarnessSetupRequest {
-  type: "confirm_harness_setup";
+export interface SetUpHarnessRequest {
+  type: "set_up_harness";
   protocol_version: 6;
   request_id: string;
   expected_revision: string;
-  offer_id: string;
+  harness_id: string;
   env_names: string[];
   summaries_dir: string | null;
 }
@@ -491,17 +489,7 @@ export interface HarnessesDiscovered {
   offers: HarnessOffer[];
 }
 
-export interface HarnessSetupConfirmed {
-  type: "harness_setup_confirmed";
-  protocol_version: 6;
-  request_id: string;
-  harness_token: string;
-  config: ConfigSnapshot;
-  summary: string;
-}
-
 export interface HarnessOffer {
-  offer_id: string | null;
   adapter: HarnessAdapter;
   harness_id: string;
   binary: string;
@@ -518,6 +506,6 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | SetUpHarnessRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | ErrorResponse;

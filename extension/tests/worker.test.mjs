@@ -1134,13 +1134,13 @@ test("host config shape requires every v6 agent and adapter key and no retired p
 
   // Harness setup: every offer key is present, nullable ones as null.
   const offer = {
-    offer_id: "offer-1", adapter: "claude_code", harness_id: "claude-code",
+    adapter: "claude_code", harness_id: "claude-code",
     binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
     args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
     env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
   };
   const refused = {
-    ...offer, offer_id: null, adapter: "codex", harness_id: "codex", real_path: null,
+    ...offer, adapter: "codex", harness_id: "codex", real_path: null,
     version: null, env_optional: [], refusal: "codex --version output was not recognized",
   };
   const discovered = { type: "harnesses_discovered", offers: [offer, refused] };
@@ -1160,13 +1160,9 @@ test("host config shape requires every v6 agent and adapter key and no retired p
     ...discovered, offers: [{ ...offer, env_optional: [{ name: "X", present: "yes" }] }],
   }), false);
 
+  // Harness setup answers config_updated; the v5 token response is gone.
   const setUp = { type: "harness_setup_confirmed", harness_token: "t", config, summary: "Harness" };
-  assert.equal(isResponseShape(setUp), true);
-  for (const key of ["harness_token", "config", "summary"]) {
-    const without = { ...setUp };
-    delete without[key];
-    assert.equal(isResponseShape(without), false, key);
-  }
+  assert.equal(isResponseShape(setUp), false);
 });
 
 // --- Background sync: the worker, not the panel, starts the host -----------
