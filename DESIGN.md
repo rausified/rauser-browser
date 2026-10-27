@@ -785,7 +785,7 @@ Summary of [the page](https://example.com/ddia/ch5). Note: [Designing Data-Inten
 Leader-based replication trades write availability for consistency...
 ```
 
-Under the neutral profile the note link is a relative Markdown link from `summaries/` to `notes/`, with path segments percent-encoded; under the obsidian preset it is a wikilink.
+Under the neutral profile the note link is a relative Markdown link from `summaries/` to `notes/`, with path segments percent-encoded; under the obsidian preset it is a folder-qualified wikilink, `[[notes/<slug>|Page note]]`. Obsidian resolves a bare `[[<slug>]]` to whichever same-named file it finds first, and the home folder may sit inside a larger vault holding a copy of the note; the `notes/` prefix matches only the home's note and still resolves when the home is a vault subfolder.
 
 ### 6.7 Example artifact file (neutral profile, M1.5b)
 

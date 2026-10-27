@@ -34,8 +34,8 @@ use crate::capture::{
 use crate::markdown::{self, yaml_string};
 use crate::summary::SummaryEvent;
 use crate::vault::{
-    OwnedWrite, STALE_TEMPORARY_AGE, checked_relative_dir, is_generated_temporary,
-    open_selected_root, owned_frontmatter, replace_owned_file,
+    OwnedWrite, PostPublishWarning, STALE_TEMPORARY_AGE, checked_relative_dir,
+    is_generated_temporary, open_selected_root, owned_frontmatter, replace_owned_file,
 };
 
 // v2 (main, independently) forces a rescan for the artifact-history
@@ -638,14 +638,31 @@ impl ArtifactIndex {
                 unpublished = true;
                 continue;
             };
-            let markdown = render_artifact(&self.storage.artifacts_dir, artifact);
+            let rendered = render_artifact(&self.storage.artifacts_dir, artifact);
             let path = || {
                 artifact_path(&self.storage.artifacts_dir, artifact)
                     .to_string_lossy()
                     .into_owned()
             };
-            match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown) {
-                Ok(OwnedWrite::Written) => {
+            match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &rendered) {
+                // A warning is post-publication work (temporary cleanup,
+                // directory sync); the file is in place, so it is written and
+                // not retried, as for page notes.
+                Ok(OwnedWrite::Written(warnings)) => {
+                    for warning in warnings {
+                        let (step, error) = match warning {
+                            PostPublishWarning::DirectorySync(error) => {
+                                ("syncing its folder", error)
+                            }
+                            PostPublishWarning::TemporaryCleanup(error) => {
+                                ("removing its temporary", error)
+                            }
+                        };
+                        eprintln!(
+                            "{NAMESPACE}: warning: wrote {}, but {step} failed: {error}",
+                            path()
+                        );
+                    }
                     report.written += 1;
                     state.dirty.remove(&id);
                     unpublished = true;
@@ -1968,12 +1985,12 @@ fn replace_artifact(
     root: &Dir,
     artifacts_dir: &str,
     artifact: &ArtifactRow,
-    markdown: &str,
+    contents: &str,
 ) -> Result<OwnedWrite> {
     replace_owned_file(
         root,
         &artifact_path(artifacts_dir, artifact),
-        markdown,
+        contents,
         "artifact",
         &|existing| owned_artifact(existing, &artifact.artifact_id),
     )

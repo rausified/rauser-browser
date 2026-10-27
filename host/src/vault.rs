@@ -47,6 +47,9 @@ pub struct CreatedPage {
 #[derive(Debug)]
 pub enum PostPublishWarning {
     DirectorySync(io::Error),
+    /// The published file's temporary name could not be removed; the startup
+    /// sweep removes it later.
+    TemporaryCleanup(io::Error),
 }
 
 impl Vault {
@@ -108,22 +111,40 @@ impl Vault {
     }
 
     /// The record's summary file, `<summaries_dir>/<note stem>.summary.md`.
-    /// It always passes `summary::validate_page_summary`'s path check: the
-    /// folder is a checked relative path and the name is a slug and a digest.
+    /// The name is a slug and a digest, and since the layout move (§6.1) the
+    /// folder is the fixed `summaries`, so the path passes
+    /// `summary::validate_page_summary`'s path check. A vault opened from an
+    /// older config can still name another folder, which
+    /// `checked_relative_dir` does not screen for link-breaking characters,
+    /// so the whole path is checked here and a failing one is an error.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn summary_relative_path(
         &self,
         key: &RecordKey,
         canonical_url: &str,
     ) -> Result<PathBuf> {
-        Ok(self
+        let path = self
             .summaries_dir()?
-            .join(crate::summary::summary_filename(key, canonical_url)?))
+            .join(crate::summary::summary_filename(key, canonical_url)?);
+        let linked = slash_path(&path).context("summary path is not UTF-8")?;
+        if let Err(code) = crate::summary::check_summary_path(&linked) {
+            bail!("{code}: the summaries folder cannot be linked from a summary event");
+        }
+        Ok(path)
     }
 
     /// A link from the record's summary file to its page note, in `style`:
     /// a percent-encoded relative Markdown link from the summaries folder, or
-    /// a wikilink to the note's stem. The note need not exist yet.
+    /// a wikilink to the note's path without `.md` (`notes/<stem>`). The note
+    /// need not exist yet.
+    ///
+    /// The wikilink names the folder (§5.2: "the page note's computed path"):
+    /// Obsidian resolves a bare `[[stem]]` to whichever file of that name it
+    /// finds first when several share it, and the home folder may sit inside
+    /// a larger vault holding a copied or archived note of the same stem. A
+    /// path-qualified link only matches a file whose path ends in
+    /// `notes/<stem>.md`, and it still resolves when the home folder is a
+    /// subfolder of the vault, which a vault-root path would not.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn note_link(
         &self,
@@ -139,7 +160,9 @@ impl Vault {
                 markdown::relative_link(summaries_dir, &self.pages_dir.join(&note))
             ),
             LinkStyle::Wikilink => {
-                markdown::wikilink(note.strip_suffix(".md").unwrap_or(&note), Some("Page note"))
+                let stem = note.strip_suffix(".md").unwrap_or(&note);
+                let notes = slash_path(&self.pages_dir).context("notes folder is not UTF-8")?;
+                markdown::wikilink(&format!("{notes}/{stem}"), Some("Page note"))
             }
         })
     }
@@ -152,10 +175,10 @@ impl Vault {
         &self,
         key: &RecordKey,
         canonical_url: &str,
-        markdown: &str,
+        contents: &str,
     ) -> Result<OwnedWrite> {
         let path = self.summary_relative_path(key, canonical_url)?;
-        replace_owned_file(&self.root, &path, markdown, "summary", &|bytes| {
+        replace_owned_file(&self.root, &path, contents, "summary", &|bytes| {
             crate::summary::owned_summary(bytes, key)
         })
     }
@@ -364,11 +387,24 @@ impl Vault {
     /// notes, `.{NAMESPACE}-summary-<uuid>.tmp` for summaries), and that are
     /// older than `STALE_TEMPORARY_AGE`, are removed. Returns how many were
     /// removed.
+    ///
+    /// Each folder is swept independently and best effort: a folder that
+    /// cannot be opened or listed is reported on stderr and skipped, and the
+    /// other folder's sweep and count still stand.
     pub fn sweep_stale_temporaries(&self) -> Result<usize> {
-        let mut removed = self.sweep_temporaries_in(&self.pages_dir, &format!(".{NAMESPACE}-"))?;
+        let mut folders = vec![(&self.pages_dir, format!(".{NAMESPACE}-"))];
         if let Some(summaries_dir) = &self.summaries_dir {
-            removed +=
-                self.sweep_temporaries_in(summaries_dir, &format!(".{NAMESPACE}-summary-"))?;
+            folders.push((summaries_dir, format!(".{NAMESPACE}-summary-")));
+        }
+        let mut removed = 0;
+        for (folder, prefix) in folders {
+            match self.sweep_temporaries_in(folder, &prefix) {
+                Ok(count) => removed += count,
+                Err(error) => eprintln!(
+                    "{NAMESPACE}: warning: could not sweep temporaries in {}: {error:#}",
+                    folder.display()
+                ),
+            }
         }
         Ok(removed)
     }
@@ -487,27 +523,75 @@ impl Vault {
 
 /// The outcome of `replace_owned_file`.
 pub(crate) enum OwnedWrite {
-    Written,
+    /// The new content is published under the name. Warnings describe work
+    /// that failed after publication; the write must not be retried as if it
+    /// failed.
+    Written(Vec<PostPublishWarning>),
     Unchanged,
     Conflict,
 }
 
+/// The filesystem steps `replace_owned_file` takes around publication, so
+/// tests can fail or race them.
+struct OwnedFileOps<'a> {
+    /// Runs between inspecting the name and opening its occupant.
+    after_inspect: &'a dyn Fn(&Dir),
+    remove_temporary: &'a dyn Fn(&Dir, &str) -> io::Result<()>,
+    sync_directory: &'a dyn Fn(&Dir) -> io::Result<()>,
+}
+
+impl OwnedFileOps<'static> {
+    const REAL: Self = Self {
+        after_inspect: &|_| {},
+        remove_temporary: &|dir, name| dir.remove_file(name),
+        sync_directory: &sync_directory,
+    };
+}
+
 /// Replace a Brauser-owned file whole, under `root`, at `relative`.
 ///
-/// The parent chain is created and synced first. When the name is absent, the
-/// new content is written and fsynced to `.{NAMESPACE}-{kind}-{uuid}.tmp` and
-/// published with a no-clobber hard link; losing that race to another writer
-/// is a `Conflict`. An existing name is renamed over only when it is a regular
-/// file (not a symlink) of at most 4 MiB whose bytes `owned` accepts, and is
-/// left alone as `Unchanged` when it already holds `markdown`. Anything else
-/// is a `Conflict`, and the occupant is never touched.
+/// `contents` over 4 MiB is refused before anything is touched: a file that
+/// large could never be read back for the ownership check, so every later
+/// write would be a `Conflict`. The parent chain is created and synced first.
+/// When the name is absent, the new content is written and fsynced to
+/// `.{NAMESPACE}-{kind}-{uuid}.tmp` and published with a no-clobber hard
+/// link; losing that race to another writer is a `Conflict`. An existing
+/// name is renamed over only when it is a regular file (not a symlink) of at
+/// most 4 MiB whose bytes `owned` accepts, and is left alone as `Unchanged`
+/// when it already holds `contents`. Anything else is a `Conflict`, and the
+/// occupant is never touched. Removing the published temporary and syncing
+/// the directory happen after publication, so their failures are warnings on
+/// `Written`, as for page notes; the startup sweep removes a leftover
+/// temporary.
+///
+/// The occupant is read through a handle that must be the regular file the
+/// name was inspected as (on Unix, the same device and inode), so a name
+/// swapped for a symlink or another file between the two is a `Conflict`.
+/// A window remains between that read and the rename: a writer that replaces
+/// the occupant after the ownership check has its file replaced. Brauser's
+/// own writers serialize under the host's locks, so the window is open only
+/// to another program writing the same generated name.
 pub(crate) fn replace_owned_file(
     root: &Dir,
     relative: &Path,
-    markdown: &str,
+    contents: &str,
     kind: &str,
     owned: &dyn Fn(&[u8]) -> bool,
 ) -> Result<OwnedWrite> {
+    replace_owned_file_with(root, relative, contents, kind, owned, &OwnedFileOps::REAL)
+}
+
+fn replace_owned_file_with(
+    root: &Dir,
+    relative: &Path,
+    contents: &str,
+    kind: &str,
+    owned: &dyn Fn(&[u8]) -> bool,
+    ops: &OwnedFileOps<'_>,
+) -> Result<OwnedWrite> {
+    if contents.len() > MAX_OWNED_FILE_BYTES {
+        bail!("{kind} file exceeds the 4 MiB write limit");
+    }
     let parent = relative
         .parent()
         .with_context(|| format!("{kind} path has no parent"))?;
@@ -522,24 +606,23 @@ pub(crate) fn replace_owned_file(
         .open_dir(parent)
         .with_context(|| format!("opening {kind} directory"))?;
     let existed = match dir.symlink_metadata(filename) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink()
-                || !metadata.is_file()
-                || metadata.len() > MAX_OWNED_FILE_BYTES as u64
+        Ok(inspected) => {
+            if inspected.file_type().is_symlink()
+                || !inspected.is_file()
+                || inspected.len() > MAX_OWNED_FILE_BYTES as u64
             {
                 return Ok(OwnedWrite::Conflict);
             }
-            let mut file = dir
-                .open(filename)
-                .with_context(|| format!("opening existing {kind}"))?;
-            let mut existing = Vec::new();
-            Read::by_ref(&mut file)
-                .take(MAX_OWNED_FILE_BYTES as u64 + 1)
-                .read_to_end(&mut existing)?;
-            if existing.len() > MAX_OWNED_FILE_BYTES || !owned(&existing) {
+            (ops.after_inspect)(&dir);
+            let Some(existing) = read_inspected_occupant(&dir, filename, &inspected)
+                .with_context(|| format!("reading existing {kind}"))?
+            else {
+                return Ok(OwnedWrite::Conflict);
+            };
+            if !owned(&existing) {
                 return Ok(OwnedWrite::Conflict);
             }
-            if existing == markdown.as_bytes() {
+            if existing == contents.as_bytes() {
                 return Ok(OwnedWrite::Unchanged);
             }
             true
@@ -553,27 +636,68 @@ pub(crate) fn replace_owned_file(
         .open_with(&temporary, OpenOptions::new().write(true).create_new(true))
         .with_context(|| format!("creating {kind} temporary"))?;
     let mut cleanup = TempFileCleanup::new(&dir, &temporary);
-    file.write_all(markdown.as_bytes())
+    file.write_all(contents.as_bytes())
         .and_then(|()| file.sync_all())?;
     drop(file);
+    let mut warnings = Vec::new();
     if existed {
         dir.rename(&temporary, &dir, filename)
             .with_context(|| format!("replacing {kind} file"))?;
+        cleanup.disarm();
     } else {
         match dir.hard_link(&temporary, &dir, filename) {
-            Ok(()) => dir
-                .remove_file(&temporary)
-                .with_context(|| format!("removing published {kind} temporary"))?,
+            Ok(()) => {
+                // The hard link is the publication point.
+                cleanup.disarm();
+                if let Err(error) = (ops.remove_temporary)(&dir, &temporary) {
+                    warnings.push(PostPublishWarning::TemporaryCleanup(error));
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 return Ok(OwnedWrite::Conflict);
             }
             Err(error) => return Err(error).with_context(|| format!("publishing {kind} file")),
         }
     }
-    cleanup.disarm();
     drop(cleanup);
-    sync_directory(&dir).with_context(|| format!("syncing {kind} directory"))?;
-    Ok(OwnedWrite::Written)
+    if let Err(error) = (ops.sync_directory)(&dir) {
+        warnings.push(PostPublishWarning::DirectorySync(error));
+    }
+    Ok(OwnedWrite::Written(warnings))
+}
+
+/// The bytes of the regular file at `name`, read only when the opened handle
+/// is the file `inspected` (taken without following symlinks) described:
+/// `None` when the name now holds something else or more than 4 MiB.
+fn read_inspected_occupant(
+    dir: &Dir,
+    name: &std::ffi::OsStr,
+    inspected: &cap_std::fs::Metadata,
+) -> io::Result<Option<Vec<u8>>> {
+    let mut file = dir.open(name)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || opened.len() > MAX_OWNED_FILE_BYTES as u64 {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::MetadataExt;
+        if (opened.dev(), opened.ino()) != (inspected.dev(), inspected.ino()) {
+            return Ok(None);
+        }
+    }
+    // Windows has no by-handle file ID in cap-std's metadata; there, the
+    // handle is only checked to be a regular file within the size cap.
+    #[cfg(not(unix))]
+    let _ = inspected;
+    let mut existing = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_OWNED_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut existing)?;
+    if existing.len() > MAX_OWNED_FILE_BYTES {
+        return Ok(None);
+    }
+    Ok(Some(existing))
 }
 
 /// True only when `bytes` open with a `---` frontmatter holding exactly one
@@ -723,6 +847,16 @@ pub(crate) fn is_generated_temporary(name: &str, prefix: &str) -> bool {
     name.strip_prefix(prefix)
         .and_then(|rest| rest.strip_suffix(".tmp"))
         .is_some_and(|id| Uuid::try_parse(id).is_ok_and(|uuid| uuid.hyphenated().to_string() == id))
+}
+
+/// `path`'s components joined with `/`, as links and summary events write
+/// vault-relative paths on every platform; `None` when one is not UTF-8.
+fn slash_path(path: &Path) -> Option<String> {
+    let parts = path
+        .components()
+        .map(|part| part.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+    Some(parts.join("/"))
 }
 
 pub(crate) fn checked_relative_dir(value: &str) -> Result<PathBuf> {
@@ -1030,7 +1164,7 @@ pub(crate) mod tests {
         // Absent: the parent chain is created and the file is published.
         assert!(matches!(
             replace_owned_file(&dir, &relative, "ours 1", "thing", &ours).unwrap(),
-            OwnedWrite::Written
+            OwnedWrite::Written(_)
         ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "ours 1");
         // Byte-identical content is not rewritten.
@@ -1043,7 +1177,7 @@ pub(crate) mod tests {
         // An owned file is replaced whole.
         assert!(matches!(
             replace_owned_file(&dir, &relative, "ours 2", "thing", &ours).unwrap(),
-            OwnedWrite::Written
+            OwnedWrite::Written(_)
         ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "ours 2");
         // A file the predicate rejects is a conflict and stays as it was.
@@ -1114,6 +1248,144 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn owned_replace_refuses_content_over_the_cap_and_publishes_nothing() {
+        // A file this large would fail the size guard on every later write
+        // and so be a conflict forever; it is refused up front instead.
+        let root = tempfile::tempdir().unwrap();
+        let dir = owned_root(root.path());
+        let relative = Path::new(crate::layout::ARTIFACTS_DIR).join("site/a.md");
+        let anything = |_: &[u8]| true;
+        let large = "x".repeat(MAX_OWNED_FILE_BYTES + 1);
+        let error = replace_owned_file(&dir, &relative, &large, "thing", &anything)
+            .err()
+            .expect("oversized content is refused");
+        assert!(format!("{error:#}").contains("4 MiB"), "{error:#}");
+        assert!(!root.path().join(crate::layout::ARTIFACTS_DIR).exists());
+        // Content exactly at the cap is still written.
+        let at_cap = "x".repeat(MAX_OWNED_FILE_BYTES);
+        assert!(matches!(
+            replace_owned_file(&dir, &relative, &at_cap, "thing", &anything).unwrap(),
+            OwnedWrite::Written(_)
+        ));
+    }
+
+    #[test]
+    fn failures_after_an_owned_publish_are_warnings_on_a_written_result() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = owned_root(root.path());
+        let relative = Path::new(crate::layout::ARTIFACTS_DIR).join("site/a.md");
+        let path = root.path().join(&relative);
+        let ours = |bytes: &[u8]| bytes.starts_with(b"ours");
+        let failing = OwnedFileOps {
+            after_inspect: &|_| {},
+            remove_temporary: &|_, _| Err(io::Error::other("simulated cleanup failure")),
+            sync_directory: &|_| Err(io::Error::other("simulated directory sync failure")),
+        };
+
+        // A new name is published by hard link; the temporary that could not
+        // be removed is left for the startup sweep.
+        let OwnedWrite::Written(warnings) =
+            replace_owned_file_with(&dir, &relative, "ours 1", "thing", &ours, &failing).unwrap()
+        else {
+            panic!("the published file was not reported as written");
+        };
+        assert!(matches!(
+            warnings.as_slice(),
+            [
+                PostPublishWarning::TemporaryCleanup(_),
+                PostPublishWarning::DirectorySync(_)
+            ]
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "ours 1");
+        let left = temporaries_in(path.parent().unwrap());
+        assert_eq!(left.len(), 1);
+        assert!(is_generated_temporary(
+            &left[0],
+            &format!(".{NAMESPACE}-thing-")
+        ));
+        fs::remove_file(path.parent().unwrap().join(&left[0])).unwrap();
+
+        // An owned name is replaced by rename, which leaves no temporary; only
+        // the directory sync can fail after it.
+        let OwnedWrite::Written(warnings) =
+            replace_owned_file_with(&dir, &relative, "ours 2", "thing", &ours, &failing).unwrap()
+        else {
+            panic!("the replaced file was not reported as written");
+        };
+        assert!(matches!(
+            warnings.as_slice(),
+            [PostPublishWarning::DirectorySync(_)]
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "ours 2");
+        assert!(temporaries_in(path.parent().unwrap()).is_empty());
+
+        // Without failures there are no warnings.
+        let OwnedWrite::Written(warnings) =
+            replace_owned_file(&dir, &relative, "ours 3", "thing", &ours).unwrap()
+        else {
+            panic!("the replaced file was not reported as written");
+        };
+        assert!(warnings.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_occupant_swapped_after_inspection_is_a_conflict() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = owned_root(root.path());
+        let site = root.path().join(crate::layout::ARTIFACTS_DIR).join("site");
+        fs::create_dir_all(&site).unwrap();
+        let relative = Path::new(crate::layout::ARTIFACTS_DIR).join("site/a.md");
+        let path = site.join("a.md");
+        let owned_elsewhere = site.join("elsewhere.md");
+        let ours = |bytes: &[u8]| bytes.starts_with(b"ours");
+
+        // Swapped for a symlink to a file the predicate would accept: the
+        // link is never followed into an ownership decision.
+        fs::write(&path, "user text").unwrap();
+        fs::write(&owned_elsewhere, "ours elsewhere").unwrap();
+        let to_symlink = OwnedFileOps {
+            after_inspect: &|_| {
+                fs::remove_file(&path).unwrap();
+                std::os::unix::fs::symlink("elsewhere.md", &path).unwrap();
+            },
+            ..OwnedFileOps::REAL
+        };
+        assert!(matches!(
+            replace_owned_file_with(&dir, &relative, "ours new", "thing", &ours, &to_symlink)
+                .unwrap(),
+            OwnedWrite::Conflict
+        ));
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_to_string(&owned_elsewhere).unwrap(),
+            "ours elsewhere"
+        );
+
+        // Swapped for a different regular file: not the inspected occupant.
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "user text").unwrap();
+        let replacement = site.join("replacement.md");
+        fs::write(&replacement, "ours replacement").unwrap();
+        let to_other_file = OwnedFileOps {
+            after_inspect: &|_| fs::rename(&replacement, &path).unwrap(),
+            ..OwnedFileOps::REAL
+        };
+        assert!(matches!(
+            replace_owned_file_with(&dir, &relative, "ours new", "thing", &ours, &to_other_file)
+                .unwrap(),
+            OwnedWrite::Conflict
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "ours replacement");
+        assert!(temporaries_in(&site).is_empty());
+    }
+
+    #[test]
     fn ownership_needs_exactly_one_block_kind_and_id() {
         let ids: &[(&str, &str)] = &[("canonical_url", "https://e.example/a"), ("url_id", "u1")];
         let owned = "---\ntitle: \"A\"\nbrauser:\n  kind: summary\n  canonical_url: \"https://e.example/a\"\n  url_id: \"u1\"\n---\nbody\n";
@@ -1156,8 +1428,12 @@ pub(crate) mod tests {
                 owned.replace("  url_id:", "  artifact_id: \"x\"\n  url_id:"),
             ),
             (
-                "id outside the block",
+                "id in the body",
                 owned.replace("  url_id: \"u1\"\n---", "---\n  url_id: \"u1\""),
+            ),
+            (
+                "id under a sibling top-level key",
+                owned.replace("  url_id: \"u1\"\n---", "other:\n  url_id: \"u1\"\n---"),
             ),
             (
                 "body only",

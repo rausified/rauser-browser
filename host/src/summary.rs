@@ -74,11 +74,18 @@ pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'stati
     if !matches!(summary.importance.as_str(), "high" | "medium" | "low") {
         return Err("invalid_summary_importance");
     }
-    if summary.summary_path.is_empty()
-        || summary.summary_path.len() > MAX_SUMMARY_PATH_BYTES
-        || summary.summary_path.starts_with('/')
-        || summary.summary_path.split('/').any(|part| part == "..")
-        || !summary.summary_path.ends_with(".summary.md")
+    check_summary_path(&summary.summary_path)
+}
+
+/// The `summary_path` rule shared by `validate_page_summary` and
+/// `Vault::summary_relative_path`: a vault-relative `/`-separated path to a
+/// `.summary.md` file that a summary event's link can name unchanged.
+pub(crate) fn check_summary_path(path: &str) -> Result<(), &'static str> {
+    if path.is_empty()
+        || path.len() > MAX_SUMMARY_PATH_BYTES
+        || path.starts_with('/')
+        || path.split('/').any(|part| part == "..")
+        || !path.ends_with(".summary.md")
         // The rendered link wraps this in `<...>` (CommonMark's bracketed
         // destination form), which forbids line breaks and unescaped `<`/
         // `>`; `#`/`?` are not special to CommonMark there, but some
@@ -87,8 +94,7 @@ pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'stati
         // trailing fragment or query instead of opening the file. Reject
         // rather than escape: a vault-relative path has no legitimate
         // reason to need any of these.
-        || summary
-            .summary_path
+        || path
             .chars()
             .any(|ch| ch.is_control() || matches!(ch, '<' | '>' | '#' | '?'))
     {
@@ -394,7 +400,7 @@ mod tests {
             vault
                 .note_link(&key, PAGE_URL, LinkStyle::Wikilink)
                 .unwrap(),
-            format!("[[{stem}|Page note]]")
+            format!("[[{}/{stem}|Page note]]", layout::NOTES_DIR)
         );
     }
 
@@ -440,7 +446,7 @@ mod tests {
 
         assert!(matches!(
             vault.write_summary(&key, PAGE_URL, &ours("one")).unwrap(),
-            OwnedWrite::Written
+            OwnedWrite::Written(_)
         ));
         assert_eq!(fs::read_to_string(&path).unwrap(), ours("one"));
         assert!(matches!(
@@ -449,7 +455,7 @@ mod tests {
         ));
         assert!(matches!(
             vault.write_summary(&key, PAGE_URL, &ours("two")).unwrap(),
-            OwnedWrite::Written
+            OwnedWrite::Written(_)
         ));
         assert_eq!(fs::read_to_string(&path).unwrap(), ours("two"));
 
@@ -508,7 +514,7 @@ mod tests {
         fs::remove_file(&jira_path).unwrap();
         assert!(matches!(
             vault.write_summary(&jira, PAGE_URL, &jira_summary).unwrap(),
-            OwnedWrite::Written
+            OwnedWrite::Written(_)
         ));
         // Nothing was ever written to the notes folder.
         assert!(!root.path().join(layout::NOTES_DIR).exists());
@@ -562,6 +568,61 @@ mod tests {
         assert!(!stale_note.exists());
         for path in kept.iter().chain([&fresh]) {
             assert!(path.exists(), "{} was removed", path.display());
+        }
+    }
+
+    #[test]
+    fn a_summaries_folder_failure_does_not_stop_the_notes_sweep() {
+        let (root, vault) = fixed_vault();
+        let notes = root.path().join(layout::NOTES_DIR);
+        fs::create_dir_all(&notes).unwrap();
+        // A file in place of the summaries folder cannot be listed, and the
+        // error is not NotFound.
+        fs::write(root.path().join(layout::SUMMARIES_DIR), "not a folder").unwrap();
+        let stale_note = notes.join(format!(".{NAMESPACE}-{}.tmp", uuid::Uuid::new_v4()));
+        fs::write(&stale_note, "content").unwrap();
+        crate::vault::tests::age_file(
+            &stale_note,
+            crate::vault::STALE_TEMPORARY_AGE + Duration::from_secs(60),
+        );
+
+        assert_eq!(vault.sweep_stale_temporaries().unwrap(), 1);
+        assert!(!stale_note.exists());
+    }
+
+    #[test]
+    fn a_notes_folder_failure_does_not_stop_the_summaries_sweep() {
+        let (root, vault) = fixed_vault();
+        let summaries = root.path().join(layout::SUMMARIES_DIR);
+        fs::create_dir_all(&summaries).unwrap();
+        fs::write(root.path().join(layout::NOTES_DIR), "not a folder").unwrap();
+        let stale = summaries.join(format!(".{NAMESPACE}-summary-{}.tmp", uuid::Uuid::new_v4()));
+        fs::write(&stale, "content").unwrap();
+        crate::vault::tests::age_file(
+            &stale,
+            crate::vault::STALE_TEMPORARY_AGE + Duration::from_secs(60),
+        );
+
+        assert_eq!(vault.sweep_stale_temporaries().unwrap(), 1);
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    fn a_summaries_folder_that_would_break_the_summary_link_is_refused() {
+        // Since the layout move the folder is always `summaries`, but a vault
+        // opened from an older config can still name another folder.
+        for folder in ["sum#maries", "sum?maries", "sum<maries", "sum>maries"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut storage = fixed_storage(root.path());
+            storage.summaries_dir = Some(folder.into());
+            let vault = Vault::open(&storage).unwrap();
+            let key = url_record_key(PAGE_URL).unwrap();
+            assert!(
+                vault.summary_relative_path(&key, PAGE_URL).is_err(),
+                "{folder} was accepted"
+            );
+            assert!(vault.write_summary(&key, PAGE_URL, "x").is_err());
+            assert!(!root.path().join(folder).exists());
         }
     }
 
