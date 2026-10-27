@@ -18,6 +18,7 @@ mod error;
 mod eval;
 mod overlap;
 mod path;
+mod policy;
 mod title;
 mod value;
 
@@ -30,4 +31,5 @@ pub use eval::{
 };
 pub use overlap::OverlapPair;
 pub use path::prepare_segments;
+pub use policy::{DraftPolicy, Fill, SharedOrigin};
 pub use value::Value;

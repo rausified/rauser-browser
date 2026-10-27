@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const {
@@ -9,6 +10,8 @@ const {
   previewDocument,
   probeUrls,
 } = await import("../dist/adapter-review.js");
+
+const catalog = JSON.parse(await readFile(new URL("../../protocol/capture-site/catalog.json", import.meta.url)));
 
 const JIRA = {
   type: "jira.issue",
@@ -108,4 +111,11 @@ test("probe and overlap copy names the concrete review evidence", () => {
     { first_adapter: 0, first_rule: 1, second_adapter: 1, second_rule: 0 },
     [JIRA, { ...JIRA, type: "jira.board" }],
   ), "jira.issue rule 2 may overlap jira.board rule 1; jira.issue wins.");
+});
+
+test("probeUrls matches the host catalog", () => {
+  assert.deepEqual(
+    probeUrls("https://x.test"),
+    catalog.probe_paths.map((path) => `https://x.test${path}`),
+  );
 });

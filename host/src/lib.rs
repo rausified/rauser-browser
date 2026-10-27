@@ -19,6 +19,7 @@ pub mod brand;
 #[cfg(test)]
 mod build_id;
 pub mod capture;
+pub mod capture_site;
 pub mod config;
 pub mod consent;
 pub mod dialog;
