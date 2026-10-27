@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, WhyEvent};
-use cap_std::fs::{Dir, OpenOptions};
+use cap_std::fs::Dir;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -34,8 +34,8 @@ use crate::capture::{
 use crate::markdown::{self, yaml_string};
 use crate::summary::SummaryEvent;
 use crate::vault::{
-    STALE_TEMPORARY_AGE, TempFileCleanup, checked_relative_dir, is_generated_temporary,
-    open_selected_root, sync_directory, sync_directory_chain,
+    OwnedWrite, STALE_TEMPORARY_AGE, checked_relative_dir, is_generated_temporary,
+    open_selected_root, owned_frontmatter, replace_owned_file,
 };
 
 // v2 (main, independently) forces a rescan for the artifact-history
@@ -645,17 +645,17 @@ impl ArtifactIndex {
                     .into_owned()
             };
             match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown) {
-                Ok(ArtifactWrite::Written) => {
+                Ok(OwnedWrite::Written) => {
                     report.written += 1;
                     state.dirty.remove(&id);
                     unpublished = true;
                 }
-                Ok(ArtifactWrite::Unchanged) => {
+                Ok(OwnedWrite::Unchanged) => {
                     report.unchanged += 1;
                     state.dirty.remove(&id);
                     unpublished = true;
                 }
-                Ok(ArtifactWrite::Conflict) => {
+                Ok(OwnedWrite::Conflict) => {
                     report.conflicts += 1;
                     if report.conflict_paths.len() < 64 {
                         report.conflict_paths.push(path());
@@ -1964,81 +1964,19 @@ fn sync_host_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-enum ArtifactWrite {
-    Written,
-    Unchanged,
-    Conflict,
-}
-
 fn replace_artifact(
     root: &Dir,
     artifacts_dir: &str,
     artifact: &ArtifactRow,
     markdown: &str,
-) -> Result<ArtifactWrite> {
-    let relative = artifact_path(artifacts_dir, artifact);
-    let parent = relative.parent().context("artifact path has no parent")?;
-    let filename = relative
-        .file_name()
-        .context("artifact path has no filename")?;
-    root.create_dir_all(parent)
-        .context("creating artifact directory")?;
-    sync_directory_chain(root, parent).context("syncing artifact directory chain")?;
-    let dir = root
-        .open_dir(parent)
-        .context("opening artifact directory")?;
-    let existed = match dir.symlink_metadata(filename) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink()
-                || !metadata.is_file()
-                || metadata.len() > 4 * 1024 * 1024
-            {
-                return Ok(ArtifactWrite::Conflict);
-            }
-            let mut file = dir.open(filename).context("opening existing artifact")?;
-            let mut existing = Vec::new();
-            Read::by_ref(&mut file)
-                .take(4 * 1024 * 1024 + 1)
-                .read_to_end(&mut existing)?;
-            if existing.len() > 4 * 1024 * 1024 || !owned_artifact(&existing, &artifact.artifact_id)
-            {
-                return Ok(ArtifactWrite::Conflict);
-            }
-            if existing == markdown.as_bytes() {
-                return Ok(ArtifactWrite::Unchanged);
-            }
-            true
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error).context("checking artifact file"),
-    };
-
-    let temporary = format!(".{NAMESPACE}-artifact-{}.tmp", Uuid::new_v4());
-    let mut file = dir
-        .open_with(&temporary, OpenOptions::new().write(true).create_new(true))
-        .context("creating artifact temporary")?;
-    let mut cleanup = TempFileCleanup::new(&dir, &temporary);
-    file.write_all(markdown.as_bytes())
-        .and_then(|()| file.sync_all())?;
-    drop(file);
-    if existed {
-        dir.rename(&temporary, &dir, filename)
-            .context("replacing artifact file")?;
-    } else {
-        match dir.hard_link(&temporary, &dir, filename) {
-            Ok(()) => dir
-                .remove_file(&temporary)
-                .context("removing published artifact temporary")?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Ok(ArtifactWrite::Conflict);
-            }
-            Err(error) => return Err(error).context("publishing artifact file"),
-        }
-    }
-    cleanup.disarm();
-    drop(cleanup);
-    sync_directory(&dir).context("syncing artifact directory")?;
-    Ok(ArtifactWrite::Written)
+) -> Result<OwnedWrite> {
+    replace_owned_file(
+        root,
+        &artifact_path(artifacts_dir, artifact),
+        markdown,
+        "artifact",
+        &|existing| owned_artifact(existing, &artifact.artifact_id),
+    )
 }
 
 /// Each checkpoint rewrites the whole cache, so space them by at least four
@@ -2088,41 +2026,7 @@ fn sweep_temporaries_in(dir: &Dir, prefix: &str) -> Result<usize> {
 }
 
 fn owned_artifact(bytes: &[u8], artifact_id: &str) -> bool {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    if !text.starts_with("---\n") {
-        return false;
-    }
-    let Some(frontmatter) = text[4..].split_once("\n---\n").map(|value| value.0) else {
-        return false;
-    };
-    let mut blocks = 0;
-    let mut in_brauser = false;
-    let mut kinds = 0;
-    let mut kind_matches = false;
-    let mut ids = 0;
-    let mut id_matches = false;
-    for line in frontmatter.lines() {
-        if !line.starts_with(' ') {
-            in_brauser = line == "brauser:";
-            if in_brauser {
-                blocks += 1;
-            }
-            continue;
-        }
-        if !in_brauser {
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("  kind: ") {
-            kinds += 1;
-            kind_matches = value == "artifact";
-        } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
-            ids += 1;
-            id_matches = serde_json::from_str::<String>(value).ok().as_deref() == Some(artifact_id);
-        }
-    }
-    blocks == 1 && kinds == 1 && kind_matches && ids == 1 && id_matches
+    owned_frontmatter(bytes, "artifact", &[("artifact_id", artifact_id)], &[])
 }
 
 fn artifact_path(artifacts_dir: &str, artifact: &ArtifactRow) -> PathBuf {
