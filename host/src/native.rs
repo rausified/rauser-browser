@@ -3112,7 +3112,10 @@ id = "jira:{host}/{key}"
                 assert_ne!(board.key, issue.key, "activity={activity}");
                 assert_ne!(board.body, "ABC-123 text", "activity={activity}");
                 let saved = save(&mut config, BOARD, "Notes about the whole board");
-                assert_ne!(saved.relative_path, issue.relative_path, "activity={activity}");
+                assert_ne!(
+                    saved.relative_path, issue.relative_path,
+                    "activity={activity}"
+                );
                 assert_eq!(
                     std::fs::read(&issue_path).unwrap(),
                     issue_bytes,
