@@ -321,11 +321,6 @@ and the protocol v6 removals) is done; see Shipped.
   run for the same key can start. Use bounded retries and an in-memory end
   state, keeping the key reserved, rather than holding the queue on a failing
   disk.
-- [ ] `brwr-hme` **One Brauser home folder (P1, John 2026-10-27).** The user
-  picks one home folder; Brauser creates its notes, artifacts, summaries, logs,
-  config and state inside it. Owned by the Columbus session (design, then a
-  PR); not Cookie work until that design lands. The service's state stays in
-  OS directories behind `service::paths`.
 - [ ] `brwr-hrc` **Note identity: remember contracts removed by hand edits
   (P1, follow-up to #70).** Record adapter contracts that vanish from
   `config.toml` outside the settings path, so a hand-deleted board adapter
@@ -540,6 +535,7 @@ main, check the item off as "not reproduced" and say why. The last item,
 
 ## Shipped
 
+- [x] `brwr-hme` **One Brauser home folder (2026-10-27, #82).** The user picks one home folder; Brauser keeps `notes/`, `artifacts/`, `summaries/` and `logs/` inside it in a fixed layout, migrating older layouts once (`pages/` → `notes/`, `log/` → `logs/`, no-clobber). Machine state stays in OS directories.
 - **Category:** New Capability. **Start capturing known work sites from the current page (2026-10-27).** The panel now reviews and enables Jira Cloud, SharePoint/OneDrive and separately scoped GitHub pull requests/issues without opening JSON. It shows the actual page's match, labeled illustrative examples and all fixed safety probes, preserves configured sites and pauses, and refuses stale reviews or pending removals. Existing note edits save before identity changes, with copy-out on failure; page-installed policy starts attention on already-open artifacts without inventing cold opens or suppressing real opens during background renewal. Unknown-site drafting stays queued in `brwr-t40`, and the parent remains open. **Metrics:** 332 Rust tests and 10 extension test files passing; 26 new model, composed-panel and worker regressions; full required gate, both Clippy configurations and queue consistency green. macOS smoke refused on Linux; 14 scripted dialogs unchanged.
 
 - **Category:** Bug Fix. **Keep shared and older notes reachable after capture rules are removed (2026-10-27).** Historical note recovery now retains the older URL-note list and its read-only viewing action after adapter removal, recognition narrowing and site removal. Both URL lookup directions share durable activity, mode and explicit-context evidence, so alternate routes and context-only history recover the same note without inventing activity. Native request tests prove separate URL notes, migration refusals, stale-key copy-out, cache deletion/reindex and suppressed capture preserve existing content. **Metrics:** 332 Rust tests (+5) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
