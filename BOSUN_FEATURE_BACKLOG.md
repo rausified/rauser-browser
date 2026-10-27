@@ -331,10 +331,6 @@ and the protocol v6 removals) is done; see Shipped.
   run for the same key can start. Use bounded retries and an in-memory end
   state, keeping the key reserved, rather than holding the queue on a failing
   disk.
-- [ ] `brwr-hrc` **Note identity: remember contracts removed by hand edits
-  (P1, follow-up to #70).** Record adapter contracts that vanish from
-  `config.toml` outside the settings path, so a hand-deleted board adapter
-  cannot leave its modal rule's notes unrecognized.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -438,15 +434,7 @@ main, check the item off as "not reproduced" and say why. The last item,
   panel adds the Use button for every older note (extension/panel.ts ~222-246)
   even when the artifact note already exists, where `use_as_artifact_note`
   (host/src/note.rs ~597) always refuses. Show only View in that case.
-- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
-  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
-  stripping a query key that an adapter rule matches on (Jira's
-  `selectedIssue`) is accepted and collapses artifact identity. Decided
-  2026-10-27: a save that adds or changes such an entry is refused with a clear
-  message; an existing config with the conflict still loads and saves, shows a
-  warning, and offers a one-click "Stop stripping <param>" fix. Also record
-  which params were stripped. P2; depends on `brwr-hrc` (rebase onto it first,
-  both edit config.rs).
+
 
 ### Cross-PR seam review defects (lane C2, 2026-10-27)
 
@@ -545,6 +533,19 @@ were folded into `brwr-q7e` above rather than given their own item.
 
 ## In Progress / This Iteration
 
+- In progress in the Columbus session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
+  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
+  stripping a query key that an adapter rule matches on (Jira's
+  `selectedIssue`) is accepted and collapses artifact identity. Decided
+  2026-10-27: a save that adds or changes such an entry is refused with a clear
+  message; an existing config with the conflict still loads and saves, shows a
+  warning, and offers a one-click "Stop stripping <param>" fix. Also record
+  which params were stripped. P2; in progress in the Columbus session (builds
+  on #85).
+- [ ] `brwr-hrr` **Give damaged adopted-contract state a visible repair path,
+  and guard ID changes against hand-retired contracts.** Follow-up to #85.
+
 - In progress in the Lane A session (PR 3 on `feat/agent-runners-pr3`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
 - [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
@@ -617,6 +618,8 @@ were folded into `brwr-q7e` above rather than given their own item.
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- [x] `brwr-hrc` **Note identity: remember contracts removed by hand edits (2026-10-27, #85).** Adapter contracts that vanish from `config.toml` outside the settings path are recorded, so a hand-deleted board adapter cannot leave its modal rule's notes unrecognized.
 
 - **Category:** New Feature. **Inspect private page patterns from the panel and settings (2026-10-27).** A collapsed panel review shows the shaped current address and same-origin link patterns only after a click, including on unknown sites. The shared shaper removes identifier/query values and title-like segments; the isolated top-frame reader checks page identity, scans at most 500 anchors and returns at most 50 shapes, generalizing singleton literals. Configured sites retain at most 20 visited shapes for seven days with local show/clear controls, including during host repair; incognito tabs, pauses and removals stay excluded, and samples never enter delivery or the vault. Closing, collapsing or navigating drops link results. This completes `brwr-b39`; unknown-site host drafting and enabling remain in `brwr-t40`. **Metrics:** 332 Rust tests and 11 extension test files passing; 21 new shaper, worker and composed UI scenarios; full required gate, both Clippy configurations and queue consistency green. macOS smoke unavailable on Linux; no scripted-dialog or smoke-step changes. Salvaged onto main by hand after the overnight rebase failed; the independent review pass also stopped attention timing on the previous artifact after an oversized same-origin navigation.
 
