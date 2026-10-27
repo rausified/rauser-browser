@@ -616,6 +616,27 @@ test("unchecking repositories omits the repo adapter", async () => {
     ["github.pr", "github.issue"]);
 });
 
+test("the confirmation line names only the checked types, truthfully and in a fixed order", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-prs").checked = false;
+  page.el("capture-site-prs").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records issues owned by: acme-corp\./);
+
+  page.el("capture-site-repos").checked = true;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-prs").checked = true;
+  page.el("capture-site-prs").dispatch("input");
+  page.el("capture-site-issues").checked = false;
+  page.el("capture-site-issues").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories and pull requests owned by: acme-corp\./);
+
+  page.el("capture-site-issues").checked = true;
+  page.el("capture-site-issues").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
+});
+
 test("unchecking every GitHub kind disables save, and clearing the organization blocks it", async () => {
   const page = await captureReview(GITHUB_URL);
   for (const id of ["capture-site-repos", "capture-site-prs", "capture-site-issues"]) {

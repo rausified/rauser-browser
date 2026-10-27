@@ -17,6 +17,22 @@ interface CaptureActions {
   afterSave(): Promise<void>;
 }
 
+// The confirmation line names only what is actually checked, in this fixed
+// order, so the privacy-boundary scope line is never wider than the save.
+const GITHUB_RECORD_LABELS: Record<string, string> = {
+  "github.repo": "repositories",
+  "github.pr": "pull requests",
+  "github.issue": "issues",
+};
+const GITHUB_RECORD_ORDER = ["github.repo", "github.pr", "github.issue"];
+
+/** "A", "A and B", or "A, B and C" — no Oxford comma, matching this panel's
+ * existing list copy (e.g. the "Remember: X and Y" summary line). */
+function joinRecordedTypes(labels: string[]): string {
+  if (labels.length < 2) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
 /** An in-panel, revision-bound review. All transient page URLs and scopes
  * remain in this panel; only the reviewed config goes to the native host. */
 export class CaptureSitePanel {
@@ -148,8 +164,10 @@ export class CaptureSitePanel {
       const githubOffer = plan.offers.find((offer) => offer.kind === "github");
       if (githubOffer) {
         const scope = githubOffer.adapter!.scope as { owner: string[] };
+        const checkedTypes = new Set(plan.offers.map((offer) => offer.artifact_type));
+        const labels = GITHUB_RECORD_ORDER.filter((type) => checkedTypes.has(type)).map((type) => GITHUB_RECORD_LABELS[type]!);
         const orgs = document.createElement("p");
-        orgs.textContent = `Records repositories, pull requests and issues owned by: ${scope.owner.join(", ")}.`;
+        orgs.textContent = `Records ${joinRecordedTypes(labels)} owned by: ${scope.owner.join(", ")}.`;
         this.preview.append(orgs);
       }
       const current = document.createElement("p");
