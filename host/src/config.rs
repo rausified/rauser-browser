@@ -2166,7 +2166,12 @@ fn validate_adapter_transition_with_history(
         let Some(artifact_type) = adapter_contract_type(candidate) else {
             continue;
         };
-        for previous in retired.iter().chain(&removed).chain(&by_hand.contracts) {
+        let earlier: Vec<&serde_json::Value> = retired
+            .iter()
+            .chain(&removed)
+            .chain(&by_hand.contracts)
+            .collect();
+        for previous in earlier.iter().copied() {
             let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
                 continue;
             };
@@ -2176,7 +2181,7 @@ fn validate_adapter_transition_with_history(
             if origin == previous_origin
                 && (id != previous_id || artifact_type != previous_type)
                 && adapter_contracts_overlap(previous, candidate)?
-                && !declares_container(previous, next, (artifact_type, id))
+                && !declares_container(previous, next, &earlier, (artifact_type, id))
             {
                 bail!(
                     "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
@@ -2262,29 +2267,32 @@ fn declared_container(value: &serde_json::Value) -> Option<(&str, &str)> {
 
 /// Ruling 2: `previous` counts as declaring container `target` (the
 /// candidate's own `(type, id)`) either because `previous` itself declares
-/// `within` that container, or because `next` holds a live adapter sharing
-/// `previous`'s `(origin, type, id)` identity that declares it. The latter
-/// lets a retired contract that predates `within` release its routes once
-/// the surviving adapter grows the declaration, without reaching for a
-/// migration tool that does not exist yet.
+/// `within` that container, or because a sibling sharing `previous`'s
+/// `(origin, type, id)` identity declares it. The sibling may be a live
+/// adapter in `next` or another retired or removed contract in `earlier`.
+/// This lets a contract that predates `within` release its routes once its
+/// own adapter grew the declaration, even if that adapter was later removed
+/// too, without reaching for a migration tool that does not exist yet.
 fn declares_container(
     previous: &serde_json::Value,
     next: &ConfigSnapshot,
+    earlier: &[&serde_json::Value],
     target: (&str, &str),
 ) -> bool {
     if declared_container(previous) == Some(target) {
         return true;
     }
-    let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
+    let Some(identity) = adapter_contract_identity(previous) else {
         return false;
     };
     let Some(previous_type) = adapter_contract_type(previous) else {
         return false;
     };
-    adapter_contracts(next).iter().any(|candidate| {
-        adapter_contract_identity(candidate) == Some((previous_origin, previous_id))
-            && adapter_contract_type(candidate) == Some(previous_type)
-            && declared_container(candidate) == Some(target)
+    let live = adapter_contracts(next);
+    live.iter().chain(earlier.iter().copied()).any(|sibling| {
+        adapter_contract_identity(sibling) == Some(identity)
+            && adapter_contract_type(sibling) == Some(previous_type)
+            && declared_container(sibling) == Some(target)
     })
 }
 
@@ -4188,6 +4196,110 @@ mod tests {
             github_repo_adapter(&["a"]),
         ]);
         store.update(next, &revision).unwrap().unwrap();
+    }
+
+    /// The settings link save retires the within-less PR; removing the PR
+    /// rule later retires PR+within. A sibling in history with the same
+    /// (origin, type, id) that declares the exact container still releases
+    /// the within-less contract once no live PR adapter is left.
+    #[test]
+    fn a_retired_sibling_declaring_within_releases_a_predating_retired_contract() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let revision = store
+            .update(
+                adapter_config(vec![github_pr_adapter(&["a"])]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        // Link: the PR grows `within` and a repository rule is added.
+        let revision = store
+            .update(
+                adapter_config(vec![
+                    within_github_repo(github_pr_adapter(&["a"])),
+                    github_repo_adapter(&["a"]),
+                ]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+        // Remove the PR rule.
+        let revision = store
+            .update(adapter_config(vec![github_repo_adapter(&["a"])]), &revision)
+            .unwrap()
+            .unwrap();
+        // Widen the repository rule's scope.
+        let revision = store
+            .update(
+                adapter_config(vec![github_repo_adapter(&["a", "b"])]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+        // Remove and re-add it.
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+        store
+            .update(adapter_config(vec![github_repo_adapter(&["a"])]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    fn assert_migration_bail(next: &ConfigSnapshot, retired: &[serde_json::Value]) {
+        let error = validate_adapter_transition_with_history(
+            &adapter_config(Vec::new()),
+            next,
+            retired,
+            &RetiredByHand::default(),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_retired_sibling_declaring_another_container_id_does_not_release() {
+        let mut other = within_github_repo(github_pr_adapter(&["a"]));
+        other["within"]["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        let retired = vec![github_pr_adapter(&["a"]), other];
+        assert_migration_bail(&adapter_config(vec![github_repo_adapter(&["a"])]), &retired);
+    }
+
+    #[test]
+    fn a_live_sibling_declaring_another_container_does_not_release() {
+        let mut other = within_github_repo(github_pr_adapter(&["a"]));
+        other["within"]["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        let retired = vec![github_pr_adapter(&["a"])];
+        assert_migration_bail(
+            &adapter_config(vec![other, github_repo_adapter(&["a"])]),
+            &retired,
+        );
+    }
+
+    #[test]
+    fn a_sibling_of_another_type_declaring_the_container_does_not_release() {
+        let mut issue = within_github_repo(adapter(
+            "https://github.com",
+            "github.issue",
+            "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}",
+            "github.pr:{host}/{owner}/{repo}/{number}",
+        ));
+        issue["scope"] = json!({"owner": ["a"]});
+        let retired = vec![github_pr_adapter(&["a"]), issue.clone()];
+        assert_migration_bail(&adapter_config(vec![github_repo_adapter(&["a"])]), &retired);
+        // Nor does a live one.
+        assert_migration_bail(
+            &adapter_config(vec![issue, github_repo_adapter(&["a"])]),
+            &[github_pr_adapter(&["a"])],
+        );
     }
 
     #[test]
