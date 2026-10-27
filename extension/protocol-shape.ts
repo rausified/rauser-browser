@@ -74,6 +74,14 @@ function isAdapterWarning(value: unknown): boolean {
       (warning[key] as number) >= 0);
 }
 
+function isAdoptedState(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const state = value as Record<string, unknown>;
+  return Object.keys(state).length === 3 && stringOrNull(state.issue) &&
+    typeof state.revision === "string" && state.revision.length > 0 &&
+    isStringArray(state.warnings) && (state.warnings as unknown[]).length <= 8;
+}
+
 function isRecordKey(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const key = value as Record<string, unknown>;
@@ -206,7 +214,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.revision === "string" && isConfig(value.config) &&
         stringOrNull(value.config_issue) && isAgentStatus(value.agent_status) &&
         stringOrNull(value.adapter_issue) && Array.isArray(value.adapter_warnings) &&
-        value.adapter_warnings.length <= 256 && value.adapter_warnings.every(isAdapterWarning);
+        value.adapter_warnings.length <= 256 && value.adapter_warnings.every(isAdapterWarning) &&
+        isAdoptedState(value.adopted_state);
     case "config_updated":
       return typeof value.revision === "string" && isConfig(value.config);
     case "folder_chosen":
