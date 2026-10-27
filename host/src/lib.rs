@@ -17,4 +17,5 @@ pub mod index;
 pub mod native;
 pub mod note;
 mod presentation;
+mod summary;
 pub mod vault;
