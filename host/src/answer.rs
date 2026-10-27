@@ -22,6 +22,10 @@ pub const MAX_REASON_CHARS: usize = 300;
 pub const MAX_ASSESSMENT_CHARS: usize = 4000;
 /// The most related notes kept; later ones are dropped.
 pub const MAX_RELATED_NOTES: usize = 32;
+/// The most `related_notes` entries looked at, kept or not; later ones are
+/// dropped unchecked, so an answer cannot make the service check the
+/// filesystem for every entry it fits in [`MAX_ANSWER_BYTES`].
+pub const MAX_RELATED_CANDIDATES: usize = 4 * MAX_RELATED_NOTES;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -280,7 +284,8 @@ fn entity_list(entities: &Map<String, Value>, key: &str) -> Result<Vec<String>, 
 }
 
 /// The listed notes that are existing regular files inside the knowledge
-/// base, as given, at most [`MAX_RELATED_NOTES`].
+/// base, as given, at most [`MAX_RELATED_NOTES`] from the first
+/// [`MAX_RELATED_CANDIDATES`] entries.
 fn related_notes(
     object: &Map<String, Value>,
     knowledge_base: &Path,
@@ -290,7 +295,7 @@ fn related_notes(
         return Ok(Vec::new());
     };
     let mut kept: Vec<String> = Vec::new();
-    for note in listed {
+    for note in listed.into_iter().take(MAX_RELATED_CANDIDATES) {
         if kept.len() == MAX_RELATED_NOTES {
             break;
         }
@@ -426,6 +431,27 @@ mod tests {
             parse(&value, &kb).unwrap().related_notes.len(),
             MAX_RELATED_NOTES
         );
+    }
+
+    /// Each candidate costs a filesystem check, so only the first
+    /// [`MAX_RELATED_CANDIDATES`] are looked at, whatever they are.
+    #[test]
+    fn related_notes_examine_a_bounded_number_of_candidates() {
+        let (_dir, kb) = knowledge_base();
+        let mut listed: Vec<String> = (0..MAX_RELATED_CANDIDATES - 1)
+            .map(|index| format!("missing-{index}.md"))
+            .collect();
+        listed.push("b.md".to_string());
+        listed.push("notes/a.md".to_string());
+        let mut value = answer();
+        value["related_notes"] = json!(listed);
+        assert_eq!(parse(&value, &kb).unwrap().related_notes, ["b.md"]);
+
+        // Escaping entries count as candidates too.
+        let mut listed = vec!["../outside.md".to_string(); 10_000];
+        listed.push("b.md".to_string());
+        value["related_notes"] = json!(listed);
+        assert!(parse(&value, &kb).unwrap().related_notes.is_empty());
     }
 
     #[test]
