@@ -83,7 +83,7 @@ export function denylistEditsLive(config: ConfigSnapshot | null): boolean {
 /** DESIGN §14: Codex runs with the user's own HOME and CODEX_HOME. The host's
  * setup confirmation says the same (host/src/consent.rs CODEX_DISCLOSURE). */
 export const CODEX_DISCLOSURE =
-  "Codex runs with your normal Codex home and login, so your own Codex instructions (AGENTS.md) and skills can shape its answers. Claude Code is the recommended harness.";
+  "Codex uses your own Codex home and login, so your AGENTS.md and skills can shape answers. Claude Code is recommended.";
 
 /** The note under a detected harness: whether it can be set up and, for
  * Codex, what sharing the user's Codex home means. */

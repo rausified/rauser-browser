@@ -680,7 +680,7 @@ fn bounded(mut text: String, max: usize) -> String {
 /// cannot be shown safely or the whole exceeds [`MAX_HARNESS_SUMMARY_BYTES`].
 /// §14: Codex shares the user's own `HOME` and `CODEX_HOME`, so their global
 /// instructions and skills reach it. The settings page says the same.
-pub const CODEX_DISCLOSURE: &str = "Codex runs with your normal Codex home and login, so your own Codex instructions (AGENTS.md) and skills can shape its answers. Claude Code is the recommended harness.";
+pub const CODEX_DISCLOSURE: &str = "Codex uses your own Codex home and login, so your AGENTS.md and skills can shape answers. Claude Code is recommended.";
 
 pub fn harness_confirmation_text(
     candidate: &Candidate,
@@ -739,35 +739,32 @@ pub fn harness_confirmation_text(
         lines.push(String::new());
     }
     lines.extend([
-        format!("Harness: {name} {version}"),
-        format!("Program: {:?}", agent.binary),
+        format!("Harness: {name} {version} at {:?}", agent.binary),
         format!("Runs: {real_path:?}"),
-        String::new(),
     ]);
     if candidate.adapter == Adapter::Codex {
         lines.push(CODEX_DISCLOSURE.to_owned());
-        lines.push(String::new());
     }
+    lines.push(String::new());
     // One shell-quoted line: every argument is shown, and quoting keeps
-    // the word boundaries unambiguous without a line per argument.
-    lines.push("Arguments (page text goes on standard input, never in arguments):".to_owned());
+    // the word boundaries unambiguous without a line per argument. Codex's
+    // many `--disable <feature>` pairs are named once on their own line.
+    let (disabled, rest) = split_disabled(&agent.args);
+    lines.push("Arguments (the page goes on stdin, never in arguments):".to_owned());
     lines.push(
-        agent
-            .args
-            .iter()
+        rest.iter()
             .map(|arg| shell_word(arg))
             .collect::<Vec<_>>()
             .join(" "),
     );
-    lines.push(String::new());
+    if !disabled.is_empty() {
+        lines.push(format!("Also --disable each of: {}", disabled.join(", ")));
+    }
     lines.push(format!(
-        "Environment variables passed (names only, values are not shown): {}",
+        "Variables passed (values hidden): {}",
         agent.env_allow.join(", ")
     ));
-    lines.push(format!(
-        "Summaries folder: {summaries:?} in {:?}",
-        storage.root
-    ));
+    lines.push(format!("Summaries: {summaries:?} in {:?}", storage.root));
     let exclusions = if after.agent_denylist.is_empty() {
         "No domains excluded.".to_owned()
     } else {
@@ -778,13 +775,11 @@ pub fn harness_confirmation_text(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    lines.push(format!(
-        "AI privacy exclusions (pages on these sites are never sent to the AI): {exclusions}"
-    ));
+    lines.push(format!("AI privacy exclusions: {exclusions}"));
     lines.push(format!("Timeout: {} seconds", agent.timeout_secs));
     lines.push(String::new());
     lines.push(format!(
-        "{APP_NAME} will now send one short test prompt to {name}. Nothing is enabled unless the test passes."
+        "Next, one test prompt goes to {name}. Nothing turns on unless it passes."
     ));
     let description = lines.join("\n");
     if title.len() + 1 + description.len() > MAX_HARNESS_SUMMARY_BYTES {
@@ -793,6 +788,28 @@ pub fn harness_confirmation_text(
         );
     }
     Ok((title, description))
+}
+
+/// Split `args` into the features of its `--disable <feature>` pairs and the
+/// other arguments in order. A feature that would need shell quoting stays
+/// in place, so the grouped line never hides how an argument is spelled.
+fn split_disabled(args: &[String]) -> (Vec<&str>, Vec<&str>) {
+    let mut disabled = Vec::new();
+    let mut rest = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args.get(index + 1) {
+            Some(feature) if args[index] == "--disable" && shell_word(feature) == *feature => {
+                disabled.push(feature.as_str());
+                index += 2;
+            }
+            _ => {
+                rest.push(args[index].as_str());
+                index += 1;
+            }
+        }
+    }
+    (disabled, rest)
 }
 
 /// `arg` as one POSIX shell word: bare when it has no shell metacharacters,
@@ -1730,40 +1747,60 @@ mod tests {
         assert!(all[1].contains("summaries folder"), "{body}");
         assert_eq!(all[2], "");
         let lines = &all[3..];
-        assert_eq!(lines[0], "Harness: Claude Code 2.1.284");
         assert_eq!(
-            lines[1],
+            lines[0],
             format!(
-                "Program: {:?}",
+                "Harness: Claude Code 2.1.284 at {:?}",
                 crate::config::fixtures::absent_binary("claude")
             )
         );
-        assert_eq!(lines[2], "Runs: \"/opt/claude/versions/2.1.284/claude\"");
-        assert_eq!(lines[3], "");
+        assert_eq!(lines[1], "Runs: \"/opt/claude/versions/2.1.284/claude\"");
+        assert_eq!(lines[2], "");
         assert_eq!(
-            lines[4],
-            "Arguments (page text goes on standard input, never in arguments):"
+            lines[3],
+            "Arguments (the page goes on stdin, never in arguments):"
         );
+        // Claude Code has no --disable pairs, so every argument is on one line.
         let args = harness::template_args(Adapter::ClaudeCode);
         let words: Vec<String> = args.iter().map(|arg| shell_word(arg)).collect();
-        assert_eq!(lines[5], words.join(" "));
-        assert_eq!(lines[6], "");
-        let rest = &lines[7..];
+        assert_eq!(lines[4], words.join(" "));
+        let rest = &lines[5..];
         assert_eq!(
             rest[0],
-            "Environment variables passed (names only, values are not shown): HOME, PATH, ANTHROPIC_API_KEY"
+            "Variables passed (values hidden): HOME, PATH, ANTHROPIC_API_KEY"
         );
         assert_eq!(
             rest[1],
             format!(
-                "Summaries folder: \"summaries\" in {:?}",
+                "Summaries: \"summaries\" in {:?}",
                 folder.path().to_string_lossy()
             )
         );
         assert!(body.contains("Timeout: 120 seconds"));
-        assert!(body.ends_with(&format!(
-            "{APP_NAME} will now send one short test prompt to Claude Code. Nothing is enabled unless the test passes."
-        )));
+        assert!(body.ends_with(
+            "Next, one test prompt goes to Claude Code. Nothing turns on unless it passes."
+        ));
+    }
+
+    #[test]
+    fn split_disabled_groups_plain_disable_pairs_in_order() {
+        let args: Vec<String> = [
+            "exec",
+            "--disable",
+            "apps",
+            "-c",
+            "x=1",
+            "--disable",
+            "a b",
+            "--disable",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let (disabled, rest) = split_disabled(&args);
+        assert_eq!(disabled, ["apps"]);
+        // A feature needing quotes, and a trailing --disable, stay verbatim.
+        assert_eq!(rest, ["exec", "-c", "x=1", "--disable", "a b", "--disable"]);
     }
 
     #[test]
@@ -2001,10 +2038,9 @@ mod tests {
         );
     }
 
-    /// Codex's reviewed arguments alone wrap to 12 rows, and its disclosure
-    /// to 3 more; fitting needs a wording decision, not a larger budget.
+    /// Listed verbatim, Codex's 28 `--disable` pairs wrapped to 12 rows and
+    /// the alert to 40; they are grouped on one labeled line instead.
     #[test]
-    #[ignore = "the realistic Codex confirmation is 40 rows, over the 30-row budget"]
     fn codex_confirmation_fits_the_dialog_line_budget() {
         let (rows, text) = realistic_rows(Adapter::Codex);
         assert!(
@@ -2480,9 +2516,7 @@ mod setup_tests {
             .unwrap();
         let shown = shown.into_inner();
         assert!(
-            shown.contains(
-                "Environment variables passed (names only, values are not shown): HOME, PATH, CODEX_HOME"
-            ),
+            shown.contains("Variables passed (values hidden): HOME, PATH, CODEX_HOME"),
             "{shown}"
         );
         assert!(!shown.contains("/users/codex-home"));
@@ -2539,12 +2573,23 @@ mod setup_tests {
         let lines: Vec<&str> = shown.lines().collect();
         let harness_line = lines
             .iter()
-            .position(|line| *line == "Harness: Codex 0.144.4")
+            .position(|line| line.starts_with("Harness: Codex 0.144.4 at "))
             .unwrap();
-        // Program and Runs, then a blank line, then the disclosure.
-        assert!(lines[harness_line + 2].starts_with("Runs: "), "{shown}");
-        assert_eq!(lines[harness_line + 3], "", "{shown}");
-        assert_eq!(lines[harness_line + 4], CODEX_DISCLOSURE, "{shown}");
+        // The disclosure follows Runs directly.
+        assert!(lines[harness_line + 1].starts_with("Runs: "), "{shown}");
+        assert_eq!(lines[harness_line + 2], CODEX_DISCLOSURE, "{shown}");
+        // Every reviewed argument is still shown: the plain ones on the
+        // argument line and each --disable feature on its own grouped line.
+        let reviewed = harness::codex_args("0.144.4").unwrap();
+        let (disabled, rest) = split_disabled(&reviewed);
+        let grouped = format!("Also --disable each of: {}", disabled.join(", "));
+        assert!(lines.contains(&grouped.as_str()), "{shown}");
+        let plain = rest
+            .iter()
+            .map(|arg| shell_word(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(lines.contains(&plain.as_str()), "{shown}");
         assert!(!shown.contains(SECRET));
         let agent = confirmed.config.agent.unwrap();
         assert_eq!(agent.args, harness::codex_args("0.144.4").unwrap());
