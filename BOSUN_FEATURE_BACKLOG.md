@@ -532,20 +532,9 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, clean `8b7acd7`): no quarantine file
-  or incomplete changes. Protocol generation, workspace build, format, both
-  Clippy configurations, offline npm ci, typecheck, lint, extension build,
-  all 13 extension test files, current-state and queue checks pass. The
-  unfiltered Rust gate has 26 adapter-template passes, 447 host passes and
-  32 service/IPC failures; later binaries are not reached. Five dialog tests
-  pass, including the repaired 60-exchange fixture. Independent AF_UNIX bind
-  and connect probes both return EPERM. Node spawnSync reports status 0 but
-  error EPERM and empty output; script diagnostics show 8 passes, 1 failure
-  and 1 platform skip. No source changes, disabled tests, feature work or
-  history reset. Raw logs: `target/overnight-health/baseline-8b7acd7/`.
-  Driver action: run the unfiltered gate with local IPC permitted and include
-  the tested baseline SHA and result in the next cycle's handoff. The absence
-  of a quarantine file does not establish green health.
+  Latest verification: see the current health handoff below for clean
+  baseline `46f17b3`. The same IPC restriction remains; the existing repair
+  is retained and this item is not closed.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -883,7 +872,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `b4b28e9`)
+### Current health handoff (2026-10-27 — baseline `46f17b3`)
 
 - Clean workspace; no quarantine failure file. The unfiltered opening gate
   again passes 26 adapter-template tests and 447 host tests, then fails 32
@@ -899,7 +888,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   TESTING.md documents that diagnostic and the restriction. Keep all tests
   enabled and do not change production IPC to fit this runner.
 - The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e` and `b4b28e9`. No commit among the last
+  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9` and `46f17b3`. No commit among the last
   five is verified green in this runner, so no history reset was attempted. Earlier quarantine recovery
   is retained; this cycle introduces no product or test change and claims no
   shipped feature.
@@ -913,3 +902,12 @@ were folded into `brwr-q7e` above rather than given their own item.
   (`brwr-gf1`) before claiming its identity cases. The existing proposal to
   preview which example pages share an artifact still belongs in this review;
   no additional diagnostic view or self-directed feature is needed first.
+
+- Baseline `46f17b3` was checked again without test exclusions. Raw Rust
+  output is retained locally at
+  `target/overnight-health/baseline-46f17b3/cargo-test.log` (gitignored).
+  The first denied fixture bind is `host/src/service/client.rs:436`;
+  server fixtures subsequently time out waiting for the unavailable listener.
+  No product or test changes can grant the missing runner capability.
+  Keep the existing product proposals; adding more internal health work
+  would not unblock the assigned Capture Site implementation.
