@@ -771,18 +771,30 @@ impl ConfigStore {
                     .as_ref()
                     .and_then(|old| old.knowledge_base_dir.as_deref())
                     == Some(knowledge_base);
-                let expected = knowledge_base_identity
-                    .or_else(|| {
+                match knowledge_base_identity {
+                    // A fresh picker selection: the folder must still be the
+                    // one the user chose.
+                    Some(expected) => {
+                        let actual = selected_root_identity(Path::new(knowledge_base))?;
+                        if actual != expected {
+                            bail!("selected knowledge base folder changed; choose it again");
+                        }
+                        Some(actual)
+                    }
+                    // Unchanged: carry the recorded identity without touching
+                    // the filesystem. Only the summary agent reads this
+                    // folder, and it re-checks the identity before use, so a
+                    // missing or replaced folder must not block unrelated
+                    // saves such as pausing capture.
+                    None => Some(
                         unchanged
-                            .then_some(current.knowledge_base_identity.as_deref())
+                            .then(|| current.knowledge_base_identity.clone())
                             .flatten()
-                    })
-                    .context("a fresh native selection of the knowledge base folder is required")?;
-                let actual = selected_root_identity(Path::new(knowledge_base))?;
-                if actual != expected {
-                    bail!("selected knowledge base folder changed; choose it again");
+                            .context(
+                                "a fresh native selection of the knowledge base folder is required",
+                            )?,
+                    ),
                 }
-                Some(actual)
             }
         };
         let serialized = toml::to_string_pretty(&StoredConfig::from_snapshot(
@@ -2200,6 +2212,47 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(!text.contains("knowledge_base"), "{text}");
         assert_eq!(reloaded.knowledge_base_dir().unwrap(), root);
+    }
+
+    #[test]
+    fn a_missing_knowledge_base_folder_does_not_block_unrelated_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        let knowledge_base = dir.path().join("kb");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&knowledge_base).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        next.storage.as_mut().unwrap().knowledge_base_dir =
+            Some(knowledge_base.to_string_lossy().into_owned());
+        let identity = selected_root_identity(&knowledge_base).unwrap();
+        let revision = store.revision().to_owned();
+        store
+            .update_with_grants(next.clone(), &revision, None, Some(&identity), None)
+            .unwrap()
+            .unwrap();
+
+        fs::remove_dir(&knowledge_base).unwrap();
+        let mut reloaded = loaded(&path);
+        assert_eq!(reloaded.config_issue(), None);
+        let mut paused = reloaded.snapshot().clone();
+        paused.capture_enabled = !paused.capture_enabled;
+        let revision = reloaded.revision().to_owned();
+        reloaded.update(paused.clone(), &revision).unwrap().unwrap();
+        assert_eq!(reloaded.snapshot(), &paused);
+        assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("knowledge_base_identity"), "{text}");
+
+        // A fresh selection still has to match the folder on disk.
+        let revision = reloaded.revision().to_owned();
+        assert!(
+            reloaded
+                .update_with_grants(paused, &revision, None, Some(&identity), None)
+                .is_err()
+        );
     }
 
     #[test]
