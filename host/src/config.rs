@@ -624,7 +624,7 @@ impl ConfigStore {
         next: ConfigSnapshot,
         expected_revision: &str,
     ) -> Result<Option<String>> {
-        self.update_with_grants(next, expected_revision, None, None)
+        self.update_with_grants(next, expected_revision, None, None, false)
     }
 
     #[cfg(test)]
@@ -634,18 +634,22 @@ impl ConfigStore {
         expected_revision: &str,
         selected_identity: Option<&str>,
     ) -> Result<Option<String>> {
-        self.update_with_grants(next, expected_revision, selected_identity, None)
+        self.update_with_grants(next, expected_revision, selected_identity, None, false)
     }
 
     /// Native dispatch calls this only after `ConsentAuthority` has checked
     /// every grant. The agent checks below repeat that decision against the
     /// file itself, under the lock, as defense in depth.
+    /// `keep_artifacts_dir_proposed` writes a save that needed no
+    /// confirmation without the proposed `storage.artifacts_dir`, which stays
+    /// only proposed (`Authorized::keeps_artifacts_dir_proposed`).
     pub(crate) fn update_with_grants(
         &mut self,
         next: ConfigSnapshot,
         expected_revision: &str,
         selected_identity: Option<&str>,
         harness_commit: Option<HarnessCommit>,
+        keep_artifacts_dir_proposed: bool,
     ) -> Result<Option<String>> {
         let json = serde_json::to_vec(&next).context("serializing config JSON")?;
         if json.len() > MAX_CONFIG_BYTES {
@@ -674,6 +678,21 @@ impl ConfigStore {
             return Ok(None);
         }
         validate_update(&current.config, &next)?;
+        // The proposal follows the notes folder's contents, so it can differ
+        // from the one the save was checked against at the same revision.
+        let artifacts_dir = |config: &ConfigSnapshot| {
+            config
+                .storage
+                .as_ref()
+                .map(|storage| storage.artifacts_dir.clone())
+        };
+        if keep_artifacts_dir_proposed
+            && (!current.artifacts_dir_proposed
+                || artifacts_dir(&current.config) != artifacts_dir(&next))
+        {
+            self.adopt(current);
+            return Ok(None);
+        }
         let adapters_unchanged = current.config.adapters == next.adapters;
         let empty_adapter_document = AdapterDocument {
             format: 1,
@@ -758,14 +777,17 @@ impl ConfigStore {
                 Some(actual)
             }
         };
-        let serialized = toml::to_string_pretty(&StoredConfig::from_snapshot(
+        let mut stored = StoredConfig::from_snapshot(
             &next,
             next_identity.clone(),
             &agent,
             retired_adapter_contracts,
             adapter_extensions.clone(),
-        ))
-        .context("serializing config TOML")?;
+        );
+        if keep_artifacts_dir_proposed && let Some(storage) = stored.storage.as_mut() {
+            storage.artifacts_dir = None;
+        }
+        let serialized = toml::to_string_pretty(&stored).context("serializing config TOML")?;
         if serialized.len() > MAX_CONFIG_BYTES {
             bail!("configuration exceeds the 64 KiB size limit");
         }
@@ -803,7 +825,7 @@ impl ConfigStore {
         self.root_identity = next_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
-        self.artifacts_dir_proposed = false;
+        self.artifacts_dir_proposed = keep_artifacts_dir_proposed;
         self.set_adapter_policy(true);
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
@@ -2251,6 +2273,42 @@ mod tests {
     }
 
     #[test]
+    fn keeping_the_artifact_proposal_writes_no_key_and_follows_the_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        next.strip_params.push("ref_one".into());
+        let revision = store.revision().to_owned();
+        let saved = store
+            .update_with_grants(next.clone(), &revision, None, None, true)
+            .unwrap()
+            .unwrap();
+        assert!(store.artifacts_dir_proposed());
+        assert!(!fs::read_to_string(&path).unwrap().contains("artifacts_dir"));
+        assert_eq!(loaded(&path).revision(), saved);
+        assert!(loaded(&path).artifacts_dir_proposed());
+
+        // The proposal moved on once its folder appeared: keeping the old
+        // one would record a folder nobody confirmed, so it is a conflict.
+        fs::create_dir(folder.path().join("artifacts")).unwrap();
+        let mut stale = next;
+        stale.strip_params.push("ref_two".into());
+        assert!(
+            store
+                .update_with_grants(stale, &saved, None, None, true)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store.snapshot().storage.as_ref().unwrap().artifacts_dir,
+            "brauser-artifacts"
+        );
+        assert!(!fs::read_to_string(&path).unwrap().contains("artifacts_dir"));
+    }
+
+    #[test]
     fn old_config_does_not_propose_an_existing_folder() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
@@ -3515,7 +3573,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
         assert!(
             store
-                .update_with_grants(next.clone(), &revision, None, Some(stale))
+                .update_with_grants(next.clone(), &revision, None, Some(stale), false)
                 .is_err()
         );
         assert_eq!(fs::read(&path).unwrap(), before);
@@ -3525,7 +3583,7 @@ mod tests {
             record,
         };
         store
-            .update_with_grants(next, &revision, None, Some(commit))
+            .update_with_grants(next, &revision, None, Some(commit), false)
             .unwrap()
             .unwrap();
         let store = loaded(&path);
@@ -3559,7 +3617,7 @@ mod tests {
         };
         let revision = store.revision().to_owned();
         let revision = store
-            .update_with_grants(next, &revision, None, Some(commit))
+            .update_with_grants(next, &revision, None, Some(commit), false)
             .unwrap()
             .unwrap();
         (path, binary, revision)

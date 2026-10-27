@@ -93,6 +93,9 @@ struct HarnessGrant {
 pub struct Authorized {
     pub selected_identity: Option<String>,
     pub harness_commit: Option<HarnessCommit>,
+    /// The save needs no confirmation, so it leaves a proposed artifact
+    /// folder proposed rather than choosing it (`approval_lines`).
+    pub keeps_artifacts_dir_proposed: bool,
 }
 
 /// The config a change starts from, with what the host knows about it that
@@ -462,7 +465,8 @@ impl ConsentAuthority {
         }
         let selected_identity = self.check_picker(current, revision, next, picker_token)?;
         check_agent_fields(current, next)?;
-        if !approval_lines(view, next).is_empty() {
+        let needs_confirmation = !approval_lines(view, next).is_empty();
+        if needs_confirmation {
             let token =
                 consent_token.context("native confirmation is required for this config change")?;
             let Some(grant) = self.consent_grants.get(token) else {
@@ -479,6 +483,7 @@ impl ConsentAuthority {
         Ok(Authorized {
             selected_identity,
             harness_commit: None,
+            keeps_artifacts_dir_proposed: view.artifacts_dir_proposed && !needs_confirmation,
         })
     }
 
@@ -510,6 +515,7 @@ impl ConsentAuthority {
         Ok(Authorized {
             selected_identity: None,
             harness_commit: Some(grant.commit.clone()),
+            keeps_artifacts_dir_proposed: false,
         })
     }
 
@@ -742,7 +748,10 @@ pub fn harness_confirmation_text<'c>(
         .as_ref()
         .context("the harness was not checked")?
         .real_path;
-    let changes = approval_lines(current, after);
+    // Setup always asks and records the whole file, so it names a proposed
+    // artifact folder even when nothing else needs approval.
+    let view = current.into();
+    let changes = change_lines(view.config, after, view.artifacts_dir_proposed);
     let values = [
         version,
         agent.binary.as_str(),
@@ -879,11 +888,28 @@ fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result
     Ok(())
 }
 
+/// A proposed artifact folder was never chosen, so a save that records it
+/// chooses it. It is named only in a save that already needs confirmation: a
+/// save that needs none, such as pausing or writing out a Chrome revocation,
+/// must never wait on a dialog about it, so it leaves the folder proposed
+/// (`Authorized::keeps_artifacts_dir_proposed`).
 fn approval_lines<'c>(current: impl Into<Current<'c>>, next: &ConfigSnapshot) -> Vec<String> {
-    let Current {
-        config: current,
-        artifacts_dir_proposed,
-    } = current.into();
+    let view = current.into();
+    let lines = change_lines(view.config, next, false);
+    if view.artifacts_dir_proposed && !lines.is_empty() {
+        change_lines(view.config, next, true)
+    } else {
+        lines
+    }
+}
+
+/// Every line a confirmation names. `artifacts_dir_proposed` names the
+/// proposed artifact folder even when it is unchanged.
+fn change_lines(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+    artifacts_dir_proposed: bool,
+) -> Vec<String> {
     let mut lines = Vec::new();
     // A hand-edited but unusable config is not a trusted prior grant. Repair
     // must ask again before it makes any of those rules effective.
@@ -999,7 +1025,6 @@ fn approval_lines<'c>(current: impl Into<Current<'c>>, next: &ConfigSnapshot) ->
                 old_storage.map(|value| value.later_dir.as_str()),
                 Some(next_storage.later_dir.as_str()),
             ),
-            // A proposed folder was never chosen: saving it is choosing it.
             (
                 "artifact files folder",
                 old_storage
@@ -1314,7 +1339,7 @@ mod tests {
     #[test]
     fn saving_a_proposed_artifact_folder_needs_confirmation() {
         // A config from before artifacts_dir carries only a host proposal.
-        // The first save that would persist it must name it, even unchanged.
+        // A save that already asks the user names it, so confirming chooses it.
         let folder = tempfile::tempdir().unwrap();
         let current = ConfigSnapshot {
             storage: Some(StorageConfig {
@@ -1328,37 +1353,97 @@ mod tests {
             }),
             ..crate::config::empty_config()
         };
+        let mut next = current.clone();
+        next.storage.as_mut().unwrap().later_dir = "reading".into();
         let proposed = Current::new(&current, true);
         assert_eq!(
-            approval_lines(proposed, &current),
-            vec!["Set artifact files folder to \"artifacts\".".to_owned()]
+            approval_lines(proposed, &next),
+            vec![
+                "Change read-later folder from \"later\" to \"reading\".".to_owned(),
+                "Set artifact files folder to \"artifacts\".".to_owned(),
+            ]
         );
-        assert!(approval_lines(Current::from(&current), &current).is_empty());
-        assert!(
-            ConsentAuthority::new()
-                .authorize_update(proposed, "revision", &current, None, None, None)
-                .is_err()
+        assert_eq!(
+            approval_lines(Current::from(&current), &next),
+            vec!["Change read-later folder from \"later\" to \"reading\".".to_owned()]
         );
         let mut authority = ConsentAuthority::new();
         let confirmed = authority
-            .confirm_config_with(proposed, "revision", &current, None, |text| {
+            .confirm_config_with(proposed, "revision", &next, None, |text| {
                 assert!(text.description.contains("artifact files folder"));
                 Ok(true)
             })
             .unwrap()
             .unwrap();
-        assert!(
-            authority
-                .authorize_update(
-                    proposed,
-                    "revision",
-                    &current,
-                    None,
-                    Some(&confirmed.consent_token),
-                    None,
-                )
-                .is_ok()
-        );
+        let authorized = authority
+            .authorize_update(
+                proposed,
+                "revision",
+                &next,
+                None,
+                Some(&confirmed.consent_token),
+                None,
+            )
+            .unwrap();
+        assert!(!authorized.keeps_artifacts_dir_proposed);
+    }
+
+    #[test]
+    fn a_save_needing_no_confirmation_keeps_the_artifact_folder_proposed() {
+        // Pausing, a Chrome revocation, or any other narrowing save must not
+        // wait on a dialog about a folder the user never chose: cancelling it
+        // would leave the wider access in force.
+        let folder = tempfile::tempdir().unwrap();
+        let current = ConfigSnapshot {
+            capture_enabled: true,
+            sites: vec![brauser_protocol::SiteConfig {
+                origin: "https://work.example".into(),
+                path_prefix: "/".into(),
+            }],
+            storage: Some(StorageConfig {
+                root: folder.path().to_string_lossy().into_owned(),
+                profile: "neutral".into(),
+                log_dir: "log".into(),
+                pages_dir: "pages".into(),
+                later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
+                summaries_dir: None,
+            }),
+            ..crate::config::empty_config()
+        };
+        let proposed = Current::new(&current, true);
+        let paused = ConfigSnapshot {
+            capture_enabled: false,
+            ..current.clone()
+        };
+        let revoked = ConfigSnapshot {
+            capture_enabled: false,
+            sites: Vec::new(),
+            ..current.clone()
+        };
+        for next in [&current, &paused, &revoked] {
+            assert!(approval_lines(proposed, next).is_empty());
+            let mut authority = ConsentAuthority::new();
+            let confirmed = authority
+                .confirm_config_with(proposed, "revision", next, None, |_| {
+                    panic!("a narrowing save shows no dialog")
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                confirmed.summary,
+                "No additional capture access is requested."
+            );
+            let authorized = authority
+                .authorize_update(proposed, "revision", next, None, None, None)
+                .unwrap();
+            assert!(authorized.keeps_artifacts_dir_proposed);
+        }
+        // A folder the user chose is simply kept.
+        let authorized = ConsentAuthority::new()
+            .authorize_update(&current, "revision", &paused, None, None, None)
+            .unwrap();
+        assert!(!authorized.keeps_artifacts_dir_proposed);
     }
 
     #[test]

@@ -273,6 +273,7 @@ fn dispatch(
                 })
             };
             if artifacts_dir_proposed
+                && !authorized.keeps_artifacts_dir_proposed
                 && config.config_issue().is_none()
                 && previous.storage.as_ref().is_some_and(same_history)
                 && let Err(queue_error) = queue_all_artifact_files(config)
@@ -289,6 +290,7 @@ fn dispatch(
                 &value.expected_revision,
                 authorized.selected_identity.as_deref(),
                 authorized.harness_commit,
+                authorized.keeps_artifacts_dir_proposed,
             ) {
                 Ok(Some(revision)) => {
                     consent.consume_update(
@@ -4847,8 +4849,10 @@ id = "work:{host}/{id}"
         assert_eq!(index.regenerate_dirty().unwrap().written, 1);
         std::fs::remove_dir_all(root.join("artifacts")).unwrap();
 
-        // Saving settings confirms the folder; every deferred file follows.
-        let next = config.snapshot().clone();
+        // A save the user confirms names the folder; every deferred file
+        // follows.
+        let mut next = config.snapshot().clone();
+        next.storage.as_mut().unwrap().later_dir = "reading".into();
         let mut consent = ConsentAuthority::new();
         let confirmed = consent
             .confirm_config_with(
@@ -4889,6 +4893,77 @@ id = "work:{host}/{id}"
     }
 
     #[test]
+    fn narrowing_save_keeps_the_artifact_folder_proposed_without_a_dialog() {
+        // Pausing must be saved without a dialog about a folder the user
+        // never chose; the folder stays proposed and its key unwritten.
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write_legacy(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            "",
+        );
+        let mut config = loaded(&path);
+        assert!(config.artifacts_dir_proposed());
+        let next = ConfigSnapshot {
+            capture_enabled: false,
+            ..config.snapshot().clone()
+        };
+        let mut consent = ConsentAuthority::new();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext {
+            env: &env,
+            confirm: no_dialog,
+        };
+        let confirmed = dispatch(
+            Request::ConfirmConfig(brauser_protocol::ConfirmConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "confirm-1".into(),
+                expected_revision: config.revision().to_owned(),
+                config: next.clone(),
+                picker_token: None,
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        let Response::ConfigConfirmed(confirmed) = confirmed else {
+            panic!("{confirmed:?}");
+        };
+        let response = dispatch(
+            Request::UpdateConfig(UpdateConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "update-1".into(),
+                expected_revision: config.revision().to_owned(),
+                config: next,
+                picker_token: None,
+                consent_token: Some(confirmed.consent_token),
+                harness_token: None,
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        assert!(
+            matches!(response, Response::ConfigUpdated(_)),
+            "{response:?}"
+        );
+        assert!(config.artifacts_dir_proposed());
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("capture_enabled = false"), "{body}");
+        assert!(!body.contains("artifacts_dir"), "{body}");
+        let reloaded = loaded(&path);
+        assert!(reloaded.artifacts_dir_proposed());
+        assert_eq!(reloaded.revision(), config.revision());
+        regenerate_artifacts(&mut config);
+        assert!(!root.join("artifacts").exists());
+    }
+
+    #[test]
     fn proposed_artifact_folder_stays_proposed_if_files_cannot_be_queued() {
         // Confirming the folder must not commit unless every artifact file is
         // already queued; otherwise a clean cache could hide missing files.
@@ -4899,7 +4974,8 @@ id = "work:{host}/{id}"
         config::fixtures::write_legacy(&path, &root, "", "capture_enabled = false", "");
         let mut config = loaded(&path);
         std::fs::write(config.cache_dir().unwrap(), "not a directory").unwrap();
-        let next = config.snapshot().clone();
+        let mut next = config.snapshot().clone();
+        next.storage.as_mut().unwrap().later_dir = "reading".into();
         let mut consent = ConsentAuthority::new();
         let confirmed = consent
             .confirm_config_with(
