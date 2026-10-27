@@ -9,6 +9,9 @@ import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { recordNoteOrigin } from "./grants.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
+import {
+  ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
+} from "./artifact-refresh.js";
 import type {
   ArtifactListItem,
   ArtifactView,
@@ -86,6 +89,8 @@ const NOTE_SAVE_DEBOUNCE_MS = 1_000;
 // query was overtaken by a newer one be ignored; the note itself is owned by
 // `notes` (note-editor.ts), which serializes every load and save.
 let tabRefreshSeq = 0;
+// The tab the panel last resolved as active; only its updates matter.
+let followedTabId: number | null = null;
 let grantOrigin: string | null = null;
 let currentPage: { url: string; title: string } | null = null;
 let currentArtifact: ArtifactView | null = null;
@@ -152,29 +157,34 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean): voi
   }
 }
 
-async function refreshArtifact(): Promise<void> {
-  const page = currentPage;
-  if (!page || !session.connected || !session.config?.storage) {
-    renderArtifact(null, false);
-    return;
-  }
-  try {
-    const response = await session.host.call({
-      type: "get_artifact",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      url: page.url,
-      title: page.title,
-    }, "artifact_result");
-    if (page !== currentPage) return;
-    renderArtifact(response.artifact, response.recognized);
-  } catch (error) {
-    if (page !== currentPage) return;
+const artifactRefresher = new ArtifactRefresher(
+  (page) => session.host.call({
+    type: "get_artifact",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+    url: page.url,
+    title: page.title,
+  }, "artifact_result"),
+  () => currentPage,
+  (_page, response) => renderArtifact(response.artifact, response.recognized),
+  (_page, error) => {
     // A transient fetch failure must not discard an in-progress "Why I'm
     // here" draft or the card's last-known state (renderArtifact(null, ...)
     // would reset both); only report the error.
     artifactStatus.textContent = `Artifact status unavailable: ${describe(error)}`;
+  },
+);
+
+/** Pass `force` when the page's history may have changed (context saved,
+ * capture delivered, settings changed); otherwise a page already shown is
+ * not asked about again. */
+function refreshArtifact(force = false): Promise<void> {
+  if (!currentPage || !session.connected || !session.config?.storage) {
+    artifactRefresher.clear();
+    renderArtifact(null, false);
+    return Promise.resolve();
   }
+  return artifactRefresher.refresh(force);
 }
 
 // Local wall-clock time with its numeric UTC offset, matching the worker's
@@ -211,7 +221,7 @@ async function saveWhy(): Promise<void> {
     if (currentArtifact === artifact && artifactWhy.value.trim() === text) {
       whyEdited = false;
     }
-    await refreshArtifact();
+    await refreshArtifact(true);
     show("Artifact context saved.");
   } catch (error) {
     show(`Could not save artifact context: ${describe(error)}`, true);
@@ -418,7 +428,7 @@ function scheduleReload(): void {
         updateControls();
         // A note that could not load before (say, no folder yet) may load now.
         void notes.retry();
-        void refreshArtifact();
+        void refreshArtifact(true);
       });
   }, 250);
 }
@@ -430,6 +440,8 @@ async function replayVisits(): Promise<void> {
   updateControls();
   try {
     await worker<WorkerStatus>({ kind: "sync_now" });
+    // Delivered activity changes the current artifact's totals.
+    void refreshArtifact(true);
   } catch (error) {
     show(`Capture delivery stopped: ${describe(error)}`, true);
   } finally {
@@ -444,7 +456,10 @@ async function panelTick(): Promise<void> {
   tickRunning = true;
   updateControls();
   try {
+    const previous = session.status?.delivered_batches ?? null;
     const state = await session.refreshStatus();
+    // A background sync delivered activity; the card's totals may be stale.
+    if (deliveredSince(previous, state.delivered_batches)) void refreshArtifact(true);
     if (state.revoked_origins.length) await session.reconcileRevocations();
   } catch (error) {
     show(`Panel refresh failed: ${describe(error)}`, true);
@@ -728,10 +743,11 @@ async function refreshActiveTab(): Promise<void> {
     tab = undefined;
   }
   if (seq !== tabRefreshSeq) return; // A newer refresh has the current tab.
+  followedTabId = tab?.id ?? null;
 
   if (!tab || tab.incognito) {
     currentPage = null;
-    renderArtifact(null, false);
+    void refreshArtifact();
     pageTitle.textContent = "No page yet";
     pageUrl.textContent = "";
     pageUnusable.hidden = true;
@@ -743,7 +759,7 @@ async function refreshActiveTab(): Promise<void> {
 
   if (tab.url === undefined) {
     currentPage = null;
-    renderArtifact(null, false);
+    void refreshArtifact();
     // §5.3: without an origin grant or a live activeTab, the panel cannot
     // see this tab's address at all.
     pageTitle.textContent = tab.title?.trim() || "This page";
@@ -763,7 +779,7 @@ async function refreshActiveTab(): Promise<void> {
   }
   if (!isHttpUrl(url)) {
     currentPage = null;
-    renderArtifact(null, false);
+    void refreshArtifact();
     pageTitle.textContent = tab.title?.trim() || tab.url;
     pageUrl.textContent = tab.url;
     pageUnusable.hidden = false;
@@ -816,10 +832,11 @@ worklogPeriod.addEventListener("change", () => void loadWorklog());
 copyWorklogButton.addEventListener("click", copyWorklog);
 session.watchPolicy(scheduleReload);
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-  if (changeInfo.title !== undefined || changeInfo.url !== undefined || changeInfo.status === "complete") {
-    void refreshActiveTab();
-  }
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (followsTabUpdate(tabId, changeInfo, tab, followedTabId)) void refreshActiveTab();
+});
+chrome.tabs.onReplaced?.addListener((addedTabId, removedTabId) => {
+  if (followsTabReplacement(addedTabId, removedTabId, followedTabId)) void refreshActiveTab();
 });
 const pollTimer = setInterval(() => void panelTick(), STATUS_POLL_MS);
 window.addEventListener("pagehide", () => {

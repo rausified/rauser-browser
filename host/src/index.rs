@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions as StdOpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, WhyEvent};
@@ -17,7 +18,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
-use time::{Date, OffsetDateTime};
+use time::{Date, OffsetDateTime, UtcOffset};
 use url::Url;
 use uuid::Uuid;
 
@@ -27,7 +28,8 @@ use crate::capture::{
 };
 use crate::summary::SummaryEvent;
 use crate::vault::{
-    TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
+    STALE_TEMPORARY_AGE, TempFileCleanup, checked_relative_dir, is_generated_temporary,
+    open_selected_root, sync_directory, sync_directory_chain,
 };
 
 // v2 (main, independently) forces a rescan for the artifact-history
@@ -35,6 +37,10 @@ use crate::vault::{
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
 // already durable in the log.
 const STATE_VERSION: u8 = 3;
+// How often a long regeneration pass publishes its progress. Chrome ends a
+// host soon after its port closes; without checkpoints a pass killed that
+// way would restart at the same sorted prefix every time.
+const REGENERATION_CHECKPOINT: Duration = Duration::from_millis(500);
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
@@ -47,6 +53,7 @@ const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 #[cfg(test)]
 thread_local! {
     static LOG_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PUBLICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone)]
@@ -206,6 +213,19 @@ struct WorklogRow {
     summary: Option<SummaryEvent>,
 }
 
+/// The local day the last regeneration pass completed, the UTC offset that
+/// day was taken in, and the storage it covered (`ArtifactIndex::daily_pass_due`).
+/// The cache is shared, so a pass for another folder never counts.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PassMarker {
+    date: String,
+    offset_seconds: i32,
+    root: String,
+    root_identity: String,
+    artifacts_dir: String,
+}
+
 impl ArtifactIndex {
     pub fn open(storage: &StorageConfig, expected_identity: Option<&str>) -> Result<Self> {
         let dirs = ProjectDirs::from("", "", APP_NAME)
@@ -292,35 +312,119 @@ impl ArtifactIndex {
         let derived = derive(&state.events);
         state.dirty = derived.artifacts.keys().cloned().collect();
         self.publish_state_and_database(&state)?;
-        self.regenerate_state(state)
+        self.regenerate_state(state, false)
     }
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.
     pub fn regenerate_dirty(&self) -> Result<RegenerationReport> {
-        let (state, _) = self.load_current_state()?;
-        self.regenerate_state(state)
+        let (state, publish) = self.load_current_state()?;
+        self.regenerate_state(state, publish)
     }
 
-    fn regenerate_state(&self, mut state: IndexState) -> Result<RegenerationReport> {
+    /// Whether no pass has completed yet on the current local day (§6.7), so
+    /// even a delivery-only connection should run one. The day is the user's,
+    /// taken from the offset of their latest activity when the pass ran; a
+    /// missing or unreadable marker means a pass is due.
+    pub fn daily_pass_due(&self, now: OffsetDateTime) -> bool {
+        let Ok(bytes) = fs::read(self.pass_marker_path()) else {
+            return true;
+        };
+        let Ok(marker) = serde_json::from_slice::<PassMarker>(&bytes) else {
+            return true;
+        };
+        let Ok(offset) = UtcOffset::from_whole_seconds(marker.offset_seconds) else {
+            return true;
+        };
+        marker.root != self.storage.root
+            || marker.root_identity != self.root_identity
+            || marker.artifacts_dir != self.storage.artifacts_dir
+            || now.to_offset(offset).date().to_string() != marker.date
+    }
+
+    /// Remove index-cache and artifact temporaries left by a host killed
+    /// between creating and publishing them. Only regular files whose whole
+    /// name is one this module generates, and that are older than
+    /// `STALE_TEMPORARY_AGE`, are removed. Returns how many were removed.
+    pub fn sweep_stale_temporaries(&self) -> Result<usize> {
+        let mut removed = match Dir::open_ambient_dir(&self.cache_dir, cap_std::ambient_authority())
+        {
+            Ok(cache) => sweep_temporaries_in(&cache, &format!(".{NAMESPACE}-index-"))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error).context("opening artifact index cache directory"),
+        };
+        let (root, _) =
+            open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
+        let artifacts = match root.open_dir(checked_relative_dir(&self.storage.artifacts_dir)?) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+            Err(error) => return Err(error).context("opening artifacts directory"),
+        };
+        // Artifact files live exactly at `<type>/<site>/` (`artifact_path`).
+        let prefix = format!(".{NAMESPACE}-artifact-");
+        for types in subdirectories(&artifacts)? {
+            for sites in subdirectories(&types)? {
+                removed += sweep_temporaries_in(&sites, &prefix)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn pass_marker_path(&self) -> PathBuf {
+        self.cache_dir.join("regenerated.json")
+    }
+
+    fn regenerate_state(&self, state: IndexState, publish: bool) -> Result<RegenerationReport> {
+        self.regenerate_state_with(state, publish, REGENERATION_CHECKPOINT, |_| {})
+    }
+
+    /// Publish the cleared dirty set at least every `checkpoint`, and before
+    /// returning an error, so a pass that is killed or fails keeps its work.
+    /// `publish` says the loaded state differs from the published cache.
+    /// `after_file` (a test seam) sees the running count of written files.
+    fn regenerate_state_with(
+        &self,
+        mut state: IndexState,
+        publish: bool,
+        checkpoint: Duration,
+        mut after_file: impl FnMut(usize),
+    ) -> Result<RegenerationReport> {
         let derived = derive(&state.events);
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let mut report = RegenerationReport::default();
         let dirty = state.dirty.iter().cloned().collect::<Vec<_>>();
+        let mut published_at = Instant::now();
+        let mut interval = checkpoint;
+        // A caught-up or rebuilt state needs publishing even if no file does.
+        let mut unpublished = publish;
         for id in dirty {
             let Some(artifact) = derived.artifacts.get(&id) else {
                 state.dirty.remove(&id);
+                unpublished = true;
                 continue;
             };
             let markdown = render_artifact(&self.storage.artifacts_dir, artifact);
-            match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown)? {
+            let write =
+                match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown) {
+                    Ok(write) => write,
+                    Err(error) => {
+                        if unpublished {
+                            // The write error is the one worth reporting.
+                            let _ = self.publish_state_and_database(&state);
+                        }
+                        return Err(error);
+                    }
+                };
+            match write {
                 ArtifactWrite::Written => {
                     report.written += 1;
                     state.dirty.remove(&id);
+                    unpublished = true;
                 }
                 ArtifactWrite::Unchanged => {
                     report.unchanged += 1;
                     state.dirty.remove(&id);
+                    unpublished = true;
                 }
                 ArtifactWrite::Conflict => {
                     report.conflicts += 1;
@@ -333,9 +437,47 @@ impl ArtifactIndex {
                     }
                 }
             }
+            if unpublished && published_at.elapsed() >= interval {
+                let started = Instant::now();
+                self.publish_state_and_database(&state)?;
+                published_at = Instant::now();
+                interval = checkpoint_interval(checkpoint, published_at - started);
+                unpublished = false;
+            }
+            after_file(report.written);
         }
-        self.publish_state_and_database(&state)?;
+        if unpublished {
+            self.publish_state_and_database(&state)?;
+        }
+        self.record_pass(&derived);
         Ok(report)
+    }
+
+    /// Remember the local day this pass completed (`daily_pass_due`).
+    /// Best effort: a lost marker only means one extra pass.
+    fn record_pass(&self, derived: &Derived) {
+        let offset = derived
+            .artifacts
+            .values()
+            .map(|artifact| artifact.latest_at)
+            .max()
+            .map_or(UtcOffset::UTC, OffsetDateTime::offset);
+        let marker = PassMarker {
+            date: OffsetDateTime::now_utc()
+                .to_offset(offset)
+                .date()
+                .to_string(),
+            offset_seconds: offset.whole_seconds(),
+            root: self.storage.root.clone(),
+            root_identity: self.root_identity.clone(),
+            artifacts_dir: self.storage.artifacts_dir.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&marker)
+            && fs::read(self.pass_marker_path()).ok().as_deref() != Some(bytes.as_slice())
+            && let Err(error) = atomic_write(&self.pass_marker_path(), &bytes)
+        {
+            eprintln!("{NAMESPACE}: warning: could not record artifact pass: {error:#}");
+        }
     }
 
     fn load_or_rebuild(&self) -> Result<IndexState> {
@@ -475,6 +617,8 @@ impl ArtifactIndex {
     }
 
     fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
+        #[cfg(test)]
+        PUBLICATIONS.with(|count| count.set(count.get() + 1));
         fs::create_dir_all(&self.cache_dir).context("creating artifact index cache directory")?;
         let bytes = serde_json::to_vec(state).context("serializing artifact index state")?;
         if bytes.len() as u64 > MAX_STATE_BYTES {
@@ -1412,6 +1556,52 @@ fn replace_artifact(
     drop(cleanup);
     sync_directory(&dir).context("syncing artifact directory")?;
     Ok(ArtifactWrite::Written)
+}
+
+/// Each checkpoint rewrites the whole cache, so space them by at least four
+/// times the last one's cost: for a large index, checkpoints then take at
+/// most a fifth of the pass instead of dominating it.
+fn checkpoint_interval(minimum: Duration, last_publish: Duration) -> Duration {
+    minimum.max(last_publish.saturating_mul(4))
+}
+
+/// Subdirectories of `dir`, not following symlinks.
+fn subdirectories(dir: &Dir) -> Result<Vec<Dir>> {
+    let mut found = Vec::new();
+    for entry in dir.entries().context("listing artifacts directory")? {
+        let entry = entry.context("listing artifacts directory")?;
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            found.push(entry.open_dir().context("opening artifacts directory")?);
+        }
+    }
+    Ok(found)
+}
+
+fn sweep_temporaries_in(dir: &Dir, prefix: &str) -> Result<usize> {
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for entry in dir.entries().context("listing temporaries")? {
+        let entry = entry.context("listing temporaries")?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_generated_temporary(name, prefix) {
+            continue;
+        }
+        // Not following symlinks: a link is not ours, whatever its name.
+        let Ok(metadata) = dir.symlink_metadata(name) else {
+            continue;
+        };
+        let stale = metadata.is_file()
+            && metadata
+                .modified()
+                .ok()
+                .and_then(|modified| now.duration_since(modified.into_std()).ok())
+                .is_some_and(|elapsed| elapsed >= STALE_TEMPORARY_AGE);
+        if stale && dir.remove_file(name).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 fn owned_artifact(bytes: &[u8], artifact_id: &str) -> bool {
@@ -2550,6 +2740,207 @@ print(json.dumps([tables,row]))"#;
             .unwrap();
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
         assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+    }
+
+    fn typed_activity(id: u32, native_id: &str, artifact_type: &str) -> ActivityEvent {
+        let mut event = activity(
+            &format!("00000000-0000-4000-8000-{id:012}"),
+            native_id,
+            native_id,
+            "2026-10-15T12:00:00-07:00",
+        );
+        event.artifact_type = artifact_type.into();
+        event
+    }
+
+    fn dirty_ids(index: &ArtifactIndex) -> Vec<String> {
+        read_state(&index.state_path())
+            .unwrap()
+            .unwrap()
+            .dirty
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_pass_keeps_the_files_it_already_wrote() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = [
+            typed_activity(1, "A", "work.item"),
+            typed_activity(2, "B", "blocked.item"),
+            typed_activity(3, "C", "work.item"),
+        ];
+        index.record_activities(events.iter(), &[]).unwrap();
+        // A file where B's type directory belongs makes B's write fail.
+        fs::create_dir_all(root.path().join("artifacts")).unwrap();
+        fs::write(root.path().join("artifacts/blocked-item"), "in the way").unwrap();
+        assert!(index.regenerate_dirty().is_err());
+        assert_eq!(
+            dirty_ids(&index),
+            ["work:example.com/B", "work:example.com/C"],
+            "A's completed write is published even though the pass failed"
+        );
+        fs::remove_file(root.path().join("artifacts/blocked-item")).unwrap();
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (2, 0));
+    }
+
+    #[test]
+    fn a_pass_killed_midway_resumes_after_the_files_it_wrote() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = ["A", "B", "C", "D"]
+            .iter()
+            .zip(1..)
+            .map(|(name, id)| typed_activity(id, name, "work.item"))
+            .collect::<Vec<_>>();
+        index.record_activities(events.iter(), &[]).unwrap();
+        let (state, _) = index.load_current_state().unwrap();
+        // Chrome kills a host whose port closed; a panic stands in for that
+        // here, after the first file, with the first checkpoint due at once.
+        let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            index.regenerate_state_with(state, false, std::time::Duration::ZERO, |written| {
+                assert!(written < 1, "killed");
+            })
+        }));
+        assert!(killed.is_err());
+        assert_eq!(
+            dirty_ids(&index),
+            [
+                "work:example.com/B",
+                "work:example.com/C",
+                "work:example.com/D"
+            ]
+        );
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (3, 0));
+    }
+
+    #[test]
+    fn a_pass_ending_on_a_checkpoint_does_not_publish_twice() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        index
+            .record_activity(&typed_activity(1, "A", "work.item"), &[])
+            .unwrap();
+        let (state, _) = index.load_current_state().unwrap();
+        PUBLICATIONS.with(|count| count.set(0));
+        index
+            .regenerate_state_with(state, false, Duration::ZERO, |_| {})
+            .unwrap();
+        assert_eq!(PUBLICATIONS.with(|count| count.get()), 1);
+        assert!(dirty_ids(&index).is_empty());
+        // Nothing dirty and nothing to repair: nothing to publish.
+        let (state, _) = index.load_current_state().unwrap();
+        PUBLICATIONS.with(|count| count.set(0));
+        index
+            .regenerate_state_with(state, false, REGENERATION_CHECKPOINT, |_| {})
+            .unwrap();
+        assert_eq!(PUBLICATIONS.with(|count| count.get()), 0);
+    }
+
+    #[test]
+    fn checkpoints_back_off_when_publishing_the_cache_is_slow() {
+        let minimum = Duration::from_millis(500);
+        assert_eq!(
+            checkpoint_interval(minimum, Duration::from_millis(10)),
+            minimum
+        );
+        assert_eq!(
+            checkpoint_interval(minimum, Duration::from_millis(300)),
+            Duration::from_millis(1200)
+        );
+    }
+
+    #[test]
+    fn the_daily_pass_is_due_once_per_local_day() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let at = |text: &str| OffsetDateTime::parse(text, &Rfc3339).unwrap();
+        assert!(index.daily_pass_due(at("2026-10-15T20:00:00Z")));
+        index
+            .record_activity(&typed_activity(1, "A", "work.item"), &[])
+            .unwrap();
+        index.regenerate_dirty().unwrap();
+        // The pass ran today in the user's -07:00 offset (from their latest
+        // activity), so 23:30 local the same day is not a new day, even
+        // though UTC has already moved on.
+        let marker = fs::read_to_string(cache.path().join("regenerated.json")).unwrap();
+        let today = OffsetDateTime::now_utc()
+            .to_offset(time::UtcOffset::from_whole_seconds(-7 * 3600).unwrap())
+            .date();
+        assert!(marker.contains(&today.to_string()), "{marker}");
+        let local_late = today
+            .with_hms(23, 30, 0)
+            .unwrap()
+            .assume_offset(time::UtcOffset::from_whole_seconds(-7 * 3600).unwrap());
+        assert!(!index.daily_pass_due(local_late));
+        assert!(index.daily_pass_due(local_late + time::Duration::hours(1)));
+        // A pass for another notes folder says nothing about this one.
+        let other_root = TempDir::new().unwrap();
+        let other =
+            ArtifactIndex::open_in(&storage(other_root.path()), None, cache.path()).unwrap();
+        assert!(other.daily_pass_due(local_late));
+        let mut moved = storage(root.path());
+        moved.artifacts_dir = "elsewhere".into();
+        let moved = ArtifactIndex::open_in(&moved, None, cache.path()).unwrap();
+        assert!(moved.daily_pass_due(local_late));
+        fs::write(cache.path().join("regenerated.json"), "not json").unwrap();
+        assert!(index.daily_pass_due(local_late));
+    }
+
+    #[test]
+    fn stale_artifact_and_index_temporaries_are_swept() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        index
+            .record_activity(&typed_activity(1, "A", "work.item"), &[])
+            .unwrap();
+        index.regenerate_dirty().unwrap();
+        let site = root.path().join("artifacts/work-item/example-com");
+        let old = crate::vault::STALE_TEMPORARY_AGE + std::time::Duration::from_secs(60);
+        let make = |dir: &Path, name: String, stale: bool| {
+            let path = dir.join(name);
+            fs::write(&path, "partial").unwrap();
+            if stale {
+                crate::vault::tests::age_file(&path, old);
+            }
+            path
+        };
+        let stale_artifact = make(
+            &site,
+            format!(".{NAMESPACE}-artifact-{}.tmp", Uuid::new_v4()),
+            true,
+        );
+        let fresh_artifact = make(
+            &site,
+            format!(".{NAMESPACE}-artifact-{}.tmp", Uuid::new_v4()),
+            false,
+        );
+        let user_file = make(&site, format!(".{NAMESPACE}-artifact-mine.tmp"), true);
+        let stale_index = make(
+            cache.path(),
+            format!(".{NAMESPACE}-index-{}.tmp", Uuid::new_v4()),
+            true,
+        );
+        let fresh_index = make(
+            cache.path(),
+            format!(".{NAMESPACE}-index-{}.tmp", Uuid::new_v4()),
+            false,
+        );
+        assert_eq!(index.sweep_stale_temporaries().unwrap(), 2);
+        assert!(!stale_artifact.exists());
+        assert!(!stale_index.exists());
+        assert!(fresh_artifact.exists());
+        assert!(fresh_index.exists());
+        assert!(user_file.exists());
+        assert_eq!(artifact_files(root.path()).len(), 1);
     }
 
     #[test]

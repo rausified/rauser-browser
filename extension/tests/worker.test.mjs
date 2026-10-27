@@ -1262,6 +1262,8 @@ test("with no extension page open, the worker freezes and delivers a completed a
   await flush();
   assert.ok(alarms.has(DELIVER_ALARM), "a capture schedules a delivery");
   assert.equal(ports.length, 0, "the current event does not start a host directly");
+  const before = (await send({ kind: "get_status" })).delivered_batches;
+  assert.equal(typeof before, "number");
   onAlarm({ name: DELIVER_ALARM });
   const port = await until(() => ports[0], "the worker to start the host");
   const request = await sentOn(port, 1);
@@ -1272,7 +1274,11 @@ test("with no extension page open, the worker freezes and delivers a completed a
   port.reply(batchRecorded(request));
   await until(() => values.get(storageKey("queue_v1")).items.length === 0, "the queue to drain");
   await until(() => port.closed, "the host connection to close");
-  assert.equal((await send({ kind: "get_status" })).host_error, null);
+  const after = await send({ kind: "get_status" });
+  assert.equal(after.host_error, null);
+  // The panel refreshes its artifact card when this generation moves, since
+  // the queue length alone can be empty both before and after a delivery.
+  assert.equal(after.delivered_batches, before + 1);
 });
 
 test("a status wake hands off completed hours before reporting live activity", async () => {

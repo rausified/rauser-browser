@@ -36,6 +36,8 @@ const PAUSE_KEY = storageKey("pause_pending_v1");
 const PAUSE_TOKEN_KEY = storageKey("pause_token_v1");
 const REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
 const HOST_ERROR_KEY = storageKey("host_error_v1");
+// Counts acknowledged delivery batches, so pages can tell the index changed.
+const DELIVERED_KEY = storageKey("delivered_batches_v1");
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const ACTIVITY_SESSION_KEY = storageKey("activity_session_v1");
 // Matches MAX_URL_BYTES in host/src/capture.rs, so the host never rejects a
@@ -714,6 +716,7 @@ async function currentStatus(
     navigation_ready: navigationReady,
     locally_removed_sites: await readLocallyRemovedSites(),
     host_error: await readHostError(),
+    delivered_batches: await readDeliveredBatches(),
   };
 }
 
@@ -955,7 +958,10 @@ async function deliverPending(host: HostClient): Promise<string | null> {
       if (response.batch_id !== batch.batch_id) {
         throw new Error("Host acknowledged a different capture batch");
       }
-      await serialize(() => ackBatch(batch, response.results, response.overflow_recorded));
+      await serialize(async () => {
+        await ackBatch(batch, response.results, response.overflow_recorded);
+        await chrome.storage.local.set({ [DELIVERED_KEY]: await readDeliveredBatches() + 1 });
+      });
       if (response.results.some((result) => result.outcome === "retryable")) return null;
     } catch (error) {
       failure = describe(error);
@@ -997,6 +1003,12 @@ function syncWithHost(): Promise<void> {
     .catch((error: unknown) => console.warn(`${APP_NAME} host sync failed:`, describe(error)))
     .finally(() => { syncing = null; });
   return syncing;
+}
+
+async function readDeliveredBatches(): Promise<number> {
+  const stored = await chrome.storage.local.get(DELIVERED_KEY);
+  const value = stored[DELIVERED_KEY];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 async function readHostError(): Promise<string | null> {
