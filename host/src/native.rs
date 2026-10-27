@@ -4657,7 +4657,6 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
  type = "work.item"
  origin = "https://work.example"
