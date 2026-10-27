@@ -115,6 +115,17 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Review reproduced the same stripped-URL collision through the
+  fallback for an origin config.toml no longer covers: after the adapter and
+  `[[adapter_id_history]]` were gone, the bare Jira board and another issue's
+  modal resolved to ABC-123's key and autosaved over its note, and the
+  board's URL note could migrate into it. That fallback also scanned the
+  whole notes folder on every uncovered page and refused notes everywhere
+  once it passed 4,096 files. Failing-first native tests
+  (`without_recorded_contracts_*`,
+  `a_large_notes_folder_does_not_block_notes_on_uncovered_pages`) cover it;
+  uncovered origins now use the URL key, and tests that once asserted
+  history-only recovery assert the artifact note stays untouched instead.
 - 2026-10-27: Review reproduced, against the native handlers, a bare Jira
   board reading and autosaving into an issue's note because `strip_params`
   made the modal's stored canonical URL equal the board URL; the board's URL

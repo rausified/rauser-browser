@@ -92,12 +92,12 @@ capture), so every route a contract matched keeps one note
 (`ConfigStore::note_key_rule`). Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
-map to the same artifact. Only an origin with no recorded contract falls back
-to complete note identities and recorded activity, mode URLs, or explicit
-context; separate older URL notes remain viewable. Ambiguous contracts or
-history fall back to the URL key, while an uncompilable recorded contract,
-unavailable history, or an incomplete bounded note scan refuses loads and saves
-instead of guessing an autosave target.
+map to the same artifact. An origin with no recorded contract uses the URL
+key with no history lookup or note scan: its recorded URLs are stripped forms
+and cannot name an artifact, and its URLs never count as older-note
+candidates. Ambiguous contracts fall back to the URL key, while an
+uncompilable recorded contract refuses loads and saves instead of guessing an
+autosave target.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on

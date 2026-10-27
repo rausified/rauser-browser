@@ -1201,8 +1201,14 @@ fn note_context(
                 value: artifact_id,
             },
             // A covered origin is decided by its contracts alone; an
-            // ambiguous one keeps the URL note rather than guessing.
-            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => {
+            // ambiguous one keeps the URL note rather than guessing. On an
+            // origin no recorded contract covers (a config repair discarded
+            // its history, or it was removed before that history existed),
+            // recorded URLs are stripped canonical forms: a Jira board and
+            // every issue modal on it share one once `selectedIssue` is
+            // stripped, so no recorded URL can name this page's artifact.
+            // The URL note is used, and any artifact note stays on disk.
+            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Uncovered => {
                 crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
             }
             // A recorded contract this host cannot compile may name an
@@ -1213,58 +1219,6 @@ fn note_context(
                     "note identity is unavailable; an adapter contract cannot be read",
                 ));
             }
-            // No recorded contract covers this origin (for example, a
-            // config repair discarded its history). Before falling back to
-            // a fresh URL key, check whether it was previously recorded
-            // under an artifact, so that artifact's existing shared note
-            // stays reachable instead of appearing empty. The note's stored
-            // identity survives even without delivered activity; indexed
-            // history also recovers notes created on a different alternate
-            // route.
-            NoteKeyRule::Uncovered => {
-                // Collect every distinct match from BOTH sources into one set
-                // before deciding uniqueness: stripped query identity can make
-                // two different artifacts share the same canonical URL, and
-                // trusting either source alone -- even one that is itself
-                // unambiguous -- could still miss a conflicting match the
-                // other source holds. Guessing between them would silently
-                // redirect a save into an unrelated artifact's note, so the
-                // recovery is trusted only when the union is unambiguous.
-                let unavailable = || {
-                    (
-                        ErrorCode::Internal,
-                        "note identity is unavailable; recovery lookup failed",
-                    )
-                };
-                let mut candidates = std::collections::BTreeSet::new();
-                let note_candidates = vault
-                    .note_identity_candidates()
-                    .map_err(|_| unavailable())?;
-                candidates.extend(note_candidates.iter().filter_map(|contents| {
-                    note::artifact_keyed_note_identity(contents, &canonical)
-                }));
-                // Failure is not an empty candidate set: a missing source can
-                // conceal a conflicting identity and redirect an autosave.
-                let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
-                let index = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                    .map_err(|_| unavailable())?;
-                candidates.extend(
-                    index
-                        .artifact_candidates_for_url(&canonical)
-                        .map_err(|_| unavailable())?,
-                );
-                match candidates.len() {
-                    1 => RecordKey {
-                        kind: RecordKeyKind::Artifact,
-                        value: candidates
-                            .into_iter()
-                            .next()
-                            .expect("checked len == 1 above"),
-                    },
-                    _ => crate::vault::url_record_key(&canonical)
-                        .expect("canonical HTTP URL has a key"),
-                }
-            }
         },
     };
     // `older_urls` is both the older-note list and the only authorization
@@ -1272,25 +1226,26 @@ fn note_context(
     // artifact itself. Recorded URLs are stripped canonical forms: the
     // page's own canonical URL, an indexed modal route, or a note's creation
     // URL can equal an unrelated page's URL once `strip_params` removed the
-    // query value that identified the artifact.
-    // `recorded` marks evidence already tied to this artifact (the page's
-    // own URL, its indexed routes, or its note's creation URL). Only that
-    // evidence may stand in for a contract on an origin config.toml no
-    // longer covers; an arbitrary URL note found by the scan never can. A
-    // current match is final, as it is for the page's own key: a retired
-    // shape cannot also claim a URL the current policy names differently.
-    let names_artifact = |candidate: &str, recorded: bool| {
+    // query value that identified the artifact. A URL on an origin config.toml no longer covers names no artifact, for
+    // the same reason it gets no artifact key above; that holds even for the
+    // artifact's own indexed routes and its note's creation URL, which are
+    // stripped forms too. A current match is final, as it is for the page's
+    // own key: a retired shape cannot also claim a URL the current policy
+    // names differently.
+    let names_artifact = |candidate: &str| {
         if let Ok(found) = config.adapter_match(candidate, None) {
             return found.artifact_id == key.value;
         }
         match config.note_key_rule(candidate) {
             NoteKeyRule::Artifact(artifact_id) => artifact_id == key.value,
-            NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Unavailable => false,
-            NoteKeyRule::Uncovered => recorded,
+            NoteKeyRule::Ambiguous
+            | NoteKeyRule::Unrecognized
+            | NoteKeyRule::Unavailable
+            | NoteKeyRule::Uncovered => false,
         }
     };
     let mut older_urls = Vec::new();
-    if names_artifact(&canonical, true) {
+    if names_artifact(&canonical) {
         older_urls.push(canonical.clone());
     }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
@@ -1298,20 +1253,20 @@ fn note_context(
             && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
             && let Ok(urls) = index.artifact_urls(&key.value)
         {
-            older_urls.extend(urls.into_iter().filter(|url| names_artifact(url, true)));
+            older_urls.extend(urls.into_iter().filter(|url| names_artifact(url)));
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
-                if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key)
-                    && names_artifact(&candidate, true)
-                {
-                    older_urls.push(candidate);
-                }
-                if let Some(candidate) = note::url_keyed_note_url(&contents)
-                    && names_artifact(&candidate, false)
-                {
-                    older_urls.push(candidate);
-                }
+                let candidates = [
+                    note::artifact_keyed_note_url(&contents, &key),
+                    note::url_keyed_note_url(&contents),
+                ];
+                older_urls.extend(
+                    candidates
+                        .into_iter()
+                        .flatten()
+                        .filter(|candidate| names_artifact(candidate)),
+                );
             }
         }
         older_urls.sort();
@@ -2637,7 +2592,7 @@ id = "{prefix}:{{host}}/{{id}}"
     }
 
     #[test]
-    fn a_removed_adapters_shared_note_stays_reachable_by_its_recorded_history() {
+    fn without_recorded_contracts_recorded_history_does_not_choose_a_note() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
         std::fs::create_dir(&root).unwrap();
@@ -2697,31 +2652,51 @@ id = "work:{host}/{id}"
         // so it is keyed by the artifact, not the URL.
         let loaded_before = note_load(&mut config, url);
         assert_eq!(loaded_before.key.kind, RecordKeyKind::Artifact);
-        match note_save(
+        let saved = match note_save(
             &mut config,
             url,
             "keep this text",
             &loaded_before.revision,
             loaded_before.key,
         ) {
-            Response::NoteSaved(_) => {}
+            Response::NoteSaved(saved) => saved,
             other => panic!("expected note_saved, got {other:?}"),
-        }
+        };
 
-        // Remove the adapter. The URL no longer resolves through any
-        // adapter, as if its site had been removed.
+        // Rewrite config.toml with no adapter and no `[[adapter_id_history]]`,
+        // as a hand edit or repair would. Recorded history alone is a stripped
+        // canonical URL and cannot name the artifact, so the page gets its URL
+        // note, and the shared note stays untouched on disk.
         write_adapter_config(&path, &root, "https://work.example", "");
+        assert_shared_note_is_kept_but_not_guessed(&mut config, &root, url, &saved);
+    }
 
-        let loaded_after = note_load(&mut config, url);
-        assert!(
-            loaded_after.exists,
-            "the shared artifact note must stay discoverable after the adapter is removed"
-        );
-        assert_eq!(loaded_after.body, "keep this text");
+    fn assert_shared_note_is_kept_but_not_guessed(
+        config: &mut ConfigStore,
+        root: &std::path::Path,
+        url: &str,
+        shared: &NoteSaved,
+    ) {
+        let shared_path = root.join(&shared.relative_path);
+        let shared_bytes = std::fs::read(&shared_path).unwrap();
+        let loaded_after = note_load(config, url);
+        assert_eq!(loaded_after.key.kind, RecordKeyKind::Url);
+        assert!(!loaded_after.exists);
+        let Response::NoteSaved(saved) = note_save(
+            config,
+            url,
+            "a separate URL note",
+            &loaded_after.revision,
+            loaded_after.key,
+        ) else {
+            panic!("expected a separate URL note")
+        };
+        assert_ne!(saved.relative_path, shared.relative_path);
+        assert_eq!(std::fs::read(shared_path).unwrap(), shared_bytes);
     }
 
     #[test]
-    fn a_note_saved_without_any_activity_stays_reachable_after_the_adapter_is_removed() {
+    fn without_recorded_contracts_a_notes_stored_identity_does_not_choose_it() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
         std::fs::create_dir(&root).unwrap();
@@ -2742,29 +2717,24 @@ id = "work:{host}/{id}"
 
         // Save the shared note while the adapter still recognizes the URL,
         // but with no activity ever recorded for it (capture paused, or
-        // simply not delivered yet) -- there is no index row to recover
-        // from, only the note's own stored identity.
+        // simply not delivered yet) -- there is no index row, only the
+        // note's own stored identity.
         let loaded_before = note_load(&mut config, url);
         assert_eq!(loaded_before.key.kind, RecordKeyKind::Artifact);
-        match note_save(
+        let saved = match note_save(
             &mut config,
             url,
             "keep this text",
             &loaded_before.revision,
             loaded_before.key,
         ) {
-            Response::NoteSaved(_) => {}
+            Response::NoteSaved(saved) => saved,
             other => panic!("expected note_saved, got {other:?}"),
-        }
+        };
 
+        // The note's stored creation URL is a stripped form too.
         write_adapter_config(&path, &root, "https://work.example", "");
-
-        let loaded_after = note_load(&mut config, url);
-        assert!(
-            loaded_after.exists,
-            "a note saved with no activity history must still be found by its own stored identity"
-        );
-        assert_eq!(loaded_after.body, "keep this text");
+        assert_shared_note_is_kept_but_not_guessed(&mut config, &root, url, &saved);
     }
 
     #[test]
@@ -2882,7 +2852,7 @@ id = "work:{host}/{id}"
     }
 
     #[test]
-    fn recorded_routes_on_an_origin_without_contracts_stay_older_notes() {
+    fn recorded_routes_on_an_origin_without_contracts_are_not_older_notes() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
         std::fs::create_dir(&root).unwrap();
@@ -2914,17 +2884,32 @@ id = "work:{host}/{id}"
             crate::config::NoteKeyRule::Uncovered
         );
 
-        let current = note_load(&mut config, "https://work.example/items/7");
+        // The covered route keeps the shared note, but its creation URL on the
+        // uncovered origin is a stripped form that could be another page, so
+        // that origin's URL note is neither listed nor migratable here. It
+        // stays reachable on its own page.
+        let current_url = "https://work.example/items/7";
+        let current = note_load(&mut config, current_url);
         assert_eq!(current.key, key);
         assert_eq!(current.body, "Shared");
-        assert_eq!(
-            current
-                .older_notes
-                .iter()
-                .map(|note| note.canonical_url.as_str())
-                .collect::<Vec<_>>(),
-            vec![old_origin]
-        );
+        assert!(current.older_notes.is_empty(), "{:?}", current.older_notes);
+        let revision = note::load_note(&vault, old_origin).unwrap().revision;
+        assert!(matches!(
+            use_artifact_note(
+                brauser_protocol::UseArtifactNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "migrate-uncovered".into(),
+                    url: current_url.into(),
+                    source_url: old_origin.into(),
+                    expected_revision: revision,
+                },
+                &mut config,
+            ),
+            Response::Error(reply) if reply.code == ErrorCode::Unauthorized
+        ));
+        let own = note_load(&mut config, old_origin);
+        assert_eq!(own.key.kind, RecordKeyKind::Url);
+        assert_eq!(own.body, "Separate");
     }
 
     /// `strip_params` can remove the query value that is a Jira board modal's
@@ -3132,6 +3117,121 @@ id = "jira:{host}/{key}"
                 "Notes about the whole board"
             );
         }
+
+        /// Removes the Jira adapter and then `[[adapter_id_history]]`, as a
+        /// config repair or an install older than that history would, so no
+        /// recorded contract covers the origin any more.
+        fn forget_jira_contracts(folder: &tempfile::TempDir, config: &mut ConfigStore) {
+            let mut next = config.snapshot().clone();
+            next.adapters.artifacts.clear();
+            let revision = config.revision().to_owned();
+            config.update(next, &revision).unwrap().unwrap();
+            let path = folder.path().join("config.toml");
+            let mut table: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(table.remove("adapter_id_history").is_some());
+            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            *config = loaded(&path);
+            assert_eq!(
+                config.note_key_rule(ABC_123),
+                crate::config::NoteKeyRule::Uncovered
+            );
+        }
+
+        #[test]
+        fn without_recorded_contracts_the_board_and_another_modal_never_take_an_issues_note() {
+            for activity in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let (root, mut config) = jira_store(&folder);
+                let issue = save(&mut config, ABC_123, "ABC-123 text");
+                if activity {
+                    record_modal_activity(&mut config, ABC_123, "ABC-123");
+                }
+                let issue_path = root.join(&issue.relative_path);
+                let issue_bytes = std::fs::read(&issue_path).unwrap();
+                forget_jira_contracts(&folder, &mut config);
+
+                // The stripped canonical form is shared by the board and
+                // every modal on it, so it never names ABC-123 by itself.
+                for url in [BOARD, ABC_456] {
+                    let page = note_load(&mut config, url);
+                    assert_eq!(page.key.kind, RecordKeyKind::Url, "{activity}/{url}");
+                    assert!(!page.exists, "{activity}/{url}");
+                    assert!(page.body.is_empty(), "{activity}/{url}");
+                }
+                let other = save(&mut config, ABC_456, "ABC-456 text");
+                assert_eq!(other.outcome, brauser_protocol::NoteSaveOutcome::Created);
+                assert_ne!(other.relative_path, issue.relative_path);
+                assert_eq!(std::fs::read(&issue_path).unwrap(), issue_bytes);
+            }
+        }
+
+        #[test]
+        fn without_recorded_contracts_a_board_note_cannot_migrate_into_a_modal_issue() {
+            let folder = tempfile::tempdir().unwrap();
+            let (root, mut config) = jira_store(&folder);
+            let board = save(&mut config, BOARD, "Notes about the whole board");
+            let board_path = root.join(&board.relative_path);
+            let board_bytes = std::fs::read(&board_path).unwrap();
+            record_modal_activity(&mut config, ABC_123, "ABC-123");
+            forget_jira_contracts(&folder, &mut config);
+
+            let loaded_board = note_load(&mut config, BOARD);
+            assert_eq!(loaded_board.key, board.key);
+            assert_eq!(loaded_board.body, "Notes about the whole board");
+            for url in [ABC_456, ABC_123] {
+                let migrated = use_artifact_note(
+                    brauser_protocol::UseArtifactNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "migrate-board".into(),
+                        url: url.into(),
+                        source_url: BOARD.into(),
+                        expected_revision: loaded_board.revision.clone(),
+                    },
+                    &mut config,
+                );
+                assert!(
+                    matches!(&migrated, Response::Error(_)),
+                    "{url}: {migrated:?}"
+                );
+            }
+            assert_eq!(std::fs::read(&board_path).unwrap(), board_bytes);
+        }
+    }
+
+    /// A page on an origin no recorded contract covers needs no scan of the
+    /// notes folder, so its note works however many notes the folder holds.
+    #[test]
+    fn a_large_notes_folder_does_not_block_notes_on_uncovered_pages() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(&path, &root, "https://work.example", "");
+        let mut config = loaded(&path);
+        let url = "https://news.example/a";
+        let first = note_load(&mut config, url);
+        let Response::NoteSaved(saved) =
+            note_save(&mut config, url, "News text", &first.revision, first.key)
+        else {
+            panic!("expected note_saved")
+        };
+        let pages = root.join(saved.relative_path).parent().unwrap().to_owned();
+        for number in 0..4097 {
+            std::fs::write(pages.join(format!("000-{number:04}.md")), b"").unwrap();
+        }
+        let current = note_load(&mut config, url);
+        assert_eq!(current.body, "News text");
+        assert!(matches!(
+            note_save(
+                &mut config,
+                url,
+                "Still saving",
+                &current.revision,
+                current.key
+            ),
+            Response::NoteSaved(_)
+        ));
     }
 
     mod note_policy_removal {
@@ -3300,7 +3400,7 @@ id = "work:{host}/{id}"
             }
 
             /// A config repair or hand edit can discard `[[adapter_id_history]]`;
-            /// note identity then falls back to recorded history.
+            /// the origin is then uncovered and its pages use URL keys.
             fn forget_policy_history(&self) {
                 let mut table: toml::Table =
                     toml::from_str(&std::fs::read_to_string(&self.path).unwrap()).unwrap();
@@ -3577,7 +3677,7 @@ id = "work:{host}/{id}"
         }
 
         #[test]
-        fn history_only_recovery_never_authorizes_unrelated_url_notes() {
+        fn lost_contracts_never_authorize_unrelated_url_notes() {
             let session = Session::new();
             let config = loaded(&session.path);
             let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
@@ -3592,17 +3692,12 @@ id = "work:{host}/{id}"
             session.policy("adapter");
             session.forget_policy_history();
 
+            // Recorded history no longer chooses the key, so EDIT is a URL
+            // page and cannot list, view, or absorb any older note.
             let recovered = session.load(EDIT);
-            assert_eq!(recovered.key, first.key);
-            assert_eq!(recovered.body, "Shared artifact text");
-            assert!(
-                recovered
-                    .older_notes
-                    .iter()
-                    .all(|older| older.canonical_url != unrelated),
-                "{:?}",
-                recovered.older_notes
-            );
+            assert_eq!(recovered.key.kind, RecordKeyKind::Url);
+            assert!(recovered.body.is_empty());
+            assert!(recovered.older_notes.is_empty());
             assert!(matches!(
                 session.call(Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
                     protocol_version: PROTOCOL_VERSION,
@@ -3610,7 +3705,7 @@ id = "work:{host}/{id}"
                     url: EDIT.into(),
                     source_url: unrelated.into(),
                 })),
-                Response::Error(reply) if reply.code == ErrorCode::Unauthorized
+                Response::Error(reply) if reply.code == ErrorCode::Conflict
             ));
             assert!(matches!(
                 session.call(Request::UseArtifactNote(brauser_protocol::UseArtifactNoteRequest {
@@ -3620,7 +3715,7 @@ id = "work:{host}/{id}"
                     source_url: unrelated.into(),
                     expected_revision: unrelated_revision,
                 })),
-                Response::Error(reply) if reply.code == ErrorCode::Unauthorized
+                Response::Error(reply) if reply.code == ErrorCode::Conflict
             ));
             assert_eq!(
                 note::load_note(&vault, unrelated).unwrap().body,
@@ -3832,7 +3927,7 @@ id = "work:{host}/{id}"
         }
 
         #[test]
-        fn an_incomplete_note_scan_cannot_choose_an_autosave_target() {
+        fn a_full_or_damaged_notes_folder_cannot_choose_an_autosave_target() {
             for fault in ["count", "file bytes", "total bytes", "unreadable"] {
                 let session = Session::new();
                 let first = session.load(EDIT);
@@ -3903,17 +3998,14 @@ id = "work:{host}/{id}"
                     }
                     _ => unreachable!(),
                 }
-                let response = session.call(Request::LoadNote(brauser_protocol::LoadNoteRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "incomplete-scan".into(),
-                    url: EDIT.into(),
-                }));
+                // No scan decides the key: EDIT is a URL page whatever the
+                // folder holds, and a client still holding the artifact key
+                // gets a key_changed conflict instead of an autosave.
+                let response = session.load(EDIT);
+                assert_eq!(response.key.kind, RecordKeyKind::Url, "{fault}");
+                assert!(!response.exists, "{fault}");
                 assert!(
-                    matches!(response, Response::Error(reply) if reply.request_id == "incomplete-scan" && reply.message.contains("note identity is unavailable")),
-                    "{fault}"
-                );
-                assert!(
-                    matches!(session.save(EDIT, &current, "Must not autosave"), Response::Error(reply) if reply.message.contains("note identity is unavailable")),
+                    matches!(session.save(EDIT, &current, "Must not autosave"), Response::NoteConflict(reply) if reply.reason == "key_changed"),
                     "{fault}"
                 );
                 assert_eq!(std::fs::read(&note_path).unwrap(), original);
@@ -3924,7 +4016,8 @@ id = "work:{host}/{id}"
                 for path in faults {
                     std::fs::remove_file(path).unwrap();
                 }
-                assert_eq!(session.load(EDIT).body, "Keep original text");
+                assert_eq!(session.load(EDIT).key.kind, RecordKeyKind::Url);
+                assert_eq!(std::fs::read(&note_path).unwrap(), original);
             }
         }
     }
@@ -4843,7 +4936,7 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
     }
 
     #[test]
-    fn unavailable_history_cannot_select_a_partial_note_identity() {
+    fn unavailable_history_cannot_redirect_a_note_on_an_uncovered_origin() {
         for (publication_failure, context_only) in
             [(false, false), (true, false), (false, true), (true, true)]
         {
@@ -4980,13 +5073,17 @@ id = "work:{host}/{id}"
                     first.key.clone(),
                 ),
             ];
-            for response in responses {
-                let Response::Error(reply) = response else {
-                    panic!("history failure must not resolve a note identity: {response:?}")
-                };
-                assert_eq!(reply.code, ErrorCode::Internal);
-                assert!(reply.message.contains("note identity is unavailable"));
-            }
+            // Note identity on an uncovered origin never consults history,
+            // so its failure cannot select, or refuse, a key.
+            let [loaded_note, saved_note] = responses;
+            assert!(
+                matches!(&loaded_note, Response::NoteLoaded(note) if note.key.kind == RecordKeyKind::Url),
+                "{loaded_note:?}"
+            );
+            assert!(
+                matches!(&saved_note, Response::NoteConflict(NoteConflict { reason, .. }) if reason == "key_changed"),
+                "{saved_note:?}"
+            );
             assert_eq!(std::fs::read(first_path).unwrap(), first_bytes);
             assert_eq!(std::fs::read(second_path).unwrap(), second_bytes);
             if publication_failure {

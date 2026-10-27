@@ -67,12 +67,11 @@ artifact on every route the removed or earlier rules recognized, because
 config.toml keeps those rules for note keys (never for capture). A page those
 rules do not recognize, such as a Jira board whose issue modal shares its
 URL once `selectedIssue` is stripped, keeps its own note. Older URL notes stay
-separate and viewable. If config.toml no longer records any rule for a site,
-the host recovers the note from recorded URLs, including alternate routes
-remembered in activity or explicit context; if that identity is ambiguous, it
-uses the URL note, and if history or the bounded note scan is unavailable, it
-refuses the save and preserves the existing files. Notes alone do not turn
-capture back on.
+separate and viewable. If config.toml no longer records any rule for a site
+(a repair replaced it, or the site was removed before Brauser kept those
+rules), the host cannot tell that board from its modals, so every page there
+uses its own URL note; the shared artifact note is left untouched in the
+notes folder. Notes alone do not turn capture back on.
 
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. macOS is the only supported platform (DESIGN.md §13); the public package remains a later release milestone.
 
