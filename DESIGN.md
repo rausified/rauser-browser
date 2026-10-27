@@ -656,11 +656,12 @@ new or changed entry stripping a parameter some reader reads or a new or
 changed rule reading a parameter an entry strips, is refused as
 `invalid_config` with a message naming the adapter, its origin, the
 parameter, and the entry; the host checks before the update and again
-under the config lock. A conflict is the entry, parameter, origin, and
-adapter type, so a save that keeps an existing one (reordering entries,
-pausing capture, editing the adapter without reading anything new, or
-removing or restoring that adapter) is not refused: a config.toml that
-already has one keeps loading and saving, and no install is locked out.
+under the config lock. A conflict is one reading rule (with its adapter's
+origin, type, and `id` template) and the entry that strips its parameter, so
+a save that keeps an existing one (reordering entries, pausing capture,
+editing the adapter's other fields, or removing or restoring that adapter)
+is not refused, while a new or changed rule reading the same parameter is.
+A config.toml that already has one therefore keeps loading and saving, and no install is locked out.
 Settings derives the warning from the `strip_params` and adapter document
 `get_config` already returns (no protocol change), names each entry with the
 parameters and adapters involved, and offers a **Stop stripping**

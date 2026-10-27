@@ -159,7 +159,12 @@ This standard is meant to improve with use. When you change it:
   (`StripParamsRefusal`) as well as the pre-lock check against the store's
   last read. Settings tests cover the warning and the one-click fix with the
   fake DOM; the headless smoke run does not cover it, because it never edits
-  config.toml by hand. No browser or native dialog is involved.
+  config.toml by hand. Codex review then reproduced an existing conflict
+  masking a new rule on the same adapter that read the same parameter,
+  because conflicts were compared by entry, parameter, origin, and type
+  only; they now include the reading rule and `id` template, and the
+  existing-conflict test adds such a rule first. No browser or native
+  dialog is involved.
 - 2026-10-27: Branch `feat/brauser-home-folder`. The one-time move of an
   older folder layout to the fixed home layout is tested natively against a
   checked-in copy of a real pre-home install (`host/tests/fixtures/pre-home-layout`:

@@ -1805,17 +1805,23 @@ impl std::error::Error for StripParamsRefusal {}
 /// read the query. Stripped canonical URLs of the pages that rule tells
 /// apart are equal, so recorded URLs and note candidates stop naming one
 /// artifact (DESIGN.md §6.2).
+///
+/// A conflict is one reading rule, so a save that keeps an existing one is
+/// not refused, but a new or changed rule reading the same parameter is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct StripParamConflict {
     pub entry: String,
     pub param: String,
     pub origin: String,
     pub artifact_type: String,
+    /// The adapter's `id` template and the reading rule, as JSON.
+    pub reader: String,
 }
 
-/// The query keys an adapter's rules read. Read from the raw document, so
-/// an inert or individually invalid adapter still counts.
-fn query_keys_read(adapter: &serde_json::Value) -> Vec<&str> {
+/// The query keys an adapter's rules read, each with its rule. Read from
+/// the raw document, so an inert or individually invalid adapter still
+/// counts.
+fn query_keys_read(adapter: &serde_json::Value) -> Vec<(&serde_json::Value, &str)> {
     let mut keys = Vec::new();
     for rule in adapter
         .get("match")
@@ -1824,14 +1830,15 @@ fn query_keys_read(adapter: &serde_json::Value) -> Vec<&str> {
         .flatten()
     {
         if let Some(query) = rule.get("query").and_then(serde_json::Value::as_object) {
-            keys.extend(query.keys().map(String::as_str));
+            keys.extend(query.keys().map(|key| (rule, key.as_str())));
         }
         keys.extend(
             rule.get("absent")
                 .and_then(serde_json::Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(serde_json::Value::as_str),
+                .filter_map(serde_json::Value::as_str)
+                .map(|key| (rule, key)),
         );
     }
     keys
@@ -1848,7 +1855,8 @@ fn conflicts_with<'a>(
     for (adapter, recorded) in readers {
         let origin = adapter.get("origin").and_then(serde_json::Value::as_str);
         let artifact_type = adapter.get("type").and_then(serde_json::Value::as_str);
-        for param in query_keys_read(adapter) {
+        let id = adapter.get("id").cloned().unwrap_or_default();
+        for (rule, param) in query_keys_read(adapter) {
             for entry in strip_params {
                 if crate::capture::matches_param(param, entry) {
                     let conflict = StripParamConflict {
@@ -1856,6 +1864,7 @@ fn conflicts_with<'a>(
                         param: param.to_owned(),
                         origin: origin.unwrap_or("an unknown origin").to_owned(),
                         artifact_type: artifact_type.unwrap_or("unnamed").to_owned(),
+                        reader: serde_json::json!([id, rule]).to_string(),
                     };
                     let slot = found.entry(conflict).or_insert(recorded);
                     *slot &= recorded;
@@ -5501,6 +5510,16 @@ mod tests {
             assert_eq!(conflicts[0].entry, "selectedIssue");
             assert_eq!(conflicts[0].param, "selectedIssue");
             assert_eq!(conflicts[0].artifact_type, "jira.issue");
+
+            // A new rule reading the same parameter is a new conflict, even
+            // beside an existing one on the same adapter.
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts[0]["match"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "path": "/projects/{*}", "query": { "selectedIssue": "{key:jira_key}" } }));
+            let message = refused(&mut store, next);
+            assert!(message.contains("\"selectedIssue\""), "{message}");
 
             // Unrelated saves keep working: the capture switch, a new
             // unrelated entry, reordering, and an edit to the conflicting
