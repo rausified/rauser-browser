@@ -6839,6 +6839,9 @@ id = "work:{host}/{id}"
         /// service is contacted (or started), not reported as a broken reply.
         #[test]
         fn start_run_too_large_once_keyed_is_refused_without_connecting() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             use crate::frame::MAX_INBOUND_BYTES;
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
@@ -6896,6 +6899,9 @@ id = "work:{host}/{id}"
 
         #[test]
         fn not_installed_service_gives_service_unavailable() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
             let notes = tempfile::tempdir().unwrap();
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();

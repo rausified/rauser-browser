@@ -79,6 +79,16 @@ smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
 claim that it passed here. Structural drafting and unknown-site enabling are
 still unbuilt, so these tests do not certify any machine-drafted rule.
 
+## Capture Site attention across an hour boundary
+
+The worker's already-open-tab policy-install test uses fixed local times,
+covering both a mid-hour interval and the last ten seconds of an hour. After
+15 seconds, `get_status` freezes completed hours into delivery: the boundary
+case must retain 10 seconds in the queue and 5 seconds in live totals, with
+zero opens across both. Queued activity uses seconds; live totals use
+milliseconds. Checking only live totals against 15 seconds made the old test
+fail whenever the real wall clock happened to cross an hour boundary.
+
 ## Dialog reply fixture
 
 `dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
@@ -124,6 +134,12 @@ with the guard (`if crate::ipc_test_guard::ipc_denied() { return; }`, or
 `brauser_host::ipc_test_guard::ipc_denied()` from `host/tests`; in Node,
 `if (await ipcDenied(t, "socket")) return;`); without it, it fails in the
 sandbox like the 32 to 47 tests that kept Cookie's gate red before `brwr-rq5`.
+
+This includes connections to a missing listener: a restricted runner can
+return EPERM before the client sees the expected missing-socket error, so
+missing-service, failed-launch and launch-timeout tests need the guard too.
+A boundary test that proves rejection without connecting but also verifies
+successful forwarding at the limit needs it for that forwarding step.
 
 ## UI-free end-to-end: the recipe
 
