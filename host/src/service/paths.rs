@@ -89,6 +89,12 @@ impl ServicePaths {
         self.support.join("service.lock")
     }
 
+    /// Held by a host while it restarts a stale service; never by the
+    /// service, which holds [`Self::lock`] for its whole life.
+    pub fn restart_lock(&self) -> PathBuf {
+        self.support.join("restart.lock")
+    }
+
     pub fn pid(&self) -> PathBuf {
         self.support.join("service.pid")
     }
@@ -174,6 +180,7 @@ mod tests {
         assert_eq!(paths.agent_env(), PathBuf::from("/s/agent.env"));
         assert_eq!(paths.lock(), PathBuf::from("/s/service.lock"));
         assert_eq!(paths.pid(), PathBuf::from("/s/service.pid"));
+        assert_eq!(paths.restart_lock(), PathBuf::from("/s/restart.lock"));
     }
 
     #[test]

@@ -5428,6 +5428,7 @@ id = "work:{host}/{id}"
 
         fn link(socket: std::path::PathBuf, launch: fn(bool) -> Launch) -> ServiceLink {
             ServiceLink {
+                restart_lock: socket.with_file_name("restart.lock"),
                 socket,
                 launch: Box::new(launch),
                 wait: Duration::from_secs(2),
