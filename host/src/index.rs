@@ -2620,7 +2620,9 @@ print(json.dumps([tables,row]))"#;
             assert!(output.status.success(), "{:?}", output.stderr);
             // Python writes \r\n on Windows.
             assert_eq!(
-                String::from_utf8(output.stdout).unwrap().replace("\r\n", "\n"),
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
                 "2\n['link']\n"
             );
             // Do not rewrite historical payloads: their exact content detects
