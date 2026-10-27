@@ -122,6 +122,52 @@ Added in version 6:
   token minted for the `knowledge_base` purpose, and a notes-folder token
   cannot set it (or the reverse).
 
+Also added in version 6, the agent run messages. The extension sends them to
+the native host, which forwards them to the per-user Brauser service (macOS
+only; elsewhere they answer `service_unavailable`) over a Unix socket using
+the same length-prefixed framing and generated types:
+
+- `start_run` carries the page `url`, `title`, extracted `content` (at most
+  1,048,576 characters; the host's 4 MiB inbound frame cap is the binding byte
+  limit), an optional `selection`, an optional `harness` (`codex` or
+  `claude`), `record_key`, and `requested_at`. The extension always sends
+  `record_key` as `null`: the host resolves it exactly as `load_note` does and
+  refuses a request that names one. `requested_at` is the user's local click
+  time as an RFC 3339 timestamp with its UTC offset, checked against the same
+  window as capture timestamps. The answer is `run_started` with the `run`
+  and `existing`, which is `true` when the page's record key already had a
+  queued or running run; that run is returned instead of a new one.
+- `get_run` names a `run_id` and `since_offset`, the stream byte offset the
+  panel already shows, and answers `run_fetched` with the `run`, one page of
+  `stream_text` from that offset (at most 196,608 characters, always ending on
+  a character boundary), `next_offset`, and `more`. Streaming is by polling;
+  there is no host-side streaming message.
+- `list_runs` answers `runs_listed` with at most 20 in-flight and recent runs,
+  newest first, so a panel can restore its run cards.
+- `cancel_run` and `retry_save` name a `run_id` and answer `run_updated`.
+  `retry_save` writes a finished run's saved answer again without rerunning
+  the agent.
+
+Every run is a `RunView`: `run_id`, `state` (`queued`, `running`,
+`succeeded`, `failed`, or `canceled`), `harness`, the start `record_key` and
+the `written_record_key` (the key at save time, which may differ after an
+adapter edit), `url`, `title`, `cwd`, RFC 3339 `created_at`, `started_at`,
+and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
+`canceled`, `service_restarted`, `invalid_output`, or `save_failed`),
+`thread_id`, `session_id`, `summary_path`, `stream_bytes`, and
+`can_retry_save`.
+
+`service_hello` and `service_ready` pass only between the host and the
+service: before forwarding, the host sends `service_hello` and the service
+answers `service_ready` with its `build_id`. When that differs from the host's
+own build, the host restarts the service once, then gives up. The host
+refuses `service_hello` from the extension as `invalid_request`, and the
+extension does not accept `service_ready`.
+
+`ErrorCode` gains `service_unavailable`: the service is not installed, could
+not be started in time, or keeps reporting another build. Notes, capture, and
+settings never depend on the service.
+
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while
 `adapter_issue` is set. Turning capture on needs only a home folder.

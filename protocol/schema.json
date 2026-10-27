@@ -70,7 +70,13 @@
         },
         {
           "$ref": "#/$defs/SetUpHarnessRequest"
-        }
+        },
+        { "$ref": "#/$defs/StartRunRequest" },
+        { "$ref": "#/$defs/GetRunRequest" },
+        { "$ref": "#/$defs/ListRunsRequest" },
+        { "$ref": "#/$defs/CancelRunRequest" },
+        { "$ref": "#/$defs/RetrySaveRequest" },
+        { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
     },
     "Response": {
@@ -126,6 +132,11 @@
         {
           "$ref": "#/$defs/HarnessesDiscovered"
         },
+        { "$ref": "#/$defs/RunStarted" },
+        { "$ref": "#/$defs/RunFetched" },
+        { "$ref": "#/$defs/RunsListed" },
+        { "$ref": "#/$defs/RunUpdated" },
+        { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
         }
@@ -421,7 +432,8 @@
         "conflict",
         "message_too_large",
         "internal",
-        "cancelled"
+        "cancelled",
+        "service_unavailable"
       ]
     },
     "ConfigSnapshot": {
@@ -1767,6 +1779,183 @@
         "present": {
           "type": "boolean"
         }
+      }
+    },
+    "HarnessId": {
+      "type": "string",
+      "description": "A summary harness the Brauser service can run.",
+      "enum": ["codex", "claude"]
+    },
+    "RunState": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "failed", "canceled"]
+    },
+    "RunErrorKind": {
+      "type": "string",
+      "enum": ["harness_failed", "timed_out", "canceled", "service_restarted", "invalid_output", "save_failed"]
+    },
+    "RunView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339.",
+      "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
+        "state": { "$ref": "#/$defs/RunState" },
+        "harness": { "$ref": "#/$defs/HarnessId" },
+        "record_key": { "$ref": "#/$defs/RecordKey" },
+        "written_record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "cwd": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 4096 }, { "type": "null" }] },
+        "created_at": { "type": "string", "minLength": 20, "maxLength": 64 },
+        "started_at": { "oneOf": [{ "type": "string", "minLength": 20, "maxLength": 64 }, { "type": "null" }] },
+        "finished_at": { "oneOf": [{ "type": "string", "minLength": 20, "maxLength": 64 }, { "type": "null" }] },
+        "error": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] },
+        "error_kind": { "oneOf": [{ "$ref": "#/$defs/RunErrorKind" }, { "type": "null" }] },
+        "thread_id": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 256 }, { "type": "null" }] },
+        "session_id": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 256 }, { "type": "null" }] },
+        "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 4096 }, { "type": "null" }] },
+        "stream_bytes": { "type": "integer", "minimum": 0 },
+        "can_retry_save": { "type": "boolean" }
+      }
+    },
+    "StartRunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start, or join, the summary run for a page. content and selection bounds are characters; the host frame cap is the binding byte limit. The extension always sends record_key null; the host resolves it.",
+      "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "harness", "record_key", "requested_at"],
+      "properties": {
+        "type": { "const": "start_run" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "content": { "type": "string", "maxLength": 1048576 },
+        "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
+        "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
+        "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
+        "requested_at": { "description": "The user's local click time with its UTC offset.", "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "RunStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "existing is true when the page already had a queued or running run.",
+      "required": ["type", "protocol_version", "request_id", "run", "existing"],
+      "properties": {
+        "type": { "const": "run_started" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run": { "$ref": "#/$defs/RunView" },
+        "existing": { "type": "boolean" }
+      }
+    },
+    "GetRunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Poll one run. since_offset is the stream byte offset already shown.",
+      "required": ["type", "protocol_version", "request_id", "run_id", "since_offset"],
+      "properties": {
+        "type": { "const": "get_run" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
+        "since_offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "RunFetched": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One page of stream text from since_offset; more is true when text remains past next_offset.",
+      "required": ["type", "protocol_version", "request_id", "run", "stream_text", "next_offset", "more"],
+      "properties": {
+        "type": { "const": "run_fetched" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run": { "$ref": "#/$defs/RunView" },
+        "stream_text": { "type": "string", "maxLength": 196608 },
+        "next_offset": { "type": "integer", "minimum": 0 },
+        "more": { "type": "boolean" }
+      }
+    },
+    "ListRunsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "list_runs" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "RunsListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "In-flight and recent runs, newest first.",
+      "required": ["type", "protocol_version", "request_id", "runs"],
+      "properties": {
+        "type": { "const": "runs_listed" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "runs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/RunView" } }
+      }
+    },
+    "CancelRunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "run_id"],
+      "properties": {
+        "type": { "const": "cancel_run" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 36, "maxLength": 36 }
+      }
+    },
+    "RetrySaveRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Write a finished run's answer again without rerunning the agent.",
+      "required": ["type", "protocol_version", "request_id", "run_id"],
+      "properties": {
+        "type": { "const": "retry_save" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 36, "maxLength": 36 }
+      }
+    },
+    "RunUpdated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "run"],
+      "properties": {
+        "type": { "const": "run_updated" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run": { "$ref": "#/$defs/RunView" }
+      }
+    },
+    "ServiceHelloRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Host to service only: ask for the service's build identity. The host refuses it from the extension.",
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "service_hello" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "ServiceReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Service to host only: the running service's build identity.",
+      "required": ["type", "protocol_version", "request_id", "build_id"],
+      "properties": {
+        "type": { "const": "service_ready" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "build_id": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     }
   }

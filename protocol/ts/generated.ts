@@ -60,7 +60,7 @@ export interface ErrorResponse {
   message: string;
 }
 
-export type ErrorCode = "invalid_request" | "unsupported_protocol_version" | "invalid_config" | "not_configured" | "unauthorized" | "conflict" | "message_too_large" | "internal" | "cancelled";
+export type ErrorCode = "invalid_request" | "unsupported_protocol_version" | "invalid_config" | "not_configured" | "unauthorized" | "conflict" | "message_too_large" | "internal" | "cancelled" | "service_unavailable";
 
 export interface ConfigSnapshot {
   storage: StorageConfig | null;
@@ -505,6 +505,119 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | SetUpHarnessRequest;
+export type HarnessId = "codex" | "claude";
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | ErrorResponse;
+export type RunState = "queued" | "running" | "succeeded" | "failed" | "canceled";
+
+export type RunErrorKind = "harness_failed" | "timed_out" | "canceled" | "service_restarted" | "invalid_output" | "save_failed";
+
+export interface RunView {
+  run_id: string;
+  state: RunState;
+  harness: HarnessId;
+  record_key: RecordKey;
+  written_record_key: RecordKey | null;
+  url: string;
+  title: string;
+  cwd: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  error_kind: RunErrorKind | null;
+  thread_id: string | null;
+  session_id: string | null;
+  summary_path: string | null;
+  stream_bytes: number;
+  can_retry_save: boolean;
+}
+
+export interface StartRunRequest {
+  type: "start_run";
+  protocol_version: 6;
+  request_id: string;
+  url: string;
+  title: string;
+  content: string;
+  selection: string | null;
+  harness: HarnessId | null;
+  record_key: RecordKey | null;
+  requested_at: string;
+}
+
+export interface RunStarted {
+  type: "run_started";
+  protocol_version: 6;
+  request_id: string;
+  run: RunView;
+  existing: boolean;
+}
+
+export interface GetRunRequest {
+  type: "get_run";
+  protocol_version: 6;
+  request_id: string;
+  run_id: string;
+  since_offset: number;
+}
+
+export interface RunFetched {
+  type: "run_fetched";
+  protocol_version: 6;
+  request_id: string;
+  run: RunView;
+  stream_text: string;
+  next_offset: number;
+  more: boolean;
+}
+
+export interface ListRunsRequest {
+  type: "list_runs";
+  protocol_version: 6;
+  request_id: string;
+}
+
+export interface RunsListed {
+  type: "runs_listed";
+  protocol_version: 6;
+  request_id: string;
+  runs: RunView[];
+}
+
+export interface CancelRunRequest {
+  type: "cancel_run";
+  protocol_version: 6;
+  request_id: string;
+  run_id: string;
+}
+
+export interface RetrySaveRequest {
+  type: "retry_save";
+  protocol_version: 6;
+  request_id: string;
+  run_id: string;
+}
+
+export interface RunUpdated {
+  type: "run_updated";
+  protocol_version: 6;
+  request_id: string;
+  run: RunView;
+}
+
+export interface ServiceHelloRequest {
+  type: "service_hello";
+  protocol_version: 6;
+  request_id: string;
+}
+
+export interface ServiceReady {
+  type: "service_ready";
+  protocol_version: 6;
+  request_id: string;
+  build_id: string;
+}
+
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | ServiceHelloRequest;
+
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | ServiceReady | ErrorResponse;

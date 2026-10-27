@@ -5,6 +5,7 @@
 const ERROR_CODES: ReadonlySet<string> = new Set([
   "invalid_request", "unsupported_protocol_version", "invalid_config", "not_configured",
   "unauthorized", "conflict", "message_too_large", "internal", "cancelled",
+  "service_unavailable",
 ]);
 
 const AGENT_STATES: ReadonlySet<string> = new Set([
@@ -86,6 +87,43 @@ function isOlderNote(value: unknown): boolean {
 
 function isUnsignedInteger(value: unknown): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+const RUN_STATES: ReadonlySet<string> = new Set([
+  "queued", "running", "succeeded", "failed", "canceled",
+]);
+
+const RUN_ERROR_KINDS: ReadonlySet<string> = new Set([
+  "harness_failed", "timed_out", "canceled", "service_restarted", "invalid_output", "save_failed",
+]);
+
+const HARNESS_IDS: ReadonlySet<string> = new Set(["codex", "claude"]);
+
+/** Exactly the v6 `RunView` keys. */
+const RUN_VIEW_KEYS: readonly string[] = [
+  "run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd",
+  "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id",
+  "summary_path", "stream_bytes", "can_retry_save",
+];
+
+export function isRunView(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const run = value as Record<string, unknown>;
+  const keys = Object.keys(run);
+  if (keys.length !== RUN_VIEW_KEYS.length || !RUN_VIEW_KEYS.every((key) => keys.includes(key))) return false;
+  return typeof run.run_id === "string" && run.run_id.length === 36 &&
+    typeof run.state === "string" && RUN_STATES.has(run.state) &&
+    typeof run.harness === "string" && HARNESS_IDS.has(run.harness) &&
+    isRecordKey(run.record_key) &&
+    (run.written_record_key === null || isRecordKey(run.written_record_key)) &&
+    typeof run.url === "string" && typeof run.title === "string" && stringOrNull(run.cwd) &&
+    typeof run.created_at === "string" && stringOrNull(run.started_at) &&
+    stringOrNull(run.finished_at) && stringOrNull(run.error) &&
+    (run.error_kind === null ||
+      (typeof run.error_kind === "string" && RUN_ERROR_KINDS.has(run.error_kind))) &&
+    stringOrNull(run.thread_id) && stringOrNull(run.session_id) &&
+    stringOrNull(run.summary_path) && isUnsignedInteger(run.stream_bytes) &&
+    typeof run.can_retry_save === "boolean";
 }
 
 function isArtifact(value: unknown): boolean {
@@ -197,6 +235,15 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.harness_id === "string" && typeof value.harness_version === "string";
     case "harnesses_discovered":
       return Array.isArray(value.offers) && value.offers.every(isHarnessOffer);
+    case "run_started":
+      return isRunView(value.run) && typeof value.existing === "boolean";
+    case "run_fetched":
+      return isRunView(value.run) && typeof value.stream_text === "string" &&
+        isUnsignedInteger(value.next_offset) && typeof value.more === "boolean";
+    case "runs_listed":
+      return Array.isArray(value.runs) && value.runs.length <= 20 && value.runs.every(isRunView);
+    case "run_updated":
+      return isRunView(value.run);
     default:
       return false;
   }
