@@ -450,6 +450,7 @@ Each state changes one area rather than the layout:
 | State | Panel |
 |---|---|
 | Not set up | The setup warning replaces the tabs; the omnibar and page controls are disabled; the strip reads "Off". |
+| Capture paused | As Not set up, but the warning reads "Capture is paused. Resume it in settings."; settings offers **Resume capture**, which asks Chrome for the listed sites' grants and needs the same native confirmation as enabling a site. |
 | Native host unavailable | A banner under the header with the fix; everything below is disabled. |
 | Origin not enabled | Chip `○ Not logged · Set up artifacts for this site…`, which opens settings with the origin filled in and offers any matching starter adapter. From M1.5b the page context menu and the toolbar action also offer **Create adapter** for the tab; once one of them has granted `activeTab`, the panel's button asks for the exact origin and drafts an adapter from the site (§5.1). The panel cannot offer it directly on an ungranted tab, because a side-panel click grants neither `activeTab` nor the tab's URL. Notes, `/log`, and summaries still work. |
 | Origin granted for notes, not enabled | Chip `○ Not logged · Set up artifacts for this site… · Create adapter`. The origin is already granted, so the button works directly (§5.1). |
