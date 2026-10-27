@@ -533,7 +533,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
   Latest verification: see the current health handoff below for clean
-  baseline `46f17b3`. The same IPC restriction remains; the existing repair
+  baseline `2f06f4b`. The same IPC restriction remains; the existing repair
   is retained and this item is not closed.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
@@ -872,7 +872,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `2f1e64c`)
+### Current health handoff (2026-10-27 — baseline `2f06f4b`)
 
 - Clean workspace; no quarantine failure file or incomplete implementation.
   The required unfiltered Cargo gate passes 26 adapter-template tests and 447
@@ -891,7 +891,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   enabled and production IPC unchanged.
 - The same restriction was observed on `728b200`, `90f88b4`, `382bf29`,
   `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4`,
-  `21d06c3`, `5231f9e` and now `2f1e64c`. Earlier raw logs remain in
+  `21d06c3`, `5231f9e`, `2f1e64c` and now `2f06f4b`. Earlier raw logs remain in
   `target/overnight-health/baseline-bdbbbb4/` and
   `target/overnight-health/baseline-5231f9e/` (gitignored). No preceding
   commit among the last five is verified green under this restriction;
