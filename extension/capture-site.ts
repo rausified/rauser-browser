@@ -6,7 +6,8 @@ import type {
   AdapterDocument, ConfigSnapshot, DraftDropReason, DraftScopeState, DraftTenantView, RuleProvenance,
   ScopeChoiceView, ShapeCount, SiteDrafted,
 } from "../protocol/ts/generated.js";
-import { canonicalCapture, urlSegments } from "./adapter-templates.js";
+import { canonicalCapture, compileDocument, evaluate, urlSegments } from "./adapter-templates.js";
+import type { PolicyLease } from "./model.js";
 import {
   exampleUrl, previewDocument, validateAdapterDocument, type AdapterObject, type PreviewRow,
 } from "./adapter-review.js";
@@ -410,4 +411,71 @@ export function planDraftedSite(
     startsCapture: config.capture_enabled || config.adapters.artifacts.length === 0,
     checked, kinds, counts,
   } };
+}
+
+
+// --- Recurring pages on configured origins ----------------------------------
+
+/** The host catalog's example value for each shape class
+ * (protocol/capture-site/catalog.json `fill`; a test pins the two). */
+const SHAPE_FILL: Readonly<Record<string, string>> = {
+  num: "123456",
+  key: "ABC-123",
+  slug: "example-page",
+  uuid: "123e4567-e89b-12d3-a456-426614174000",
+  hex32: "0123456789abcdef0123456789abcdef",
+  hex40: "0123456789abcdef0123456789abcdef01234567",
+  hex64: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  tailhex32: "example-page-0123456789abcdef0123456789abcdef",
+  id: "example123",
+};
+
+/** The host catalog's `blocked_route_words`: never a route word to draft from. */
+const BLOCKED_ROUTE_WORDS: ReadonlySet<string> = new Set([
+  "search", "query", "filter", "login", "home", "dashboard", "invite", "reset", "password", "verify",
+  "confirm", "share", "magic", "token", "oauth", "auth", "signin", "signup", "logout", "unsubscribe",
+]);
+
+/** How many sampled visits make a page shape recurring. */
+export const RECURRING_VISITS = 3;
+
+const fillClass = (part: string): string => SHAPE_FILL[part.slice(1, -1)] ?? part;
+const isPlaceholder = (part: string): boolean => part.startsWith("{");
+
+/** An example URL for a private shape, filled with the host catalog's class
+ * examples as the host's `UrlShape::fill` does, or null for a non-shape. */
+export function fillShape(origin: string, shape: string): string | null {
+  if (!isUrlShape(shape)) return null;
+  const [path, query] = shape.split("?");
+  let url = origin + path!.split("/").map((part) => isPlaceholder(part) ? fillClass(part) : part).join("/");
+  if (query !== undefined) {
+    url += "?" + query.split("&").map((pair) => {
+      const [key, value] = pair.split("=");
+      return `${key === "{param}" ? "param" : key}=${fillClass(value!)}`;
+    }).join("&");
+  }
+  return url;
+}
+
+/**
+ * Whether the panel offers to draft rules for recurring pages on a
+ * configured origin: the current page is not recognized, and the worker's
+ * sample holds a shape that is not recognized either, was visited at least
+ * three times, and has a path route word. It is computed here by filling each
+ * shape and evaluating it with the lease's compiled document, and sends
+ * nothing anywhere.
+ */
+export function recurringHint(lease: PolicyLease | null, samples: readonly SampledShape[], url: string): boolean {
+  const origin = httpOrigin(url);
+  if (!lease || !origin || !lease.adapters.artifacts.some((adapter) => adapter.origin === origin)) return false;
+  const compiled = compileDocument(lease.adapters);
+  if (!compiled.ok || evaluate(compiled.doc, url).match) return false;
+  return samples.slice(0, MAX_SITE_SHAPES).some((row) => {
+    const entry = shapeCount(row?.shape, row?.count, MAX_SHAPE_COUNT);
+    if (!entry || entry.count < RECURRING_VISITS) return false;
+    const words = entry.shape.split("?")[0]!.split("/").filter((part) => part !== "" && !isPlaceholder(part));
+    if (!words.some((word) => !BLOCKED_ROUTE_WORDS.has(word))) return false;
+    const example = fillShape(origin, entry.shape);
+    return example !== null && !evaluate(compiled.doc, example).match;
+  });
 }

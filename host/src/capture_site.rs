@@ -1207,6 +1207,48 @@ mod handler_tests {
         assert_eq!(site.preview[0].adapter, None);
     }
 
+    /// Task 13: drafting additions on a configured origin lists a shape that
+    /// an owner-scoped existing adapter recognizes only without scope as
+    /// already captured, and drafts only the new kind of page.
+    #[test]
+    fn draft_site_on_a_configured_origin_lists_scoped_recognized_shapes_as_already_captured() {
+        const GITHUB_ISSUES: &str = "[[artifacts]]\ntype = \"github.issue\"\norigin = \"https://github.com\"\nmatch = [{ path = \"/{owner:name|lower}/{repo:name|lower}/issues/{number:int}\" }]\nscope = { owner = [\"acme-corp\"] }\nid = \"github.issue:{host}/{owner}/{repo}/{number}\"\n";
+        let mut s = setup(&adapters(&[GITHUB_ISSUES]));
+        let snapshot = s.config.snapshot().clone();
+        let site = drafted(draft_site(
+            request(
+                "https://github.com",
+                &[
+                    "/{slug}/{slug}/discussions/{num}",
+                    "/{slug}/{slug}/issues/{num}",
+                ],
+                &[],
+            ),
+            &mut s.config,
+        ));
+        assert!(
+            site.dropped.iter().any(
+                |d| d.shape.as_deref() == Some("/{slug}/{slug}/issues/{num}")
+                    && d.reason == DraftDropReason::AlreadyRecognized
+            ),
+            "{:?}",
+            site.dropped
+        );
+        assert_eq!(site.adapters.len(), 1, "{site:#?}");
+        let adapter = &site.adapters[0];
+        assert_ne!(adapter.adapter["type"], "github.issue");
+        assert_eq!(adapter.scope, DraftScopeState::Copied);
+        let rules = adapter.adapter["match"].as_array().unwrap();
+        assert!(
+            rules
+                .iter()
+                .all(|rule| rule["path"].as_str().unwrap().contains("/discussions/")),
+            "{rules:?}"
+        );
+        // The existing definition is untouched.
+        assert_eq!(s.config.snapshot(), &snapshot);
+    }
+
     #[test]
     fn draft_site_writes_nothing_to_home_or_config_dir() {
         let mut s = setup(&adapters(&[TOOLS_ITEMS]));

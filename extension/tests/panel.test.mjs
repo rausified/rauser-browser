@@ -1601,6 +1601,156 @@ test("a pending pause or removal blocks the drafted save", async () => {
   }
 });
 
+// --- Capture Site: recurring pages on configured origins -------------------
+
+const { starterOffers: starterOffersFor } = await import("../dist/starter-adapters.js");
+const WIKI_PAGES = { type: "wiki.pages", origin: WIKI, match: [{ path: "/pages/{num:int}" }], id: "wiki.pages:{host}/{num}" };
+const NOTES_URL = `${WIKI}/notes/42`;
+const sampleRow = (shape, count) => ({ shape, count, last_seen: Date.now() - 1_000 });
+const notesDraft = (revision = "1") => ({
+  type: "site_drafted", revision, drafter: "structural",
+  adapters: [{
+    adapter: { type: "wiki.notes", origin: WIKI, match: [{ path: "/notes/{num:int}" }], id: "wiki.notes:{host}/{num}" },
+    scope: "not_shared", tenant: null,
+    rules: [draftRule(0, `${WIKI}/notes/123`, { visited: 3 })],
+  }],
+  dropped: [{ shape: "/pages/{num}", adapter: null, rule: null, reason: "already_recognized" }],
+  preview: [
+    { source: "visited", shape: "/notes/{num}", url: `${WIKI}/notes/123456`, adapter: 0, rule: 0, artifact_id: "wiki.notes:wiki.example.com/123456" },
+    { source: "visited", shape: "/pages/{num}", url: `${WIKI}/pages/123456`, adapter: null, rule: null, artifact_id: null },
+  ],
+  taken_types: ["wiki.pages"], remapped: 0,
+});
+
+// A configured origin whose worker sample holds `patterns`. Resolves once
+// the startup reads settle; the hint may or may not be shown.
+async function configuredPage(url = NOTES_URL, options = {}) {
+  const { artifacts = [WIKI_PAGES], draft = () => notesDraft(), intercept, current = "/notes/{num}", ...rest } = options;
+  const page = await install({
+    tab: { id: 1, url, title: "Work page" },
+    config: { ...CONFIG, capture_enabled: true, adapters: { format: 1, artifacts } },
+    script: async () => ({ current, links: [{ shape: "/notes/{num}", count: 2 }] }),
+    intercept: (request, state) => request.type === "draft_site"
+      ? (typeof draft === "function" ? draft(request, state) : draft)
+      : intercept?.(request, state),
+    ...rest,
+  });
+  await until(() => !page.el("note-body").disabled, "the note to load");
+  await until(() => page.state.workerRequests.some((message) => message.kind === "get_site_patterns"), "the sample read");
+  await settle();
+  return page;
+}
+
+async function recurringReview(url = NOTES_URL, options = {}) {
+  const page = await configuredPage(url, options);
+  await until(() => !page.el("capture-site-recurring").hidden && !page.el("capture-site-recurring").disabled, "the recurring hint");
+  page.from = page.state.requests.length;
+  page.el("capture-site-recurring").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  await drafted(page);
+  return page;
+}
+
+test("the recurring-pages hint shows only after three unrecognized visits and sends nothing to the host", async () => {
+  const two = await configuredPage(NOTES_URL, { patterns: [sampleRow("/notes/{num}", 2), sampleRow("/pages/{num}", 9)] });
+  assert.equal(two.el("capture-site-area").hidden, true);
+  assert.equal(two.el("capture-site-recurring").hidden, true);
+  const recognized = await configuredPage(`${WIKI}/pages/42`, { current: "/pages/{num}", patterns: [sampleRow("/notes/{num}", 9)] });
+  assert.equal(recognized.el("capture-site-area").hidden, true);
+  const page = await configuredPage(NOTES_URL, { patterns: [sampleRow("/notes/{num}", 3)] });
+  await until(() => !page.el("capture-site-recurring").hidden, "the recurring hint");
+  assert.equal(page.el("capture-site-area").hidden, false);
+  assert.equal(page.el("capture-site").hidden, true);
+  assert.equal(page.el("capture-site-hint").textContent, "Looks like you have recurring pages on wiki.example.com.");
+  assert.equal(page.el("capture-site-recurring").textContent, "Draft rules for these pages");
+  for (const shown of [two, recognized, page]) {
+    assert.deepEqual(shown.sent("draft_site"), []);
+    assert.deepEqual(shown.sent("check_site_draft"), []);
+    assert.equal(shown.state.scripts.length, 0, "no page links are read before the click");
+  }
+});
+
+test("the sample reaches the host only after the user asks", async () => {
+  const patterns = [sampleRow("/notes/{num}", 3), sampleRow("/pages/{num}", 5)];
+  const page = await configuredPage(NOTES_URL, { patterns });
+  await until(() => !page.el("capture-site-recurring").hidden, "the recurring hint");
+  assert.deepEqual(page.sent("draft_site"), []);
+  const from = page.state.requests.length;
+  page.el("capture-site-recurring").click();
+  await drafted(page);
+  assert.deepEqual(sentAfter(page, from), ["draft_site"]);
+  const [request] = page.sent("draft_site");
+  assert.equal(request.origin, WIKI);
+  // The current page's shape carries its sampled count; the sample follows.
+  assert.deepEqual(request.visited, [{ shape: "/notes/{num}", count: 3 }, { shape: "/pages/{num}", count: 5 }]);
+  assert.deepEqual(request.links, [{ shape: "/notes/{num}", count: 2 }]);
+  assert.doesNotMatch(JSON.stringify({ ...request, origin: null, request_id: null }), /http|Work page|last_seen|42/);
+  assert.equal(page.el("capture-site-heading").textContent, "Capture work on wiki.example.com");
+  assert.match(draftText(page), /Brauser will remember: wiki\.notes — pages like \/notes\/<number>/);
+  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
+  // Canceling returns to the hint and saves nothing.
+  page.el("capture-site-cancel").click();
+  assert.equal(page.el("capture-site-review").hidden, true);
+  assert.equal(page.el("capture-site-recurring").hidden, false);
+  assert.equal(page.el("capture-site").hidden, true);
+  assert.equal(updates(page).length, 0);
+});
+
+test("drafting on a configured origin adds adapters and never changes existing ones", async () => {
+  const custom = { id: "wiki.pages:{host}/{num}", match: [{ path: "/pages/{num:int}" }], origin: WIKI, type: "wiki.pages", title: "{title} · Wiki" };
+  const artifacts = [custom, { type: "tools.item", origin: "https://tools.example.com", match: [{ path: "/items/{id:int}" }], id: "tools.item:{host}/{id}" }];
+  const page = await recurringReview(NOTES_URL, {
+    artifacts, patterns: [sampleRow("/notes/{num}", 4)],
+    intercept: (request, state) => request.type === "check_site_draft" ? siteChecked(request, state) : null,
+  });
+  assert.equal(page.el("capture-site-save").textContent, "Start capturing this site");
+  await saveCapture(page);
+  const [check] = checks(page);
+  assert.deepEqual(check.adapters, [notesDraft().adapters[0].adapter]);
+  const [update] = updates(page);
+  assert.equal(update.config.adapters.artifacts.length, 3);
+  assert.equal(JSON.stringify(update.config.adapters.artifacts.slice(0, 2)), JSON.stringify(artifacts));
+  assert.deepEqual(update.config.adapters.artifacts[2], notesDraft().adapters[0].adapter);
+  assert.equal(update.config.capture_enabled, true);
+});
+
+test("rules overlapping the origin's existing adapters are listed as already captured", async () => {
+  // GitHub issues for one organization only. The sampled issues shape is
+  // recognized by that adapter only without its owner scope, so the hint
+  // offers it and the host lists it as already captured.
+  const issues = starterOffersFor("https://github.com", ["acme-corp"]).find((offer) => offer.artifact_type === "github.issue").adapter;
+  const github = "https://github.com";
+  const page = await recurringReview(`${github}/acme-corp/widget/discussions/5`, {
+    artifacts: [issues], current: "/{slug}/{slug}/discussions/{num}",
+    patterns: [sampleRow("/{slug}/{slug}/discussions/{num}", 3), sampleRow("/{slug}/{slug}/issues/{num}", 4)],
+    draft: (request) => ({
+      type: "site_drafted", revision: "1", drafter: "structural",
+      adapters: [{
+        adapter: {
+          type: "github.discussions", origin: github,
+          match: [{ path: "/{owner:name|lower}/{repo:name|lower}/discussions/{num:int}" }],
+          id: "github.discussions:{host}/{owner}/{repo}/{num}",
+        },
+        scope: "copied", tenant: { segment: 0, capture: "owner" },
+        rules: [draftRule(0, `${github}/example/repo/discussions/123`, { visited: 3 })],
+      }],
+      dropped: [
+        { shape: request.visited[1].shape, adapter: null, rule: null, reason: "already_recognized" },
+        { shape: null, adapter: 0, rule: 1, reason: "draft_overlap" },
+      ],
+      preview: [], taken_types: ["github.issue"], remapped: 0,
+    }),
+  });
+  const [request] = page.sent("draft_site");
+  assert.deepEqual(request.visited.map((row) => row.shape), ["/{slug}/{slug}/discussions/{num}", "/{slug}/{slug}/issues/{num}"]);
+  const dropped = page.el("capture-site-dropped").textContent;
+  assert.match(dropped, /\/\{slug\}\/\{slug\}\/issues\/\{num\}: already captured by this site's rules/);
+  assert.match(dropped, /A drafted github\.discussions rule: already captured by this site's rules/);
+  // The copied scope keeps the new kind to the same organization.
+  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
+  assert.equal(page.el("capture-site-scope").hidden, true);
+});
+
 // --- Artifact card: "Why I'm here" -------------------------------------------
 
 const CAPTURING = { ...CONFIG, capture_enabled: true };

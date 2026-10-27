@@ -1,10 +1,10 @@
 import type { SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
 import type { WorkerStatus } from "./model.js";
 import { HostError } from "./native.js";
-import { ConfigSession, describe, element, withConfigMutationLock, worker } from "./settings.js";
+import { ConfigSession, describe, element, leaseFor, withConfigMutationLock, worker } from "./settings.js";
 import {
-  DROP_REASONS, captureMode, captureOrigin, checkReason, draftRequest, planCaptureSite, planDraftedSite, siteConfigured,
-  tenantPrefill,
+  DROP_REASONS, captureMode, captureOrigin, checkReason, draftRequest, planCaptureSite, planDraftedSite, recurringHint,
+  siteConfigured, tenantPrefill,
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
@@ -129,6 +129,7 @@ export class CaptureSitePanel {
   private readonly patterns = new SitePatternPanel();
   private readonly area = element<HTMLElement>("capture-site-area");
   private readonly start = element<HTMLButtonElement>("capture-site");
+  private readonly recurringStart = element<HTMLButtonElement>("capture-site-recurring");
   private readonly hint = element<HTMLElement>("capture-site-hint");
   private readonly review = element<HTMLElement>("capture-site-review");
   private readonly heading = element<HTMLElement>("capture-site-heading");
@@ -155,6 +156,11 @@ export class CaptureSitePanel {
   private readonly dropped = element<HTMLElement>("capture-site-dropped");
   private readonly advanced = element<HTMLButtonElement>("capture-site-advanced");
   private page: CapturePage | null = null;
+  private busy = false;
+  // The worker's private shape sample for the configured page, read from the
+  // worker (never the host) to decide the recurring-pages hint. It is only
+  // sent to the host after the user asks to draft rules for these pages.
+  private sample: { key: string; samples: SampledShape[] | null; revision: string | null; hint: boolean } | null = null;
   private target: (CapturePage & { revision: string; mode: CaptureMode; origin: string }) | null = null;
   private plan: CapturePlan | null = null;
   // The drafted flow. The link shapes (in `draftInput`) and the draft live
@@ -169,6 +175,7 @@ export class CaptureSitePanel {
 
   constructor(private readonly session: ConfigSession, private readonly actions: CaptureActions) {
     this.start.addEventListener("click", () => this.open());
+    this.recurringStart.addEventListener("click", () => this.openRecurring());
     this.cancel.addEventListener("click", () => {
       if (this.saving) return;
       this.close();
@@ -202,22 +209,66 @@ export class CaptureSitePanel {
   render(page: CapturePage | null, busy: boolean): void {
     this.patterns.render(page, busy);
     this.page = page;
+    this.busy = busy;
     if (this.target && !this.samePage(page, this.target)) this.close();
+    this.updateOffer();
+  }
+
+  /** Which Capture Site entry the page gets: the Capture Site button on a
+   * starter or unknown site, the recurring-pages hint on a configured site
+   * whose sampled pages recur unrecognized, or the settings pointer. */
+  private updateOffer(): void {
+    const page = this.page;
+    const busy = this.busy;
     const config = this.session.config;
     const mode = page ? captureMode(config, page.url) : "unsupported";
-    // A configured starter site still says where its rules are managed.
-    const offered = mode === "starter" || mode === "draft" || (mode === "configured" && captureOrigin(page!.url) !== null);
-    this.area.hidden = !offered;
-    if (!offered) return;
     const configured = mode === "configured";
-    this.start.hidden = configured || this.target !== null;
-    this.start.disabled = configured || busy || !this.session.connected || !config?.storage ||
+    const recurring = configured && this.recurring(page!);
+    // A configured starter site still says where its rules are managed.
+    const offered = this.target !== null || mode === "starter" || mode === "draft" ||
+      (configured && (captureOrigin(page!.url) !== null || recurring));
+    this.area.hidden = !offered;
+    this.recurringStart.hidden = !offered || !recurring || this.target !== null;
+    if (!offered) return;
+    const blocked = busy || !this.session.connected || !config?.storage ||
       !!this.session.configIssue || !!this.session.adapterIssue;
-    this.hint.textContent = configured ? "This site has capture rules. Manage them in settings."
+    this.start.hidden = configured || this.target !== null;
+    this.start.disabled = configured || blocked;
+    this.recurringStart.disabled = !recurring || blocked;
+    this.hint.textContent = configured && !recurring ? "This site has capture rules. Manage them in settings."
       : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
+      : recurring ? `Looks like you have recurring pages on ${new URL(page!.url).host}.`
       : "Remember work on this site without configuring rules by hand.";
     if (this.target) this.updateControls(busy);
+  }
+
+  /** Whether this configured page gets the recurring-pages hint. The
+   * worker's sample is read once per page and revision and evaluated here
+   * with the current policy; nothing goes to the host. */
+  private recurring(page: CapturePage): boolean {
+    const origin = httpOrigin(page.url);
+    const config = this.session.config;
+    const revision = this.session.revision;
+    if (!origin || !config || !revision) return false;
+    const key = `${page.tabId ?? ""}\n${page.url}\n${revision}`;
+    if (this.sample?.key !== key) {
+      const sample: NonNullable<CaptureSitePanel["sample"]> = { key, samples: null, revision: null, hint: false };
+      this.sample = sample;
+      void worker<SampledShape[]>({ kind: "get_site_patterns", origin }).catch(() => []).then((rows) => {
+        if (this.sample !== sample) return;
+        sample.samples = Array.isArray(rows) ? rows : [];
+        this.updateOffer();
+      });
+      return false;
+    }
+    const sample = this.sample;
+    if (!sample.samples) return false;
+    if (sample.revision !== revision) {
+      sample.hint = recurringHint(leaseFor(config, revision), sample.samples, page.url);
+      sample.revision = revision;
+    }
+    return sample.hint;
   }
 
   private samePage(a: CapturePage | null, b: CapturePage): boolean {
@@ -229,9 +280,27 @@ export class CaptureSitePanel {
     const mode = captureMode(this.session.config, this.page.url);
     const origin = mode === "starter" ? captureOrigin(this.page.url) : mode === "draft" ? httpOrigin(this.page.url) : null;
     if (!origin) return;
-    this.target = { ...this.page, revision: this.session.revision, mode, origin };
+    this.begin(mode, origin);
+  }
+
+  /** Draft rules for a configured site's recurring pages: the drafted flow,
+   * with the worker's sample as the visited shapes. It only adds adapters;
+   * the site's existing definitions are never replaced or edited. */
+  private openRecurring(): void {
+    const page = this.page;
+    if (this.actions.isBusy() || !page || !this.session.revision || this.target ||
+        this.recurringStart.disabled || this.recurringStart.hidden) return;
+    const origin = httpOrigin(page.url);
+    if (!origin || captureMode(this.session.config, page.url) !== "configured" || !this.recurring(page)) return;
+    this.begin("draft", origin);
+  }
+
+  private begin(mode: CaptureMode, origin: string): void {
+    const page = this.page!;
+    this.target = { ...page, revision: this.session.revision!, mode, origin };
     this.review.hidden = false;
     this.start.hidden = true;
+    this.recurringStart.hidden = true;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
     this.source.textContent = mode === "draft" ? DRAFT_SOURCE : STARTER_SOURCE;
     this.github.hidden = mode !== "starter" || starterKind(origin) !== "github";
@@ -268,7 +337,7 @@ export class CaptureSitePanel {
     this.titleSuffix.value = "";
     this.advanced.hidden = true;
     this.message.textContent = "";
-    this.start.hidden = false;
+    this.updateOffer();
   }
 
   /** Read this page's shapes on the click, then have the host draft from

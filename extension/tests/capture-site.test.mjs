@@ -470,3 +470,83 @@ test("the real current URL is evaluated locally", () => {
   assert.equal(drafting(draft, select(draft), url, "", { ...CONFIG, storage: null }).ok, false);
   assert.equal(drafting(draft, select(draft), "https://other.example.com/pages/42").ok, false);
 });
+
+// --- Recurring-pages hint and additions on configured origins ---------------
+
+const { readFile } = await import("node:fs/promises");
+const { recurringHint, fillShape } = await import("../dist/capture-site.js");
+const captureCatalog = JSON.parse(await readFile(new URL("../../protocol/capture-site/catalog.json", import.meta.url)));
+const WIKI_PAGES = { type: "wiki.pages", origin: WIKI, match: [{ path: "/pages/{num:int}" }], id: "wiki.pages:{host}/{num}" };
+const leaseOf = (artifacts, revision = "7") => ({
+  revision, expires_at: Date.now() + 60_000, capture_enabled: true, adapters: { format: 1, artifacts },
+});
+const sampled = (shape, count) => ({ shape, count, last_seen: 1 });
+
+test("shapes fill with the host catalog's class examples", () => {
+  for (const [name, value] of Object.entries(captureCatalog.fill)) {
+    assert.equal(fillShape(WIKI, `/x/{${name}}`), `${WIKI}/x/${value}`, name);
+  }
+  assert.equal(fillShape(WIKI, "/"), `${WIKI}/`);
+  assert.equal(fillShape(WIKI, "/a//{num}?q={slug}&{param}={id}"), `${WIKI}/a//123456?q=example-page&param=example123`);
+  assert.equal(fillShape(WIKI, "https://wiki.example.com/pages/1"), null);
+  assert.equal(fillShape(WIKI, "/Pages/1"), null);
+});
+
+test("hint appears only after three unrecognized visits of a candidate shape and sends nothing to the host", () => {
+  const lease = leaseOf([WIKI_PAGES]);
+  const url = `${WIKI}/notes/42`;
+  const previous = globalThis.chrome;
+  let calls = 0;
+  globalThis.chrome = new Proxy({}, { get() { calls += 1; throw new Error("recurringHint must not touch Chrome APIs"); } });
+  try {
+    // Fewer than three visits is not yet a recurring page.
+    assert.equal(recurringHint(lease, [sampled("/notes/{num}", 2)], url), false);
+    assert.equal(recurringHint(lease, [sampled("/notes/{num}", 3)], url), true);
+    assert.equal(recurringHint(lease, [sampled("/pages/{num}", 9), sampled("/notes/{num}", 4)], url), true);
+    // A shape the lease already recognizes, one with no path route word, or
+    // only a blocked route word is not a candidate.
+    assert.equal(recurringHint(lease, [sampled("/pages/{num}", 9)], url), false);
+    assert.equal(recurringHint(lease, [sampled("/{num}", 9), sampled("/{slug}/{id}", 9)], url), false);
+    assert.equal(recurringHint(lease, [sampled("/login/{num}", 9), sampled("/search?q={slug}", 9)], url), false);
+    assert.equal(recurringHint(lease, [sampled("/{num}?view={id}", 9)], url), false);
+    for (const word of captureCatalog.blocked_route_words) {
+      assert.equal(recurringHint(lease, [sampled(`/${word}/{num}`, 9)], url), false, word);
+    }
+    // A recognized current page gets no hint, nor does a page on another
+    // origin, a missing lease, or invalid sample rows.
+    assert.equal(recurringHint(lease, [sampled("/notes/{num}", 9)], `${WIKI}/pages/42`), false);
+    assert.equal(recurringHint(lease, [sampled("/notes/{num}", 9)], "https://other.example.com/notes/42"), false);
+    assert.equal(recurringHint(null, [sampled("/notes/{num}", 9)], url), false);
+    assert.equal(recurringHint(lease, [sampled("/notes/1", 9), { shape: "/notes/{num}", count: "9" }, null], url), false);
+    assert.equal(recurringHint(lease, [sampled("/notes/{num}", 9)], "chrome://newtab"), false);
+  } finally {
+    globalThis.chrome = previous;
+  }
+  assert.equal(calls, 0);
+});
+
+test("drafting on a configured origin adds adapters and never changes existing ones", () => {
+  // Existing definitions, including a custom one on the drafted origin with
+  // unusual key order and extra settings, stay byte-identical.
+  const custom = { id: "wiki.pages:{host}/{num}", match: [{ path: "/pages/{num:int}/{mode?:(edit|view)}" }], origin: WIKI,
+    type: "wiki.pages", title: "{title} · Wiki", modes: { view: "view", edit: "edit" } };
+  const artifacts = [custom, ...starterOffers("https://acme.atlassian.net", []).map((offer) => offer.adapter)];
+  const config = { ...CONFIG, capture_enabled: true, adapters: { format: 1, artifacts } };
+  const before = JSON.stringify(config);
+  const draft = drafted([{
+    adapter: { type: "wiki.notes", origin: WIKI, match: [{ path: "/notes/{num:int}" }], id: "wiki.notes:{host}/{num}" },
+    scope: "not_shared", tenant: null,
+    rules: [rule(0, `${WIKI}/notes/123`, { visited: 3 })],
+  }], [], ["wiki.pages"]);
+  const plan = drafts(draft, select(draft), `${WIKI}/notes/42`, "", config);
+  assert.equal(JSON.stringify(config), before);
+  assert.equal(plan.document.artifacts.length, artifacts.length + 1);
+  assert.equal(JSON.stringify(plan.document.artifacts.slice(0, artifacts.length)), JSON.stringify(artifacts));
+  assert.deepEqual(added(plan, config).map((adapter) => adapter.type), ["wiki.notes"]);
+  assert.equal(plan.current.result.artifact_id, "wiki.notes:wiki.example.com/42");
+  assert.equal(plan.startsCapture, true);
+  // A rename can never take an existing type on the origin.
+  const taken = drafting(draft, select(draft, { types: ["wiki.pages"] }), `${WIKI}/notes/42`, "", config);
+  assert.equal(taken.ok, false);
+  assert.match(taken.message, /already used/);
+});
