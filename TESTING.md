@@ -79,7 +79,7 @@ smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
 claim that it passed here. Structural drafting and unknown-site enabling are
 still unbuilt, so these tests do not certify any machine-drafted rule.
 
-## Dialog reply fixture and restricted runners
+## Dialog reply fixture
 
 `dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
 child that reads the length line and exactly that many body bytes before
@@ -89,40 +89,41 @@ closes stdin before the parent finishes writing and races into `EPIPE`. Do
 not read until EOF either: the parent keeps stdin open until the child exits.
 The fixture uses the same `head -c` tool as the neighboring timeout fixture.
 
-A restricted runner can deny Unix socket creation and connection with EPERM,
-even under a temporary directory. On 2026-10-27 this caused 32 host service
-test failures, confirmed with an independent Unix-socket bind. The same
-runner denied Node `spawnSync`, preventing `test:scripts` from running its
-win32 path simulation. Keep these tests enabled; run the full gate outside
-that restriction. An explicitly filtered local run can diagnose the remaining
-tests, but is not a passing full gate. The dialog repair remains in progress
-until that external gate passes.
+## Local IPC in sandboxes
 
-The restricted runs on baselines `728b200` and `90f88b4` reproduced the
-same failures. To distinguish a runner denial from a service regression,
-try an independent Python `AF_UNIX` bind in a temporary workspace directory.
-Do not change service paths or permissions to work around a denied bind.
-Node's restriction can be misleading: a JSON-only `spawnSync` child returned
-`status: 0` alongside `error.code: "EPERM"` and empty stdout. Inspect the
-spawn result's `error` as well as its exit status. The script suite consequently
-reported `Unexpected end of JSON input` in its win32 simulation; no real
-registration or launchd call was involved.
+Some development sandboxes deny local IPC. Codex's `workspace-write` sandbox
+on Linux, which Cookie's in-cycle health gate runs in, refuses to bind or
+connect a Unix socket even in a temporary directory (EPERM), and Node's child
+pipes, which are socketpairs on Linux, fail the same way: a `spawnSync` child
+can come back with `status: 0`, `error.code: "EPERM"` and empty stdout. This
+is a limitation of the sandbox, not a product defect. Do not change service
+paths, permissions or production IPC to fit it.
 
-If `npm run test:scripts` reports only a failed file, use
-`node --test --test-isolation=none scripts/tests/dev-service.test.mjs` for
-diagnosis. On this runner it exposes the win32 simulation's empty-output
-JSON parse error (8 pass, 1 fail, 1 platform skip). This changes only the
-diagnostic invocation; the required script gate remains unmodified and failing.
-The required opening gate stops Cargo after the failing host test binary,
-so its 26 adapter-template passes and 447 host passes do not establish that
-later integration and documentation tests passed.
+Every test that binds or connects a Unix socket, or starts a service that
+does, starts with a guard (Rust: `host/src/ipc_test_guard.rs`, test and
+`scripted-dialogs` builds only; `test:scripts`: `scripts/tests/ipc-guard.mjs`,
+with a `"socket"` and a `"child-pipe"` probe). One cached probe per test
+process binds and connects a socket in a fresh `/tmp` directory (the Node
+`"child-pipe"` probe reads a child's stdout instead) and then:
 
-The diagnostic workspace run excluding `service::client::tests::`,
-`service::server::tests::` and `native::tests::run_proxy::` passed 493 tests
-with 39 host tests filtered out. The scripted-dialog unit group passed 10
-tests. Neither result substitutes for the unfiltered gate, and neither
-justifies disabling the socket tests or changing production IPC to fit the
-runner. Verify the full gate in a runner that permits these local operations.
+- IPC works: the test runs.
+- EPERM or EACCES, with `BRAUSER_REQUIRE_IPC_TESTS` unset: the test returns
+  early and prints `<test>: skipping: local IPC denied by sandbox (...)` to
+  stderr, so the suite passes in the sandbox without hiding the skip.
+- EPERM or EACCES with `BRAUSER_REQUIRE_IPC_TESTS=1`: the test fails. CI sets
+  the flag on every build job (`.github/workflows/build-os.yml`), so CI never
+  skips a socket test.
+- Any other probe error: the test fails, flag or not.
+
+`BRAUSER_TEST_SIMULATE_IPC_DENIED=1` makes the probe report a denial without
+trying, to check both paths on a machine that allows IPC. On macOS a real
+denial can be reproduced with a Seatbelt profile that denies
+`network-bind (local unix-socket)` and `network-outbound (remote unix-socket)`
+under `sandbox-exec -f <profile> cargo test ...`. A new socket test must start
+with the guard (`if crate::ipc_test_guard::ipc_denied() { return; }`, or
+`brauser_host::ipc_test_guard::ipc_denied()` from `host/tests`; in Node,
+`if (await ipcDenied(t, "socket")) return;`); without it, it fails in the
+sandbox like the 32 to 47 tests that kept Cookie's gate red before `brwr-rq5`.
 
 ## UI-free end-to-end: the recipe
 
@@ -401,4 +402,5 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-26: Branch `feat/agent-service-pr2`. A Unix socket path must fit in `sun_path`, 104 bytes on macOS, and a socket in a support directory under a `$TMPDIR`-based temporary `HOME` (`/var/folders/...`) can exceed it, so binding fails. The service refuses a too-long path outright instead of moving the socket, and the smoke runner and service tests now use a short `HOME` directly under `/tmp`. Tests also never call `launchctl`: the runner starts the service child itself, and the host's spawn seam replaces `kickstart` in the Rust integration tests.
 - 2026-10-27: Branch `fix/retired-hand-removed-contracts`. Rewriting config.toml in a test no longer simulates lost adapter contracts by itself: any refresh under the config lock (every note request, and `ConfigStore::update`) records adopted contracts in `adopted-contracts.json` beside the test's config, so a later hand edit keeps their note keys. A fixture that means "no contract recorded anywhere" must also remove `config::adopted_contracts_path(dir)`, and tolerate its absence, since a contract removed through settings before any locked refresh is only in `[[adapter_id_history]]`. A plain `loaded()` store refreshes without the lock and records nothing.
 - 2026-10-27: Branch `fix/adopted-contract-repair`. `ConfigStore::update` now reads `adopted-contracts.json` for the frozen-ID check, so a test that adds adapters after damaging or hand-editing that file gets a refusal it did not before: either restore the file or assert the refusal. Checking a refusal's wording against a constant was not enough once the message carried the runtime state path; the native test matches the stable prefix plus `adopted_contracts_path(dir)`, then renames the file aside and checks that notes come back, which is the repair the message promises.
+- 2026-10-27: Branch `fix/sandbox-aware-ipc-tests` (`brwr-rq5`). Cookie's health gate had failed every Unix-socket test inside Codex's `workspace-write` sandbox since the service landed, and Cookie read that as a blocked gate for 20+ cycles. The socket tests now probe once and skip on EPERM/EACCES unless `BRAUSER_REQUIRE_IPC_TESTS=1` ("Local IPC in sandboxes"). Checked on macOS: a normal run skips nothing. Under `sandbox-exec` with Unix-socket bind and connect denied, and separately with `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, the 47 guarded Rust tests (38 unit, 9 `scripted-dialogs` integration) skip with the reason and both Cargo runs pass; with `BRAUSER_REQUIRE_IPC_TESTS=1` the same runs fail exactly those 47. In `test:scripts` the simulated denial skips the 2 guarded child-pipe tests and the probe self-test, and fails them with the flag; Seatbelt leaves child pipes alone, so there only the socket probe self-test skips.
 - 2026-10-27: Branch `feat/adopted-state-repair`. `get_config` now refreshes under the config lock, so it records adopted contracts like a note request; a test that wants "never recorded" must avoid `get_config` as well as locked refreshes. Recording warnings come from the reporting host's own last locked attempt, so a host test injects a write failure by making the config directory read-only (0500) after `.config.lock` exists, and an unlocked refresh must leave the warning in place. Settings' confirmation text lives in `options.html`, which the fake DOM does not parse, so the options test checks the markup between `forget-adopted-confirm` and `forget-adopted-yes`. The headless smoke forgets a damaged record through the real page and checks the `.bak` bytes and that no native dialog appeared.

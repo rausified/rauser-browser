@@ -25,6 +25,11 @@ pub mod dialog;
 pub mod frame;
 pub mod harness;
 pub mod index;
+// Tests that need Unix sockets skip under a sandbox that denies them, unless
+// BRAUSER_REQUIRE_IPC_TESTS=1 (CI). Test and scripted-dialogs builds only.
+#[cfg(all(unix, any(test, feature = "scripted-dialogs")))]
+#[doc(hidden)]
+pub mod ipc_test_guard;
 mod layout;
 pub mod native;
 pub mod note;
