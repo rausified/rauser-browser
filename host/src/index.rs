@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{
-    activity_shape_is_bounded, activity_shape_is_valid, canonical_url, trail_transition_is_valid,
+    activity_shape_is_valid, canonical_url, logged_activity_is_bounded, trail_transition_is_valid,
 };
 use crate::summary::SummaryEvent;
 use crate::vault::{
@@ -38,8 +38,10 @@ use crate::vault::{
 // recovery fix. v3 adds `CachedEvent::Summary` on top of it; bumping again
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
 // already durable in the log. v4 records log positions and the adapter
-// document fingerprint.
-const STATE_VERSION: u8 = 4;
+// document fingerprint. v5 counts M1 visits as opens and bounds logged
+// titles. A v4 cache is migrated in place (`migrate_v4_state`) rather than
+// rescanned, so its checkpoints survive the upgrade.
+const STATE_VERSION: u8 = 5;
 // How often a long regeneration pass publishes its progress. Chrome ends a
 // host soon after its port closes; without checkpoints a pass killed that
 // way would restart at the same sorted prefix every time.
@@ -232,6 +234,8 @@ struct ArtifactRow {
     why: Option<String>,
     activities: Vec<ActivityEvent>,
     summaries: Vec<SummaryEvent>,
+    /// Instants of M1 visit entries, each one cold open with no measures.
+    legacy_visits: Vec<OffsetDateTime>,
     latest_at: OffsetDateTime,
 }
 
@@ -605,9 +609,9 @@ impl ArtifactIndex {
     }
 
     fn load_current_state(&self) -> Result<(IndexState, bool)> {
-        let (mut state, rebuild) = match read_state(&self.state_path()) {
-            Ok(Some(state)) if self.state_matches(&state) => (state, false),
-            Ok(_) | Err(_) => (self.empty_state(), true),
+        let (mut state, rebuild) = match self.read_current_state() {
+            Some((state, migrated)) => (state, migrated),
+            None => (self.empty_state(), true),
         };
         let changed = self.catch_up_logs(&mut state)?;
         // Ref resolution follows the current adapters, so a policy change
@@ -619,9 +623,25 @@ impl ArtifactIndex {
         Ok((state, publish))
     }
 
-    fn state_matches(&self, state: &IndexState) -> bool {
-        state.version == STATE_VERSION
-            && state.root == self.storage.root
+    /// The cache for this root and layout, if any. A version 4 cache is
+    /// migrated in place; the flag reports that it must be republished.
+    fn read_current_state(&self) -> Option<(IndexState, bool)> {
+        let mut state = read_state(&self.state_path()).ok()??;
+        if !self.state_location_matches(&state) {
+            return None;
+        }
+        match state.version {
+            STATE_VERSION => Some((state, false)),
+            4 => {
+                migrate_v4_state(&mut state);
+                Some((state, true))
+            }
+            _ => None,
+        }
+    }
+
+    fn state_location_matches(&self, state: &IndexState) -> bool {
+        state.root == self.storage.root
             && state.root_identity == self.root_identity
             && state.log_dir == self.storage.log_dir
             && state.artifacts_dir == self.storage.artifacts_dir
@@ -658,10 +678,7 @@ impl ArtifactIndex {
     /// the earliest position. Also returns that cache.
     fn rescan_logs(&self) -> Result<(IndexState, Option<IndexState>)> {
         let mut state = self.scan_logs()?;
-        let previous = match read_state(&self.state_path()) {
-            Ok(Some(previous)) if self.state_matches(&previous) => Some(previous),
-            _ => None,
-        };
+        let previous = self.read_current_state().map(|(previous, _)| previous);
         if let Some(previous) = &previous {
             for (id, seen) in std::mem::take(&mut state.conflicts) {
                 if let Some(winner) = previous.events.get(&id)
@@ -776,7 +793,15 @@ impl ArtifactIndex {
             bail!("artifact index state exceeds its 64 MiB limit");
         }
         let database = sqlite_snapshot(&self.derive(state), &state.dirty)?;
-        atomic_write(&self.database_path(), &database)?;
+        if database.skipped_rows > 0 {
+            // index.db is a derived snapshot; the log and the ingestion
+            // cache keep the event. One bad row never stops publication.
+            eprintln!(
+                "{NAMESPACE}: warning: left {} artifact index row(s) larger than one SQLite page out of index.db",
+                database.skipped_rows
+            );
+        }
+        atomic_write(&self.database_path(), &database.bytes)?;
         // Publish the checkpoint last. If either write fails, a subsequent
         // read still sees the older checkpoint and retries the catch-up.
         atomic_write(&self.state_path(), &bytes)
@@ -1002,6 +1027,34 @@ impl ArtifactIndex {
     }
 }
 
+/// Upgrade a version 4 cache without rereading the logs: drop activity a
+/// log rescan would now skip (a title over capture's limit), and mark those
+/// artifacts and every M1 visit's artifact dirty so their owned files are
+/// regenerated with the v5 derivation (M1 visits count as opens).
+fn migrate_v4_state(state: &mut IndexState) {
+    let dropped = state
+        .events
+        .iter()
+        .filter(|(_, event)| {
+            matches!(event, CachedEvent::Activity(event) if !logged_activity_is_bounded(event))
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    for id in dropped {
+        if let Some(event) = state.events.remove(&id) {
+            state.dirty.insert(event.artifact_id().to_owned());
+        }
+        state.positions.remove(&id);
+        state.sequence.remove(&id);
+    }
+    for event in state.events.values() {
+        if let CachedEvent::Legacy(event) = event {
+            state.dirty.insert(event.artifact_id.clone());
+        }
+    }
+    state.version = STATE_VERSION;
+}
+
 fn saturating_u32(value: u64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
@@ -1151,6 +1204,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         why: None,
                         activities: Vec::new(),
                         summaries: Vec::new(),
+                        legacy_visits: Vec::new(),
                         latest_at: at,
                     });
                 row.focused_secs = row
@@ -1276,8 +1330,13 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         why: None,
                         activities: Vec::new(),
                         summaries: Vec::new(),
+                        legacy_visits: Vec::new(),
                         latest_at: at,
                     });
+                // An M1 visit entry recorded one navigation to the page:
+                // count it as one open, with no measured time.
+                row.opens = row.opens.saturating_add(1);
+                row.legacy_visits.push(at);
                 row.days.insert(day.clone());
                 if day < row.first_seen {
                     row.first_seen = day.clone();
@@ -1297,7 +1356,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     local_date: day,
                     focused_secs: 0,
                     background_secs: 0,
-                    opens: 0,
+                    opens: 1,
                     mode: None,
                     title: event.title.clone(),
                     url: event.url.clone(),
@@ -1329,6 +1388,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         why: None,
                         activities: Vec::new(),
                         summaries: Vec::new(),
+                        legacy_visits: Vec::new(),
                         latest_at: at,
                     });
                 row.days.insert(day.clone());
@@ -1492,7 +1552,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 return None;
             }
             let event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
-            if !activity_shape_is_bounded(&event)
+            if !logged_activity_is_bounded(&event)
                 || Uuid::parse_str(&event.event_id).is_err()
                 || event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
@@ -1937,7 +1997,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
             total_summaries - shown_summaries
         ));
     }
-    for period in timeline_rollups(&artifact.activities) {
+    for period in timeline_rollups(artifact) {
         out.push_str(&format!(
             "- {} · {}\n",
             period.label,
@@ -1967,12 +2027,20 @@ struct Rollup {
     last_date: Date,
 }
 
-fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
+/// Activity totals and M1 visit entries (one open each) by day.
+fn timeline_rollups(artifact: &ArtifactRow) -> Vec<Rollup> {
+    let activities = artifact.activities.iter().filter_map(|event| {
+        let at = OffsetDateTime::parse(&event.occurred_at, &Rfc3339).ok()?;
+        Some((
+            at,
+            u64::from(event.focused_seconds),
+            u64::from(event.background_seconds),
+            u64::from(event.opens),
+        ))
+    });
+    let legacy = artifact.legacy_visits.iter().map(|at| (*at, 0, 0, 1));
     let mut days = BTreeMap::<Date, Rollup>::new();
-    for event in events {
-        let Ok(at) = OffsetDateTime::parse(&event.occurred_at, &Rfc3339) else {
-            continue;
-        };
+    for (at, focused, background, opens) in activities.chain(legacy) {
         let date = at.date();
         let row = days.entry(date).or_insert_with(|| Rollup {
             label: date.to_string(),
@@ -1981,11 +2049,9 @@ fn timeline_rollups(events: &[ActivityEvent]) -> Vec<Rollup> {
             opens: 0,
             last_date: date,
         });
-        row.focused = row.focused.saturating_add(u64::from(event.focused_seconds));
-        row.background = row
-            .background
-            .saturating_add(u64::from(event.background_seconds));
-        row.opens = row.opens.saturating_add(u64::from(event.opens));
+        row.focused = row.focused.saturating_add(focused);
+        row.background = row.background.saturating_add(background);
+        row.opens = row.opens.saturating_add(opens);
     }
     let dates = days.keys().copied().collect::<Vec<_>>();
     let recent = dates.len().saturating_sub(14);
@@ -2054,7 +2120,7 @@ struct SqlTable {
     rows: Vec<Vec<SqlValue>>,
 }
 
-fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<Vec<u8>> {
+fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<SqliteImage> {
     let artifacts = derived
         .artifacts
         .values()
@@ -2139,21 +2205,36 @@ fn sql_u64(value: u64) -> SqlValue {
     SqlValue::Integer(i64::try_from(value).unwrap_or(i64::MAX))
 }
 
+/// SQLite stores a table-leaf payload of up to U-35 bytes (U is the usable
+/// page size: the whole page, as no bytes are reserved) on the leaf itself.
+/// A larger payload must spill to overflow pages, which this writer does
+/// not emit, so such a row is left out instead of written unreadably.
+const SQLITE_MAX_LOCAL_PAYLOAD: usize = SQLITE_PAGE_SIZE - 35;
+
+struct SqliteImage {
+    bytes: Vec<u8>,
+    /// Rows left out because their payload would need overflow pages.
+    skipped_rows: usize,
+}
+
 /// Emit the small subset of the SQLite file format this append-derived
 /// snapshot needs: schema and rowid table B-trees, without secondary indexes
-/// or overflow records. A 64 KiB page keeps every bounded event row local.
-fn build_sqlite(tables: &[SqlTable]) -> Result<Vec<u8>> {
+/// or overflow records. A 64 KiB page keeps every bounded event row local;
+/// a row over the local payload limit is skipped and counted.
+fn build_sqlite(tables: &[SqlTable]) -> Result<SqliteImage> {
     let root_count = tables.len() + 1;
     let mut pages = vec![vec![0u8; SQLITE_PAGE_SIZE]; root_count];
     let mut next_page = root_count + 1;
+    let mut skipped_rows = 0;
     for (table_index, table) in tables.iter().enumerate() {
         let root_page = table_index + 2;
-        let cells = table
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| table_leaf_cell((index + 1) as u64, row))
-            .collect::<Result<Vec<_>>>()?;
+        let mut cells = Vec::with_capacity(table.rows.len());
+        for (index, row) in table.rows.iter().enumerate() {
+            match table_leaf_cell((index + 1) as u64, row)? {
+                Some(cell) => cells.push(cell),
+                None => skipped_rows += 1,
+            }
+        }
         let chunks = partition_cells(&cells, 8)?;
         if chunks.len() <= 1 {
             write_leaf_page(
@@ -2192,12 +2273,18 @@ fn build_sqlite(tables: &[SqlTable]) -> Result<Vec<u8>> {
     let schema_cells = schema_rows
         .iter()
         .enumerate()
-        .map(|(index, row)| table_leaf_cell((index + 1) as u64, row))
+        .map(|(index, row)| {
+            table_leaf_cell((index + 1) as u64, row)?
+                .context("SQLite schema row exceeds the local payload limit")
+        })
         .collect::<Result<Vec<_>>>()?;
     write_leaf_page(&mut pages[0], 100, &schema_cells)?;
     let page_count = pages.len() as u32;
     write_database_header(&mut pages[0], page_count);
-    Ok(pages.into_iter().flatten().collect())
+    Ok(SqliteImage {
+        bytes: pages.into_iter().flatten().collect(),
+        skipped_rows,
+    })
 }
 
 fn partition_cells(cells: &[Vec<u8>], header: usize) -> Result<Vec<Vec<Vec<u8>>>> {
@@ -2295,12 +2382,17 @@ fn write_interior_page(page: &mut [u8], children: &[(u32, u64)]) -> Result<()> {
     Ok(())
 }
 
-fn table_leaf_cell(rowid: u64, values: &[SqlValue]) -> Result<Vec<u8>> {
+/// One table-leaf cell, or `None` when its payload is too large to keep
+/// local (`SQLITE_MAX_LOCAL_PAYLOAD`).
+fn table_leaf_cell(rowid: u64, values: &[SqlValue]) -> Result<Option<Vec<u8>>> {
     let payload = sqlite_record(values)?;
+    if payload.len() > SQLITE_MAX_LOCAL_PAYLOAD {
+        return Ok(None);
+    }
     let mut cell = sqlite_varint(payload.len() as u64);
     cell.extend(sqlite_varint(rowid));
     cell.extend(payload);
-    Ok(cell)
+    Ok(Some(cell))
 }
 
 fn decode_cell_rowid(cell: &[u8]) -> Result<u64> {
@@ -4296,6 +4388,250 @@ print(json.dumps([tables,row]))"#;
             "a v1 cache must be rescanned, not trusted"
         );
         assert_eq!(artifact_files(root.path()).len(), 1);
+    }
+
+    /// Run SQLite's own integrity check on `path`, then one query whose
+    /// rows are printed one per line.
+    fn sqlite_check(path: &Path, query: &str) -> String {
+        let output = Command::new("python3")
+            .args([
+                "-c",
+                "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('pragma integrity_check').fetchone()[0]); [print(*r) for r in c.execute(sys.argv[2])]",
+            ])
+            .arg(path)
+            .arg(query)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Python writes \r\n on Windows.
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n")
+    }
+
+    #[test]
+    fn a_logged_title_over_the_capture_limit_is_skipped_without_stopping_the_index() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        // Capture refuses titles over 2048 bytes; an edited or crafted log
+        // line can still carry one inside an otherwise valid marker.
+        let crafted = activity(
+            "00000000-0000-4000-8000-0000000000a1",
+            "CRAFTED",
+            &"T".repeat(100_000),
+            "2026-10-15T10:00:00Z",
+        );
+        let longest = activity(
+            "00000000-0000-4000-8000-0000000000a2",
+            "LONGEST",
+            &"L".repeat(2048),
+            "2026-10-15T11:00:00Z",
+        );
+        let just_over = activity(
+            "00000000-0000-4000-8000-0000000000a4",
+            "OVER",
+            &"O".repeat(2049),
+            "2026-10-15T11:30:00Z",
+        );
+        write_log(
+            root.path(),
+            "2026-10-15.md",
+            &[&crafted, &longest, &just_over],
+        );
+        assert_eq!(index.reindex().unwrap().written, 1);
+        assert!(index.artifact(&crafted.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&just_over.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&longest.artifact_id).unwrap().is_some());
+        // Later deliveries keep updating index.db.
+        let later = activity(
+            "00000000-0000-4000-8000-0000000000a3",
+            "LATER",
+            "Later",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&later, &[]).unwrap();
+        assert_eq!(
+            sqlite_check(
+                &index.database_path(),
+                "select title from artifacts order by title"
+            ),
+            format!("ok\n{}\nLater\n", "L".repeat(2048))
+        );
+    }
+
+    #[test]
+    fn an_oversize_cached_row_is_left_out_of_index_db_without_stopping_publication() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        // Log parsing bounds titles, so only a hand-edited or otherwise
+        // unexpected cache can hold an event whose rows exceed one SQLite
+        // page. Publication must still survive it.
+        let oversize = activity(
+            "00000000-0000-4000-8000-0000000000b1",
+            "OVERSIZE",
+            &"T".repeat(100_000),
+            "2026-10-15T10:00:00Z",
+        );
+        let good = activity(
+            "00000000-0000-4000-8000-0000000000b2",
+            "GOOD",
+            "Good",
+            "2026-10-15T11:00:00Z",
+        );
+        let mut state = index.empty_state();
+        for event in [&oversize, &good] {
+            state.ingest(CachedEvent::Activity(event.clone()), None);
+        }
+        index.publish_state_and_database(&state).unwrap();
+        let later = activity(
+            "00000000-0000-4000-8000-0000000000b3",
+            "LATER",
+            "Later",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&later, &[]).unwrap();
+        assert_eq!(
+            sqlite_check(
+                &index.database_path(),
+                "select title from visits order by title"
+            ),
+            "ok\nGood\nLater\n"
+        );
+        assert_eq!(
+            sqlite_check(&index.database_path(), "select count(*) from artifacts"),
+            "ok\n2\n"
+        );
+        // Only index.db leaves the row out; the derived history keeps it.
+        assert!(index.artifact(&oversize.artifact_id).unwrap().is_some());
+        // A version 4 cache (from before log titles were bounded) drops
+        // the event while it migrates, as a log rescan now would.
+        let mut cached: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        cached["version"] = 4.into();
+        fs::write(index.state_path(), serde_json::to_vec(&cached).unwrap()).unwrap();
+        assert!(index.artifact(&oversize.artifact_id).unwrap().is_none());
+        assert!(index.artifact(&good.artifact_id).unwrap().is_some());
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().version,
+            STATE_VERSION
+        );
+    }
+
+    #[test]
+    fn index_db_rows_up_to_the_local_payload_limit_are_readable_and_larger_ones_are_left_out() {
+        // A table-leaf payload over U-35 = 65,501 bytes must spill to
+        // overflow pages, which this writer does not emit. A one-column text
+        // record has a 4-byte header here, so 65,497 bytes is the limit.
+        let at_limit = "a".repeat(65_497);
+        let over_limit = "b".repeat(65_498);
+        let image = build_sqlite(&[SqlTable {
+            name: "t",
+            sql: "CREATE TABLE t(v TEXT)",
+            rows: vec![
+                vec![SqlValue::Text(at_limit.clone())],
+                vec![SqlValue::Text(over_limit)],
+                vec![SqlValue::Text("small".into())],
+            ],
+        }])
+        .unwrap();
+        assert_eq!(image.skipped_rows, 1);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("t.db");
+        fs::write(&path, image.bytes).unwrap();
+        assert_eq!(
+            sqlite_check(&path, "select length(v) from t order by rowid"),
+            "ok\n65497\n5\n"
+        );
+    }
+
+    #[test]
+    fn an_m1_legacy_visit_counts_one_open_with_a_dated_timeline_line() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://example.org/legacy-page";
+        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let url_hash = sha256_hex(url.as_bytes());
+        let legacy_line = format!(
+            "\n- 2026-10-20T10:00:00Z — Legacy page — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+            sha256_hex("legacy-marker-open".as_bytes()),
+        );
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!("{LOG_HEADER}\n{legacy_line}"),
+        )
+        .unwrap();
+        assert_eq!(index.reindex().unwrap().written, 1);
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(
+            markdown.contains("  opens: 1\n  days_opened: 1\n"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.ends_with("## Timeline\n\n- 2026-10-20 · opened 1×\n"),
+            "{markdown}"
+        );
+        assert_eq!(index.artifact(&artifact_id).unwrap().unwrap().opens, 1);
+        assert_eq!(index.recent(None, None, 32).unwrap().0[0].opens, 1);
+        let (worklog, _) = index
+            .worklog(
+                parse_date("2026-10-20").unwrap(),
+                parse_date("2026-10-20").unwrap(),
+            )
+            .unwrap();
+        assert!(worklog.starts_with("Opened 1 artifact,"), "{worklog}");
+        assert_eq!(
+            sqlite_check(&index.database_path(), "select opens from visits"),
+            "ok\n1\n"
+        );
+    }
+
+    #[test]
+    fn a_version_4_cache_migrates_so_existing_m1_artifact_files_gain_their_opens() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://example.org/legacy-page";
+        let url_hash = sha256_hex(url.as_bytes());
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!(
+                "{LOG_HEADER}\n\n- 2026-10-20T10:00:00Z — Legacy page — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+                sha256_hex("legacy-marker-upgrade".as_bytes()),
+            ),
+        )
+        .unwrap();
+        index.reindex().unwrap();
+        // Simulate the file and clean cache a version 4 build left: legacy
+        // visits rendered no open and no Timeline line.
+        let path = artifact_files(root.path()).pop().unwrap();
+        let current = fs::read_to_string(&path).unwrap();
+        let old = current
+            .replace("  opens: 1\n", "  opens: 0\n")
+            .replace("- 2026-10-20 · opened 1×\n", "");
+        assert_ne!(old, current);
+        fs::write(&path, &old).unwrap();
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        state["version"] = 4.into();
+        state["dirty"] = serde_json::json!([]);
+        fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+
+        // The migration keeps the checkpoints: no log is reread.
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        assert_eq!(fs::read_to_string(&path).unwrap(), current);
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {

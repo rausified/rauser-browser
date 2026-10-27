@@ -174,6 +174,18 @@ pub(crate) fn activity_shape_is_bounded(event: &ActivityEvent) -> bool {
         })
 }
 
+/// The field bounds a logged activity must meet to be indexed: the shape
+/// caps plus the title limit capture enforces before writing
+/// (`title_too_long`), so an edited or crafted log line cannot carry more
+/// than a delivered event could.
+pub(crate) fn logged_activity_is_bounded(event: &ActivityEvent) -> bool {
+    activity_shape_is_bounded(event)
+        && event
+            .title
+            .as_ref()
+            .is_none_or(|title| title.len() <= MAX_TITLE_BYTES)
+}
+
 pub(crate) fn trail_transition_is_valid(transition: &str) -> bool {
     matches!(
         transition,
