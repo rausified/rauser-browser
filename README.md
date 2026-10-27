@@ -72,11 +72,17 @@ artifact on every route the removed or earlier rules recognized, because
 config.toml keeps those rules for note keys (never for capture). A page those
 rules do not recognize, such as a Jira board whose issue modal shares its
 URL once `selectedIssue` is stripped, keeps its own note. Older URL notes stay
-separate and viewable. If config.toml no longer records any rule for a site
-(a repair replaced it, or the site was removed before Brauser kept those
-rules), the host cannot tell that board from its modals, so every page there
+separate and viewable. A repair of an unusable config.toml keeps those rules
+when it can read them. If no record of any rule for a site remains (an
+oversized config.toml was replaced on a fresh install, or the site was
+removed before Brauser kept those rules), the host cannot tell that board from its modals, so every page there
 uses its own URL note; the shared artifact note is left untouched in the
-home folder. Notes alone do not turn capture back on.
+home folder. Deleting an adapter from config.toml by hand keeps its notes
+too: the host records every adapter it has used in `adopted-contracts.json`
+beside config.toml and reads removed ones from there. If that file is damaged,
+notes on pages no current adapter recognizes refuse to load or save until it
+is fixed or removed; removing it forgets those adapters. Notes alone do not
+turn capture back on.
 
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows is in scope but has no accepted run yet (DESIGN.md §13, §14); the public package remains a later release milestone.
 
