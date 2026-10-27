@@ -3245,4 +3245,179 @@ mod tests {
         ));
         assert!(!new_root.path().join("log").exists());
     }
+
+    /// A JSON Schema `pattern` matcher for the subset `requested_at` uses:
+    /// `^`/`$`, literals, `[...]` classes with ranges, `{n}` repeats, and
+    /// one level of `(a|b)` alternation. Anything else panics, so a schema
+    /// change to an unsupported pattern fails this test rather than passing it.
+    fn pattern_matches(pattern: &str, value: &str) -> bool {
+        #[derive(Debug)]
+        enum Atom {
+            Char(char),
+            Class(Vec<(char, char)>),
+            Group(Vec<Vec<(Atom, usize)>>),
+        }
+        fn parse(
+            chars: &mut std::iter::Peekable<std::str::Chars>,
+            in_group: bool,
+        ) -> Vec<Vec<(Atom, usize)>> {
+            let mut alternatives = vec![Vec::new()];
+            while let Some(&c) = chars.peek() {
+                let atom = match c {
+                    ')' if in_group => break,
+                    '|' if in_group => {
+                        chars.next();
+                        alternatives.push(Vec::new());
+                        continue;
+                    }
+                    '(' => {
+                        chars.next();
+                        let group = parse(chars, true);
+                        assert_eq!(chars.next(), Some(')'), "unclosed group");
+                        Atom::Group(group)
+                    }
+                    '[' => {
+                        chars.next();
+                        let mut ranges = Vec::new();
+                        loop {
+                            let lo = chars.next().expect("unclosed class");
+                            if lo == ']' {
+                                break;
+                            }
+                            if chars.peek() == Some(&'-') {
+                                chars.next();
+                                if chars.peek() == Some(&']') {
+                                    ranges.push((lo, lo));
+                                    ranges.push(('-', '-'));
+                                    continue;
+                                }
+                                let hi = chars.next().expect("unclosed range");
+                                ranges.push((lo, hi));
+                            } else {
+                                ranges.push((lo, lo));
+                            }
+                        }
+                        Atom::Class(ranges)
+                    }
+                    '\\' | '.' | '*' | '+' | '?' | '^' | '$' | '{' | '}' | ']' | '|' | ')' => {
+                        panic!("unsupported pattern syntax {c:?}")
+                    }
+                    _ => {
+                        chars.next();
+                        Atom::Char(c)
+                    }
+                };
+                let mut count = 1;
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    let digits: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                    count = digits.parse().expect("unsupported repeat");
+                }
+                alternatives.last_mut().unwrap().push((atom, count));
+            }
+            alternatives
+        }
+        fn matches_seq<'a>(seq: &[(Atom, usize)], input: &'a [char]) -> Vec<&'a [char]> {
+            let Some(((atom, count), rest)) = seq.split_first() else {
+                return vec![input];
+            };
+            let mut tails = vec![input];
+            for _ in 0..*count {
+                tails = tails
+                    .into_iter()
+                    .flat_map(|tail| matches_atom(atom, tail))
+                    .collect();
+            }
+            tails
+                .into_iter()
+                .flat_map(|tail| matches_seq(rest, tail))
+                .collect()
+        }
+        fn matches_atom<'a>(atom: &Atom, input: &'a [char]) -> Vec<&'a [char]> {
+            match atom {
+                Atom::Char(c) => match input.split_first() {
+                    Some((first, rest)) if first == c => vec![rest],
+                    _ => vec![],
+                },
+                Atom::Class(ranges) => match input.split_first() {
+                    Some((first, rest))
+                        if ranges.iter().any(|(lo, hi)| lo <= first && first <= hi) =>
+                    {
+                        vec![rest]
+                    }
+                    _ => vec![],
+                },
+                Atom::Group(alternatives) => alternatives
+                    .iter()
+                    .flat_map(|seq| matches_seq(seq, input))
+                    .collect(),
+            }
+        }
+        let body = pattern
+            .strip_prefix('^')
+            .and_then(|rest| rest.strip_suffix('$'))
+            .expect("pattern must be anchored");
+        let mut chars = body.chars().peekable();
+        let alternatives = parse(&mut chars, false);
+        assert!(chars.next().is_none(), "unbalanced pattern");
+        let input: Vec<char> = value.chars().collect();
+        alternatives
+            .iter()
+            .any(|seq| matches_seq(seq, &input).iter().any(|tail| tail.is_empty()))
+    }
+
+    #[test]
+    fn start_run_requested_at_schema_admits_the_timestamps_the_host_parses() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../protocol/schema.json")).unwrap();
+        let defs = &schema["$defs"];
+        let requested_at = &defs["StartRunRequest"]["properties"]["requested_at"];
+        let occurred_at = &defs["VisitEvent"]["properties"]["occurred_at"];
+        for bound in ["minLength", "maxLength"] {
+            assert_eq!(requested_at[bound], occurred_at[bound], "{bound}");
+        }
+        let pattern = requested_at["pattern"]
+            .as_str()
+            .expect("requested_at states the forms the host parses");
+        let schema_admits = |value: &str| {
+            let length = value.chars().count() as u64;
+            length >= requested_at["minLength"].as_u64().unwrap()
+                && length <= requested_at["maxLength"].as_u64().unwrap()
+                && pattern_matches(pattern, value)
+        };
+
+        // Schema and host agree on the form of every one of these.
+        for (value, accepted) in [
+            ("2026-10-27T12:22:48Z", true),
+            ("2026-10-27T12:22:48+02:00", true),
+            ("2026-10-27T12:22:48-07:00", true),
+            ("2026-10-27T12:22:48+00:00", true),
+            // new Date().toISOString(): fractional seconds are not accepted.
+            ("2026-10-27T12:22:48.452Z", false),
+            ("2026-10-27T12:22:48.452+02:00", false),
+            ("2026-10-27T12:22:48.4Z", false),
+            ("2026-10-27T12:22:48+0200", false),
+            ("2026-10-27T12:22:48", false),
+            ("2026-10-27T12:22Z", false),
+            ("2026-10-27 12:22:48Z", false),
+            ("2026-10-27t12:22:48Z", false),
+            ("2026-10-27T12:22:48z", false),
+            ("2026-10-27T12:22:48Z ", false),
+            ("yesterday", false),
+            ("", false),
+        ] {
+            assert_eq!(parse_event_time(value).is_ok(), accepted, "host: {value}");
+            assert_eq!(schema_admits(value), accepted, "schema: {value}");
+        }
+        // The schema states the form; only the host can judge the calendar
+        // and the offset's size, so these pass the schema and not the host.
+        for value in [
+            "2026-13-01T12:22:48Z",
+            "2026-10-27T25:00:00Z",
+            "2026-10-27T12:22:48+15:00",
+        ] {
+            assert!(schema_admits(value), "schema: {value}");
+            assert!(parse_event_time(value).is_err(), "host: {value}");
+        }
+    }
 }

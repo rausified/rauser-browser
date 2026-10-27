@@ -170,8 +170,10 @@ the same length-prefixed framing and generated types:
   naming another is refused as `not_configured`), `record_key`, and `requested_at`. The extension always sends
   `record_key` as `null`: the host resolves it exactly as `load_note` does and
   refuses a request that names one. `requested_at` is the user's local click
-  time as an RFC 3339 timestamp with its UTC offset, checked against the same
-  window as capture timestamps. The answer is `run_started` with the `run`
+  time as an RFC 3339 timestamp in whole seconds with its UTC offset (`Z` or
+  `+HH:MM`/`-HH:MM`, so `new Date().toISOString()`'s fractional seconds are
+  refused), the same form as capture's `occurred_at` and checked against the
+  same window. The answer is `run_started` with the `run`
   and `existing`, which is `true` when the page's record key already had a
   queued or running run; that run is returned instead of a new one.
 - `get_run` names a `run_id` and `since_offset`, the stream byte offset the

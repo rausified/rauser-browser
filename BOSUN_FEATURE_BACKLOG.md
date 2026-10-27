@@ -493,21 +493,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   spec above), not the old M2 step 8.2 harness path. Agent drafts are
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
-- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
-  durable.** From the PR #75 Codex review: a failed terminal status write
-  still frees the run's slot and key, so the record says running and a second
-  run for the same key can start. Use bounded retries and an in-memory end
-  state, keeping the key reserved, rather than holding the queue on a failing
-  disk.
-- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
-  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
-  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
-  whole-second forms. Make them agree.
-- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
-  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
-  the cap that `write_request` (host/src/frame.rs ~64) enforces after
-  connecting; refuse it as too large before contacting the service.
-  Re-check against open access PR 3 (#98), which reworked the service run path.
 
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
   child could exit after printing its reply before the parent wrote the framed
