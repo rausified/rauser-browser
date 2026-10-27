@@ -65,7 +65,7 @@ Agent runs are owned by a new per-user OS service (a macOS launchd agent) instal
 | Sync caution | Warning when the home folder is in iCloud/OneDrive/etc. | Deleted |
 | `log_incognito` | Always false | Key removed; the manifest keeps `"incognito": "not_allowed"` |
 
-**Kept unchanged:** the native folder picker and its single-use selection token for `storage.root` (it proves which folder Brauser may write, not a privacy choice); vault confinement and every file-ownership rule (page notes, artifact files, summary files never adopt or clobber unowned files); the adapter engines, frozen IDs, and the host's independent re-check of each delivered event against the adapters (it keeps automatic capture to enabled adapters even if the worker misbehaves); `strip_params` URL normalization; the append-only log; neutralizing remote-resource Markdown in agent output before it is written (it stops a Markdown viewer from fetching page-supplied images).
+**Kept unchanged:** the native folder picker and its single-use selection token for `storage.root` (it proves which folder Brauser may write, not a privacy choice); vault confinement and every file-ownership rule (page notes, artifact files, summary files never adopt or clobber unowned files); the adapter engines, frozen IDs, and the host's independent re-check of each delivered event against the adapters (it keeps automatic capture to enabled adapters even if the worker misbehaves); `strip_params` URL normalization; the append-only log; neutralizing remote-resource Markdown in agent output before it is written (it stops a Markdown viewer from fetching page-supplied images; since 2026-10-27 this is a context-free escape, DESIGN.md §5.2 step 6: every `<` becomes `&lt;` and every `!` before `[` becomes `\!`).
 
 ## 5. The Brauser service
 
@@ -170,7 +170,7 @@ thread: codex://threads/…     # or claude_session: …
 Related: [[…]], [[…]]
 ```
 
-Entity and related-note links use the notes profile's link style (DESIGN.md §6.3): `[[wiki links]]` for the Obsidian preset, plain text for the neutral profile. Agent-supplied text is escaped for YAML and neutralized per DESIGN.md §5.2 step 6.
+Entity and related-note links use the notes profile's link style (DESIGN.md §6.3): `[[wiki links]]` for the Obsidian preset, plain text for the neutral profile. Agent-supplied text is escaped for YAML and neutralized per DESIGN.md §5.2 step 6. Neutralizing is a context-free escape applied to every agent string in the body: every `<` becomes `&lt;`, and every `!` directly before `[` becomes `\!` unless already escaped; nothing else changes, so links, emphasis, lists, code and tables still render, while inside code the escapes show literally. Front matter values are JSON-quoted with `<` and an image `!` written as JSON `\u` escapes, so the value reads back unchanged and no agent text puts a raw `<` in the file.
 
 ### 7.2 Log entry
 

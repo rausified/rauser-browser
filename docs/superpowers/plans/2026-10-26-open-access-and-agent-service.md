@@ -1991,9 +1991,10 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 ### Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links
 
 **Files:**
-- Create: `host/src/markdown.rs`
+- Create: `host/src/markdown.rs`, `host/src/markdown_corpus.rs` (test-only), `host/tests/fixtures/markdown-neutralize-corpus.json`, `scripts/check-markdown-neutralizer.mjs`
 - Modify:
-  - `host/src/lib.rs` (`pub(crate) mod markdown;`)
+  - `host/src/lib.rs` (`pub(crate) mod markdown;`, `#[cfg(test)] mod markdown_corpus;`)
+  - `package.json` (exact-pinned `markdown-it`, `micromark`, `micromark-extension-gfm` and `marked` devDependencies; `test:markdown-neutralizer`) and `.github/workflows/ci.yml` (a step after `test:extension`)
   - `host/src/index.rs`: move `yaml_string` and `safe_markdown` into `markdown.rs`; `render_artifact` calls `markdown::inline(.., 2048)`; `fn relative_artifact_link` builds its link with `markdown::relative_link`.
   - `host/src/capture.rs`: `fn relative_log_link` is deleted, and `record_summary` calls `markdown::relative_link(&day_dir, ..)`.
 
@@ -2004,28 +2005,34 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 - `pub(crate) enum LinkStyle { Relative, Wikilink }` and `pub(crate) fn link_style(profile: &str) -> LinkStyle`
 - `pub(crate) fn relative_link(from_dir: &Path, to: &Path) -> String`: percent-encodes each segment except unreserved characters. No new crate.
 - `pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String`: strips `[ ] | # ^` and control characters.
-- The neutralizer is a **hand-written scanner over chars**. The host has no `regex` crate, and none is added.
+- The neutralizer is a **context-free escape** (revised 2026-10-27; it replaced a scanner that turned each construct into a code span and had to mirror each viewer's parser, which three review rounds kept defeating). For every agent-sourced text written into a summary body: every `<` becomes `&lt;` (an entity never creates HTML structure in CommonMark or GFM, so no tag, autolink, comment, CDATA section, processing instruction or declaration can form in any context); every `!` directly before `[` becomes `\!` unless an odd run of backslashes already escapes it (no inline, reference, collapsed or shortcut image, and no `![[embed]]`); nothing else changes. Inside code the escapes show literally and autolinks show as text, which is accepted. No `regex` crate is added.
+- `yaml_string` also writes `<` and an image `!` as JSON `\u` escapes, so the raw front matter holds neither while a YAML reader gets the same value. `wikilink` also strips `<` and `>`.
 - The daily-log line and the artifact file's `Summary:` line keep #59's bracketed `[..](<link>)` form. Only the destination changes: it is now encoded, so a `summaries_dir` with a space gives `%20`. `validate_page_summary` keeps rejecting `<`, `>`, `#`, `?` and control characters.
 
 - [ ] Write the failing tests:
   ```rust
-  #[test] fn every_remote_construct_becomes_an_inert_code_span_with_its_url_visible() {
+  #[test] fn every_lt_becomes_an_entity_and_every_image_bang_is_escaped() {
       for (input, expected) in [
-          ("see ![x](https://e.example/a.png) now", "see `![x](https://e.example/a.png)` now"),
-          ("![x](https://e.example/a.png \"t\")", "`![x](https://e.example/a.png \"t\")`"),
-          ("![x][r]\n\n[r]: https://e.example/b.png", "`![x][r]`\n\n`[r]: https://e.example/b.png`"),
-          ("![x][]", "`![x][]`"), ("![x]", "`![x]`"),
-          ("<img src=https://e.example/c.png>", "`<img src=https://e.example/c.png>`"),
-          ("<IFRAME src=x></IFRAME>", "`<IFRAME src=x>``</IFRAME>`"),
-      ] { assert_eq!(neutralize_remote(input), expected); }
-      for tag in ["video", "audio", "object", "embed", "link", "style", "svg", "picture", "source"] {
-          assert!(neutralize_remote(&format!("<{tag} src=u>")).starts_with('`'));
-      }
+          ("see ![x](https://e.example/a.png) now", "see \\![x](https://e.example/a.png) now"),
+          ("![x][r]\n\n[r]: https://e.example/b.png", "\\![x][r]\n\n[r]: https://e.example/b.png"),
+          ("![x][]", "\\![x][]"), ("![x]", "\\![x]"), ("![[https://e.example/x.png]]", "\\![[https://e.example/x.png]]"),
+          ("<IFRAME src=x></IFRAME>", "&lt;IFRAME src=x>&lt;/IFRAME>"),
+          ("<!-- c --><img src=u>", "&lt;!-- c -->&lt;img src=u>"),
+          ("```\n<img src=u>\n```", "```\n&lt;img src=u>\n```"),
+          ("\\\\![x](u)", "\\\\\\![x](u)"),
+          // ... every input the earlier scanner's tests used (backticks, multi-line constructs,
+          // indented and under-indented fences, table cells, reference definitions, CDATA, PIs).
+      ] { assert_eq!(neutralize_remote(input), expected, "{input:?}"); }
   }
-  #[test] fn backticks_inside_a_construct_get_a_longer_fence() { assert_eq!(neutralize_remote("![`a`](u)"), "``![`a`](u)``"); }
+  #[test] fn every_tag_in_the_list_is_escaped_in_any_case() { /* img iframe video audio object embed link style svg picture source script image */ }
   #[test] fn ordinary_markdown_is_left_alone() {
-      for text in ["[a](https://x.example)", "a < b and c > d", "```\n<img src=u>\n```", "`<img>`"] { assert_eq!(neutralize_remote(text), text); }
+      for text in ["[a](https://x.example)", "- [ ] open\n- [x] done", "| a | b |\n|---|---|\n| 1 | 2 |"] { assert_eq!(neutralize_remote(text), text); }
   }
+  // host/src/markdown_corpus.rs: over host/tests/fixtures/markdown-neutralize-corpus.json, no output holds a
+  // raw `<` or an unescaped `![`, and nothing else changes; with BRAUSER_NEUTRALIZE_CORPUS_OUT set it writes
+  // the outputs for scripts/check-markdown-neutralizer.mjs (`npm run test:markdown-neutralizer`, a CI step
+  // after test:extension), which renders them with markdown-it, micromark+GFM and marked and fails on any
+  // element outside an inert allowlist.
   #[test] fn relative_links_climb_and_percent_encode() {
       assert_eq!(relative_link(Path::new("summaries"), Path::new("pages/a b.md")), "../pages/a%20b.md");
       assert_eq!(relative_link(Path::new("log/2026/10"), Path::new("summaries/x.summary.md")), "../../../summaries/x.summary.md");
@@ -2034,11 +2041,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
   ```
 - [ ] Change the expectation of `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link` in `capture.rs` to `[summary](<../../../My%20Summaries/hn-item.summary.md>)`. Add `the_artifact_summary_link_is_percent_encoded` in `index.rs`, modeled on `summary_event_appends_once_on_a_page_no_adapter_covers`, with a `summary_path` of `My Summaries/hn-item.summary.md`.
 - [ ] Run `cargo test --locked -p brauser -- markdown:: summary_path_with_a_space artifact_summary_link`. Expect FAIL.
-- [ ] Implement `neutralize_remote` line by line:
-  - Lines inside a ``` or ~~~ fence pass through unchanged.
-  - A link reference definition (up to 3 spaces, `[label]:`, whitespace, then non-space) is wrapped whole.
-  - Otherwise, outside existing inline code spans, wrap each `![…](…)`, `![…][…]` or `![…]`, and each `<` followed by an ASCII letter, `/` or `!`, up to the next `>` on the line.
-  - The fence is one backtick longer than the longest backtick run inside, padded with a space when the content starts or ends with a backtick.
+- [ ] Implement `neutralize_remote` as one pass over chars: `<` becomes `&lt;`; `!` followed by `[` becomes `\!` when the run of backslashes before it is even; every other character is copied.
 
   Move `yaml_string` and `safe_markdown` (as `inline`) unchanged. Switch both #59 link sites to `relative_link`.
 - [ ] Run `cargo test --locked -p brauser markdown:: && cargo test --locked -p brauser index:: && cargo test --locked -p brauser capture::`. Expect PASS, including #59's `summary_event_appends_once_on_a_page_no_adapter_covers` unchanged (its path has no reserved characters).
@@ -2087,8 +2090,7 @@ impl Vault {
 ```
 - Rendering:
   - Frontmatter values go through `yaml_string`, and entity lists are flow sequences of JSON strings.
-  - Single-line agent text goes through `inline(.., 200)`. In the `Wikilink` style, entities and related notes use `wikilink` instead.
-  - `description` and `assessment` go through `neutralize_remote`.
+  - Every agent-sourced string in the body goes through `neutralize_remote`: `description` and `assessment` as written, and single-line agent text (type, category, importance reason, entity names, related notes) after `presentation::plain_line(.., 200)` folds it to one line. In the `Wikilink` style, entities and related notes use `wikilink` instead.
   - Empty entity groups are omitted. The Entities line goes when all groups are empty, and Related goes when the list is empty.
 - `summary_relative_path` always yields a path that #59's `validate_page_summary` accepts: relative, ending `.summary.md`, and free of `..`, `<`, `>`, `#`, `?` and control characters.
 
@@ -2336,7 +2338,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 - [ ] Add the steps:
   1. Write a page note on an unrecognized fixture page, then summarize it. Expect `succeeded`, with the page note's bytes unchanged.
-  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. It contains "`![t](https://evil.example/t.png)`" and no raw `<img`.
+  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. It contains `\![t](https://evil.example/t.png)` and the escaped `&lt;img` entity, and no raw `<img` anywhere (front matter values write `<` as a JSON `\u` escape).
   3. Today's daily log has exactly one ` kind=summary ` line, and its payload has `harness: "codex"` and a `url` record key.
   4. `list_artifacts` returns a `web.page` item with `summary.importance === "high"`.
   5. `worklog` contains `Summarized: <fixture title> — specification, high importance`.
@@ -2352,7 +2354,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 **Files:**
 - Modify `DESIGN.md`:
-  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's construct list.
+  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's escape rule (done in Task 43's 2026-10-27 revision).
   - §6.2: the `Summary` fields.
   - §6.6: the §7.1 layout and the two-key identity encoding.
   - §6.7: the Summary line and the date-ordered Timeline summary lines.
