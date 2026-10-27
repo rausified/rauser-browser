@@ -986,16 +986,24 @@ impl From<StoredStorage> for StorageConfig {
 /// `artifacts` name; adopting a colliding default would make the whole config
 /// unreadable before the user had any way to choose a different location.
 fn unused_artifacts_dir(occupied: &[&Path]) -> String {
-    for suffix in 0u32.. {
+    // An empty location has no components and would block every name;
+    // validation rejects it later. Every other location blocks at most the
+    // one single-component name matching its first component, so one of
+    // the first `occupied.len() + 1` candidates is always free.
+    let occupied: Vec<Vec<String>> = occupied
+        .iter()
+        .map(|path| lower_components(path))
+        .filter(|parts| !parts.is_empty())
+        .collect();
+    for suffix in 0..=occupied.len() {
         let candidate = match suffix {
             0 => "artifacts".to_owned(),
             1 => "brauser-artifacts".to_owned(),
             value => format!("brauser-artifacts-{value}"),
         };
         let candidate_parts = lower_components(Path::new(&candidate));
-        if occupied.iter().all(|path| {
-            let parts = lower_components(path);
-            !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(&parts)
+        if occupied.iter().all(|parts| {
+            !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(parts)
         }) {
             return candidate;
         }
@@ -2296,6 +2304,46 @@ mod tests {
         let storage = store.snapshot().storage.as_ref().unwrap();
         assert_eq!(storage.pages_dir, "artifacts");
         assert_eq!(storage.artifacts_dir, "brauser-artifacts");
+    }
+
+    #[test]
+    fn old_config_with_an_empty_location_reports_the_usual_issue() {
+        // An empty location must not stall the artifact-name search; the
+        // file should fail validation exactly as it does with artifacts_dir.
+        let issue = |storage_extra: &'static str, line: &'static str| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let folder = tempfile::tempdir().unwrap();
+                let path = folder.path().join("config.toml");
+                fixtures::write(&path, folder.path(), storage_extra, "", "");
+                let (field, _) = line.split_once(" = ").unwrap();
+                let body = fs::read_to_string(&path)
+                    .unwrap()
+                    .replace(line, &format!("{field} = \"\""));
+                fs::write(&path, body).unwrap();
+                let _ = sender.send(loaded(&path).config_issue().map(str::to_owned));
+            });
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("loading with an emptied {line} hung"))
+        };
+        for line in [
+            "log_dir = \"log\"",
+            "pages_dir = \"pages\"",
+            "later_dir = \"later\"",
+            "summaries_dir = \"summaries\"",
+        ] {
+            let with_artifacts = issue(
+                "artifacts_dir = \"artifacts\"\nsummaries_dir = \"summaries\"",
+                line,
+            );
+            assert!(
+                with_artifacts.is_some(),
+                "an emptied {line} should be rejected"
+            );
+            let without_artifacts = issue("summaries_dir = \"summaries\"", line);
+            assert_eq!(without_artifacts, with_artifacts, "{line}");
+        }
     }
 
     #[test]

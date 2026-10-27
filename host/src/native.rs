@@ -533,86 +533,8 @@ fn record_activity(
             None,
         );
     }
-    // Serde enforces types, not the JSON Schema's maxItems limits. Reject
-    // oversized collections before replaying adapter evaluation for each
-    // claimed mode or trail from this untrusted native message.
-    if !activity_shape_is_valid(&value.event) {
-        return answer(
-            VisitOutcome::Rejected,
-            Some("invalid_activity".into()),
-            None,
-        );
-    }
-    let matched = match config.adapter_match(&value.event.url, value.event.title.as_deref()) {
-        Ok(matched) => matched,
-        Err(_) => {
-            return answer(
-                VisitOutcome::Suppressed,
-                Some("not_an_artifact".into()),
-                None,
-            );
-        }
-    };
-    if matched.artifact_id != value.event.artifact_id
-        || matched.artifact_type != value.event.artifact_type
-    {
-        return answer(
-            VisitOutcome::Rejected,
-            Some("artifact_identity_mismatch".into()),
-            None,
-        );
-    }
-    for mode in &value.event.modes {
-        match config.adapter_match(&mode.url, None) {
-            Ok(evidence)
-                if evidence.artifact_id == value.event.artifact_id
-                    && evidence
-                        .mode
-                        .is_some_and(|found| found.as_str() == mode.mode) => {}
-            _ => {
-                return answer(
-                    VisitOutcome::Rejected,
-                    Some("activity_mode_mismatch".into()),
-                    None,
-                );
-            }
-        }
-    }
-    for trail in &value.event.trails {
-        match (&trail.from_artifact_id, &trail.from_url) {
-            (None, None) => {}
-            (Some(id), Some(url)) => match config.adapter_match(url, None) {
-                Ok(source) if &source.artifact_id == id => {}
-                _ => {
-                    return answer(
-                        VisitOutcome::Rejected,
-                        Some("trail_identity_mismatch".into()),
-                        None,
-                    );
-                }
-            },
-            _ => {
-                return answer(
-                    VisitOutcome::Rejected,
-                    Some("trail_identity_mismatch".into()),
-                    None,
-                );
-            }
-        }
-    }
-    let expected_refs = matched.title.as_ref().map(|title| &title.refs);
-    if value.event.refs.iter().any(|supplied| {
-        !expected_refs.is_some_and(|refs| {
-            refs.iter().any(|expected| {
-                expected.artifact_type == supplied.artifact_type && expected.value == supplied.value
-            })
-        })
-    }) {
-        return answer(
-            VisitOutcome::Rejected,
-            Some("activity_refs_mismatch".into()),
-            None,
-        );
+    if let Err((outcome, reason)) = check_activity_policy(config, &value.event) {
+        return answer(outcome, Some(reason.into()), None);
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
@@ -934,6 +856,9 @@ fn check_activity_policy(
     if !config.snapshot().capture_enabled {
         return Err((VisitOutcome::Suppressed, "capture_disabled"));
     }
+    // Serde enforces types, not the JSON Schema's maxItems limits. Reject
+    // oversized collections before replaying adapter evaluation for each
+    // claimed mode or trail from this untrusted native message.
     if !activity_shape_is_valid(event) {
         return Err((VisitOutcome::Rejected, "invalid_activity"));
     }
@@ -1149,74 +1074,83 @@ fn note_context(
     // requires must still be visible here, or this path and capture would
     // disagree on whether the page is recognized.
     let matched = config.adapter_match(url, None).ok();
-    let key = match matched.as_ref() {
-        Some(found) => RecordKey {
-            kind: RecordKeyKind::Artifact,
-            value: found.artifact_id.clone(),
-        },
-        // No adapter currently recognizes this URL (for example, its
-        // adapter or last enabled site was removed). Before falling back to
-        // a fresh URL key, check whether it was previously recorded under an
-        // artifact, so that artifact's existing shared note stays reachable
-        // instead of appearing empty. The note's own stored identity is
-        // checked first because it survives independently of activity (a
-        // note saved while capture was paused, or before any activity was
-        // ever delivered, has no index row to recover from); the index is
-        // only a fallback for a note saved under a different alternate URL.
-        None => {
-            // Collect every distinct match from BOTH sources into one set
-            // before deciding uniqueness: stripped query identity can make
-            // two different artifacts share the same canonical URL, and
-            // trusting either source alone -- even one that is itself
-            // unambiguous -- could still miss a conflicting match the
-            // other source holds. Guessing between them would silently
-            // redirect a save into an unrelated artifact's note, so the
-            // recovery is trusted only when the union is unambiguous.
-            let mut candidates = std::collections::BTreeSet::new();
-            if let Ok(note_candidates) = vault.note_candidates() {
+    let key =
+        match matched.as_ref() {
+            Some(found) => RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: found.artifact_id.clone(),
+            },
+            // No adapter currently recognizes this URL (for example, its
+            // adapter or last enabled site was removed). Before falling back to
+            // a fresh URL key, check whether it was previously recorded under an
+            // artifact, so that artifact's existing shared note stays reachable
+            // instead of appearing empty. The note's stored identity
+            // survives even without delivered activity; indexed history
+            // also recovers notes created on a different alternate route.
+            None => {
+                // Collect every distinct match from BOTH sources into one set
+                // before deciding uniqueness: stripped query identity can make
+                // two different artifacts share the same canonical URL, and
+                // trusting either source alone -- even one that is itself
+                // unambiguous -- could still miss a conflicting match the
+                // other source holds. Guessing between them would silently
+                // redirect a save into an unrelated artifact's note, so the
+                // recovery is trusted only when the union is unambiguous.
+                let unavailable = || {
+                    (
+                        ErrorCode::Internal,
+                        "note identity is unavailable; recovery lookup failed",
+                    )
+                };
+                let mut candidates = std::collections::BTreeSet::new();
+                let note_candidates = vault
+                    .note_identity_candidates()
+                    .map_err(|_| unavailable())?;
                 candidates.extend(note_candidates.iter().filter_map(|contents| {
                     note::artifact_keyed_note_identity(contents, &canonical)
                 }));
-            }
-            if let Ok(cache_dir) = config.cache_dir()
-                && let Ok(index) =
-                    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                && let Ok(ids) = index.artifact_candidates_for_url(&canonical)
-            {
-                candidates.extend(ids);
-            }
-            match candidates.len() {
-                1 => RecordKey {
-                    kind: RecordKeyKind::Artifact,
-                    value: candidates
-                        .into_iter()
-                        .next()
-                        .expect("checked len == 1 above"),
-                },
-                _ => {
-                    crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
+                // Failure is not an empty candidate set: a missing source can
+                // conceal a conflicting identity and redirect an autosave.
+                let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
+                let index = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+                    .map_err(|_| unavailable())?;
+                candidates.extend(
+                    index
+                        .artifact_candidates_for_url(&canonical)
+                        .map_err(|_| unavailable())?,
+                );
+                match candidates.len() {
+                    1 => RecordKey {
+                        kind: RecordKeyKind::Artifact,
+                        value: candidates
+                            .into_iter()
+                            .next()
+                            .expect("checked len == 1 above"),
+                    },
+                    _ => crate::vault::url_record_key(&canonical)
+                        .expect("canonical HTTP URL has a key"),
                 }
             }
-        }
-    };
+        };
     let mut older_urls = vec![canonical.clone()];
-    if let Some(found) = matched
-        && include_older_notes
-    {
+    if key.kind == RecordKeyKind::Artifact && include_older_notes {
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-            && let Ok(urls) = index.artifact_urls(&found.artifact_id)
+            && let Ok(urls) = index.artifact_urls(&key.value)
         {
             older_urls.extend(urls);
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
+                if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key) {
+                    older_urls.push(candidate);
+                }
                 let Some(candidate) = note::url_keyed_note_url(&contents) else {
                     continue;
                 };
                 if config
                     .adapter_match(&candidate, None)
-                    .is_ok_and(|candidate_match| candidate_match.artifact_id == found.artifact_id)
+                    .is_ok_and(|candidate_match| candidate_match.artifact_id == key.value)
                 {
                     older_urls.push(candidate);
                 }
@@ -1250,6 +1184,17 @@ fn note_error(request_id: &str, error_value: note::NoteRequestError) -> Response
 }
 
 fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore) -> Response {
+    // Note identity lookup can catch up and publish the history cache.
+    let _config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
@@ -1428,6 +1373,17 @@ fn view_older_note(
     value: brauser_protocol::ViewOlderNoteRequest,
     config: &mut ConfigStore,
 ) -> Response {
+    // Note identity lookup can catch up and publish the history cache.
+    let _config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
     let context = match note_context(config, &value.url, true) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, message),
@@ -1566,7 +1522,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
-                "artifact index could not be read",
+                "artifact history is unavailable; log catch-up could not complete",
             );
         }
     };
@@ -1616,7 +1572,7 @@ fn list_artifacts(
         Err(_) => error(
             &value.request_id,
             ErrorCode::Internal,
-            "artifact index could not be read",
+            "artifact history is unavailable; log catch-up could not complete",
         ),
     }
 }
@@ -1675,7 +1631,7 @@ fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) ->
         Err(_) => error(
             &value.request_id,
             ErrorCode::Internal,
-            "worklog could not be generated",
+            "worklog history is unavailable; log catch-up could not complete",
         ),
     }
 }
@@ -2547,6 +2503,11 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
         let mut config = loaded(&path);
         let url = "https://work.example/items/7";
 
@@ -2562,7 +2523,7 @@ id = "work:{host}/{id}"
                     artifact_type: "work.item".into(),
                     url: url.into(),
                     title: Some("Issue 7".into()),
-                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    occurred_at,
                     incognito: false,
                     opens: 1,
                     focused_seconds: 3,
@@ -2703,6 +2664,542 @@ id = "jira:{host}/{key}"
         assert_eq!(browse_loaded.body, "same issue");
     }
 
+    mod note_policy_removal {
+        use super::*;
+
+        const EDIT: &str = "https://work.example/items/7/edit";
+        const VIEW: &str = "https://work.example/items/7/view";
+        const CONTEXT: &str = "https://work.example/items/7/context";
+
+        struct Session {
+            folder: tempfile::TempDir,
+            root: std::path::PathBuf,
+            path: std::path::PathBuf,
+        }
+
+        impl Session {
+            fn new() -> Self {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("notes");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                write_adapter_config(
+                    &path,
+                    &root,
+                    r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}/edit", mode = "edit" }, { path = "/items/{id:int}/view", mode = "view" }, { path = "/items/{id:int}/context", mode = "view" }, { path = "/items/{id:int}/retained", mode = "view" }]
+id = "work:{host}/{id}"
+"#,
+                );
+                Self { folder, root, path }
+            }
+
+            // Exercise real request/response framing and reopen the host for
+            // every request, so config history and recovery must survive EOF.
+            fn call(&self, request: Request) -> Response {
+                let mut output = Vec::new();
+                serve_with_context(
+                    Cursor::new(encoded_request(request)),
+                    &mut output,
+                    loaded(&self.path),
+                    &SetupContext {
+                        env: &no_harnesses(self.folder.path()),
+                    },
+                )
+                .unwrap();
+                decoded_response(output)
+            }
+
+            fn load(&self, url: &str) -> NoteLoaded {
+                match self.call(Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "load-removal".into(),
+                    url: url.into(),
+                })) {
+                    Response::NoteLoaded(note) => note,
+                    other => panic!("expected note_loaded, got {other:?}"),
+                }
+            }
+
+            fn save(&self, url: &str, note: &NoteLoaded, body: &str) -> Response {
+                self.call(Request::SaveNote(brauser_protocol::SaveNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save-removal".into(),
+                    url: url.into(),
+                    title: "Shared note".into(),
+                    body: body.into(),
+                    expected_revision: note.revision.clone(),
+                    expected_key: note.key.clone(),
+                }))
+            }
+
+            fn policy(&self, removal: &str) {
+                let config = loaded(&self.path);
+                let mut next = config.snapshot().clone();
+                match removal {
+                    "adapter" => next.adapters.artifacts.clear(),
+                    "site" => {
+                        // Sites are derived from adapters; removing the
+                        // site means removing its adapters.
+                        next.adapters.artifacts.clear();
+                        next.capture_enabled = false;
+                    }
+                    "narrow" => {
+                        next.adapters.artifacts[0]["match"] = serde_json::json!([{ "path": "/items/{id:int}/retained", "mode": "view" }]);
+                    }
+                    _ => panic!("unknown removal"),
+                }
+                // Open access: adapter edits and removals need no native
+                // confirmation, so every removal goes through the real
+                // request/response framing.
+                let response = self.call(Request::UpdateConfig(UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "remove-policy".into(),
+                    expected_revision: config.revision().into(),
+                    config: next,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }));
+                assert!(
+                    matches!(response, Response::ConfigUpdated(_)),
+                    "{response:?}"
+                );
+            }
+
+            fn activity(&self) -> ActivityEvent {
+                ActivityEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: "work:work.example/7".into(),
+                    artifact_type: "work.item".into(),
+                    url: VIEW.into(),
+                    title: Some("Item 7".into()),
+                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    incognito: false,
+                    opens: 1,
+                    focused_seconds: 3,
+                    background_seconds: 0,
+                    modes: vec![ActivityMode {
+                        mode: "edit".into(),
+                        url: EDIT.into(),
+                    }],
+                    trails: Vec::new(),
+                    refs: Vec::new(),
+                }
+            }
+
+            fn index(&self) -> ArtifactIndex {
+                let config = loaded(&self.path);
+                ArtifactIndex::open_in(
+                    config.snapshot().storage.as_ref().unwrap(),
+                    config.root_identity(),
+                    &config.cache_dir().unwrap(),
+                )
+                .unwrap()
+            }
+        }
+
+        #[test]
+        fn removal_keeps_shared_and_older_route_notes_separate_across_rebuilds() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                // Separate URL notes already occupy both known routes.
+                for url in [EDIT, VIEW] {
+                    note::save_note(&vault, url, "Before adapters", url, "missing").unwrap();
+                }
+                let first = session.load(VIEW);
+                assert_eq!(first.key.kind, RecordKeyKind::Artifact);
+                let Response::NoteSaved(saved) = session.save(VIEW, &first, "Shared artifact text")
+                else {
+                    panic!("expected new shared artifact note")
+                };
+                let shared = session.load(VIEW);
+                assert_eq!(shared.older_notes.len(), 2);
+                let event = session.activity();
+                let response = session.call(Request::RecordActivity(RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "remember-routes".into(),
+                    event: event.clone(),
+                }));
+                assert!(
+                    matches!(
+                        response,
+                        Response::ActivityRecorded(ActivityRecorded {
+                            outcome: VisitOutcome::Persisted,
+                            ..
+                        })
+                    ),
+                    "{response:?}"
+                );
+                session.policy(removal);
+                let shared_path = session.root.join(saved.relative_path);
+                let original = std::fs::read(&shared_path).unwrap();
+                let log_path = session.root.join("log/2026/10/2026-10-16.md");
+                let original_log = std::fs::read(&log_path).unwrap();
+                for rebuild in ["existing", "deleted", "reindex"] {
+                    if rebuild == "deleted" {
+                        std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                    } else if rebuild == "reindex" {
+                        session.index().reindex().unwrap();
+                    }
+                    for url in [EDIT, VIEW] {
+                        let recovered = session.load(url);
+                        assert_eq!(recovered.key, shared.key, "{removal}/{rebuild}/{url}");
+                        assert_eq!(recovered.body, "Shared artifact text");
+                        assert_eq!(recovered.revision, shared.revision);
+                        assert_eq!(
+                            recovered.older_notes.len(),
+                            2,
+                            "{removal}/{rebuild}/{url}: both separate URL notes must stay listed"
+                        );
+                        for older in &recovered.older_notes {
+                            let viewed = session.call(Request::ViewOlderNote(
+                                brauser_protocol::ViewOlderNoteRequest {
+                                    protocol_version: PROTOCOL_VERSION,
+                                    request_id: "view-separate".into(),
+                                    url: url.into(),
+                                    source_url: older.canonical_url.clone(),
+                                },
+                            ));
+                            assert!(
+                                matches!(viewed, Response::NoteLoaded(note) if note.body == older.canonical_url)
+                            );
+                            // An explicit migration also cannot clobber the
+                            // existing shared note or delete its source.
+                            assert!(
+                                matches!(session.call(Request::UseArtifactNote(brauser_protocol::UseArtifactNoteRequest {
+                                protocol_version: PROTOCOL_VERSION,
+                                request_id: "no-merge".into(),
+                                url: url.into(),
+                                source_url: older.canonical_url.clone(),
+                                expected_revision: older.revision.clone(),
+                            })), Response::Error(reply) if reply.code == ErrorCode::Conflict)
+                            );
+                            assert_eq!(
+                                note::load_note(&vault, &older.canonical_url)
+                                    .unwrap()
+                                    .revision,
+                                older.revision
+                            );
+                        }
+                        // A stale URL key must not redirect an autosave.
+                        let wrong_key = NoteLoaded {
+                            key: crate::vault::url_record_key(url).unwrap(),
+                            ..recovered
+                        };
+                        assert!(
+                            matches!(session.save(url, &wrong_key, "Keep this copy-out"),
+                            Response::NoteConflict(reply) if reply.reason == "key_changed" && reply.body == "Shared artifact text")
+                        );
+                    }
+                    assert_eq!(std::fs::read(&shared_path).unwrap(), original);
+                    let response = session.call(Request::RecordActivity(RecordActivityRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "must-stay-off".into(),
+                        event: ActivityEvent {
+                            event_id: uuid::Uuid::new_v4().to_string(),
+                            ..event.clone()
+                        },
+                    }));
+                    assert!(
+                        matches!(response, Response::ActivityRecorded(reply) if reply.outcome == VisitOutcome::Suppressed)
+                    );
+                    assert_eq!(std::fs::read(&log_path).unwrap(), original_log);
+                }
+                assert!(matches!(
+                    session.save(EDIT, &shared, "Edit after removal"),
+                    Response::NoteSaved(_)
+                ));
+                assert_eq!(session.load(VIEW).body, "Edit after removal");
+            }
+        }
+
+        #[test]
+        fn context_only_routes_recover_the_note_without_creating_activity() {
+            let session = Session::new();
+            let first = session.load(VIEW);
+            assert!(matches!(
+                session.save(VIEW, &first, "Note with context only"),
+                Response::NoteSaved(_)
+            ));
+            let shared = session.load(VIEW);
+            assert!(matches!(
+                session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "context-route".into(),
+                    event: brauser_protocol::WhyEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        artifact_id: shared.key.value.clone(),
+                        url: CONTEXT.into(),
+                        occurred_at: "2026-10-16T13:00:00Z".into(),
+                        incognito: false,
+                        text: "Preparing the review".into(),
+                    },
+                })),
+                Response::WhyRecorded(WhyRecorded {
+                    outcome: VisitOutcome::Persisted,
+                    ..
+                })
+            ));
+            session.policy("adapter");
+            for rebuild in [false, true] {
+                if rebuild {
+                    std::fs::remove_dir_all(loaded(&session.path).cache_dir().unwrap()).unwrap();
+                    session.index().reindex().unwrap();
+                }
+                let recovered = session.load(CONTEXT);
+                assert_eq!(recovered.key, shared.key);
+                assert_eq!(recovered.body, shared.body);
+                assert!(
+                    session
+                        .index()
+                        .artifact(&shared.key.value)
+                        .unwrap()
+                        .is_none(),
+                    "note recovery cannot invent measured activity"
+                );
+            }
+        }
+
+        #[test]
+        fn recovered_routes_keep_the_older_note_on_the_shared_notes_creation_url() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                note::save_note(
+                    &vault,
+                    VIEW,
+                    "Before adapters",
+                    "Separate URL text",
+                    "missing",
+                )
+                .unwrap();
+                let first = session.load(VIEW);
+                assert!(matches!(
+                    session.save(VIEW, &first, "Shared artifact text"),
+                    Response::NoteSaved(_)
+                ));
+                let shared = session.load(VIEW);
+                assert_eq!(shared.older_notes.len(), 1);
+                assert!(matches!(
+                    session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "remember-context-route".into(),
+                        event: brauser_protocol::WhyEvent {
+                            event_id: uuid::Uuid::new_v4().to_string(),
+                            artifact_id: shared.key.value.clone(),
+                            url: CONTEXT.into(),
+                            occurred_at: "2026-10-16T13:00:00Z".into(),
+                            incognito: false,
+                            text: "Preparing the review".into(),
+                        },
+                    })),
+                    Response::WhyRecorded(WhyRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                ));
+                session.policy(removal);
+                for rebuild in [false, true] {
+                    if rebuild {
+                        std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                        session.index().reindex().unwrap();
+                    }
+                    let recovered = session.load(CONTEXT);
+                    assert_eq!(recovered.key, shared.key);
+                    assert_eq!(recovered.revision, shared.revision);
+                    assert_eq!(recovered.older_notes, shared.older_notes, "{removal}");
+                    assert!(matches!(
+                        session.call(Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "view-creation-url".into(),
+                            url: CONTEXT.into(),
+                            source_url: VIEW.into(),
+                        })),
+                        Response::NoteLoaded(note) if note.body == "Separate URL text"
+                    ));
+                    assert_eq!(
+                        note::load_note(&vault, VIEW).unwrap().body,
+                        "Separate URL text"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_note_without_delivered_history_survives_each_policy_removal() {
+            for removal in ["adapter", "narrow", "site"] {
+                let session = Session::new();
+                let first = session.load(VIEW);
+                assert!(matches!(
+                    session.save(VIEW, &first, "No activity required"),
+                    Response::NoteSaved(_)
+                ));
+                let saved = session.load(VIEW);
+                session.policy(removal);
+                std::fs::remove_dir_all(loaded(&session.path).cache_dir().unwrap()).unwrap();
+                let recovered = session.load(VIEW);
+                assert_eq!(recovered.key, saved.key);
+                assert_eq!(recovered.body, saved.body);
+                assert_eq!(recovered.revision, saved.revision);
+                assert!(matches!(
+                    session.save(VIEW, &recovered, "Still editable"),
+                    Response::NoteSaved(_)
+                ));
+                assert!(
+                    matches!(session.save(VIEW, &saved, "Stale text for copy-out"),
+                    Response::NoteConflict(reply) if reply.reason == "stale" && reply.body == "Still editable")
+                );
+                assert!(
+                    !session.root.join("log").exists(),
+                    "notes cannot restart capture"
+                );
+            }
+        }
+
+        #[test]
+        fn ambiguous_removed_notes_never_replace_an_occupied_url_note() {
+            let session = Session::new();
+            let config = loaded(&session.path);
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            // Two historical artifacts once used the same canonical form.
+            let keys = ["work:work.example/7", "work:other.example/8"];
+            let mut originals = Vec::new();
+            for id in keys {
+                let key = RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: id.into(),
+                };
+                note::save_keyed_note(&vault, EDIT, &key, "Separate artifact", id, "missing")
+                    .unwrap();
+                originals.push((key.clone(), vault.read_note(&key, EDIT).unwrap().unwrap()));
+            }
+            note::save_note(&vault, EDIT, "URL note", "Separate URL text", "missing").unwrap();
+            let url_key = crate::vault::url_record_key(EDIT).unwrap();
+            let url_bytes = vault.read_note(&url_key, EDIT).unwrap().unwrap();
+            session.policy("adapter");
+            for rebuild in [false, true] {
+                if rebuild {
+                    std::fs::remove_dir_all(config.cache_dir().unwrap()).unwrap();
+                    session.index().reindex().unwrap();
+                }
+                let current = session.load(EDIT);
+                assert_eq!(current.key, url_key);
+                assert_eq!(current.body, "Separate URL text");
+                for (key, bytes) in &originals {
+                    let stale = NoteLoaded {
+                        key: key.clone(),
+                        ..current.clone()
+                    };
+                    assert!(matches!(session.save(EDIT, &stale, "Keep copy-out"),
+                        Response::NoteConflict(reply) if reply.reason == "key_changed" && reply.body == current.body));
+                    assert_eq!(vault.read_note(key, EDIT).unwrap().as_ref(), Some(bytes));
+                }
+                assert_eq!(vault.read_note(&url_key, EDIT).unwrap().unwrap(), url_bytes);
+            }
+        }
+
+        #[test]
+        fn an_incomplete_note_scan_cannot_choose_an_autosave_target() {
+            for fault in ["count", "file bytes", "total bytes", "unreadable"] {
+                let session = Session::new();
+                let first = session.load(EDIT);
+                let Response::NoteSaved(saved) = session.save(EDIT, &first, "Keep original text")
+                else {
+                    panic!("expected saved note")
+                };
+                let current = session.load(EDIT);
+                session.policy("adapter");
+                let note_path = session.root.join(saved.relative_path);
+                let original = std::fs::read(&note_path).unwrap();
+                let pages = session.root.join("pages");
+                let mut faults = Vec::new();
+                match fault {
+                    "count" => {
+                        // A conflicting identity sorts after the scan cap.
+                        // The first artifact remains in the truncated set.
+                        let config = loaded(&session.path);
+                        let vault =
+                            Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                        let hidden_key = RecordKey {
+                            kind: RecordKeyKind::Artifact,
+                            value: "zzz:work.example/8".into(),
+                        };
+                        note::save_keyed_note(
+                            &vault,
+                            EDIT,
+                            &hidden_key,
+                            "Other artifact",
+                            "Keep other text",
+                            "missing",
+                        )
+                        .unwrap();
+                        let path = session
+                            .root
+                            .join(vault.note_relative_path(&hidden_key, EDIT).unwrap());
+                        assert!(
+                            path > note_path,
+                            "the conflicting note must sort after the original"
+                        );
+                        faults.push(path);
+                        for number in 0..4095 {
+                            let path = pages.join(format!("000-{number:04}.md"));
+                            std::fs::write(&path, b"").unwrap();
+                            faults.push(path);
+                        }
+                    }
+                    "file bytes" => {
+                        let path = pages.join("000-large.md");
+                        std::fs::File::create(&path)
+                            .unwrap()
+                            .set_len(4 * 1024 * 1024 + 1)
+                            .unwrap();
+                        faults.push(path);
+                    }
+                    "total bytes" => {
+                        for number in 0..4 {
+                            let path = pages.join(format!("000-large-{number}.md"));
+                            std::fs::write(&path, vec![b'x'; 4 * 1024 * 1024]).unwrap();
+                            faults.push(path);
+                        }
+                    }
+                    "unreadable" => {
+                        let path = pages.join("000-non-utf8.md");
+                        std::fs::write(&path, [0xff]).unwrap();
+                        faults.push(path);
+                    }
+                    _ => unreachable!(),
+                }
+                let response = session.call(Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "incomplete-scan".into(),
+                    url: EDIT.into(),
+                }));
+                assert!(
+                    matches!(response, Response::Error(reply) if reply.request_id == "incomplete-scan" && reply.message.contains("note identity is unavailable")),
+                    "{fault}"
+                );
+                assert!(
+                    matches!(session.save(EDIT, &current, "Must not autosave"), Response::Error(reply) if reply.message.contains("note identity is unavailable")),
+                    "{fault}"
+                );
+                assert_eq!(std::fs::read(&note_path).unwrap(), original);
+                // The optional discovery list retains its best-effort behavior.
+                let config = loaded(&session.path);
+                let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+                assert!(vault.note_candidates().is_ok());
+                for path in faults {
+                    std::fs::remove_file(path).unwrap();
+                }
+                assert_eq!(session.load(EDIT).body, "Keep original text");
+            }
+        }
+    }
+
     #[test]
     fn saved_context_appears_before_the_first_activity_is_delivered() {
         let folder = tempfile::tempdir().unwrap();
@@ -2719,6 +3216,11 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
+        let occurred_at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
         let mut config = loaded(&path);
         let url = "https://work.example/items/7";
         let artifact_id = "work:work.example/7";
@@ -2731,7 +3233,7 @@ id = "work:{host}/{id}"
                     event_id: uuid::Uuid::new_v4().to_string(),
                     artifact_id: artifact_id.into(),
                     url: url.into(),
-                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    occurred_at,
                     incognito: false,
                     text: "blocking the release".into(),
                 },
@@ -3089,7 +3591,16 @@ id = "work:{host}/{id}"
             artifact_type: "work.item".into(),
             url: "https://work.example/issues/1".into(),
             title: Some("Issue 1".into()),
-            occurred_at: "2026-10-16T13:00:00Z".into(),
+            // Relative to now: a fixed date ages out of the 30-day window.
+            occurred_at: time::OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
             incognito: false,
             opens: 1,
             focused_seconds: 3,
@@ -3098,6 +3609,11 @@ id = "work:{host}/{id}"
             trails: Vec::new(),
             refs: Vec::new(),
         }
+    }
+
+    /// The local log day `activity_for_invalid_policy` events land on.
+    fn invalid_policy_day() -> String {
+        activity_for_invalid_policy().occurred_at[..10].to_owned()
     }
 
     fn invalid_adapter_config(folder: &tempfile::TempDir) -> ConfigStore {
@@ -3280,6 +3796,733 @@ scope = { owner = ["acme"] }
             .unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
+    }
+
+    #[test]
+    fn unknown_trail_transitions_are_terminal_on_single_and_batch_delivery() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        for transition in [
+            "mentions",
+            "unknown",
+            "Link",
+            "link,forward_back",
+            "link\n",
+            "",
+            "\u{202e}link",
+        ] {
+            let mut event = activity_for_invalid_policy();
+            event.occurred_at = time::OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            event.trails.push(ActivityTrail {
+                from_artifact_id: Some("work:work.example/2".into()),
+                from_url: Some("https://work.example/issues/2".into()),
+                transition: transition.into(),
+            });
+            let single = record_activity(
+                RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "single-transition".into(),
+                    event: event.clone(),
+                },
+                &mut config,
+            );
+            let batch = record_batch(
+                RecordBatchRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "batch-transition".into(),
+                    batch_id: uuid::Uuid::new_v4().to_string(),
+                    events: vec![CaptureBatchItem {
+                        kind: CaptureEventKind::Activity,
+                        visit: None,
+                        activity: Some(event),
+                    }],
+                    overflow: None,
+                },
+                &mut config,
+            );
+            let Response::ActivityRecorded(single) = single else {
+                panic!("expected an activity result");
+            };
+            let Response::BatchRecorded(batch) = batch else {
+                panic!("expected a batch result");
+            };
+            assert_eq!(batch.results.len(), 1);
+            for (outcome, reason, relative_path) in [
+                (single.outcome, single.reason, single.relative_path),
+                (
+                    batch.results[0].outcome,
+                    batch.results[0].reason.clone(),
+                    batch.results[0].relative_path.clone(),
+                ),
+            ] {
+                assert_eq!(outcome, VisitOutcome::Rejected, "{transition:?}");
+                assert_eq!(reason.as_deref(), Some("invalid_activity"));
+                assert!(relative_path.is_none());
+            }
+        }
+        assert!(!root.join("log").exists());
+        assert!(!config.cache_dir().unwrap().join("index.db").exists());
+    }
+
+    #[test]
+    fn single_and_batch_activity_enforce_the_same_policy() {
+        use serde_json::json;
+
+        // Override one part of otherwise valid activity. Expected outcomes
+        // are explicit so two equally permissive paths cannot pass by agreeing.
+        let cases = [
+            ("accepted", json!({}), VisitOutcome::Persisted, None),
+            (
+                "accepted mode, trail, and title reference",
+                json!({"title": "Work PROJ-7", "modes": [{"mode": "view",
+                    "url": "https://work.example/teams/acme/items/1"}],
+                    "trails": [{"from_artifact_id": "work:work.example/acme/2",
+                        "from_url": "https://work.example/teams/acme/items/2",
+                        "transition": "link"}],
+                    "refs": [{"artifact_type": "jira.issue", "value": "PROJ-7"}]}),
+                VisitOutcome::Persisted,
+                None,
+            ),
+            (
+                "oversized modes before recognition",
+                json!({"url": "https://work.example/search", "modes": vec![json!({"mode": "view", "url": "https://work.example/issues/1"}); 4]}),
+                VisitOutcome::Rejected,
+                Some("invalid_activity"),
+            ),
+            (
+                "unknown transition",
+                json!({"trails": [{"from_artifact_id": null, "from_url": null,
+                    "transition": "mentions"}]}),
+                VisitOutcome::Rejected,
+                Some("invalid_activity"),
+            ),
+            (
+                "unpaired trail source",
+                json!({"trails": [{"from_artifact_id": "work:work.example/acme/2",
+                    "from_url": null, "transition": "link"}]}),
+                VisitOutcome::Rejected,
+                Some("invalid_activity"),
+            ),
+            (
+                "unrecognized route",
+                json!({"url": "https://work.example/search"}),
+                VisitOutcome::Suppressed,
+                Some("not_an_artifact"),
+            ),
+            (
+                "outside scope",
+                json!({"url": "https://work.example/teams/personal/items/1"}),
+                VisitOutcome::Suppressed,
+                Some("not_an_artifact"),
+            ),
+            (
+                "forged artifact ID",
+                json!({"artifact_id": "work:work.example/acme/2"}),
+                VisitOutcome::Rejected,
+                Some("artifact_identity_mismatch"),
+            ),
+            (
+                "forged artifact type",
+                json!({"artifact_type": "other.item"}),
+                VisitOutcome::Rejected,
+                Some("artifact_identity_mismatch"),
+            ),
+            (
+                "unsupported mode evidence",
+                json!({"modes": [{"mode": "edit",
+                    "url": "https://work.example/teams/acme/items/1"}]}),
+                VisitOutcome::Rejected,
+                Some("activity_mode_mismatch"),
+            ),
+            (
+                "forged trail identity",
+                json!({"trails": [{"from_artifact_id": "work:work.example/acme/99",
+                    "from_url": "https://work.example/teams/acme/items/2",
+                    "transition": "link"}]}),
+                VisitOutcome::Rejected,
+                Some("trail_identity_mismatch"),
+            ),
+            (
+                "ungranted trail origin",
+                json!({"trails": [{"from_artifact_id": "work:work.example/acme/2",
+                    "from_url": "https://private.example/teams/acme/items/2",
+                    "transition": "link"}]}),
+                VisitOutcome::Rejected,
+                Some("trail_identity_mismatch"),
+            ),
+            (
+                "invented title reference",
+                json!({"refs": [{"artifact_type": "jira.issue", "value": "SECRET-1"}]}),
+                VisitOutcome::Rejected,
+                Some("activity_refs_mismatch"),
+            ),
+        ];
+        for (label, patch, expected_outcome, expected_reason) in cases {
+            let mut event = activity_for_invalid_policy();
+            event.url = "https://work.example/teams/acme/items/1".into();
+            event.artifact_id = "work:work.example/acme/1".into();
+            event.occurred_at = time::OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            let mut payload = serde_json::to_value(event).unwrap();
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            let event: ActivityEvent = serde_json::from_value(payload).unwrap();
+            let mut outcomes = Vec::new();
+            // Separate stores let the same accepted event persist on both
+            // paths instead of hiding one behind duplicate-event suppression.
+            for batched in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("notes");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                config::fixtures::write(
+                    &path,
+                    &root,
+                    "",
+                    "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+                    r#"[adapters]
+format = 1
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/teams/{owner:name|lower}/items/{id:int}", mode = "view" }]
+id = "work:{host}/{owner}/{id}"
+scope = { owner = ["acme"] }
+title = "{title}"
+refs = [{ type = "jira.issue", find = "jira_key" }]
+"#,
+                );
+                let mut config = loaded(&path);
+                let (outcome, reason, relative_path) = if batched {
+                    let Response::BatchRecorded(mut reply) = record_batch(
+                        RecordBatchRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "batch-policy".into(),
+                            batch_id: uuid::Uuid::new_v4().to_string(),
+                            events: vec![CaptureBatchItem {
+                                kind: CaptureEventKind::Activity,
+                                visit: None,
+                                activity: Some(event.clone()),
+                            }],
+                            overflow: None,
+                        },
+                        &mut config,
+                    ) else {
+                        panic!("expected batch result for {label}");
+                    };
+                    assert_eq!(reply.request_id, "batch-policy");
+                    assert_eq!(reply.results.len(), 1);
+                    let result = reply.results.remove(0);
+                    assert_eq!(result.event_id, event.event_id);
+                    (result.outcome, result.reason, result.relative_path)
+                } else {
+                    let Response::ActivityRecorded(reply) = record_activity(
+                        RecordActivityRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "single-policy".into(),
+                            event: event.clone(),
+                        },
+                        &mut config,
+                    ) else {
+                        panic!("expected activity result for {label}");
+                    };
+                    assert_eq!(reply.request_id, "single-policy");
+                    assert_eq!(reply.event_id, event.event_id);
+                    (reply.outcome, reply.reason, reply.relative_path)
+                };
+                assert_eq!(outcome, expected_outcome, "{label}, batch={batched}");
+                assert_eq!(
+                    reason.as_deref(),
+                    expected_reason,
+                    "{label}, batch={batched}"
+                );
+                if expected_outcome == VisitOutcome::Persisted {
+                    let log = std::fs::read_to_string(root.join(relative_path.as_ref().unwrap()))
+                        .unwrap();
+                    let encoded = log
+                        .split(" data=")
+                        .nth(1)
+                        .unwrap()
+                        .split(' ')
+                        .next()
+                        .unwrap();
+                    let stored: ActivityEvent =
+                        serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+                    assert_eq!(stored, event, "{label}, batch={batched}");
+                } else {
+                    assert!(relative_path.is_none());
+                    assert!(!root.join("log").exists(), "{label}, batch={batched}");
+                    assert!(!config.cache_dir().unwrap().join("index.db").exists());
+                }
+                outcomes.push((outcome, reason, relative_path));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "{label}");
+        }
+    }
+
+    #[test]
+    fn unavailable_history_cannot_select_a_partial_note_identity() {
+        for (publication_failure, context_only) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            let write_config = |adapters: &str| {
+                config::fixtures::write(
+                    &path,
+                    &root,
+                    "artifacts_dir = \"artifacts\"",
+                    "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]\nstrip_params = [\"item\"]",
+                    &format!("[adapters]\nformat = 1\n{adapters}"),
+                );
+            };
+            write_config(
+                r#"
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items", query = { item = "{id:int}" } }, { path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+            );
+            let mut config = loaded(&path);
+            let canonical = "https://work.example/items";
+            let first_url = "https://work.example/items?item=1";
+            let second_url = "https://work.example/issues/2";
+            let first = note_load(&mut config, first_url);
+            let Response::NoteSaved(first_saved) = note_save(
+                &mut config,
+                first_url,
+                "First note",
+                &first.revision,
+                first.key.clone(),
+            ) else {
+                panic!("expected first note")
+            };
+            let second = note_load(&mut config, second_url);
+            let Response::NoteSaved(second_saved) = note_save(
+                &mut config,
+                second_url,
+                "Second note",
+                &second.revision,
+                second.key.clone(),
+            ) else {
+                panic!("expected second note")
+            };
+            // Only history reveals that the stripped URL also belongs to
+            // the second artifact; its note was created on another route.
+            let mut event = activity_for_invalid_policy();
+            event.url = "https://work.example/items?item=2".into();
+            event.artifact_id = second.key.value;
+            let persisted = if context_only {
+                matches!(
+                    record_why(
+                        brauser_protocol::RecordWhyRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "history-context".into(),
+                            event: brauser_protocol::WhyEvent {
+                                event_id: event.event_id,
+                                artifact_id: event.artifact_id,
+                                url: event.url,
+                                occurred_at: event.occurred_at,
+                                incognito: false,
+                                text: "Context on the shared canonical URL".into(),
+                            },
+                        },
+                        &mut config
+                    ),
+                    Response::WhyRecorded(WhyRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                )
+            } else {
+                matches!(
+                    record_activity(
+                        RecordActivityRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "history".into(),
+                            event,
+                        },
+                        &mut config
+                    ),
+                    Response::ActivityRecorded(ActivityRecorded {
+                        outcome: VisitOutcome::Persisted,
+                        ..
+                    })
+                )
+            };
+            assert!(persisted);
+            write_config("");
+            assert_eq!(
+                note_load(&mut config, canonical).key.kind,
+                RecordKeyKind::Url
+            );
+            let first_path = root.join(first_saved.relative_path);
+            let second_path = root.join(second_saved.relative_path);
+            let first_bytes = std::fs::read(&first_path).unwrap();
+            let second_bytes = std::fs::read(&second_path).unwrap();
+            let cache = config.cache_dir().unwrap();
+            let fault = if publication_failure {
+                std::fs::remove_file(cache.join("index-state.json")).unwrap();
+                let fault = cache.join("index.db");
+                std::fs::remove_file(&fault).unwrap();
+                std::fs::create_dir(&fault).unwrap();
+                fault
+            } else {
+                let fault = root.join("log/oversized.md");
+                std::fs::File::create(&fault)
+                    .unwrap()
+                    .set_len(32 * 1024 * 1024 + 1)
+                    .unwrap();
+                fault
+            };
+            let responses = [
+                load_note(
+                    brauser_protocol::LoadNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "load-unavailable".into(),
+                        url: canonical.into(),
+                    },
+                    &mut config,
+                ),
+                // A client holding a formerly valid artifact key must not
+                // be able to overwrite it using an incomplete candidate set.
+                note_save(
+                    &mut config,
+                    canonical,
+                    "Wrong note",
+                    &first_saved.revision,
+                    first.key.clone(),
+                ),
+            ];
+            for response in responses {
+                let Response::Error(reply) = response else {
+                    panic!("history failure must not resolve a note identity: {response:?}")
+                };
+                assert_eq!(reply.code, ErrorCode::Internal);
+                assert!(reply.message.contains("note identity is unavailable"));
+            }
+            assert_eq!(std::fs::read(first_path).unwrap(), first_bytes);
+            assert_eq!(std::fs::read(second_path).unwrap(), second_bytes);
+            if publication_failure {
+                std::fs::remove_dir(fault).unwrap();
+            } else {
+                std::fs::remove_file(fault).unwrap();
+            }
+            assert_eq!(
+                note_load(&mut config, canonical).key.kind,
+                RecordKeyKind::Url
+            );
+            assert!(
+                matches!(note_save(&mut config, canonical, "Keep copy-out", &first_saved.revision, first.key),
+                Response::NoteConflict(NoteConflict { reason, .. }) if reason == "key_changed")
+            );
+        }
+    }
+
+    #[test]
+    fn durable_activity_missing_from_a_valid_cache_catches_up_without_replay() {
+        for query_first in [false, true] {
+            for batched in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("notes");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                write_adapter_config(
+                    &path,
+                    &root,
+                    r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+                );
+                let mut config = loaded(&path);
+                let deliver = |config: &mut ConfigStore, number: u8| {
+                    let mut event = activity_for_invalid_policy();
+                    event.event_id = format!("00000000-0000-4000-8000-{number:012}");
+                    event.url = format!("https://work.example/issues/{number}");
+                    event.artifact_id = format!("work:work.example/{number}");
+                    event.title = Some(format!("Issue {number}"));
+                    let outcomes = if batched {
+                        let Response::BatchRecorded(reply) = record_batch(
+                            RecordBatchRequest {
+                                protocol_version: PROTOCOL_VERSION,
+                                request_id: "batch".into(),
+                                batch_id: uuid::Uuid::new_v4().to_string(),
+                                events: vec![CaptureBatchItem {
+                                    kind: CaptureEventKind::Activity,
+                                    visit: None,
+                                    activity: Some(event),
+                                }],
+                                overflow: None,
+                            },
+                            config,
+                        ) else {
+                            panic!("expected batch result")
+                        };
+                        reply
+                            .results
+                            .into_iter()
+                            .map(|r| r.outcome)
+                            .collect::<Vec<_>>()
+                    } else {
+                        let Response::ActivityRecorded(reply) = record_activity(
+                            RecordActivityRequest {
+                                protocol_version: PROTOCOL_VERSION,
+                                request_id: "single".into(),
+                                event,
+                            },
+                            config,
+                        ) else {
+                            panic!("expected activity result")
+                        };
+                        vec![reply.outcome]
+                    };
+                    assert_eq!(outcomes, vec![VisitOutcome::Persisted]);
+                };
+                deliver(&mut config, 1);
+                let cache = config.cache_dir().unwrap();
+                let state_path = cache.join("index-state.json");
+                let old_state = std::fs::read(&state_path).unwrap();
+                let old_db = std::fs::read(cache.join("index.db")).unwrap();
+                deliver(&mut config, 2);
+                // The append is durable, but both published caches are from
+                // before it (interruption between append and index update).
+                std::fs::write(&state_path, &old_state).unwrap();
+                std::fs::write(cache.join("index.db"), &old_db).unwrap();
+                drop(config);
+                let mut config = loaded(&path);
+                if !query_first {
+                    deliver(&mut config, 3);
+                }
+                let Response::ArtifactListResult(reply) = list_artifacts(
+                    brauser_protocol::ListArtifactsRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "recent".into(),
+                        artifact_type: None,
+                        title_query: None,
+                        limit: 32,
+                    },
+                    &mut config,
+                ) else {
+                    panic!("expected complete history")
+                };
+                let expected = if query_first { 2 } else { 3 };
+                assert_eq!(
+                    reply.items.len(),
+                    expected,
+                    "query_first={query_first}, batched={batched}"
+                );
+                assert!(
+                    reply
+                        .items
+                        .iter()
+                        .any(|item| item.artifact_id == "work:work.example/2")
+                );
+                assert_eq!(
+                    reply
+                        .items
+                        .iter()
+                        .map(|item| u64::from(item.opens))
+                        .sum::<u64>(),
+                    expected as u64
+                );
+                let Response::WorklogResult(log) = worklog(
+                    brauser_protocol::WorklogRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "worklog".into(),
+                        start_date: invalid_policy_day(),
+                        end_date: invalid_policy_day(),
+                    },
+                    &mut config,
+                ) else {
+                    panic!("expected worklog")
+                };
+                assert_eq!(log.artifact_count as usize, expected);
+                assert!(log.text.contains("Issue 2"));
+                // Catch-up must persist its checkpoint and repair the public
+                // SQLite snapshot too, without waiting for another delivery.
+                let output = std::process::Command::new("python3")
+                    .args(["-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])"])
+                    .arg(cache.join("index.db")).output().unwrap();
+                assert!(output.status.success());
+                assert_eq!(
+                    String::from_utf8(output.stdout).unwrap().trim(),
+                    expected.to_string()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cache_failure_keeps_capture_durable_and_history_explicitly_unavailable() {
+        for oversized_log in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(
+                &path,
+                &root,
+                r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+            );
+            let mut config = loaded(&path);
+            let mut event = activity_for_invalid_policy();
+            let deliver = |config: &mut ConfigStore, event: ActivityEvent| {
+                let Response::ActivityRecorded(reply) = record_activity(
+                    RecordActivityRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "capture".into(),
+                        event,
+                    },
+                    config,
+                ) else {
+                    panic!("expected capture result")
+                };
+                reply
+            };
+            assert_eq!(
+                deliver(&mut config, event.clone()).outcome,
+                VisitOutcome::Persisted
+            );
+            let cache = config.cache_dir().unwrap();
+            let old_state = std::fs::read(cache.join("index-state.json")).unwrap();
+            let fault = if oversized_log {
+                let fault = root.join("log/oversized.md");
+                let file = std::fs::File::create(&fault).unwrap();
+                file.set_len(32 * 1024 * 1024 + 1).unwrap();
+                fault
+            } else {
+                let fault = cache.join("index.db");
+                std::fs::remove_file(&fault).unwrap();
+                std::fs::create_dir(&fault).unwrap();
+                fault
+            };
+            event.event_id = uuid::Uuid::new_v4().to_string();
+            event.artifact_id = "work:work.example/2".into();
+            event.url = "https://work.example/issues/2".into();
+            event.title = Some("Durable despite cache failure".into());
+            let captured = deliver(&mut config, event.clone());
+            assert_eq!(captured.outcome, VisitOutcome::Persisted);
+            let log_path = root.join(captured.relative_path.unwrap());
+            let durable_bytes = std::fs::read(&log_path).unwrap();
+            assert_eq!(
+                std::fs::read(cache.join("index-state.json")).unwrap(),
+                old_state
+            );
+            let replies = [
+                list_artifacts(
+                    brauser_protocol::ListArtifactsRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "recent".into(),
+                        artifact_type: None,
+                        title_query: None,
+                        limit: 32,
+                    },
+                    &mut config,
+                ),
+                get_artifact(
+                    brauser_protocol::GetArtifactRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "artifact".into(),
+                        url: event.url.clone(),
+                        title: None,
+                    },
+                    &mut config,
+                ),
+                worklog(
+                    brauser_protocol::WorklogRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "worklog".into(),
+                        start_date: invalid_policy_day(),
+                        end_date: invalid_policy_day(),
+                    },
+                    &mut config,
+                ),
+            ];
+            for reply in replies {
+                let Response::Error(reply) = reply else {
+                    panic!("must not return partial history: {reply:?}")
+                };
+                assert_eq!(reply.code, ErrorCode::Internal);
+                assert!(reply.message.contains("history is unavailable"));
+            }
+            if oversized_log {
+                std::fs::remove_file(fault).unwrap();
+            } else {
+                std::fs::remove_dir(fault).unwrap();
+            }
+            drop(config);
+            let mut config = loaded(&path);
+            let Response::ArtifactListResult(reply) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recovered".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ) else {
+                panic!("expected recovered history")
+            };
+            assert_eq!(reply.items.len(), 2);
+            assert!(
+                reply
+                    .items
+                    .iter()
+                    .any(|item| item.title == "Durable despite cache failure")
+            );
+            let duplicate = deliver(&mut config, event);
+            assert_eq!(duplicate.outcome, VisitOutcome::Suppressed);
+            assert_eq!(duplicate.reason.as_deref(), Some("duplicate_event"));
+            assert_eq!(std::fs::read(log_path).unwrap(), durable_bytes);
+        }
     }
 
     #[test]

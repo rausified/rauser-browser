@@ -95,6 +95,12 @@ to host-derived artifact keys (with guarded migration of older URL-keyed
 notes), and settings can regenerate artifact files while reporting every
 unowned-path conflict it leaves untouched.
 
+After adapter/site removal or recognition narrowing, notes recover their
+artifact key from complete note identities and recorded activity, mode URLs,
+or explicit context; separate older URL notes remain viewable. Ambiguous
+history falls back to the URL key, while unavailable history or an incomplete
+bounded note scan refuses loads and saves instead of guessing an autosave target.
+
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
 opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the

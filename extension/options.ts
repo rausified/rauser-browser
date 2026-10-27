@@ -4,6 +4,7 @@ import type {
 import { isHttpUrl, type WorkerStatus } from "./model.js";
 import {
   ConfigSession,
+  capturePaused,
   captureStateText,
   describe,
   element,
@@ -127,6 +128,7 @@ function showConfigState(): void {
       true,
     );
   }
+  else if (capturePaused(config, null)) show("Capture is paused. Click Resume capture to turn it back on.");
   else show(captureStateText(config));
 }
 
@@ -157,6 +159,8 @@ function updateControls(): void {
   resumeButton.disabled = !connected || busy || repairing || repairingAdapters ||
     session.config?.capture_enabled !== false || !session.config.storage ||
     !siteOrigins(session.config.adapters).length;
+  // Resume is offered only while a finished setup is paused.
+  resumeButton.hidden = !capturePaused(session.config, session.configIssue ?? session.adapterIssue);
   for (const button of sitesList.querySelectorAll("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters;
   }
