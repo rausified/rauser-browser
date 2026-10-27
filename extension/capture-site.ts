@@ -2,11 +2,15 @@
 // definitions, not structural drafts: unknown-site drafting stays host-owned.
 import type { AdapterDocument, ConfigSnapshot } from "../protocol/ts/generated.js";
 import { exampleUrl, previewDocument, validateAdapterDocument, type PreviewRow } from "./adapter-review.js";
-import { parseGitHubOrganizations, starterKind, starterOffers, type StarterOffer } from "./starter-adapters.js";
+import {
+  orderContainedFirst, parseGitHubOrganizations, starterKind, starterOffers, type StarterOffer,
+} from "./starter-adapters.js";
 
 export interface CaptureChoice {
   pullRequests: string | null;
   issues: string | null;
+  /** Organizations for repositories. Optional until Capture Site offers it. */
+  repositories?: string | null;
 }
 
 export interface CapturePlan {
@@ -18,6 +22,9 @@ export interface CapturePlan {
   probes: PreviewRow[];
   startsCapture: boolean;
 }
+
+// A repository example is its home page.
+const GITHUB_EXAMPLE_ROUTES: Record<string, string> = { "github.pr": "/pull/123", "github.issue": "/issues/123" };
 
 export function captureOrigin(url: string): string | null {
   try {
@@ -48,6 +55,7 @@ export function planCaptureSite(
     for (const [type, value, label] of [
       ["github.pr", choice.pullRequests, "pull requests"],
       ["github.issue", choice.issues, "issues"],
+      ["github.repo", choice.repositories ?? null, "repositories"],
     ] as const) {
       if (value === null) continue;
       const organizations = parseGitHubOrganizations(value);
@@ -59,8 +67,11 @@ export function planCaptureSite(
   }
   if (!offers.length) return { ok: false, message: "Choose pull requests, issues, or both." };
   const artifacts = offers.map((offer) => offer.adapter!);
-  const additions: AdapterDocument = { format: 1, artifacts };
-  const document: AdapterDocument = { ...config.adapters, artifacts: [...config.adapters.artifacts, ...artifacts] };
+  const additions: AdapterDocument = { format: 1, artifacts: orderContainedFirst(artifacts) };
+  const document: AdapterDocument = {
+    ...config.adapters,
+    artifacts: orderContainedFirst([...config.adapters.artifacts, ...artifacts]),
+  };
   const validation = validateAdapterDocument(document);
   if (validation) return { ok: false, message: validation };
   const preview = previewDocument(additions, url, "", true, origin);
@@ -72,7 +83,8 @@ export function planCaptureSite(
     let example = exampleUrl(offer.adapter!);
     if (offer.kind === "github") {
       const scope = offer.adapter!.scope as { owner: string[] };
-      example = `${origin}/${scope.owner[0]}/example-repository/${offer.artifact_type === "github.pr" ? "pull" : "issues"}/123`;
+      const route = GITHUB_EXAMPLE_ROUTES[offer.artifact_type] ?? "";
+      example = `${origin}/${scope.owner[0]}/example-repository${route}`;
     }
     const result = previewDocument(additions, example, "", false);
     if (result.ok) examples.push(...result.rows);

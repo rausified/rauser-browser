@@ -5,6 +5,7 @@ import test from "node:test";
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 const {
   hasAdapter,
+  orderContainedFirst,
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
@@ -27,9 +28,66 @@ test("generated starters stay identical to the shared cross-engine fixtures", ()
     ...starterOffers("https://acme.sharepoint.com", []),
     ...starterOffers("https://acme-my.sharepoint.com", []),
   ].map((offer) => offer.adapter);
-  const expectedTypes = new Set(["jira.issue", "github.pr", "github.issue", "sharepoint.doc"]);
+  const expectedTypes = new Set(["jira.issue", "github.pr", "github.issue", "github.repo", "sharepoint.doc"]);
   const expected = recorded.filter((adapter) => expectedTypes.has(adapter.type));
   assert.deepEqual(generated, expected);
+});
+
+test("GitHub offers pull requests, issues, and repositories, each inside its repository", () => {
+  const offers = starterOffers("https://github.com", ["acme-corp"]);
+  assert.deepEqual(offers.map((offer) => offer.key), ["github.pr", "github.issue", "github.repo"]);
+  const repo = offers[2];
+  assert.equal(repo.label, "GitHub repositories");
+  assert.equal(repo.description, "Every page inside a repository counts toward it; pull requests and issues count toward both.");
+  assert.equal(repo.needs_scope, true);
+  assert.equal("title" in repo.adapter, false);
+  assert.equal("refs" in repo.adapter, false);
+  for (const offer of offers.slice(0, 2)) {
+    assert.deepEqual(offer.adapter.within, { type: "github.repo", id: repo.adapter.id });
+  }
+  assert.equal(starterOffers("https://github.com", [])[2].adapter, null);
+  const doc = compiled(offers);
+  const page = evaluate(doc, "https://github.com/acme-corp/widgets/blob/main/README.md");
+  assert.equal(page.artifact_id, "github.repo:github.com/acme-corp/widgets");
+  const pr = evaluate(doc, "https://github.com/acme-corp/widgets/pull/7");
+  assert.deepEqual(pr.within, { type: "github.repo", artifact_id: page.artifact_id });
+});
+
+const adapter = (type, origin = "https://github.com", within = undefined) =>
+  ({ type, origin, ...(within ? { within: { type: within, id: `${within}:{host}` } } : {}) });
+
+test("orderContainedFirst moves a later PR adapter ahead of the repo catch-all", () => {
+  const jira = adapter("jira.issue", "https://acme.atlassian.net");
+  const repo = adapter("github.repo");
+  const pr = adapter("github.pr", "https://github.com", "github.repo");
+  const issue = adapter("github.issue", "https://github.com", "github.repo");
+  assert.deepEqual(orderContainedFirst([jira, repo, pr]), [jira, pr, repo]);
+  assert.deepEqual(orderContainedFirst([repo, issue, pr]), [issue, pr, repo]);
+  // Nested containers pull their whole chain ahead of the outermost one.
+  const org = adapter("github.org");
+  const nestedRepo = adapter("github.repo", "https://github.com", "github.org");
+  assert.deepEqual(orderContainedFirst([org, nestedRepo, pr]), [pr, nestedRepo, org]);
+});
+
+test("orderContainedFirst is stable and leaves other origins alone", () => {
+  const repo = adapter("github.repo");
+  const pr = adapter("github.pr", "https://github.com", "github.repo");
+  const custom = adapter("custom.page");
+  const elsewhereRepo = adapter("github.repo", "https://github.example.com");
+  const elsewherePr = adapter("github.pr", "https://github.example.com", "github.repo");
+  const ordered = [pr, custom, repo, elsewhereRepo, elsewherePr];
+  assert.deepEqual(orderContainedFirst(ordered), [pr, custom, repo, elsewherePr, elsewhereRepo]);
+  // A PR on another origin never moves ahead of this origin's repo.
+  assert.deepEqual(orderContainedFirst([repo, custom, elsewherePr]), [repo, custom, elsewherePr]);
+  const inOrder = [pr, repo, custom];
+  const result = orderContainedFirst(inOrder);
+  assert.deepEqual(result, inOrder);
+  assert.notEqual(result, inOrder);
+  // A within cycle cannot be satisfied; its members keep their order.
+  const a = adapter("x.a", "https://github.com", "x.b");
+  const b = adapter("x.b", "https://github.com", "x.a");
+  assert.deepEqual(orderContainedFirst([a, b]), [a, b]);
+  assert.deepEqual(orderContainedFirst([]), []);
 });
 
 test("starter origins are classified narrowly", () => {

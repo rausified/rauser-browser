@@ -52,6 +52,18 @@ test("GitHub choices keep PR and issue scopes separate and show current-page mis
   assert.equal(issueOnly.current.result.match, false);
 });
 
+test("capture plan puts PR and issue before repo", () => {
+  const result = plan("https://github.com/acme-corp/widget/pull/12/files", CONFIG,
+    { pullRequests: "acme-corp", issues: "acme-corp", repositories: "acme-corp" });
+  assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["github.pr", "github.issue", "github.repo"]);
+  assert.equal(result.current.result.type, "github.pr");
+  assert.deepEqual(result.current.result.within, { type: "github.repo", artifact_id: "github.repo:github.com/acme-corp/widget" });
+  assert.equal(match(result, "https://github.com/acme-corp/widget/issues/3").type, "github.issue");
+  assert.equal(match(result, "https://github.com/acme-corp/widget/tree/main").type, "github.repo");
+  assert.ok(result.probes.every((row) => !row.result.match));
+  assert.deepEqual(result.examples.map((row) => row.result.type), ["github.pr", "github.issue", "github.repo"]);
+});
+
 test("empty, invalid, or unselected GitHub scope cannot produce a save", () => {
   for (const choice of [
     { pullRequests: "", issues: "acme" }, { pullRequests: "acme", issues: "" },

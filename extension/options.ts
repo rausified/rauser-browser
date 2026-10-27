@@ -35,6 +35,7 @@ import {
 } from "./adapter-review.js";
 import {
   hasAdapter,
+  orderContainedFirst,
   parseGitHubOrganizations,
   starterOffers,
   type StarterOffer,
@@ -541,7 +542,8 @@ function readAdapterCandidate(): CandidateResult {
     }
     artifacts[matches[0]!] = parsed.adapter;
   }
-  const document = { format: 1, artifacts };
+  // Preview and save in the order the host will evaluate (contained first).
+  const document = { format: 1, artifacts: orderContainedFirst(artifacts) };
   const problem = validateAdapterDocument(document);
   return problem ? { ok: false, message: problem } : { ok: true, adapter: parsed.adapter, document };
 }
@@ -642,8 +644,11 @@ function closeAdapterEditor(): void {
  * turns capture on unless a pause is still pending. A folder selection the
  * host has not saved yet is saved with it.
  */
-async function saveAdapterDocument(document: AdapterDocument, success: string): Promise<void> {
+async function saveAdapterDocument(proposed: AdapterDocument, success: string): Promise<void> {
   if (!session.config || busy) return;
+  // Every settings save keeps contained adapters ahead of their container's
+  // catch-all, whichever path built the document.
+  const document: AdapterDocument = { ...proposed, artifacts: orderContainedFirst(proposed.artifacts) };
   busy = true;
   updateControls();
   const selection = picker;

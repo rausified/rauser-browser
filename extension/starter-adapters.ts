@@ -14,6 +14,9 @@ export interface StarterOffer {
 }
 
 const GITHUB_ORIGIN = "https://github.com";
+const GITHUB_REPOSITORY = "github.repo";
+// Frozen with the PR and issue IDs (adapter-templates.md §8.2, §8.3).
+const GITHUB_REPOSITORY_WITHIN = { type: GITHUB_REPOSITORY, id: "github.repo:{host}/{owner}/{repo}" };
 
 function secureHostname(origin: string): string | null {
   try {
@@ -86,6 +89,7 @@ function githubPullRequest(organizations: string[]): AdapterObject {
     id: "github.pr:{host}/{owner}/{repo}/{number}",
     title: "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
     refs: [{ type: "jira.issue", find: "jira_key" }],
+    within: { ...GITHUB_REPOSITORY_WITHIN },
   };
 }
 
@@ -98,6 +102,21 @@ function githubIssue(organizations: string[]): AdapterObject {
     id: "github.issue:{host}/{owner}/{repo}/{number}",
     title: "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
     refs: [{ type: "jira.issue", find: "jira_key" }],
+    within: { ...GITHUB_REPOSITORY_WITHIN },
+  };
+}
+
+/** Every page inside a repository. It has no title templates: the host
+ * derives a container's title from its ID. It must follow the PR and issue
+ * adapters on the origin (first match wins), which `orderContainedFirst`
+ * guarantees. */
+function githubRepository(organizations: string[]): AdapterObject {
+  return {
+    type: GITHUB_REPOSITORY,
+    origin: GITHUB_ORIGIN,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }],
+    scope: { owner: organizations },
+    id: GITHUB_REPOSITORY_WITHIN.id,
   };
 }
 
@@ -154,6 +173,16 @@ export function starterOffers(origin: string, githubOrganizations: string[]): St
         needs_scope: true,
         adapter: scope ? githubIssue(scope) : null,
       },
+      {
+        key: GITHUB_REPOSITORY,
+        kind,
+        artifact_type: GITHUB_REPOSITORY,
+        label: "GitHub repositories",
+        description: "Every page inside a repository counts toward it; pull requests and issues count toward both.",
+        origin,
+        needs_scope: true,
+        adapter: scope ? githubRepository(scope) : null,
+      },
     ];
   }
   return [];
@@ -162,4 +191,50 @@ export function starterOffers(origin: string, githubOrganizations: string[]): St
 export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): boolean {
   return adapters.some((adapter) =>
     adapter.type === offer.artifact_type && adapter.origin === offer.origin);
+}
+
+function containerType(adapter: AdapterObject): string | null {
+  const within = adapter.within;
+  if (!within || typeof within !== "object" || Array.isArray(within)) return null;
+  const type = (within as Record<string, unknown>).type;
+  return typeof type === "string" ? type : null;
+}
+
+/** A stable reorder so that, on each origin, every adapter declaring
+ * `within.type` T comes before every adapter of type T. First match wins
+ * (adapter-templates.md §3), so a container catch-all placed first would
+ * swallow the pages of the artifacts inside it. Adapters keep their order,
+ * except that a contained adapter found after its container moves up to just
+ * ahead of it (recursively, for nested containers). Adapters on other
+ * origins, and an already-ordered list, are untouched. Members of a cycle of
+ * `within` declarations, which cannot all be satisfied, keep their order. */
+export function orderContainedFirst<T extends AdapterObject>(artifacts: T[]): T[] {
+  const containers = artifacts.map(containerType);
+  // inside[i]: the adapters that sit directly within adapter i on its origin.
+  const inside = artifacts.map((adapter) => artifacts.flatMap((other, at) =>
+    containers[at] === adapter.type && other.origin === adapter.origin ? [at] : []));
+  const reaches = (from: number, to: number): boolean => {
+    const seen = new Set<number>();
+    const stack = [from];
+    while (stack.length) {
+      const at = stack.pop()!;
+      if (at === to) return true;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      stack.push(...inside[at]!);
+    }
+    return false;
+  };
+  const placed = artifacts.map(() => false);
+  const ordered: T[] = [];
+  const place = (index: number): void => {
+    if (placed[index]) return;
+    placed[index] = true;
+    // A contained adapter that also (transitively) contains this one is in a
+    // cycle; it is not pulled ahead, so the cycle keeps its order.
+    for (const at of inside[index]!) if (!reaches(at, index)) place(at);
+    ordered.push(artifacts[index]!);
+  };
+  artifacts.forEach((_adapter, index) => place(index));
+  return ordered;
 }
