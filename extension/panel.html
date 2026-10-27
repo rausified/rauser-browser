@@ -11,7 +11,7 @@
       <header class="panel-header">
         <div>
           <h1>{{FULL_NAME}}</h1>
-          <p class="eyebrow">Pre-M2 development build · Chrome</p>
+          <p class="eyebrow">M2 development build · Chrome</p>
         </div>
         <button id="open-settings" type="button" class="icon-button" aria-label="Open {{APP_NAME}} settings" title="Settings">
           <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20">
@@ -21,7 +21,7 @@
       </header>
 
       <div id="setup-warning" class="setup-warning" role="alert" hidden>
-        <p><strong>{{APP_NAME}} isn't set up yet.</strong> <span id="setup-reason"></span></p>
+        <p><strong id="setup-heading">{{APP_NAME}} isn't set up yet.</strong> <span id="setup-reason"></span></p>
         <button id="setup-open-settings" type="button">Open settings</button>
       </div>
 
@@ -69,6 +69,8 @@
         <p id="note-unavailable" class="warning" hidden>
           {{APP_NAME}} can't see this tab's address yet. Click the {{APP_NAME}} toolbar button, press its keyboard
           shortcut, or right-click the page and choose <strong>Add a note in {{APP_NAME}}</strong> to start a note here.
+          This repeats on every new site you haven't granted access to yet, until you choose
+          <strong>Keep working on this page from the panel</strong> once for that site, which remembers it there.
         </p>
         <div class="field">
           <label for="note-body" class="visually-hidden">Your note</label>

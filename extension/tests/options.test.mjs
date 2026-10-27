@@ -110,7 +110,7 @@ function install({
   };
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-url", "input"],
-    ["enable-site", "button"], ["pause-capture", "button"], ["sites-list", "ul"],
+    ["enable-site", "button"], ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
@@ -318,6 +318,153 @@ test("removing an origin's final site removes its adapters in the same host upda
   await removeListedSite();
   assert.deepEqual(state.config.adapters.artifacts, []);
   assert.match(statusText(), /Also removed 1 adapter for that origin/);
+});
+
+test("paused capture resumes for the listed sites behind the native confirmation", async () => {
+  const state = install({ grants: ["webNavigation", PATTERN] });
+  state.config.capture_enabled = false;
+  await openSettings();
+  const resume = env.elements.get("resume-capture");
+  assert.equal(resume.hidden, false);
+  assert.equal(resume.disabled, false);
+  assert.match(statusText(), /^Capture is paused\./);
+
+  resume.click();
+  await until(() => statusText().startsWith("Capture resumed") && idle(), "capture to resume");
+  assert.equal(state.config.capture_enabled, true);
+  assert.deepEqual(state.config.sites, [SITE]);
+  const confirm = state.requests.find((request) => request.type === "confirm_config");
+  assert.equal(confirm.config.capture_enabled, true);
+  assert.deepEqual(confirm.config.sites, [SITE]);
+  assert.ok(state.workerRequests.some((request) =>
+    request.kind === "ack_reenabled_origin" && request.origin === SITE.origin));
+  assert.equal(resume.hidden, true);
+});
+
+test("a canceled resume leaves capture paused", async () => {
+  const state = install({
+    grants: ["webNavigation", PATTERN],
+    host: { confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }) },
+  });
+  state.config.capture_enabled = false;
+  await openSettings();
+  env.elements.get("resume-capture").click();
+  await until(() => statusText().startsWith("Could not resume capture") && idle(), "the canceled resume");
+  assert.equal(state.config.capture_enabled, false);
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+  assert.equal(env.elements.get("resume-capture").hidden, false);
+  // The sites still need these grants once capture resumes.
+  assert.equal(state.grants.has(PATTERN), true);
+});
+
+test("a canceled resume removes the Chrome access it added", async () => {
+  const state = install({
+    grants: [PATTERN],
+    host: { confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }) },
+  });
+  state.config.capture_enabled = false;
+  await openSettings();
+  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
+  env.elements.get("resume-capture").click();
+  await until(() => statusText().startsWith("Could not resume capture") && idle(), "the canceled resume");
+  await until(() => !state.grants.has("webNavigation"), "the added webNavigation grant to be removed");
+  assert.equal(state.grants.has(PATTERN), true);
+  assert.equal(state.config.capture_enabled, false);
+});
+
+test("a failed resume keeps grants that another page's commit now needs", async () => {
+  const state = install({
+    grants: [PATTERN],
+    host: {
+      // Another settings page turns capture on while this one confirms.
+      confirm_config: (_request, current) => {
+        current.config = { ...current.config, capture_enabled: true };
+        current.revision += 1;
+        return { type: "error", code: "conflict", message: "The configuration changed" };
+      },
+    },
+  });
+  state.config.capture_enabled = false;
+  await openSettings();
+  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
+  env.elements.get("resume-capture").click();
+  // The conflict reloads settings, which then report the other page's commit.
+  await until(() => statusText().startsWith("Capture is enabled") && idle(), "the conflicted resume");
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+  assert.equal(state.config.capture_enabled, true);
+  assert.equal(state.grants.has("webNavigation"), true);
+  assert.equal(state.grants.has(PATTERN), true);
+});
+
+test("Resume capture waits for a pending local site removal", async () => {
+  const state = install({
+    grants: ["webNavigation", PATTERN],
+    workerStatus: { locally_removed_sites: [SITE] },
+  });
+  state.config.capture_enabled = false;
+  await openSettings();
+  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
+  env.elements.get("resume-capture").click();
+  await until(() => /Finish removing https:\/\/a\.com/.test(statusText()), "the pending-removal refusal");
+  assert.equal(state.requests.some((request) => request.type === "confirm_config"), false);
+  assert.equal(state.config.capture_enabled, false);
+});
+
+test("a canceled resume does not keep a grant behind a stale notes entry", async () => {
+  // The side panel's notes list still names the origin, but Chrome no longer
+  // grants it, so the entry is stale and must not protect the resume's grant.
+  const state = install({
+    grants: ["webNavigation"],
+    storage: { [NOTE_ORIGINS_KEY]: [SITE.origin] },
+    host: { confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }) },
+  });
+  state.config.capture_enabled = false;
+  await openSettings();
+  await until(() => !env.elements.get("resume-capture").disabled, "Resume to read Chrome grants");
+  env.elements.get("resume-capture").click();
+  await until(() => statusText().startsWith("Could not resume capture") && idle(), "the canceled resume");
+  await until(() => !state.grants.has(PATTERN), "the added origin grant to be removed");
+  assert.equal(state.grants.has("webNavigation"), true);
+});
+
+test("Resume capture waits for an invalid adapter policy to be repaired", async () => {
+  const state = install({
+    grants: ["webNavigation", PATTERN],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
+        adapter_warnings: [],
+      }),
+    },
+  });
+  state.config.capture_enabled = false;
+  await openSettings();
+  assert.equal(env.elements.get("resume-capture").hidden, true);
+  assert.match(statusText(), /unsupported adapter format 2/);
+});
+
+test("Resume capture is hidden while capture is on or nothing is set up", async () => {
+  install({ grants: ["webNavigation", PATTERN] });
+  await openSettings();
+  assert.equal(env.elements.get("resume-capture").hidden, true);
+
+  const empty = install({ sites: [] });
+  empty.config.capture_enabled = false;
+  await openSettings();
+  assert.equal(env.elements.get("resume-capture").hidden, true);
+});
+
+test("capturePaused tells a paused setup apart from an unfinished one", async () => {
+  install();
+  const { capturePaused, setupProblem } = await import("../dist/settings.js");
+  const paused = { ...configWith([SITE]), capture_enabled: false };
+  assert.equal(capturePaused(paused, null), true);
+  assert.equal(capturePaused(configWith([SITE]), null), false);
+  assert.equal(capturePaused({ ...configWith([]), capture_enabled: false }, null), false);
+  assert.equal(capturePaused({ ...paused, storage: null }, null), false);
+  assert.equal(capturePaused(paused, "config.toml is unreadable"), false);
+  assert.equal(setupProblem(paused, null), "Capture is paused.");
 });
 
 test("a notes grant Chrome no longer holds does not protect a later logging grant", async () => {

@@ -450,6 +450,7 @@ Each state changes one area rather than the layout:
 | State | Panel |
 |---|---|
 | Not set up | The setup warning replaces the tabs; the omnibar and page controls are disabled; the strip reads "Off". |
+| Capture paused | As Not set up, but the warning reads "Capture is paused. Resume it in settings."; settings offers **Resume capture**, which asks Chrome for the listed sites' grants and needs the same native confirmation as enabling a site. |
 | Native host unavailable | A banner under the header with the fix; everything below is disabled. |
 | Origin not enabled | Chip `○ Not logged · Set up artifacts for this site…`, which opens settings with the origin filled in and offers any matching starter adapter. From M1.5b the page context menu and the toolbar action also offer **Create adapter** for the tab; once one of them has granted `activeTab`, the panel's button asks for the exact origin and drafts an adapter from the site (§5.1). The panel cannot offer it directly on an ungranted tab, because a side-panel click grants neither `activeTab` nor the tab's URL. Notes, `/log`, and summaries still work. |
 | Origin granted for notes, not enabled | Chip `○ Not logged · Set up artifacts for this site… · Create adapter`. The origin is already granted, so the button works directly (§5.1). |
@@ -508,7 +509,32 @@ Because `artifact_id` is the record key below, an `id` template is durable. The 
 - **Aliases follow the artifact.** A record stays at the filename it was created under. When the index resolves its `artifact_id` to a newer canonical ID, lookups for either ID find it. If both IDs already had a note before the alias was learned, the panel shows the canonical note and lists the other as "note from before the move"; nothing is merged automatically. An `unalias` separates them again. When a note is reached through an alias, the panel says so.
 - **Older URL-keyed records stay findable.** Notes from M1, and notes made before an adapter existed, are left where they are. At reindex, the host maps each URL-keyed record's `canonical_url` through the current adapters, so the panel lists every older note on any URL of the artifact as "older note on this URL". It is still editable in place. When the artifact has no note yet, **Use as artifact note** rekeys one: the host writes it under the artifact key with a no-clobber create, then removes the URL-keyed file after checking its identity. If an adapter is later removed, an artifact-keyed record is still listed on the URLs it recorded.
 
-As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
+As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. When no current adapter recognizes a URL, historical key recovery requires both the note scan and the history lookup to succeed before deciding whether their combined candidates are unique. A lookup or catch-up failure returns an unavailable-note-identity error on load and save; it must never count as an empty candidate set or redirect a save into a different artifact note. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
+
+**Policy removal acceptance (2026-10-27).** Removing an adapter or its site,
+or narrowing its recognition rules, preserves the existing shared note on
+its recorded URLs without authorizing further capture. Historical URL
+evidence includes activity, its mode URLs, and explicit `why` context even
+before any measured activity. Older-note discovery also includes the shared
+note's verified creation URL, so a separate URL note there remains viewable
+from another recorded route even without activity on the creation route.
+Both lookup directions use that same evidence;
+recovered artifact notes retain the older URL-note list and its read-only
+viewing action. A separate URL note remains separate, and an occupied artifact
+note still blocks explicit migration. With several historical artifact IDs
+for one canonical URL the host uses the URL key, preserving any existing URL
+note; a stale artifact key is refused. Neither cache deletion nor reindex
+changes these decisions. With no delivered history, the note's original
+creation URL still recovers its identity; other routes need recorded evidence.
+Historical key selection requires a complete bounded note scan (4,096 Markdown
+entries, 4 MiB per regular file, 16 MiB total). Hitting a bound or encountering
+an unreadable regular candidate returns unavailable identity, never a partial
+choice; symlinks are skipped. Optional older-note discovery on a currently
+recognized page remains best effort, so a broken optional note does not hide
+the primary note. The panel does not yet list the preserved artifact-note
+candidates when history is ambiguous; explicit read-only candidate viewing
+is a separate follow-up and must not change the primary autosave key.
+
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
 ### 6.3 Profiles
@@ -646,6 +672,7 @@ Artifact files belong to Brauser and are rebuildable in the same way as the inde
 Artifact files are written to be quiet in synced and versioned folders:
 
 - **Lazy regeneration.** Delivery updates the index and marks changed artifacts dirty there; it does not touch their files. The host regenerates dirty files on a best-effort pass when the panel's connection closes, on the first connection of each local day, and when the user chooses "Update artifact files now" in settings. The dirty set is mirrored in `index.db` and its atomically replaced ingestion cache, so a host that exits before its pass loses nothing. The panel's artifact card reads the index, so a file that is not yet regenerated never makes the panel stale. Step 6.6 implements the connection-boundary pass and `brauser reindex`; the settings-facing action lands with the settings and panel work in step 6.7.
+- **Log ingestion recovery (built 2026-10-27).** The format-2 disposable cache records each log's relative path, byte length, and modification time. Every delivery update, history query, note-identity lookup, and dirty-file regeneration first checks those checkpoints under the configuration/write lock and reparses changed files in full. This recovers an append that became durable before cache publication, including across restart, without replaying the event or asking for reindex. Unchanged logs are not reread; changed-file parsing retains the preceding prose needed by legacy markers and revisits an incomplete trailing marker on the next append. Cache-format upgrades rebuild from the logs. SQLite is published before the checkpoint cache, so a failed publication leaves the checkpoint eligible for retry. Durable capture acknowledgement never depends on that publication. Ingestion is bounded to 100,000 files, eight directory levels, 32 MiB per file, 64 MiB of changed-file reads per pass, and the existing 64 MiB serialized state cap. A read, bound, conflicting-event, or publication failure returns unavailable history for artifact, Recent, and worklog queries instead of a success containing stale totals; no partial checkpoint is published. The planned real SQLite replacement (§14) still owns incremental transactions and scaling beyond these provisional cache limits.
 - **Stable content.** Frontmatter uses dates, not timestamps, and whole minutes. A file whose regenerated bytes are unchanged is not rewritten (§4.4). An extra visit in the same day changes one Timeline line and a few counters, not the whole file.
 - **Bounded size.** The Timeline keeps one line per day for the last 14 days with activity. Older days roll into one line per week, and weeks older than 26 weeks roll into one line per month. Linked lists the 50 strongest edges and ends with "N more" pointing at the omnibar. The full detail stays in the log and the index, so a ticket opened every day for a year still has a file of a few dozen lines. Titles, Tier 1 fields, and the one-liner are written with YAML escaping, and their Markdown is neutralized as in §5.2 step 6, so a hostile ticket title cannot make a viewer fetch a remote resource. Links follow the profile's link style.
 

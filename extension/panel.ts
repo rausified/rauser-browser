@@ -4,7 +4,7 @@ import {
   localTimestamp,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
+import { capturePaused, ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { recordNoteOrigin } from "./grants.js";
@@ -19,6 +19,7 @@ import type {
 const status = element<HTMLDivElement>("status");
 const settingsButton = element<HTMLButtonElement>("open-settings");
 const setupWarning = element<HTMLDivElement>("setup-warning");
+const setupHeading = element<HTMLElement>("setup-heading");
 const setupReason = element<HTMLSpanElement>("setup-reason");
 const setupSettingsButton = element<HTMLButtonElement>("setup-open-settings");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
@@ -321,9 +322,13 @@ function updateControls(): void {
 }
 
 function renderSetupWarning(): void {
-  const problem = setupProblem(session.config, session.configIssue ?? session.adapterIssue);
+  const issue = session.configIssue ?? session.adapterIssue;
+  const problem = setupProblem(session.config, issue);
   setupWarning.hidden = problem === null;
-  setupReason.textContent = problem ?? "";
+  // A paused setup is complete; it only needs capture turned back on.
+  const paused = capturePaused(session.config, issue);
+  setupHeading.textContent = paused ? "Capture is paused." : `${APP_NAME} isn't set up yet.`;
+  setupReason.textContent = paused ? "Resume it in settings." : problem ?? "";
 }
 
 function renderQueue(state: WorkerStatus): void {

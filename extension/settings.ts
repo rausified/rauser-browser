@@ -80,8 +80,16 @@ export function setupProblem(config: ConfigSnapshot | null, issue: string | null
   if (!config) return null;
   if (!config.storage) return "No notes folder is chosen.";
   if (!config.sites.length) return "No sites are enabled for capture.";
-  if (!config.capture_enabled) return "Capture is off.";
+  if (!config.capture_enabled) return "Capture is paused.";
   return null;
+}
+
+/**
+ * Whether setup is complete and only the capture switch is off, so the user
+ * resumes capture instead of setting anything up.
+ */
+export function capturePaused(config: ConfigSnapshot | null, issue: string | null): boolean {
+  return !issue && !!config?.storage && config.sites.length > 0 && !config.capture_enabled;
 }
 
 export class ConfigSession {
