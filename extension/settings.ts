@@ -3,7 +3,7 @@
 // across every open page, and the worker's policy lease tells a page when
 // another page has saved a different revision.
 import type {
-  AdapterDocument, AdapterWarning, AgentStatus, ConfigSnapshot, HarnessFound, HarnessId,
+  AdapterDocument, AdapterWarning, AdoptedState, AgentStatus, ConfigSnapshot, HarnessFound, HarnessId,
 } from "../protocol/ts/generated.js";
 import {
   POLICY_LEASE_MS,
@@ -96,6 +96,7 @@ export class ConfigSession {
   agentStatus: AgentStatus | null = null;
   adapterIssue: string | null = null;
   adapterWarnings: AdapterWarning[] = [];
+  adoptedState: AdoptedState | null = null;
   status: WorkerStatus | null = null;
   // While this page pauses, the worker clears the lease before the host
   // commits. That null lease is this page's own write, not another page's.
@@ -141,6 +142,7 @@ export class ConfigSession {
     this.agentStatus = response.agent_status;
     this.adapterIssue = response.adapter_issue;
     this.adapterWarnings = response.adapter_warnings;
+    this.adoptedState = response.adopted_state;
     this.onChange();
   }
 
@@ -156,6 +158,7 @@ export class ConfigSession {
         this.agentStatus = latest.agent_status;
         this.adapterIssue = latest.adapter_issue;
         this.adapterWarnings = latest.adapter_warnings;
+        this.adoptedState = latest.adopted_state;
         return true;
       }
     } catch {
@@ -205,6 +208,27 @@ export class ConfigSession {
       withConfigMutationLock, () => this.readHostConfig(), (state) => this.applyHostConfig(state));
     await this.refreshStatus();
     return response;
+  }
+
+  /** Forget the host's record of adopted adapters, as this page was shown
+   * it. The host backs the file up and starts a fresh record; a record that
+   * changed since is a `conflict` HostError. Config itself is unchanged, so
+   * only a different config revision needs the full reload. */
+  async forgetAdoptedContracts(): Promise<void> {
+    const expected = this.adoptedState?.revision;
+    if (!expected) throw new Error("Host configuration has not loaded");
+    const response = await this.host.call({
+      type: "forget_adopted_contracts",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      expected_revision: expected,
+    }, "config_result");
+    if (response.revision !== this.revision) {
+      await this.reload();
+      return;
+    }
+    this.adoptedState = response.adopted_state;
+    this.onChange();
   }
 
   /** Returns whether the host verified the saved policy before publication. */

@@ -42,6 +42,20 @@ export interface ConfigResult {
   agent_status: AgentStatus;
   adapter_issue: string | null;
   adapter_warnings: AdapterWarning[];
+  adopted_state: AdoptedState;
+}
+
+export interface ForgetAdoptedContractsRequest {
+  type: "forget_adopted_contracts";
+  protocol_version: 6;
+  request_id: string;
+  expected_revision: string;
+}
+
+export interface AdoptedState {
+  issue: string | null;
+  revision: string;
+  warnings: string[];
 }
 
 export interface ConfigUpdated {
@@ -662,6 +676,6 @@ export interface ServiceReady {
   build_id: string;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
 export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | ServiceReady | ErrorResponse;

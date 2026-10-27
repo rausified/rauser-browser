@@ -17,6 +17,11 @@
 //!
 //! Every status transition is a read-modify-write of `status.json` under a
 //! per-run mutex, so the heartbeat never overwrites a terminal state.
+//!
+//! The end state is written a bounded number of times. If it still cannot be
+//! recorded, the run's slot is freed so the queue moves on, but its record
+//! key stays taken and `get_run`/`list_runs` report the end state from memory
+//! until a later request writes it or restart recovery settles the record.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -56,6 +61,11 @@ pub const HEARTBEAT: Duration = Duration::from_secs(5);
 pub const LIST_LIMIT: usize = 20;
 /// How long `cancel_run` waits for a running run to reach its end state.
 const CANCEL_WAIT: Duration = Duration::from_secs(5);
+/// How many times [`Inner::finish`] tries to record a run's end state before
+/// keeping it in memory.
+const TERMINAL_WRITE_ATTEMPTS: usize = 3;
+/// The pause before the second try; each later try waits one step longer.
+const TERMINAL_WRITE_BACKOFF: Duration = Duration::from_millis(20);
 
 /// Where a successful save wrote the run's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,10 +259,45 @@ impl RunControl {
 #[cfg(test)]
 type SpawnFault = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
+/// A `status.json` access, for the [`StatusFault`] test seam.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum StatusIo<'a> {
+    Read(Uuid),
+    Write(&'a RunStatusFile),
+}
+
+/// Test seam: true makes the `status.json` read or write fail.
+#[cfg(test)]
+type StatusFault = Arc<dyn Fn(StatusIo<'_>) -> bool + Send + Sync>;
+
+/// The change that gives a record its end state.
+type EndChange = Box<dyn FnOnce(&mut RunStatusFile) + Send>;
+
+/// A run's end state that `status.json` does not hold yet.
+enum EndState {
+    /// The record could not be read, so the change is not applied yet.
+    Unread(EndChange),
+    /// The record with its end state, still to be written.
+    Unwritten(Box<RunStatusFile>),
+}
+
+/// How one attempt to record an end state went.
+enum Settle {
+    Written,
+    /// The run has no record, so there is nothing to write.
+    Gone,
+    Failed(EndState, anyhow::Error),
+}
+
 struct Inner {
     store: RunStore,
     scheduler: Mutex<Scheduler>,
     runs: Mutex<HashMap<Uuid, Arc<RunControl>>>,
+    /// Ended runs whose end state could not be recorded. Each keeps its
+    /// record key in the scheduler until the state is written. (Lock order:
+    /// scheduler, then this, then a record lock.)
+    unsettled: Mutex<HashMap<Uuid, EndState>>,
     record_locks: Mutex<HashMap<Uuid, Arc<Mutex<()>>>>,
     registry: HarnessRegistry,
     finisher: Box<dyn RunFinisher>,
@@ -262,6 +307,8 @@ struct Inner {
     prune_lock: Mutex<()>,
     #[cfg(test)]
     spawn_fault: std::sync::OnceLock<SpawnFault>,
+    #[cfg(test)]
+    status_fault: std::sync::OnceLock<StatusFault>,
 }
 
 /// Owns every run of this service process. Cheap to clone.
@@ -301,6 +348,28 @@ impl Supervisor {
         supervisor
     }
 
+    /// As [`Supervisor::new`], with `status.json` access failing wherever
+    /// `fault` says so, from the first resumed run on.
+    #[cfg(test)]
+    fn with_status_fault(
+        store: RunStore,
+        registry: HarnessRegistry,
+        finisher: Box<dyn RunFinisher>,
+        options: ServiceOptions,
+        fault: StatusFault,
+    ) -> Self {
+        let (supervisor, queued) = Self::recovered(store, registry, finisher, options);
+        let _ = supervisor.inner.status_fault.set(fault);
+        supervisor.resume(queued);
+        supervisor
+    }
+
+    /// Make `status.json` reads and writes fail wherever `fault` says so.
+    #[cfg(test)]
+    fn set_status_fault(&self, fault: StatusFault) {
+        let _ = self.inner.status_fault.set(fault);
+    }
+
     /// Recover and prune the records a previous process left behind; the
     /// still-queued runs are returned for [`Supervisor::resume`].
     fn recovered(
@@ -318,6 +387,7 @@ impl Supervisor {
                 store,
                 scheduler: Mutex::new(Scheduler::default()),
                 runs: Mutex::new(HashMap::new()),
+                unsettled: Mutex::new(HashMap::new()),
                 record_locks: Mutex::new(HashMap::new()),
                 registry,
                 finisher,
@@ -326,6 +396,8 @@ impl Supervisor {
                 prune_lock: Mutex::new(()),
                 #[cfg(test)]
                 spawn_fault: std::sync::OnceLock::new(),
+                #[cfg(test)]
+                status_fault: std::sync::OnceLock::new(),
             }),
         };
         (supervisor, queued)
@@ -363,11 +435,15 @@ impl Supervisor {
                     let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
-                Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
-                    status.state = RunState::Failed;
-                    status.error_kind = Some(RunErrorKind::ServiceRestarted);
-                    status.error = Some(maintenance::SERVICE_RESTARTED.to_string());
-                }),
+                Some((Submit::Existing(_), _)) | None => {
+                    // Its key stays taken until this end state is recorded.
+                    lock(&inner.scheduler).hold(&status.start_key, id);
+                    inner.finish(id, |status| {
+                        status.state = RunState::Failed;
+                        status.error_kind = Some(RunErrorKind::ServiceRestarted);
+                        status.error = Some(maintenance::SERVICE_RESTARTED.to_string());
+                    });
+                }
             }
         }
         Inner::pump(inner);
@@ -399,6 +475,8 @@ impl Supervisor {
         let id = Uuid::new_v4();
         {
             let mut scheduler = lock(&inner.scheduler);
+            // A run whose end state is now recorded gives up its key first.
+            inner.settle_locked(&mut scheduler);
             if let Submit::Existing(owner) = scheduler.submit(&req.record_key, id) {
                 drop(scheduler);
                 return inner.view(owner).map(|view| (view, true));
@@ -459,6 +537,7 @@ impl Supervisor {
         since_offset: u32,
     ) -> Result<(RunView, StreamPage), (ErrorCode, String)> {
         self.inner.touch();
+        self.inner.settle();
         let view = self.inner.view(id)?;
         let page = self
             .inner
@@ -483,7 +562,20 @@ impl Supervisor {
     /// [`LIST_LIMIT`], newest first.
     pub fn list_runs(&self) -> Vec<RunView> {
         self.inner.touch();
+        self.inner.settle();
         let mut runs = self.inner.store.list();
+        // An end state not yet on disk is the run's true state.
+        {
+            let unsettled = lock(&self.inner.unsettled);
+            for run in &mut runs {
+                let ended = Uuid::parse_str(&run.run_id)
+                    .ok()
+                    .and_then(|id| unsettled.get(&id));
+                if let Some(EndState::Unwritten(status)) = ended {
+                    *run = status.as_ref().clone();
+                }
+            }
+        }
         runs.reverse();
         let (active, finished): (Vec<_>, Vec<_>) = runs
             .into_iter()
@@ -558,6 +650,14 @@ impl Supervisor {
         let Some(record_lock) = inner.record_lock(id) else {
             return Err(no_such_run());
         };
+        // The end state must be on disk before a save changes it.
+        inner.settle();
+        if lock(&inner.unsettled).contains_key(&id) {
+            return Err((
+                ErrorCode::Internal,
+                "The run could not be updated.".to_string(),
+            ));
+        }
         let _guard = lock(&record_lock);
         let mut status = inner.status(id)?;
         let result = inner.store.read_result(id).ok().flatten();
@@ -592,7 +692,7 @@ impl Supervisor {
             Err(reason) => status.error = Some(reason),
         }
         status.finished_at = Some(now_timestamp());
-        inner.store.write_status(&status).map_err(|error| {
+        inner.write_status(&status).map_err(|error| {
             eprintln!("brauser service: recording retry save of run {id}: {error:#}");
             (
                 ErrorCode::Internal,
@@ -608,9 +708,15 @@ impl Supervisor {
     }
 
     /// True once the service has been idle, with no requests, for
-    /// `idle_exit`.
+    /// `idle_exit`. An end state still not recorded gets one last try; if it
+    /// fails, restart recovery settles the record.
     pub fn idle_expired(&self) -> bool {
-        self.is_idle() && lock(&self.inner.last_activity).elapsed() >= self.inner.options.idle_exit
+        let expired = self.is_idle()
+            && lock(&self.inner.last_activity).elapsed() >= self.inner.options.idle_exit;
+        if expired {
+            self.inner.settle();
+        }
+        expired
     }
 }
 
@@ -638,7 +744,7 @@ impl Inner {
         if !self.store.run_dir(id).exists() {
             return Err(no_such_run());
         }
-        self.store.status(id).map_err(|error| {
+        self.read_status(id).map_err(|error| {
             eprintln!("brauser service: reading run {id}: {error:#}");
             (
                 ErrorCode::Internal,
@@ -647,9 +753,45 @@ impl Inner {
         })
     }
 
+    /// The run's view, from its end state in memory when that is not yet
+    /// on disk. (An end state leaves memory only once it is written, so a
+    /// miss here reads it from disk.)
     fn view(&self, id: Uuid) -> Result<RunView, (ErrorCode, String)> {
-        let status = self.status(id)?;
+        let ended = match lock(&self.unsettled).get(&id) {
+            Some(EndState::Unwritten(status)) => Some(status.as_ref().clone()),
+            _ => None,
+        };
+        let status = match ended {
+            Some(status) => status,
+            None => self.status(id)?,
+        };
         Ok(self.view_of(id, &status))
+    }
+
+    /// Read `status.json`; tests can make this fail.
+    fn read_status(&self, id: Uuid) -> anyhow::Result<RunStatusFile> {
+        #[cfg(test)]
+        if self
+            .status_fault
+            .get()
+            .is_some_and(|fault| fault(StatusIo::Read(id)))
+        {
+            anyhow::bail!("status read failed (test)");
+        }
+        self.store.status(id)
+    }
+
+    /// Write `status.json`; tests can make this fail.
+    fn write_status(&self, status: &RunStatusFile) -> anyhow::Result<()> {
+        #[cfg(test)]
+        if self
+            .status_fault
+            .get()
+            .is_some_and(|fault| fault(StatusIo::Write(status)))
+        {
+            anyhow::bail!("status write failed (test)");
+        }
+        self.store.write_status(status)
     }
 
     fn view_of(&self, id: Uuid, status: &RunStatusFile) -> RunView {
@@ -671,9 +813,9 @@ impl Inner {
             anyhow::bail!("run {id} has no record");
         };
         let _guard = lock(&record_lock);
-        let mut status = self.store.status(id)?;
+        let mut status = self.read_status(id)?;
         change(&mut status);
-        self.store.write_status(&status)?;
+        self.write_status(&status)?;
         Ok(status)
     }
 
@@ -993,7 +1135,7 @@ impl Inner {
         self: &Arc<Self>,
         control: &RunControl,
         id: Uuid,
-        change: impl FnOnce(&mut RunStatusFile),
+        change: impl FnOnce(&mut RunStatusFile) + Send + 'static,
     ) {
         self.finish(id, change);
         control.mark_done();
@@ -1003,20 +1145,102 @@ impl Inner {
     /// Write the end state, then free the run's slot and key. The scheduler
     /// lock is held across both, so no caller sees a finished record whose
     /// key is still taken. (Lock order: scheduler, then a record lock.)
-    fn finish(&self, id: Uuid, change: impl FnOnce(&mut RunStatusFile)) {
+    ///
+    /// The write is tried [`TERMINAL_WRITE_ATTEMPTS`] times. If it still
+    /// fails, only the slot is freed, so the queue moves on; the end state is
+    /// kept in memory and the key stays taken until [`Inner::settle`] writes
+    /// it. Holding the slot instead would strand the queue on a failing disk.
+    fn finish(&self, id: Uuid, change: impl FnOnce(&mut RunStatusFile) + Send + 'static) {
         let finished = now_timestamp();
-        let mut scheduler = lock(&self.scheduler);
-        if let Err(error) = self.update(id, |status| {
+        let mut end = EndState::Unread(Box::new(move |status: &mut RunStatusFile| {
             change(status);
             status.finished_at = Some(finished);
-        }) {
-            eprintln!("brauser service: recording the end of run {id}: {error:#}");
+        }));
+        let mut scheduler = lock(&self.scheduler);
+        let mut tries: u32 = 0;
+        let unsettled = loop {
+            match self.settle_end(id, end) {
+                Settle::Written | Settle::Gone => break None,
+                Settle::Failed(left, error) => {
+                    tries += 1;
+                    if tries as usize >= TERMINAL_WRITE_ATTEMPTS {
+                        eprintln!(
+                            "brauser service: recording the end of run {id} \
+                             (kept in memory, its key stays taken): {error:#}"
+                        );
+                        break Some(left);
+                    }
+                    end = left;
+                    thread::sleep(TERMINAL_WRITE_BACKOFF * tries);
+                }
+            }
+        };
+        match unsettled {
+            None => {
+                scheduler.finished(id);
+                // The disk works again, so earlier end states may now stick.
+                self.settle_locked(&mut scheduler);
+            }
+            Some(end) => {
+                scheduler.release(id);
+                lock(&self.unsettled).insert(id, end);
+            }
         }
-        scheduler.finished(id);
         drop(scheduler);
         lock(&self.runs).remove(&id);
         self.touch();
         self.prune();
+    }
+
+    /// Try once more to record each end state kept in memory.
+    fn settle(&self) {
+        if lock(&self.unsettled).is_empty() {
+            return;
+        }
+        let mut scheduler = lock(&self.scheduler);
+        self.settle_locked(&mut scheduler);
+    }
+
+    /// [`Inner::settle`] under the scheduler lock: each end state that is
+    /// written (or whose record is gone) frees its run's key.
+    fn settle_locked(&self, scheduler: &mut Scheduler) {
+        let mut unsettled = lock(&self.unsettled);
+        let ids: Vec<Uuid> = unsettled.keys().copied().collect();
+        for id in ids {
+            let Some(end) = unsettled.remove(&id) else {
+                continue;
+            };
+            match self.settle_end(id, end) {
+                Settle::Written | Settle::Gone => scheduler.finished(id),
+                Settle::Failed(end, _) => {
+                    unsettled.insert(id, end);
+                }
+            }
+        }
+    }
+
+    /// One attempt to put `end` into the run's `status.json`, under its
+    /// record lock.
+    fn settle_end(&self, id: Uuid, end: EndState) -> Settle {
+        let Some(record_lock) = self.record_lock(id) else {
+            return Settle::Gone;
+        };
+        let _guard = lock(&record_lock);
+        let status = match end {
+            EndState::Unwritten(status) => status,
+            EndState::Unread(change) => match self.read_status(id) {
+                Ok(status) => {
+                    let mut status = Box::new(status);
+                    change(&mut status);
+                    status
+                }
+                Err(error) => return Settle::Failed(EndState::Unread(change), error),
+            },
+        };
+        match self.write_status(&status) {
+            Ok(()) => Settle::Written,
+            Err(error) => Settle::Failed(EndState::Unwritten(status), error),
+        }
     }
 
     /// Apply retention after a run finishes, then drop the locks of runs
@@ -1163,7 +1387,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -1183,6 +1407,8 @@ mod tests {
     /// Accepts a §6.4 answer and saves nothing, counting its saves and
     /// keeping the record the last one was given.
     struct TestFinisher {
+        /// How many of the next saves fail.
+        fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
         seen: SeenRun,
     }
@@ -1205,6 +1431,15 @@ mod tests {
         ) -> Result<SavedRun, String> {
             self.saves.fetch_add(1, Ordering::SeqCst);
             *self.seen.lock().unwrap() = Some(run.clone());
+            let failing = self
+                .fail_saves
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            if failing {
+                return Err("The notes folder is unavailable.".to_string());
+            }
             Ok(SavedRun {
                 written_key: run.start_key.clone(),
                 summary_path: Some("summaries/a.summary.md".to_string()),
@@ -1225,6 +1460,8 @@ mod tests {
     struct Fixture {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
+        /// How many of the default [`TestFinisher`]'s next saves fail.
+        fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
         /// The record the [`TestFinisher`]'s last save was given.
         seen: SeenRun,
@@ -1342,11 +1579,13 @@ mod tests {
             finisher: Option<FinisherFactory>,
         ) -> Self {
             let store = RunStore::open(dir.path().join("runs")).unwrap();
+            let fail_saves = Arc::new(AtomicUsize::new(0));
             let saves = Arc::new(AtomicUsize::new(0));
             let seen = SeenRun::default();
             let finisher: Box<dyn RunFinisher> = match finisher {
                 Some(build) => build(dir.path()),
                 None => Box::new(TestFinisher {
+                    fail_saves: fail_saves.clone(),
                     saves: saves.clone(),
                     seen: seen.clone(),
                 }),
@@ -1380,6 +1619,7 @@ mod tests {
             Self {
                 dir,
                 supervisor,
+                fail_saves,
                 saves,
                 seen,
                 env,
@@ -2782,6 +3022,333 @@ mod tests {
         assert_eq!(view.error.as_deref(), Some("agent.env is a symlink"));
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
         assert!(fixture.supervisor.is_idle());
+    }
+
+    /// A disk that fails the end-state writes of runs whose key starts with
+    /// `stuck`: always while `failing` is set, else for the next `fail_next`
+    /// writes. Reads of the `unreadable` run's record fail.
+    #[derive(Default)]
+    struct StuckDisk {
+        failing: AtomicBool,
+        fail_next: AtomicUsize,
+        unreadable: Mutex<Option<Uuid>>,
+        /// End-state writes of `stuck` runs tried so far.
+        writes: AtomicUsize,
+    }
+
+    impl StuckDisk {
+        fn install(fixture: &Fixture) -> Arc<Self> {
+            let disk = Arc::new(Self::default());
+            let fault = disk.clone();
+            fixture
+                .supervisor
+                .set_status_fault(Arc::new(move |io: StatusIo<'_>| match io {
+                    StatusIo::Read(id) => *fault.unreadable.lock().unwrap() == Some(id),
+                    StatusIo::Write(status) => {
+                        let terminal = status.finished_at.is_some()
+                            && status.url.starts_with("https://example.com/stuck");
+                        if !terminal {
+                            return false;
+                        }
+                        fault.writes.fetch_add(1, Ordering::SeqCst);
+                        fault.failing.load(Ordering::SeqCst)
+                            || fault
+                                .fail_next
+                                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                                    left.checked_sub(1)
+                                })
+                                .is_ok()
+                    }
+                }));
+            disk
+        }
+    }
+
+    impl Fixture {
+        /// Wait, without asking the supervisor (which would retry), until
+        /// `count` runs hold an end state that is not yet on disk.
+        fn wait_unsettled(&self, count: usize) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while lock(&self.supervisor.inner.unsettled).len() != count {
+                assert!(Instant::now() < deadline, "never {count} unsettled runs");
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        fn on_disk(&self, id: Uuid) -> RunState {
+            self.supervisor.inner.store.status(id).unwrap().state
+        }
+
+        fn start_existing(&self, key: &str) -> brauser_protocol::RunView {
+            let (view, existing) = self.supervisor.start_run(self.request(key)).unwrap();
+            assert!(existing, "a second run started for {key}: {view:?}");
+            view
+        }
+    }
+
+    #[test]
+    fn an_end_state_write_that_fails_briefly_is_retried() {
+        let fixture = Fixture::new(ANSWER);
+        let disk = StuckDisk::install(&fixture);
+        disk.fail_next
+            .store(TERMINAL_WRITE_ATTEMPTS - 1, Ordering::SeqCst);
+        let id = fixture.start("stuck");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fixture.on_disk(id) != RunState::Succeeded {
+            assert!(Instant::now() < deadline, "the end state was never written");
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(disk.writes.load(Ordering::SeqCst), TERMINAL_WRITE_ATTEMPTS);
+        fixture.wait_unsettled(0);
+        // The key is free again.
+        assert_ne!(fixture.start("stuck"), id);
+    }
+
+    #[test]
+    fn an_end_state_that_cannot_be_recorded_keeps_its_key_and_is_reported() {
+        let fixture = Fixture::new(ANSWER);
+        let disk = StuckDisk::install(&fixture);
+        disk.failing.store(true, Ordering::SeqCst);
+        let id = fixture.start("stuck");
+        fixture.wait_unsettled(1);
+        // A bounded number of tries, then nothing retries on its own.
+        assert_eq!(disk.writes.load(Ordering::SeqCst), TERMINAL_WRITE_ATTEMPTS);
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(disk.writes.load(Ordering::SeqCst), TERMINAL_WRITE_ATTEMPTS);
+        assert_eq!(fixture.on_disk(id), RunState::Running);
+
+        // get_run and list_runs report the true end state.
+        let view = fixture.view(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.summary_path.as_deref(), Some("summaries/a.summary.md"));
+        assert!(view.finished_at.is_some());
+        let listed = fixture.supervisor.list_runs();
+        let listed = listed
+            .iter()
+            .find(|run| run.run_id == id.to_string())
+            .unwrap();
+        assert_eq!(listed.state, RunState::Succeeded, "{listed:?}");
+
+        // No second run starts for the same key.
+        let existing = fixture.start_existing("stuck");
+        assert_eq!(existing.run_id, id.to_string());
+        assert_eq!(existing.state, RunState::Succeeded);
+        assert_eq!(fixture.on_disk(id), RunState::Running);
+
+        // Once the disk recovers, the next request records the end state and
+        // frees the key.
+        disk.failing.store(false, Ordering::SeqCst);
+        assert_eq!(fixture.view(id).state, RunState::Succeeded);
+        assert_eq!(fixture.on_disk(id), RunState::Succeeded);
+        fixture.wait_unsettled(0);
+        assert_ne!(fixture.start("stuck"), id);
+    }
+
+    #[test]
+    fn unrecordable_end_states_never_strand_the_queue() {
+        let fixture = Fixture::new(ANSWER);
+        let disk = StuckDisk::install(&fixture);
+        disk.failing.store(true, Ordering::SeqCst);
+        // More stuck runs than slots, then an ordinary one.
+        let stuck: Vec<Uuid> = (0..=crate::service::queue::MAX_RUNNING)
+            .map(|n| fixture.start(&format!("stuck-{n}")))
+            .collect();
+        let ordinary = fixture.start("ordinary");
+        assert_eq!(fixture.wait_finished(ordinary).state, RunState::Succeeded);
+        assert_eq!(fixture.on_disk(ordinary), RunState::Succeeded);
+        for id in &stuck {
+            assert_eq!(fixture.wait_finished(*id).state, RunState::Succeeded);
+        }
+        assert!(fixture.supervisor.is_idle());
+        for n in 0..=crate::service::queue::MAX_RUNNING {
+            fixture.start_existing(&format!("stuck-{n}"));
+        }
+    }
+
+    #[test]
+    fn an_unreadable_record_at_the_end_still_keeps_its_key() {
+        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
+        let disk = StuckDisk::install(&fixture);
+        let id = fixture.start("stuck");
+        fixture.wait_for(id, |view| view.state == RunState::Running);
+        *disk.unreadable.lock().unwrap() = Some(id);
+        fixture.release();
+        fixture.wait_unsettled(1);
+        assert!(fixture.supervisor.is_idle());
+        // The record cannot be read, so the existing run cannot be shown,
+        // but no second run starts either.
+        assert!(matches!(
+            fixture.supervisor.start_run(fixture.request("stuck")),
+            Err((ErrorCode::Internal, _))
+        ));
+        assert_eq!(disk.writes.load(Ordering::SeqCst), 0);
+
+        // The answer could not be stamped on the unreadable record, so the
+        // end state is a save failure that offers Retry save, and nothing
+        // was saved.
+        *disk.unreadable.lock().unwrap() = None;
+        let view = fixture.view(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
+        assert!(view.can_retry_save, "{view:?}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.on_disk(id), RunState::Failed);
+        fixture.wait_unsettled(0);
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+        assert_ne!(fixture.start("stuck"), id);
+    }
+
+    #[test]
+    fn retry_save_waits_until_the_end_state_is_recorded() {
+        let fixture = Fixture::new(ANSWER);
+        let disk = StuckDisk::install(&fixture);
+        disk.failing.store(true, Ordering::SeqCst);
+        fixture.fail_saves.store(1, Ordering::SeqCst);
+        let id = fixture.start("stuck");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed), "{view:?}");
+        assert!(view.can_retry_save);
+        assert!(matches!(
+            fixture.supervisor.retry_save(id),
+            Err((ErrorCode::Internal, _))
+        ));
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+
+        disk.failing.store(false, Ordering::SeqCst);
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 2);
+        assert_eq!(fixture.on_disk(id), RunState::Succeeded);
+        assert_ne!(fixture.start("stuck"), id);
+    }
+
+    #[test]
+    fn restart_recovery_settles_an_end_state_that_was_never_recorded() {
+        let fixture = Fixture::new(ANSWER);
+        let disk = StuckDisk::install(&fixture);
+        disk.failing.store(true, Ordering::SeqCst);
+        let id = fixture.start("stuck");
+        fixture.wait_unsettled(1);
+        assert_eq!(fixture.on_disk(id), RunState::Running);
+
+        // A new service process recovers the record this one left behind.
+        let options = ServiceOptions {
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
+            idle_exit: Duration::from_secs(600),
+            service_pid: std::process::id().wrapping_add(1),
+            run_env: Arc::new(|| Ok(Vec::new())),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
+            opener: crate::open::default_opener(),
+        };
+        let finisher = TestFinisher {
+            fail_saves: Arc::new(AtomicUsize::new(0)),
+            saves: Arc::new(AtomicUsize::new(0)),
+            seen: SeenRun::default(),
+        };
+        let restarted = Supervisor::new(
+            RunStore::open(fixture.path("runs")).unwrap(),
+            HarnessRegistry::default(),
+            Box::new(finisher),
+            options,
+        );
+        let (view, _) = restarted.get_run(id, 0).unwrap();
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::ServiceRestarted));
+        assert_eq!(fixture.on_disk(id), RunState::Failed);
+        assert!(restarted.is_idle());
+    }
+
+    /// A queued record that recovery cannot resume (no working directory, or
+    /// a second queued run for one key) fails with "service restarted"; when
+    /// that end state cannot be recorded, its key must stay taken too.
+    #[test]
+    fn recovery_only_end_states_that_cannot_be_recorded_keep_their_keys() {
+        let fixture = Fixture::new(ANSWER);
+        let store = &fixture.supervisor.inner.store;
+        let seed = |key: &str, cwd: Option<&Path>, created_at: &str| {
+            let id = seed_record(store, fixture.dir.path(), RunState::Queued, created_at);
+            let mut status = store.status(id).unwrap();
+            status.cwd = cwd.map(|cwd| cwd.display().to_string());
+            status.start_key.value = format!("https://example.com/{key}");
+            status.url = status.start_key.value.clone();
+            store.write_status(&status).unwrap();
+            id
+        };
+        let homeless = seed("stuck-homeless", None, "2026-10-26T09:00:00.000000000Z");
+        // Oldest first: this one resumes, the later one is the duplicate.
+        let _first = seed(
+            "stuck-twice",
+            Some(fixture.dir.path()),
+            "2026-10-26T09:00:00.000000000Z",
+        );
+        let second = seed(
+            "stuck-twice",
+            Some(fixture.dir.path()),
+            "2026-10-26T09:05:00.000000000Z",
+        );
+
+        let options = ServiceOptions {
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
+            idle_exit: Duration::from_secs(600),
+            service_pid: std::process::id().wrapping_add(1),
+            run_env: Arc::new(|| Ok(Vec::new())),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
+            opener: crate::open::default_opener(),
+        };
+        let finisher = TestFinisher {
+            fail_saves: Arc::new(AtomicUsize::new(0)),
+            saves: Arc::new(AtomicUsize::new(0)),
+            seen: SeenRun::default(),
+        };
+        // Every end-state write of a recovery-only run fails.
+        let fault: StatusFault = Arc::new(move |io: StatusIo<'_>| match io {
+            StatusIo::Read(_) => false,
+            StatusIo::Write(status) => {
+                status.finished_at.is_some()
+                    && (status.run_id == homeless.to_string()
+                        || status.run_id == second.to_string())
+            }
+        });
+        let program = fixture.path("fake-harness");
+        let registry = HarnessRegistry::from_lookup(move |name| {
+            (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
+        });
+        let restarted = Supervisor::with_status_fault(
+            RunStore::open(fixture.path("runs")).unwrap(),
+            registry,
+            Box::new(finisher),
+            options,
+            fault,
+        );
+        assert_eq!(lock(&restarted.inner.unsettled).len(), 2);
+        assert_eq!(
+            store.status(homeless).unwrap().state,
+            RunState::Queued,
+            "the failed write left the record queued on disk"
+        );
+
+        // No new run starts for the homeless record's key.
+        let (view, existing) = restarted
+            .start_run(fixture.request("stuck-homeless"))
+            .unwrap();
+        assert!(existing, "a second run started: {view:?}");
+        assert_eq!(view.run_id, homeless.to_string());
+        assert_eq!(view.state, RunState::Failed);
+
+        // Once the resumed run for the shared key ends, the unrecorded
+        // duplicate still holds the key.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !restarted.is_idle() {
+            assert!(Instant::now() < deadline, "the resumed run never ended");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let (view, existing) = restarted.start_run(fixture.request("stuck-twice")).unwrap();
+        assert!(existing, "a second run started: {view:?}");
+        assert_eq!(view.run_id, second.to_string());
     }
 
     #[test]

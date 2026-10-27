@@ -1,4 +1,4 @@
-use brauser_protocol::{Request, Response};
+use brauser_protocol::{AdoptedState, Request, Response};
 
 // Every agent, vocabulary and adapter key is required on the wire, like `storage`.
 const AGENT_AND_ADAPTERS: &str = concat!(
@@ -61,7 +61,7 @@ fn v6_retires_config_confirmation() {
 fn config_responses_always_report_the_revision() {
     for kind in ["config_result", "config_updated"] {
         let extra = if kind == "config_result" {
-            r#","config_issue":null,"agent_status":{"state":"not_set_up","harness_version":null,"message":null},"adapter_issue":null,"adapter_warnings":[]"#
+            r#","config_issue":null,"agent_status":{"state":"not_set_up","harness_version":null,"message":null},"adapter_issue":null,"adapter_warnings":[],"adopted_state":{"issue":null,"revision":"missing","warnings":[]}"#
         } else {
             ""
         };
@@ -147,7 +147,7 @@ fn config_with_extra(key: &str) -> String {
     };
     let body = config(r#""storage":null,"#).replacen('{', &format!(r#"{{"{key}":{value},"#), 1);
     format!(
-        r#"{{"type":"config_result","protocol_version":6,"request_id":"r1","revision":"missing","config_issue":null,"agent_status":{{"state":"not_set_up","harness_version":null,"message":null}},"adapter_issue":null,"adapter_warnings":[],"config":{body}}}"#
+        r#"{{"type":"config_result","protocol_version":6,"request_id":"r1","revision":"missing","config_issue":null,"agent_status":{{"state":"not_set_up","harness_version":null,"message":null}},"adapter_issue":null,"adapter_warnings":[],"adopted_state":{{"issue":null,"revision":"missing","warnings":[]}},"config":{body}}}"#
     )
 }
 
@@ -687,6 +687,34 @@ fn open_summary_requires_url() {
     assert!(
         serde_json::from_str::<Response>(
             &opened.replace(r#","relative_path":"summaries/a.summary.md""#, "")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn adopted_state_and_its_forget_request_round_trip() {
+    let request = r#"{"type":"forget_adopted_contracts","protocol_version":6,"request_id":"r","expected_revision":"sha256:abc"}"#;
+    let parsed: Request = serde_json::from_str(request).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), request);
+    // The revision is required, as for update_config.
+    assert!(
+        serde_json::from_str::<Request>(
+            r#"{"type":"forget_adopted_contracts","protocol_version":6,"request_id":"r"}"#
+        )
+        .is_err()
+    );
+
+    let state = r#"{"issue":"damaged","revision":"not-a-file","warnings":["full"]}"#;
+    let parsed: AdoptedState = serde_json::from_str(state).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), state);
+    // issue is required even when null, and no other key is allowed.
+    assert!(
+        serde_json::from_str::<AdoptedState>(r#"{"revision":"missing","warnings":[]}"#).is_err()
+    );
+    assert!(
+        serde_json::from_str::<AdoptedState>(
+            r#"{"issue":null,"revision":"missing","warnings":[],"extra":1}"#
         )
         .is_err()
     );
