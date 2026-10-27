@@ -907,18 +907,20 @@ impl From<StorageConfig> for StoredStorage {
 
 impl From<StoredStorage> for StorageConfig {
     fn from(value: StoredStorage) -> Self {
+        let proposed = value.artifacts_dir.is_none();
         let mut storage = Self {
             root: value.root,
             profile: value.profile,
             log_dir: value.log_dir,
             pages_dir: value.pages_dir,
             later_dir: value.later_dir,
+            // An explicit value, even an empty one, is kept for validation.
             artifacts_dir: value.artifacts_dir.unwrap_or_default(),
             summaries_dir: value.summaries_dir,
         };
         // The notes folder is not verified yet, so this first proposal looks
         // only at the config; read_disk_state refines it once it is.
-        if storage.artifacts_dir.is_empty() {
+        if proposed {
             storage.artifacts_dir = unused_artifacts_dir(&storage, |_| Ok(false))
                 .expect("a config-only check never fails");
         }
@@ -2299,6 +2301,22 @@ mod tests {
                 .artifacts_dir,
             "artifacts"
         );
+    }
+
+    #[test]
+    fn an_explicitly_empty_artifact_directory_is_invalid() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            folder.path(),
+            "artifacts_dir = \"\"",
+            "capture_enabled = false",
+            "",
+        );
+        let store = loaded(&path);
+        assert!(store.config_issue().is_some());
+        assert!(!store.configured());
     }
 
     #[test]
