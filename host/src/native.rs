@@ -1271,7 +1271,11 @@ fn note_context(
     // page's own canonical URL, an indexed modal route, or a note's creation
     // URL can equal an unrelated page's URL once `strip_params` removed the
     // query value that identified the artifact.
-    let names_artifact = |candidate: &str| {
+    // `recorded` marks evidence already tied to this artifact (the page's
+    // own URL, its indexed routes, or its note's creation URL). Only that
+    // evidence may stand in for a contract on an origin config.toml no
+    // longer covers; an arbitrary URL note found by the scan never can.
+    let names_artifact = |candidate: &str, recorded: bool| {
         if config
             .adapter_match(candidate, None)
             .is_ok_and(|found| found.artifact_id == key.value)
@@ -1281,28 +1285,34 @@ fn note_context(
         match config.note_key_rule(candidate) {
             NoteKeyRule::Artifact(artifact_id) => artifact_id == key.value,
             NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => false,
-            NoteKeyRule::Uncovered => recovered_from_history,
+            NoteKeyRule::Uncovered => recorded && recovered_from_history,
         }
     };
-    let mut older_urls = vec![canonical.clone()];
+    let mut older_urls = Vec::new();
+    if names_artifact(&canonical, true) {
+        older_urls.push(canonical.clone());
+    }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
             && let Ok(urls) = index.artifact_urls(&key.value)
         {
-            older_urls.extend(urls);
+            older_urls.extend(urls.into_iter().filter(|url| names_artifact(url, true)));
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
-                if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key) {
+                if let Some(candidate) = note::artifact_keyed_note_url(&contents, &key)
+                    && names_artifact(&candidate, true)
+                {
                     older_urls.push(candidate);
                 }
-                if let Some(candidate) = note::url_keyed_note_url(&contents) {
+                if let Some(candidate) = note::url_keyed_note_url(&contents)
+                    && names_artifact(&candidate, false)
+                {
                     older_urls.push(candidate);
                 }
             }
         }
-        older_urls.retain(|candidate| names_artifact(candidate));
         older_urls.sort();
         older_urls.dedup();
     }
@@ -3451,6 +3461,58 @@ id = "work:{host}/{id}"
                     );
                 }
             }
+        }
+
+        #[test]
+        fn history_only_recovery_never_authorizes_unrelated_url_notes() {
+            let session = Session::new();
+            let config = loaded(&session.path);
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            let first = session.load(EDIT);
+            assert!(matches!(
+                session.save(EDIT, &first, "Shared artifact text"),
+                Response::NoteSaved(_)
+            ));
+            let unrelated = "https://unrelated.example/page";
+            note::save_note(&vault, unrelated, "Unrelated", "Unrelated text", "missing").unwrap();
+            let unrelated_revision = note::load_note(&vault, unrelated).unwrap().revision;
+            session.policy("adapter");
+            session.forget_policy_history();
+
+            let recovered = session.load(EDIT);
+            assert_eq!(recovered.key, first.key);
+            assert_eq!(recovered.body, "Shared artifact text");
+            assert!(
+                recovered
+                    .older_notes
+                    .iter()
+                    .all(|older| older.canonical_url != unrelated),
+                "{:?}",
+                recovered.older_notes
+            );
+            assert!(matches!(
+                session.call(Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "view-unrelated".into(),
+                    url: EDIT.into(),
+                    source_url: unrelated.into(),
+                })),
+                Response::Error(reply) if reply.code == ErrorCode::Unauthorized
+            ));
+            assert!(matches!(
+                session.call(Request::UseArtifactNote(brauser_protocol::UseArtifactNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "migrate-unrelated".into(),
+                    url: EDIT.into(),
+                    source_url: unrelated.into(),
+                    expected_revision: unrelated_revision,
+                })),
+                Response::Error(reply) if reply.code == ErrorCode::Unauthorized
+            ));
+            assert_eq!(
+                note::load_note(&vault, unrelated).unwrap().body,
+                "Unrelated text"
+            );
         }
 
         #[test]
