@@ -108,7 +108,15 @@ pub struct ConfigSnapshot {
     pub strip_params: Vec<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub agent: Option<AgentConfig>,
+    pub summary_vocabulary: SummaryVocabulary,
     pub adapters: AdapterDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryVocabulary {
+    pub document_types: Vec<String>,
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,19 +153,12 @@ pub struct StorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    pub harness_id: String,
-    pub adapter: HarnessAdapter,
+    pub harness: HarnessId,
     pub binary: String,
-    pub args: Vec<String>,
-    pub env_allow: Vec<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub version: Option<String>,
     pub timeout_secs: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HarnessAdapter {
-    ClaudeCode,
-    Codex,
+    pub probed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,13 +302,6 @@ pub struct WorklogRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshArtifactsRequest {
-    pub protocol_version: u32,
-    pub request_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckAgentRequest {
     pub protocol_version: u32,
     pub request_id: String,
 }
@@ -531,15 +525,6 @@ pub struct ArtifactsRefreshed {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentChecked {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub harness_id: String,
-    pub harness_version: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VisitEvent {
     pub event_id: String,
     pub url: String,
@@ -670,8 +655,9 @@ pub struct SetUpHarnessRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub expected_revision: String,
-    pub harness_id: String,
-    pub env_names: Vec<String>,
+    pub harness: HarnessId,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub timeout_secs: Option<u32>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summaries_dir: Option<String>,
 }
@@ -681,31 +667,19 @@ pub struct SetUpHarnessRequest {
 pub struct HarnessesDiscovered {
     pub protocol_version: u32,
     pub request_id: String,
-    pub offers: Vec<HarnessOffer>,
+    pub harnesses: Vec<HarnessFound>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HarnessOffer {
-    pub adapter: HarnessAdapter,
-    pub harness_id: String,
-    pub binary: String,
+pub struct HarnessFound {
+    pub harness: HarnessId,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub real_path: Option<String>,
+    pub binary: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub version: Option<String>,
-    pub args: Vec<String>,
-    pub env_required: Vec<String>,
-    pub env_optional: Vec<EnvName>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub refusal: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnvName {
-    pub name: String,
-    pub present: bool,
+    pub problem: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -734,6 +708,23 @@ pub enum RunErrorKind {
     ServiceRestarted,
     InvalidOutput,
     SaveFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportanceLevel {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunAnswer {
+    pub document_type: String,
+    pub category: String,
+    pub importance: ImportanceLevel,
+    pub importance_reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -766,6 +757,8 @@ pub struct RunView {
     pub summary_path: Option<String>,
     pub stream_bytes: u32,
     pub can_retry_save: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub answer: Option<RunAnswer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -853,6 +846,47 @@ pub struct RunUpdated {
     pub run: RunView,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenTarget {
+    CodexThread,
+    AgentEnv,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenPathRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub target: OpenTarget,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathOpened {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetAgentEnvRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentEnvListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub names: Vec<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub problem: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceHelloRequest {
@@ -870,6 +904,7 @@ pub struct ServiceReady {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Request {
     Hello(HelloRequest),
     GetConfig(GetConfigRequest),
@@ -887,7 +922,6 @@ pub enum Request {
     ListArtifacts(ListArtifactsRequest),
     Worklog(WorklogRequest),
     RefreshArtifacts(RefreshArtifactsRequest),
-    CheckAgent(CheckAgentRequest),
     DiscoverHarnesses(DiscoverHarnessesRequest),
     SetUpHarness(SetUpHarnessRequest),
     StartRun(StartRunRequest),
@@ -895,6 +929,8 @@ pub enum Request {
     ListRuns(ListRunsRequest),
     CancelRun(CancelRunRequest),
     RetrySave(RetrySaveRequest),
+    OpenPath(OpenPathRequest),
+    GetAgentEnv(GetAgentEnvRequest),
     ServiceHello(ServiceHelloRequest),
 }
 
@@ -917,7 +953,6 @@ impl Request {
             Self::ListArtifacts(value) => value.protocol_version,
             Self::Worklog(value) => value.protocol_version,
             Self::RefreshArtifacts(value) => value.protocol_version,
-            Self::CheckAgent(value) => value.protocol_version,
             Self::DiscoverHarnesses(value) => value.protocol_version,
             Self::SetUpHarness(value) => value.protocol_version,
             Self::StartRun(value) => value.protocol_version,
@@ -925,6 +960,8 @@ impl Request {
             Self::ListRuns(value) => value.protocol_version,
             Self::CancelRun(value) => value.protocol_version,
             Self::RetrySave(value) => value.protocol_version,
+            Self::OpenPath(value) => value.protocol_version,
+            Self::GetAgentEnv(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
     }
@@ -947,7 +984,6 @@ impl Request {
             Self::ListArtifacts(value) => &value.request_id,
             Self::Worklog(value) => &value.request_id,
             Self::RefreshArtifacts(value) => &value.request_id,
-            Self::CheckAgent(value) => &value.request_id,
             Self::DiscoverHarnesses(value) => &value.request_id,
             Self::SetUpHarness(value) => &value.request_id,
             Self::StartRun(value) => &value.request_id,
@@ -955,6 +991,8 @@ impl Request {
             Self::ListRuns(value) => &value.request_id,
             Self::CancelRun(value) => &value.request_id,
             Self::RetrySave(value) => &value.request_id,
+            Self::OpenPath(value) => &value.request_id,
+            Self::GetAgentEnv(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
     }
@@ -962,6 +1000,7 @@ impl Request {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Response {
     HelloResult(HelloResult),
     ConfigResult(ConfigResult),
@@ -978,12 +1017,13 @@ pub enum Response {
     ArtifactListResult(ArtifactListResult),
     WorklogResult(WorklogResult),
     ArtifactsRefreshed(ArtifactsRefreshed),
-    AgentChecked(AgentChecked),
     HarnessesDiscovered(HarnessesDiscovered),
     RunStarted(RunStarted),
     RunFetched(RunFetched),
     RunsListed(RunsListed),
     RunUpdated(RunUpdated),
+    PathOpened(PathOpened),
+    AgentEnvListed(AgentEnvListed),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
 }
@@ -1006,12 +1046,13 @@ impl Response {
             Self::ArtifactListResult(value) => value.protocol_version,
             Self::WorklogResult(value) => value.protocol_version,
             Self::ArtifactsRefreshed(value) => value.protocol_version,
-            Self::AgentChecked(value) => value.protocol_version,
             Self::HarnessesDiscovered(value) => value.protocol_version,
             Self::RunStarted(value) => value.protocol_version,
             Self::RunFetched(value) => value.protocol_version,
             Self::RunsListed(value) => value.protocol_version,
             Self::RunUpdated(value) => value.protocol_version,
+            Self::PathOpened(value) => value.protocol_version,
+            Self::AgentEnvListed(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
@@ -1034,12 +1075,13 @@ impl Response {
             Self::ArtifactListResult(value) => &value.request_id,
             Self::WorklogResult(value) => &value.request_id,
             Self::ArtifactsRefreshed(value) => &value.request_id,
-            Self::AgentChecked(value) => &value.request_id,
             Self::HarnessesDiscovered(value) => &value.request_id,
             Self::RunStarted(value) => &value.request_id,
             Self::RunFetched(value) => &value.request_id,
             Self::RunsListed(value) => &value.request_id,
             Self::RunUpdated(value) => &value.request_id,
+            Self::PathOpened(value) => &value.request_id,
+            Self::AgentEnvListed(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }

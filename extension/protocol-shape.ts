@@ -20,32 +20,34 @@ function isStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
 }
 
+function isHarnessId(value: unknown): boolean {
+  return value === "codex" || value === "claude";
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+const AGENT_KEYS = ["harness", "binary", "version", "timeout_secs", "probed_at"] as const;
+
 function isAgent(value: unknown): boolean {
   if (value === null) return true;
-  if (typeof value !== "object") return false;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
   const agent = value as Record<string, unknown>;
-  return typeof agent.harness_id === "string" &&
-    (agent.adapter === "claude_code" || agent.adapter === "codex") &&
-    typeof agent.binary === "string" &&
-    isStringArray(agent.args) && isStringArray(agent.env_allow) &&
-    typeof agent.timeout_secs === "number" && Number.isInteger(agent.timeout_secs);
+  return hasExactKeys(agent, AGENT_KEYS) && isHarnessId(agent.harness) &&
+    typeof agent.binary === "string" && stringOrNull(agent.version) &&
+    typeof agent.timeout_secs === "number" && Number.isInteger(agent.timeout_secs) &&
+    typeof agent.probed_at === "string";
 }
 
-function isEnvName(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const env = value as Record<string, unknown>;
-  return typeof env.name === "string" && typeof env.present === "boolean";
-}
+const HARNESS_FOUND_KEYS = ["harness", "binary", "version", "problem"] as const;
 
-function isHarnessOffer(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const offer = value as Record<string, unknown>;
-  return (offer.adapter === "claude_code" || offer.adapter === "codex") &&
-    typeof offer.harness_id === "string" && typeof offer.binary === "string" &&
-    stringOrNull(offer.real_path) && stringOrNull(offer.version) &&
-    isStringArray(offer.args) && isStringArray(offer.env_required) &&
-    Array.isArray(offer.env_optional) && offer.env_optional.every(isEnvName) &&
-    stringOrNull(offer.refusal);
+function isHarnessFound(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const found = value as Record<string, unknown>;
+  return hasExactKeys(found, HARNESS_FOUND_KEYS) && isHarnessId(found.harness) &&
+    stringOrNull(found.binary) && stringOrNull(found.version) && stringOrNull(found.problem);
 }
 
 function isAgentStatus(value: unknown): boolean {
@@ -103,8 +105,20 @@ const HARNESS_IDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 const RUN_VIEW_KEYS: readonly string[] = [
   "run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd",
   "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id",
-  "summary_path", "stream_bytes", "can_retry_save",
+  "summary_path", "stream_bytes", "can_retry_save", "answer",
 ];
+
+const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
+
+/** Exactly the v6 `RunAnswer` keys; the host bounds the strings. */
+function isRunAnswer(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const answer = value as Record<string, unknown>;
+  return Object.keys(answer).length === 4 &&
+    typeof answer.document_type === "string" && typeof answer.category === "string" &&
+    typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
+    typeof answer.importance_reason === "string";
+}
 
 export function isRunView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -123,7 +137,8 @@ export function isRunView(value: unknown): boolean {
       (typeof run.error_kind === "string" && RUN_ERROR_KINDS.has(run.error_kind))) &&
     stringOrNull(run.thread_id) && stringOrNull(run.session_id) &&
     stringOrNull(run.summary_path) && isUnsignedInteger(run.stream_bytes) &&
-    typeof run.can_retry_save === "boolean";
+    typeof run.can_retry_save === "boolean" &&
+    (run.answer === null || isRunAnswer(run.answer));
 }
 
 const ARTIFACT_REF_KEYS = ["artifact_id", "artifact_type", "title", "url"];
@@ -165,8 +180,16 @@ function isArtifactListItem(value: unknown): boolean {
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
  * `agent_denylist` or `sites` means the host speaks another shape. */
 const CONFIG_KEYS: readonly string[] = [
-  "storage", "capture_enabled", "strip_params", "agent", "adapters",
+  "storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "adapters",
 ];
+
+/** The host validates entry lengths and duplicates; this checks the shape. */
+function isSummaryVocabulary(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const vocabulary = value as Record<string, unknown>;
+  return Object.keys(vocabulary).length === 2 &&
+    isStringArray(vocabulary.document_types) && isStringArray(vocabulary.categories);
+}
 
 export function isConfig(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
@@ -183,7 +206,8 @@ export function isConfig(value: unknown): boolean {
   }
   return typeof config.capture_enabled === "boolean" &&
     isStringArray(config.strip_params) &&
-    isAgent(config.agent) && isAdapterDocument(config.adapters);
+    isAgent(config.agent) && isSummaryVocabulary(config.summary_vocabulary) &&
+    isAdapterDocument(config.adapters);
 }
 
 export function isResponseShape(value: Record<string, unknown>): boolean {
@@ -247,10 +271,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return isUnsignedInteger(value.written) && isUnsignedInteger(value.unchanged) &&
         isUnsignedInteger(value.conflicts) && Array.isArray(value.conflict_paths) &&
         value.conflict_paths.length <= 64 && isStringArray(value.conflict_paths);
-    case "agent_checked":
-      return typeof value.harness_id === "string" && typeof value.harness_version === "string";
     case "harnesses_discovered":
-      return Array.isArray(value.offers) && value.offers.every(isHarnessOffer);
+      return Array.isArray(value.harnesses) && value.harnesses.length <= 2 &&
+        value.harnesses.every(isHarnessFound);
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";
     case "run_fetched":
@@ -260,6 +283,11 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return Array.isArray(value.runs) && value.runs.length <= 20 && value.runs.every(isRunView);
     case "run_updated":
       return isRunView(value.run);
+    case "path_opened":
+      return true;
+    case "agent_env_listed":
+      return Array.isArray(value.names) && value.names.length <= 64 &&
+        isStringArray(value.names) && stringOrNull(value.problem);
     default:
       return false;
   }

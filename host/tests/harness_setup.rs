@@ -1,53 +1,62 @@
-//! Native harness setup end to end: the built host serves real frames, and
-//! the only harness on its search path is a fake `#!/bin/sh` script. Setup
-//! shows no dialog; the scripted-dialog directory only proves that. The host
-//! runs with a cleared environment and a temp `HOME`, so it never sees the
-//! user's real config, harness, or screen. Without the feature this file is
-//! empty.
+//! Harness setup end to end: the built host serves real frames and, with the
+//! spawn seam set, starts `brauser service` itself (never launchd). The
+//! service detects harnesses on its own `PATH`, where the only `codex` and
+//! `claude` are fake `#!/bin/sh` scripts, and probes through the real Claude
+//! Code runner. Setup shows no dialog; the scripted-dialog directory only
+//! proves that. Each test has a short temp `HOME` and a cleared environment,
+//! so nothing here touches the user's real config, harness, or service.
+//! Without the feature, or off Unix, this file is empty.
 #![cfg(all(feature = "scripted-dialogs", unix))]
 
 use std::fs;
-use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use brauser_protocol::PROTOCOL_VERSION;
+use brauser_host::brand::{SCRIPTED_DIALOGS_ENV, SERVICE_IDLE_SECS_ENV, SERVICE_SPAWN_ENV};
+use brauser_host::frame::{read_frame, write_request};
+use brauser_protocol::{PROTOCOL_VERSION, Request};
+use rustix::process::{Pid, Signal, kill_process};
 use serde_json::{Value, json};
 
 const HOST: &str = env!("CARGO_BIN_EXE_brauser");
-const CLAUDE_HELP: &str = include_str!("fixtures/harness/claude_help.txt");
-const PASSING_BODY: &str = r#"/bin/cat > "$log/stdin.log"
-printf '%s\n' '{"type":"system","subtype":"init","tools":[]}' '{"type":"result","subtype":"success","is_error":false,"result":"OK"}'"#;
-const SECRET_NAME: &str = "ANTHROPIC_API_KEY";
-const SECRET: &str = "sk-test-secret-value";
+const PROBE_PROMPT: &str = "Reply with the single word OK.";
+/// What a passing Claude Code `-p` stream-json probe prints.
+const PASSING: &str = r#"printf '%s\n' '{"type":"system","subtype":"init","session_id":"probe-session"}' '{"type":"assistant","message":{"content":[{"type":"text","text":"OK"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"OK"}'"#;
+/// The v5 harness entry and checked record a native setup wrote.
+const V5_TABLES: &str = "[agent]\ndefault = \"claude-code\"\n[agent.harnesses.claude-code]\nbinary = \"/usr/local/bin/claude\"\nargs = [\"-p\", \"{prompt}\"]\nenv_allow = [\"HOME\", \"PATH\"]\ntimeout_secs = 120\n\n[harness_record]\nharness_id = \"claude-code\"\nreal_path = \"/usr/local/bin/claude\"\nsize = 1\nmtime_ns = \"1\"\nversion = \"2.1.284\"\nhelp_sha256 = \"00\"\nconfirmed_flags = [\"-p\"]\nprobe_passed_at = \"2026-09-28T00:00:00Z\"\n";
 
-/// A temp home, fake harness directory, scripted-dialog directory, notes
-/// folder, and the config path the host resolves under that home.
+/// A short temp home (the service socket path must fit `sun_path`), fake
+/// harnesses, a scripted-dialog directory, a notes folder, and the config
+/// path the host resolves under that home.
 struct World {
     root: tempfile::TempDir,
     config: PathBuf,
 }
 
 impl World {
-    fn new(body: &str) -> Self {
-        let root = tempfile::tempdir().unwrap();
-        for dir in ["home", "bin", "log", "dialogs", "notes"] {
+    /// `claude_body` runs for every call but `--version`.
+    fn new(claude_body: &str) -> Self {
+        let root = tempfile::Builder::new()
+            .prefix("bh")
+            .tempdir_in("/tmp")
+            .unwrap();
+        for dir in ["h", "bin", "log", "dialogs", "notes"] {
             fs::create_dir(root.path().join(dir)).unwrap();
             fs::set_permissions(root.path().join(dir), fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let world = Self {
+        let mut world = Self {
             config: PathBuf::new(),
             root,
         };
-        world.install_claude(body);
-        let config = world.config_path();
+        world.install("claude", "2.1.284 (Claude Code)", claude_body);
+        world.install("codex", "codex-cli 0.144.4", "exit 1");
+        world.config = world.config_path();
         assert!(
-            config.starts_with(world.path("home")),
+            world.config.starts_with(world.path("h")),
             "the host must resolve its config under the temp HOME, not {}",
-            config.display()
+            world.config.display()
         );
-        let world = Self { config, ..world };
         world.write_config();
         world
     }
@@ -56,25 +65,25 @@ impl World {
         self.root.path().join(name)
     }
 
-    fn install_claude(&self, body: &str) {
-        let help = self.path("claude-help.txt");
-        fs::write(&help, CLAUDE_HELP).unwrap();
-        let script = self.path("bin").join("claude");
+    fn support(&self) -> PathBuf {
+        self.config.parent().unwrap().to_path_buf()
+    }
+
+    /// A fake `bin/<name>` that answers `--version` and otherwise logs its
+    /// argv, stdin, working directory, and environment, then runs `body`.
+    fn install(&self, name: &str, version: &str, body: &str) {
+        let script = self.path("bin").join(name);
         let text = format!(
             r#"#!/bin/sh
-log='{log}'
-for arg in "$@"; do printf '[%s]' "$arg"; done >> "$log/argv.log"
-echo >> "$log/argv.log"
-/usr/bin/env | /usr/bin/cut -d= -f1 | /usr/bin/sort | /usr/bin/tr '\n' ' ' >> "$log/env.log"
-echo >> "$log/env.log"
-case "$1" in
-  --version) echo '2.1.284 (Claude Code)'; exit 0 ;;
-  --help) /bin/cat '{help}'; exit 0 ;;
-esac
+log='{log}/{name}'
+if [ "$1" = --version ]; then echo '{version}'; exit 0; fi
+printf '%s\n' "$*" > "$log.argv"
+/bin/cat > "$log.stdin"
+/bin/pwd -P > "$log.cwd"
+/usr/bin/env > "$log.env"
 {body}
 "#,
             log = self.path("log").display(),
-            help = help.display(),
         );
         fs::write(&script, text).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
@@ -84,10 +93,14 @@ esac
         let mut command = Command::new(HOST);
         command
             .env_clear()
-            .env("HOME", self.path("home"))
-            .env("PATH", self.path("bin"))
-            .env("BRAUSER_SCRIPTED_DIALOGS", self.path("dialogs"))
-            .env(SECRET_NAME, SECRET);
+            .env("HOME", self.path("h"))
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.path("bin").display()),
+            )
+            .env(SCRIPTED_DIALOGS_ENV, self.path("dialogs"))
+            .env(SERVICE_IDLE_SECS_ENV, "10")
+            .env(SERVICE_SPAWN_ENV, "1");
         command
     }
 
@@ -98,17 +111,17 @@ esac
     }
 
     /// A config with a home folder chosen in the fixed layout (so loading it
-    /// moves nothing) and no harness. It still carries
-    /// a retired v5 privacy key, which loads and is dropped on the next save.
+    /// moves nothing) and the v5 harness tables, which load as not set up
+    /// and are dropped on the next save.
     fn write_config(&self) {
         let root = fs::canonicalize(self.path("notes")).unwrap();
         let metadata = fs::metadata(&root).unwrap();
         let identity = format!("unix:{:016x}:{:016x}", metadata.dev(), metadata.ino());
-        fs::create_dir_all(self.config.parent().unwrap()).unwrap();
+        fs::create_dir_all(self.support()).unwrap();
         fs::write(
             &self.config,
             format!(
-                "root_picker_confirmed = true\nroot_identity = {:?}\nagent_denylist = [\"bank.example\"]\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"logs\"\npages_dir = \"notes\"\nlater_dir = \"later\"\nartifacts_dir = \"artifacts\"\nsummaries_dir = \"summaries\"\n",
+                "root_picker_confirmed = true\nroot_identity = {:?}\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"logs\"\npages_dir = \"notes\"\nlater_dir = \"later\"\nartifacts_dir = \"artifacts\"\nsummaries_dir = \"summaries\"\n\n{V5_TABLES}",
                 identity,
                 root.to_str().unwrap(),
             ),
@@ -116,21 +129,16 @@ esac
         .unwrap();
     }
 
-    fn shown(&self) -> Vec<Value> {
-        fs::read_to_string(self.path("dialogs").join("shown.jsonl"))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-
     fn log(&self, file: &str) -> Option<String> {
         fs::read_to_string(self.path("log").join(file)).ok()
     }
 
+    fn shown(&self) -> String {
+        fs::read_to_string(self.path("dialogs").join("shown.jsonl")).unwrap_or_default()
+    }
+
     fn serve(&self) -> Host {
-        // Refuse to start unless this binary is the scripted build, so no
-        // test can open a real dialog.
+        // Refuse to start unless this binary is the scripted build.
         let version = self.command().arg("--version").output().unwrap();
         assert!(String::from_utf8_lossy(&version.stdout).contains("(scripted dialogs)"));
         let mut child = self
@@ -151,6 +159,20 @@ esac
     }
 }
 
+impl Drop for World {
+    /// Stop the service this world started before its directory goes away.
+    fn drop(&mut self) {
+        let pid = fs::read_to_string(self.support().join("service.pid"))
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .and_then(Pid::from_raw)
+            .filter(|pid| pid.as_raw_nonzero().get() > 1);
+        if let Some(pid) = pid {
+            let _ = kill_process(pid, Signal::KILL);
+        }
+    }
+}
+
 struct Host {
     child: Child,
     input: Option<ChildStdin>,
@@ -165,19 +187,11 @@ impl Host {
         let id = format!("r{}", self.next_id);
         request["protocol_version"] = json!(PROTOCOL_VERSION);
         request["request_id"] = json!(id);
-        let body = serde_json::to_vec(&request).unwrap();
-        let input = self.input.as_mut().unwrap();
-        input
-            .write_all(&u32::try_from(body.len()).unwrap().to_ne_bytes())
-            .unwrap();
-        input.write_all(&body).unwrap();
-        input.flush().unwrap();
-        let mut prefix = [0u8; 4];
-        self.output.read_exact(&mut prefix).unwrap();
-        let mut reply = vec![0u8; u32::from_ne_bytes(prefix) as usize];
-        self.output.read_exact(&mut reply).unwrap();
-        let reply: Value = serde_json::from_slice(&reply).unwrap();
-        assert_eq!(reply["request_id"], json!(id));
+        let request: Request = serde_json::from_value(request).unwrap();
+        write_request(self.input.as_mut().unwrap(), &request).unwrap();
+        let body = read_frame(&mut self.output).unwrap().unwrap();
+        let reply: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(reply["request_id"], json!(id), "{reply}");
         reply
     }
 
@@ -187,38 +201,29 @@ impl Host {
         reply["revision"].as_str().unwrap().to_owned()
     }
 
-    /// The fake claude's offer. Every offer must come from the fake
-    /// directory; anything else means a real harness was found.
-    fn claude_offer(&mut self) -> Value {
+    /// Both harnesses, from the fake directory only; anything else means a
+    /// real harness was found.
+    fn discover(&mut self) -> Vec<Value> {
         let reply = self.call(json!({"type": "discover_harnesses"}));
         assert_eq!(reply["type"], "harnesses_discovered", "{reply}");
-        let offers = reply["offers"].as_array().unwrap();
-        for offer in offers {
-            let binary = Path::new(offer["binary"].as_str().unwrap());
+        let found = reply["harnesses"].as_array().unwrap().clone();
+        for harness in &found {
+            let binary = Path::new(harness["binary"].as_str().unwrap());
             assert!(
                 binary.starts_with(&self.fake_bin),
                 "a harness outside the fake directory was found: {}",
                 binary.display()
             );
-            assert!(offer.get("offer_id").is_none(), "{offer}");
         }
-        let claude = offers
-            .iter()
-            .find(|offer| offer["harness_id"] == "claude-code")
-            .unwrap_or_else(|| panic!("fake Claude offer was missing: {reply}"));
-        assert!(
-            claude["refusal"].is_null(),
-            "fake Claude was refused: {claude}"
-        );
-        claude.clone()
+        found
     }
 
     fn set_up(&mut self, revision: &str) -> Value {
         self.call(json!({
             "type": "set_up_harness",
             "expected_revision": revision,
-            "harness_id": "claude-code",
-            "env_names": [],
+            "harness": "claude",
+            "timeout_secs": null,
             "summaries_dir": null,
         }))
     }
@@ -229,101 +234,128 @@ impl Host {
     }
 }
 
-/// The probe's environment names: the last line of the fake's env.log.
-fn probe_env(world: &World) -> Vec<String> {
-    world
-        .log("env.log")
-        .unwrap()
-        .lines()
-        .last()
-        .unwrap()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect()
-}
-
-fn assert_secret_absent(world: &World) {
-    for file in ["argv.log", "env.log", "stdin.log"] {
-        assert!(
-            !world.log(file).unwrap_or_default().contains(SECRET),
-            "{file}"
-        );
+impl Drop for Host {
+    /// A test that panics mid-call must not leave a host writing into a
+    /// temp home that is being removed.
+    fn drop(&mut self) {
+        drop(self.input.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
-    let shown = fs::read_to_string(world.path("dialogs").join("shown.jsonl")).unwrap_or_default();
-    assert!(!shown.contains(SECRET));
-    assert!(!fs::read_to_string(&world.config).unwrap().contains(SECRET));
 }
 
 #[test]
-fn harness_setup_commits_after_probe() {
-    let world = World::new(PASSING_BODY);
+fn service_detects_and_probes_fake_claude() {
+    let world = World::new(PASSING);
     let mut host = world.serve();
     let revision = host.revision();
-    host.claude_offer();
+    let status = host.call(json!({"type": "get_config"}));
+    assert_eq!(status["agent_status"]["state"], "not_set_up", "{status}");
+
+    let found = host.discover();
+    assert_eq!(
+        found,
+        [
+            json!({"harness": "codex", "binary": world.path("bin").join("codex"),
+                "version": "0.144.4", "problem": null}),
+            json!({"harness": "claude", "binary": world.path("bin").join("claude"),
+                "version": "2.1.284", "problem": null}),
+        ]
+    );
+    // Detection runs `--version` only.
+    assert_eq!(world.log("claude.argv"), None);
+    assert_eq!(world.log("codex.argv"), None);
+
     let updated = host.set_up(&revision);
     assert_eq!(updated["type"], "config_updated", "{updated}");
     assert_ne!(updated["revision"], json!(revision));
     let agent = &updated["config"]["agent"];
-    assert_eq!(agent["harness_id"], "claude-code");
+    assert_eq!(agent["harness"], "claude");
     assert_eq!(
         agent["binary"].as_str(),
         world.path("bin").join("claude").to_str()
     );
+    assert_eq!(agent["version"], "2.1.284");
+    assert_eq!(agent["timeout_secs"], 600);
     assert_eq!(
         updated["config"]["storage"]["summaries_dir"].as_str(),
         Some("summaries")
     );
-    assert!(world.shown().is_empty(), "{:?}", world.shown());
 
-    // The probe ran with only the allowlisted names.
-    let names = probe_env(&world);
-    assert!(names.contains(&"HOME".to_owned()) && names.contains(&"PATH".to_owned()));
-    assert!(!names.contains(&"BRAUSER_SCRIPTED_DIALOGS".to_owned()));
-    assert!(!names.contains(&SECRET_NAME.to_owned()));
-    assert_eq!(
-        world.log("stdin.log").as_deref(),
-        Some("Brauser setup test.")
+    // The probe went through the real Claude Code invocation: print mode
+    // with full access, the fixed prompt on stdin, in the knowledge base
+    // folder (the notes folder here).
+    let argv = world.log("claude.argv").unwrap();
+    assert!(
+        argv.starts_with("-p --output-format stream-json --verbose"),
+        "{argv}"
     );
+    assert!(argv.contains("--dangerously-skip-permissions"), "{argv}");
+    assert_eq!(world.log("claude.stdin").unwrap().trim_end(), PROBE_PROMPT);
+    let notes = fs::canonicalize(world.path("notes")).unwrap();
+    assert_eq!(
+        world.log("claude.cwd").unwrap().trim_end(),
+        notes.to_str().unwrap()
+    );
+    assert_eq!(world.log("codex.argv"), None);
 
-    let checked = host.call(json!({"type": "check_agent"}));
-    assert_eq!(checked["type"], "agent_checked", "{checked}");
-    assert_eq!(checked["harness_version"], "2.1.284");
-    assert!(checked.get("url_allowed").is_none(), "{checked}");
     let status = host.call(json!({"type": "get_config"}));
     assert_eq!(status["agent_status"]["state"], "ready", "{status}");
+    assert_eq!(status["agent_status"]["harness_version"], "2.1.284");
     host.close();
 
     let saved = fs::read_to_string(&world.config).unwrap();
-    assert!(!saved.contains("agent_denylist"), "{saved}");
-    assert!(saved.contains("[harness_record]"), "{saved}");
-    assert!(saved.contains("summaries_dir = \"summaries\""), "{saved}");
-    assert!(world.shown().is_empty());
-    assert_secret_absent(&world);
+    assert!(saved.contains("[summarizer]"), "{saved}");
+    assert!(!saved.contains("[agent"), "{saved}");
+    assert!(!saved.contains("harness_record"), "{saved}");
+    assert!(world.shown().is_empty(), "{}", world.shown());
+}
+
+#[test]
+fn probe_runs_with_agent_env_overlay() {
+    let world = World::new(PASSING);
+    let agent_env = world.support().join("agent.env");
+    fs::write(&agent_env, "BRAUSER_PROBE_MARK=from-agent-env\n").unwrap();
+    fs::set_permissions(&agent_env, fs::Permissions::from_mode(0o600)).unwrap();
+    let mut host = world.serve();
+    let revision = host.revision();
+    let updated = host.set_up(&revision);
+    assert_eq!(updated["type"], "config_updated", "{updated}");
+    host.close();
+
+    let env = world.log("claude.env").unwrap();
+    let lines: Vec<&str> = env.lines().collect();
+    assert!(
+        lines.contains(&"BRAUSER_PROBE_MARK=from-agent-env"),
+        "{env}"
+    );
+    // The service's own environment comes through as well.
+    let home = format!("HOME={}", world.path("h").display());
+    assert!(lines.contains(&home.as_str()), "{env}");
+    assert!(world.shown().is_empty(), "{}", world.shown());
 }
 
 #[test]
 fn failing_probe_is_refused() {
-    let world = World::new("exit 3");
-    let before = fs::read(&world.config).unwrap();
+    let world = World::new("echo 'Invalid API key' >&2; exit 3");
     let mut host = world.serve();
     let revision = host.revision();
-    host.claude_offer();
+    let before = fs::read(&world.config).unwrap();
     let reply = host.set_up(&revision);
     assert_eq!(reply["type"], "error", "{reply}");
     assert_eq!(reply["code"], "invalid_config");
-    assert_eq!(
-        reply["message"],
-        "Claude Code failed its test run (test run failed (exit 3)); AI commands stay off"
+    let message = reply["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Claude Code failed its test run (")
+            && message.contains("Invalid API key")
+            && message.ends_with("); summaries stay off"),
+        "{message}"
     );
-    assert!(world.shown().is_empty(), "{:?}", world.shown());
     let status = host.call(json!({"type": "get_config"}));
     assert_eq!(status["agent_status"]["state"], "not_set_up");
     assert_eq!(host.revision(), revision);
     host.close();
 
     assert_eq!(fs::read(&world.config).unwrap(), before);
-    // Discovery ran --version and --help, then setup rediscovered and probed.
-    assert_eq!(world.log("argv.log").unwrap().lines().count(), 5);
-    assert!(world.shown().is_empty());
-    assert_secret_absent(&world);
+    assert!(world.shown().is_empty(), "{}", world.shown());
 }

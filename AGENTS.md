@@ -53,22 +53,6 @@ A fixed name already present, or a nested, symlinked, or case-variant older
 folder, refuses with a `config_issue` and changes nothing; until the move
 succeeds the older layout is never used for vault I/O.
 
-Harness setup (M2 step 1, revised in v6) lives in `host/src/harness.rs` and
-`host/src/harness_setup.rs`: discovery on an injected search path, bounded runs
-(cleared environment, host-owned 0700 work directory, output caps, timeout,
-process-group kill), the `--help` flag and Codex feature checks, and the setup
-probe, tested with fake harness scripts. `discover_harnesses` offers what the
-host found; `set_up_harness` names a detected `harness_id`, and the host detects
-that harness again, runs one test prompt, and commits it with no native dialog
-and no token. `update_config` cannot set a harness entry; the extension may only
-echo it or remove it. Codex setup runs with the user's own `HOME` and
-`CODEX_HOME`, so the settings page says the user's Codex instructions and skills
-can shape its output (§14). The settings page ("AI harness (optional)") also
-shows the full-access warning and the knowledge base folder. No AI command exists yet, so nothing runs a harness beyond setup's own
-checks and probe; the argv templates and cleared environment remain until the
-service runners replace them (PR 3). The headless smoke run covers setup with
-fake harnesses on a pinned `PATH` and a cleared host environment.
-
 The Brauser service skeleton (PR 2 of the open-access spec, DESIGN.md §12.2
 step 10.2) is built on `feat/agent-service-pr2` in `host/src/service/`
 (built on every Unix, compiled out on Windows; only the launchd glue is
@@ -88,12 +72,47 @@ never restarts the service; it asks for an extension reload instead. The service
 per run under `runs/`, runs at most two at once with one queued-or-running run
 per record key, times runs out after 10 minutes, kills the process group on
 cancel, marks orphaned runs failed on restart, prunes old records, and overlays
-an optional `agent.env` on each run's environment. The panel will poll
-`get_run`; there is no host-side streaming protocol. No real harness is
-registered yet: only the test-only fake harness (`scripted-dialogs` builds)
-runs, so a normal build answers `start_run` with `not_configured` until PR 3.
+an optional `agent.env` on each run's environment. The panel polls
+`get_run`; there is no host-side streaming protocol.
 `node scripts/register-dev-host.mjs` now also writes and bootstraps the dev
 LaunchAgent; `--no-service` skips it and `--unregister-service` removes it.
+
+Summarize & log (PR 3 of the open-access spec, DESIGN.md §12.2 step 10.3)
+is built on `feat/agent-runners-pr3`. Harness setup runs in the service:
+`discover_harnesses` and `set_up_harness` are forwarded to it, it detects
+`codex` and `claude` on its own `PATH` plus `$HOME/.local/bin` (an owned,
+non-writable install and a parseable `--version`, with no version refused),
+and it commits the chosen harness to `config.toml`'s `[summarizer]` table
+(wire `ConfigSnapshot.agent`) only after a probe through the real runner
+passes in the knowledge base folder. A v5 `[agent]`/`[harness_record]` file
+loads as not set up. The registered runners are Codex as a `codex app-server
+--listen stdio://` JSON-RPC thread (`approvalPolicy: "never"`, `sandbox:
+"danger-full-access"`, and the answer schema as `outputSchema`) and Claude Code
+as `claude -p --output-format stream-json --verbose --include-partial-messages
+--dangerously-skip-permissions` with the prompt on stdin and a resumable
+session. Both run with full access in the knowledge base folder, with the
+service's environment plus `agent.env`, on the user's normal login. The §6.4
+prompt names the run's `page.md` by absolute path, marks it untrusted, and
+lists the editable `summary_vocabulary`; `host/src/answer.rs` validates the
+final JSON (one repair turn, then `invalid_output`) and drops `related_notes`
+outside the knowledge base; `RunView.answer` carries the validated type,
+category, and importance. `open_path` opens a Codex thread (`codex://threads/<id>`) or
+reveals `agent.env`, whose names (never values) `get_agent_env` lists. The
+lockdown is gone: no argv templates, `--help` or feature checks, emptied
+run environment, environment allowlist, or host-owned work directories. The
+settings page detects, tests and chooses a harness, sets its timeout, shows
+the setup warning, `agent.env` names, and the vocabulary. Every HTTP(S) page
+gets **Summarize & log** in the panel, a `summarize` command
+(Command+Shift+9 on macOS) and a "Summarize with Brauser" context-menu item:
+the extension injects the pinned, hash-checked Readability 0.6.0
+(`dist/vendor/readability.js`) and a self-contained extractor in the top
+frame, caps the text in encoded bytes, and sends `start_run`. A polling run
+card shows state, elapsed time, the streamed text as text only, Cancel,
+Retry save, Copy, Open in Codex or Copy resume command, and the
+type/category/importance line, and cards return from `list_runs` when the
+panel reopens. Nothing is saved yet: `summary_path` is always null, and the
+summary file and summary log event are PR 4. The headless smoke run covers
+setup and runs against fake `codex` and `claude` scripts.
 
 M1.5a is built on top of that. The adapter-template language
 (`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a
@@ -142,8 +161,12 @@ document is inert, note keys come from the note-only contracts still recorded
 (`[[adapter_id_history]]`, the inert document, and contracts removed from
 config.toml by hand, which the host keeps in its own `adopted-contracts.json`
 state file; never capture), so every route a contract matched keeps one note
-(`ConfigStore::note_key_rule`). An unusable state file makes identity on
-every page the current policy does not recognize unavailable. Those contracts alone decide an origin they
+(`ConfigStore::note_key_rule`). Hand-removed contracts also take part in the
+frozen-ID check (`validate_adapter_transition_with_history`, via
+`retired_by_hand`). An unusable state file makes identity on every page the
+current policy does not recognize unavailable (`NoteKeyRule::StateUnavailable`,
+whose refusal names the file), and refuses adapter additions until it is
+repaired; a damaged entry does both for its origin only. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL
@@ -202,10 +225,11 @@ changes a contract.
 - `adapter-templates/` is the Rust crate implementing the adapter-template grammar specified in `adapter-templates.md`; `extension/adapter-templates.ts` is its TypeScript twin. Keep both in sync with the shared vectors in `protocol/adapter-templates/vectors.json` — run `npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) after changing either engine; CI also checks `adapter-templates/fuzz` compiles.
 - `host/` contains the native host. Keep host policy checks on the privileged side of the messaging boundary. `host/src/consent.rs` holds the purpose-bound folder-picker grants and the `update_config` field checks; `host/src/dialog.rs` runs the native folder picker, the only native dialog. There is no `privacy.rs`, `extension/grants.ts`, or `macos-alert/` crate any more (removed with protocol v6).
 - Every first-party crate is `#![forbid(unsafe_code)]`.
-- `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading.
+- `host/src/answer.rs` validates the structured summary answer; `host/src/open.rs` is the platform opener (`/usr/bin/open` on macOS, a log file in test builds). `host/src/service/` holds the service: `child.rs` (line-streaming child processes), `codex.rs` and `claude.rs` (the runners), `prompt.rs` (the §6.4 prompt), `setup.rs` (detect and probe), and `open.rs` (`open_path`, `get_agent_env`), beside PR 2's server, supervisor, queue, records, and client. There is no `harness_setup.rs` any more.
+- `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading, including the pinned `vendor/readability.js` it copies from `node_modules` after checking its hash. `extension/extract.ts` is the self-contained page extractor, `extension/summarize.ts` starts a run from a tab, and `extension/run-card.ts` is the panel's polling run card.
 - Product naming (app name, native host ID, storage key, marker, and temp-file prefixes) lives in `extension/brand.ts` (also used by the build and dev scripts) and `host/src/brand.rs`. Page and manifest text use `{{APP_NAME}}`/`{{FULL_NAME}}`, filled in by `extension/build.mjs`. Crate, package, and binary names in `Cargo.toml` and `package.json` still change separately.
 - `scripts/register-dev-host.mjs` registers a per-user development native host for one unpacked extension ID; installers own release registration.
-- `.github/workflows/ci.yml` runs the build and quality checks on a `macos-15` and `windows-latest` matrix, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only; a `Build and check` gate job, the check branch protection requires, passes only when every platform build passes.
+- `.github/workflows/ci.yml` runs the build and quality checks from the reusable `.github/workflows/build-os.yml` on `macos-15` and `windows-latest`, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only, and `BRAUSER_REQUIRE_IPC_TESTS=1` so socket tests never skip. When GitHub cancels a starved `macos-15` job (cancelled with zero steps run, checked through the Actions API), the same steps rerun on `macos-15-intel` (x64; a separate runner pool from the arm64 images); a real failure, timeout or interruption of `macos-15` does not fall back. The `Build and check` gate job, the check branch protection requires, passes only when Windows passes and macOS passes on `macos-15` or, after that cancellation, on the `macos-15-intel` fallback.
 - `TESTING.md` is this repo's own testing strategy (headless end-to-end recipe, dialog seams, what headless cannot prove). It is self-contained; nothing in this repo should point outside it for testing guidance.
 
 ## Local checks
@@ -219,13 +243,15 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - Treat all extension messages and page-derived content as untrusted.
 - Keep vault paths rooted in a user-selected directory; never accept a raw file path from a page or extension request.
 - Preserve existing user files. Page notes and generated artifact files are the two implemented file kinds the host replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`). An unrelated or unowned file at either path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
-- Keep capture off until a home folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The summary agent must re-check that identity before it reads the folder (PR 3).
+- Keep capture off until a home folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The service re-checks that identity before every run and refuses a missing or replaced knowledge base folder (`not_configured`, host/src/service/server.rs), and checks it again under the config lock when a queued or resumed run leaves the queue, failing that run before its harness starts (`cwd_check`, `ServiceOptions::run_cwd`).
 - The host re-checks every delivered event against its own adapters with the Rust engine before any vault I/O; a worker can only narrow what is recorded, never widen it. Never let a Chrome permission, a worker claim, or extension state substitute for that check. That includes every activity trail source: the host rejects the event rather than drop a trail, so the worker strips trails whose source left the lease before dispatch (`trailsUnder` in extension/worker.ts) and never edits a dispatched event.
 - Carry pending site removals across upgrades. Origins an earlier build removed or saw revoked are migrated into the worker's one pending-removal list (`migratePendingRemovals` in extension/worker.ts), their adapters stay out of every capture lease, and the list clears only when a lease the host actually sent holds no adapter on those origins. An unreadable list pauses capture (fail closed).
-- Only native harness setup (`set_up_harness`, host/src/harness_setup.rs) may set the harness entry; it names a detected `harness_id`, never a path or arguments, and the host rediscovers and probes that harness before committing. `update_config` may only echo the harness entry unchanged or remove it (host/src/consent.rs `check_agent_fields`).
-- Scope every AI harness run's environment to exactly the names discovery offered as required or requested-and-offered for that adapter, and run it with a cleared environment in its own fresh host-owned 0700 work directory, in its own process group killed on timeout, output overflow, or normal exit, under capped stdout/stderr (host/src/harness_setup.rs `requested_env`; host/src/harness.rs `run_bounded`). These lockdown rules hold until the service runners replace them (PR 3 of the open-access spec).
-- Before trusting a harness binary — at discovery, setup, probe, and every run — verify it and its parent directory are not symlinks, are owned by the current user or root, and are not group/world-writable, and that its path/size/mtime/inode identity hasn't changed since last checked; treat any mismatch as "harness changed" and refuse the action (host/src/harness.rs `check_install`, `identity`).
-- Run a harness only with its single, hardcoded, security-reviewed argument template for the detected adapter and (for Codex) version; refuse an unreviewed Codex version outright, and never pass page or prompt content as a command-line argument — only as standard input (host/src/harness.rs `template_args`, `template_matches`, `codex_args`).
+- Only harness setup (`set_up_harness`, host/src/service/setup.rs) may set the harness entry; it names a `HarnessId`, never a path or arguments, and the service detects that harness again and probes it through the real runner before committing. `update_config` may only echo the harness entry unchanged or remove it (host/src/consent.rs `check_agent_fields`).
+- Before offering a harness, detection verifies the resolved binary and its parent directory are owned by the current user or root and are not group/world-writable, and refuses it otherwise (host/src/harness.rs `detect`, `check_install`).
+- Summary runs have full access by design (Codex `danger-full-access` with `approvalPolicy: "never"`, Claude Code `--dangerously-skip-permissions`), run in the knowledge base folder with the service's environment plus `agent.env`, and are bounded by the per-run timeout and a process-group kill on cancel or timeout. Never put page text, or anything derived from the page, on a command line: the prompt names `page.md` by path, and Claude Code gets the prompt on stdin (host/src/service/prompt.rs, host/src/service/claude.rs).
+- The prompt must mark the page content as untrusted data that may carry instructions aimed at the agent, and tell the agent to ignore them (host/src/service/prompt.rs `summary_prompt`). The agent's answer is untrusted too: the service validates it (host/src/answer.rs `parse_answer`) and drops any `related_notes` entry outside the knowledge base.
+- Render streamed agent text and answers as text only (`textContent`), never as HTML or Markdown, and never navigate from them (extension/run-card.ts).
+- Tests never run a real harness, `/usr/bin/open`, or `launchctl`: runners are tested with fake `codex`/`claude` scripts on an injected search path, the opener in test and `scripted-dialogs` builds only appends to the file `BRAUSER_OPEN_LOG` names (host/src/open.rs), and the smoke run's fakes sit on a pinned `PATH`.
 - The Brauser service (`host/src/service/`) runs as the user, never root, as a per-user LaunchAgent started on demand. Its support directory must be a real directory owned by the user with mode 0700 (refuse a symlink or another owner, `ServicePaths::ensure_private`), its socket is mode 0600, and the service refuses a support path too long for a Unix socket rather than moving the socket elsewhere. Only the native host talks to it; the host accepts no `service_hello` from the extension and always chooses the run's record key itself.
 - `agent.env` is read at the start of every run and must be a regular, non-symlink file of mode 0600, or the run fails before it starts (host/src/service/agent_env.rs). Never put a value from it in an error, log line, protocol message, or settings view; settings may show its names only.
 - Before forwarding a run message, the host compares the service's `service_hello` `build_id` with its own and restarts a stale service once; a persistent mismatch is `service_unavailable`, never a request sent to old code (host/src/service/client.rs).

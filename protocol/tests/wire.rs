@@ -1,7 +1,11 @@
 use brauser_protocol::{Request, Response};
 
-// Every agent and adapter key is required on the wire, like `storage`.
-const AGENT_AND_ADAPTERS: &str = r#""agent":null,"adapters":{"format":1,"artifacts":[]}"#;
+// Every agent, vocabulary and adapter key is required on the wire, like `storage`.
+const AGENT_AND_ADAPTERS: &str = concat!(
+    r#""agent":null,"#,
+    r#""summary_vocabulary":{"document_types":["report"],"categories":["news"]},"#,
+    r#""adapters":{"format":1,"artifacts":[]}"#,
+);
 
 fn config(storage: &str) -> String {
     format!(
@@ -198,6 +202,32 @@ fn v6_config_requires_agent_and_adapter_keys() {
 }
 
 #[test]
+fn config_requires_summary_vocabulary() {
+    let plain = config(r#""storage":null,"#);
+    assert!(
+        serde_json::from_str::<Request>(&update(&plain)).is_ok(),
+        "{plain}"
+    );
+    let vocabulary = r#""summary_vocabulary":{"document_types":["report"],"categories":["news"]},"#;
+    for (from, to) in [
+        (vocabulary, ""),
+        (r#""document_types":["report"],"#, ""),
+        (r#","categories":["news"]"#, ""),
+        (
+            r#""categories":["news"]"#,
+            r#""categories":["news"],"tags":[]"#,
+        ),
+    ] {
+        let changed = plain.replace(from, to);
+        assert_ne!(changed, plain, "{from} was not replaced");
+        assert!(
+            serde_json::from_str::<Request>(&update(&changed)).is_err(),
+            "{changed}"
+        );
+    }
+}
+
+#[test]
 fn update_config_refuses_a_harness_token() {
     let plain = update(&config(r#""storage":null,"#));
     assert!(serde_json::from_str::<Request>(&plain).is_ok());
@@ -213,38 +243,59 @@ fn with_agent(agent: &str) -> String {
 }
 
 #[test]
-fn agent_config_rejects_unknown_fields() {
-    let agent = r#"{"harness_id":"claude-code","adapter":"claude_code","binary":"/usr/local/bin/claude","args":["-p","{prompt}"],"env_allow":["HOME"],"timeout_secs":120}"#;
+fn agent_config_requires_every_key_and_rejects_unknown_fields() {
+    let agent = r#"{"harness":"claude","binary":"/usr/local/bin/claude","version":"2.1.284","timeout_secs":600,"probed_at":"2026-10-27T10:00:00Z"}"#;
     assert!(serde_json::from_str::<Request>(&with_agent(agent)).is_ok());
+    let unknown_version = agent.replace(r#""version":"2.1.284""#, r#""version":null"#);
+    assert!(serde_json::from_str::<Request>(&with_agent(&unknown_version)).is_ok());
+    for key in [
+        r#""binary":"/usr/local/bin/claude","#,
+        r#""version":"2.1.284","#,
+        r#""timeout_secs":600,"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Request>(&with_agent(&agent.replace(key, ""))).is_err(),
+            "{key}"
+        );
+    }
     let extra = agent.replace(
-        r#""timeout_secs":120"#,
-        r#""timeout_secs":120,"stdin":"page""#,
+        r#""timeout_secs":600"#,
+        r#""timeout_secs":600,"args":["-p"]"#,
     );
     assert!(serde_json::from_str::<Request>(&with_agent(&extra)).is_err());
 }
 
 #[test]
-fn harness_adapter_rejects_hyphenated_value() {
-    let agent = r#"{"harness_id":"claude-code","adapter":"claude-code","binary":"/usr/local/bin/claude","args":[],"env_allow":[],"timeout_secs":120}"#;
-    assert!(serde_json::from_str::<Request>(&with_agent(agent)).is_err());
+fn agent_config_rejects_the_v5_harness_names() {
+    for harness in ["claude_code", "claude-code"] {
+        let agent = format!(
+            r#"{{"harness":"{harness}","binary":"/usr/local/bin/claude","version":null,"timeout_secs":600,"probed_at":"2026-10-27T10:00:00Z"}}"#
+        );
+        assert!(
+            serde_json::from_str::<Request>(&with_agent(&agent)).is_err(),
+            "{harness}"
+        );
+    }
 }
 
 #[test]
-fn check_agent_carries_no_url() {
-    let plain = r#"{"type":"check_agent","protocol_version":7,"request_id":"r1"}"#;
-    assert!(serde_json::from_str::<Request>(plain).is_ok());
-    let with_url = r#"{"type":"check_agent","protocol_version":7,"request_id":"r1","url":null}"#;
-    assert!(serde_json::from_str::<Request>(with_url).is_err());
+fn v6_retires_check_agent() {
+    let check = r#"{"type":"check_agent","protocol_version":7,"request_id":"r1"}"#;
+    assert!(serde_json::from_str::<Request>(check).is_err());
+    let checked = r#"{"type":"agent_checked","protocol_version":7,"request_id":"r1","harness_id":"claude-code","harness_version":"2.1.284"}"#;
+    assert!(serde_json::from_str::<Response>(checked).is_err());
 }
 
 #[test]
 fn set_up_harness_requires_every_key() {
-    let full = r#"{"type":"set_up_harness","protocol_version":7,"request_id":"r1","expected_revision":"missing","harness_id":"claude-code","env_names":["HOME"],"summaries_dir":null}"#;
+    let full = r#"{"type":"set_up_harness","protocol_version":7,"request_id":"r1","expected_revision":"missing","harness":"claude","timeout_secs":null,"summaries_dir":null}"#;
     assert!(serde_json::from_str::<Request>(full).is_ok());
+    let timed = full.replace(r#""timeout_secs":null"#, r#""timeout_secs":900"#);
+    assert!(serde_json::from_str::<Request>(&timed).is_ok());
     for key in [
         r#","expected_revision":"missing""#,
-        r#","harness_id":"claude-code""#,
-        r#","env_names":["HOME"]"#,
+        r#","harness":"claude""#,
+        r#","timeout_secs":null"#,
         r#","summaries_dir":null"#,
     ] {
         assert!(
@@ -252,12 +303,19 @@ fn set_up_harness_requires_every_key() {
             "{key}"
         );
     }
-    // The extension never names a binary; an extra path key is refused.
-    let with_binary = full.replace(
-        r#""harness_id":"claude-code""#,
-        r#""harness_id":"claude-code","binary":"/bin/sh""#,
-    );
-    assert!(serde_json::from_str::<Request>(&with_binary).is_err());
+    // The extension never names a binary or environment names.
+    for extra in [r#","binary":"/bin/sh""#, r#","env_names":["HOME"]"#] {
+        let with_extra = full.replace(
+            r#","summaries_dir":null"#,
+            &format!("{extra},\"summaries_dir\":null"),
+        );
+        assert!(
+            serde_json::from_str::<Request>(&with_extra).is_err(),
+            "{extra}"
+        );
+    }
+    let v5 = full.replace(r#""harness":"claude""#, r#""harness_id":"claude-code""#);
+    assert!(serde_json::from_str::<Request>(&v5).is_err());
 }
 
 #[test]
@@ -276,24 +334,27 @@ fn v6_retires_confirm_harness_setup_and_offer_ids() {
 }
 
 #[test]
-fn harnesses_discovered_offers_require_nullable_keys() {
-    let offer = r#"{"adapter":"codex","harness_id":"codex","binary":"/usr/local/bin/codex","real_path":null,"version":null,"args":[],"env_required":["HOME","PATH"],"env_optional":[{"name":"OPENAI_API_KEY","present":false}],"refusal":"codex --version output was not recognized"}"#;
-    let message = |offer: &str| {
+fn harnesses_discovered_requires_nullable_keys() {
+    let found = r#"{"harness":"codex","binary":"/usr/local/bin/codex","version":null,"problem":"codex --version output was not recognized"}"#;
+    let message = |found: &str| {
         format!(
-            r#"{{"type":"harnesses_discovered","protocol_version":7,"request_id":"r1","offers":[{offer}]}}"#
+            r#"{{"type":"harnesses_discovered","protocol_version":7,"request_id":"r1","harnesses":[{found}]}}"#
         )
     };
-    assert!(serde_json::from_str::<Response>(&message(offer)).is_ok());
-    for key in [r#""real_path":null,"#, r#""version":null,"#] {
+    assert!(serde_json::from_str::<Response>(&message(found)).is_ok());
+    let missing = r#"{"harness":"claude","binary":null,"version":null,"problem":null}"#;
+    assert!(serde_json::from_str::<Response>(&message(missing)).is_ok());
+    for key in [r#""binary":"/usr/local/bin/codex","#, r#""version":null,"#] {
         assert!(
-            serde_json::from_str::<Response>(&message(&offer.replace(key, ""))).is_err(),
+            serde_json::from_str::<Response>(&message(&found.replace(key, ""))).is_err(),
             "{key}"
         );
     }
-    let with_help = offer.replace(r#""args":[]"#, r#""args":[],"help":"usage""#);
-    assert!(serde_json::from_str::<Response>(&message(&with_help)).is_err());
-    let with_offer_id = offer.replace(r#""adapter""#, r#""offer_id":null,"adapter""#);
-    assert!(serde_json::from_str::<Response>(&message(&with_offer_id)).is_err());
+    let with_refusal = found.replace(r#""problem""#, r#""refusal":null,"problem""#);
+    assert!(serde_json::from_str::<Response>(&message(&with_refusal)).is_err());
+    let v5 =
+        r#"{"type":"harnesses_discovered","protocol_version":7,"request_id":"r1","offers":[]}"#;
+    assert!(serde_json::from_str::<Response>(v5).is_err());
 }
 
 #[test]
@@ -374,7 +435,7 @@ fn artifact_queries_and_note_keys_have_complete_shapes() {
     );
 }
 
-const RUN_VIEW: &str = r#"{"run_id":"00000000-0000-4000-8000-000000000001","state":"running","harness":"codex","record_key":{"kind":"url","value":"https://a.example/x"},"written_record_key":null,"url":"https://a.example/x","title":"T","cwd":null,"created_at":"2026-10-26T14:00:00-07:00","started_at":null,"finished_at":null,"error":null,"error_kind":null,"thread_id":null,"session_id":null,"summary_path":null,"stream_bytes":0,"can_retry_save":false}"#;
+const RUN_VIEW: &str = r#"{"run_id":"00000000-0000-4000-8000-000000000001","state":"running","harness":"codex","record_key":{"kind":"url","value":"https://a.example/x"},"written_record_key":null,"url":"https://a.example/x","title":"T","cwd":null,"created_at":"2026-10-26T14:00:00-07:00","started_at":null,"finished_at":null,"error":null,"error_kind":null,"thread_id":null,"session_id":null,"summary_path":null,"stream_bytes":0,"can_retry_save":false,"answer":null}"#;
 
 fn run_fetched(view: &str) -> String {
     format!(
@@ -455,6 +516,7 @@ fn run_view_round_trips_every_state_and_error_kind() {
         r#","summary_path":null"#,
         r#","stream_bytes":0"#,
         r#","can_retry_save":false"#,
+        r#","answer":null"#,
     ] {
         assert!(
             serde_json::from_str::<Response>(&run_fetched(&RUN_VIEW.replace(key, ""))).is_err(),
@@ -508,4 +570,56 @@ fn service_ready_requires_build_id() {
     let ready = r#"{"type":"service_ready","protocol_version":7,"request_id":"r","build_id":"b1"}"#;
     assert!(serde_json::from_str::<Response>(ready).is_ok());
     assert!(serde_json::from_str::<Response>(&ready.replace(r#","build_id":"b1""#, "")).is_err());
+}
+
+#[test]
+fn run_view_answer_round_trips_and_rejects_an_unknown_importance() {
+    let answer = r#""answer":{"document_type":"report","category":"news","importance":"high","importance_reason":"New."}"#;
+    let view = RUN_VIEW.replace(r#""answer":null"#, answer);
+    let parsed: Response = serde_json::from_str(&run_fetched(&view)).unwrap();
+    let encoded = serde_json::to_string(&parsed).unwrap();
+    assert!(encoded.contains(answer), "{encoded}");
+    for bad in [
+        view.replace(r#""importance":"high""#, r#""importance":"critical""#),
+        view.replace(r#""importance":"high""#, r#""importance":"High""#),
+        view.replace(r#","importance_reason":"New.""#, ""),
+        view.replace(
+            r#""importance_reason":"New.""#,
+            r#""importance_reason":"New.","x":1"#,
+        ),
+    ] {
+        assert!(
+            serde_json::from_str::<Response>(&run_fetched(&bad)).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn open_path_and_agent_env_messages_round_trip() {
+    for (target, run_id) in [
+        ("codex_thread", r#""00000000-0000-4000-8000-000000000001""#),
+        ("agent_env", "null"),
+    ] {
+        let request = format!(
+            r#"{{"type":"open_path","protocol_version":7,"request_id":"r","target":"{target}","run_id":{run_id}}}"#
+        );
+        let parsed: Request = serde_json::from_str(&request).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), request);
+    }
+    // There is no summary target, and run_id is required.
+    let summary = r#"{"type":"open_path","protocol_version":7,"request_id":"r","target":"summary","run_id":null}"#;
+    assert!(serde_json::from_str::<Request>(summary).is_err());
+    let no_run =
+        r#"{"type":"open_path","protocol_version":7,"request_id":"r","target":"agent_env"}"#;
+    assert!(serde_json::from_str::<Request>(no_run).is_err());
+    let opened = r#"{"type":"path_opened","protocol_version":7,"request_id":"r"}"#;
+    assert!(serde_json::from_str::<Response>(opened).is_ok());
+
+    let get = r#"{"type":"get_agent_env","protocol_version":7,"request_id":"r"}"#;
+    assert!(serde_json::from_str::<Request>(get).is_ok());
+    let listed = r#"{"type":"agent_env_listed","protocol_version":7,"request_id":"r","names":["FOO"],"problem":null}"#;
+    let parsed: Response = serde_json::from_str(listed).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), listed);
+    assert!(serde_json::from_str::<Response>(&listed.replace(r#","problem":null"#, "")).is_err());
 }

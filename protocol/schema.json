@@ -63,9 +63,6 @@
           "$ref": "#/$defs/RefreshArtifactsRequest"
         },
         {
-          "$ref": "#/$defs/CheckAgentRequest"
-        },
-        {
           "$ref": "#/$defs/DiscoverHarnessesRequest"
         },
         {
@@ -76,6 +73,8 @@
         { "$ref": "#/$defs/ListRunsRequest" },
         { "$ref": "#/$defs/CancelRunRequest" },
         { "$ref": "#/$defs/RetrySaveRequest" },
+        { "$ref": "#/$defs/OpenPathRequest" },
+        { "$ref": "#/$defs/GetAgentEnvRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
     },
@@ -127,15 +126,14 @@
           "$ref": "#/$defs/ArtifactsRefreshed"
         },
         {
-          "$ref": "#/$defs/AgentChecked"
-        },
-        {
           "$ref": "#/$defs/HarnessesDiscovered"
         },
         { "$ref": "#/$defs/RunStarted" },
         { "$ref": "#/$defs/RunFetched" },
         { "$ref": "#/$defs/RunsListed" },
         { "$ref": "#/$defs/RunUpdated" },
+        { "$ref": "#/$defs/PathOpened" },
+        { "$ref": "#/$defs/AgentEnvListed" },
         { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
@@ -444,6 +442,7 @@
         "capture_enabled",
         "strip_params",
         "agent",
+        "summary_vocabulary",
         "adapters"
       ],
       "properties": {
@@ -479,8 +478,42 @@
             }
           ]
         },
+        "summary_vocabulary": {
+          "$ref": "#/$defs/SummaryVocabulary"
+        },
         "adapters": {
           "$ref": "#/$defs/AdapterDocument"
+        }
+      }
+    },
+    "SummaryVocabulary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The open document-type and category lists the summary prompt offers the agent. Entries contain no control characters and are unique ignoring case.",
+      "required": [
+        "document_types",
+        "categories"
+      ],
+      "properties": {
+        "document_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
         }
       }
     },
@@ -604,59 +637,45 @@
     "AgentConfig": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A confirmed harness entry. Only native harness setup can create or change it.",
+      "description": "The summary harness the Brauser service set up after its probe passed. Only set_up_harness can create or change it; update_config may echo it unchanged or clear it.",
       "required": [
-        "harness_id",
-        "adapter",
+        "harness",
         "binary",
-        "args",
-        "env_allow",
-        "timeout_secs"
+        "version",
+        "timeout_secs",
+        "probed_at"
       ],
       "properties": {
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "adapter": {
-          "$ref": "#/$defs/HarnessAdapter"
+        "harness": {
+          "$ref": "#/$defs/HarnessId"
         },
         "binary": {
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
         },
-        "args": {
-          "type": "array",
-          "maxItems": 64,
-          "items": {
-            "type": "string",
-            "maxLength": 256
-          }
-        },
-        "env_allow": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
+        "version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "timeout_secs": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 600
+          "minimum": 60,
+          "maximum": 3600
+        },
+        "probed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
         }
       }
-    },
-    "HarnessAdapter": {
-      "type": "string",
-      "enum": [
-        "claude_code",
-        "codex"
-      ]
     },
     "AgentStatus": {
       "type": "object",
@@ -953,30 +972,6 @@
         "type": { "const": "refresh_artifacts" },
         "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
-      }
-    },
-    "CheckAgentRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Ask whether AI commands may run.",
-      "required": [
-        "type",
-        "protocol_version",
-        "request_id"
-      ],
-      "properties": {
-        "type": {
-          "const": "check_agent"
-        },
-        "protocol_version": {
-          "type": "integer",
-          "const": 7
-        },
-        "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        }
       }
     },
     "FolderChosen": {
@@ -1394,40 +1389,6 @@
         "conflict_paths": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } }
       }
     },
-    "AgentChecked": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "protocol_version",
-        "request_id",
-        "harness_id",
-        "harness_version"
-      ],
-      "properties": {
-        "type": {
-          "const": "agent_checked"
-        },
-        "protocol_version": {
-          "type": "integer",
-          "const": 7
-        },
-        "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "harness_version": {
-          "type": "string",
-          "maxLength": 256
-        }
-      }
-    },
     "VisitEvent": {
       "type": "object",
       "additionalProperties": false,
@@ -1587,7 +1548,7 @@
     "DiscoverHarnessesRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ask the host to look for supported AI harnesses on its own search path. The extension never supplies a binary path.",
+      "description": "Ask the Brauser service which supported harnesses it finds on its own PATH. The extension never supplies a binary path.",
       "required": [
         "type",
         "protocol_version",
@@ -1611,14 +1572,14 @@
     "SetUpHarnessRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ask the host to rediscover one harness by harness_id, run one test prompt through it, and commit it when the test passes. Answered by config_updated.",
+      "description": "Ask the Brauser service to detect one harness on its PATH, run one probe prompt through its real invocation in the knowledge base folder, and commit it when the probe passes. timeout_secs null means 600. Answered by config_updated.",
       "required": [
         "type",
         "protocol_version",
         "request_id",
         "expected_revision",
-        "harness_id",
-        "env_names",
+        "harness",
+        "timeout_secs",
         "summaries_dir"
       ],
       "properties": {
@@ -1639,19 +1600,20 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+        "harness": {
+          "$ref": "#/$defs/HarnessId"
         },
-        "env_names": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
+        "timeout_secs": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 3600
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "summaries_dir": {
           "oneOf": [
@@ -1670,11 +1632,12 @@
     "HarnessesDiscovered": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Both supported harnesses, codex then claude, as the service found them on its PATH.",
       "required": [
         "type",
         "protocol_version",
         "request_id",
-        "offers"
+        "harnesses"
       ],
       "properties": {
         "type": {
@@ -1689,45 +1652,30 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "offers": {
+        "harnesses": {
           "type": "array",
-          "maxItems": 8,
+          "maxItems": 2,
           "items": {
-            "$ref": "#/$defs/HarnessOffer"
+            "$ref": "#/$defs/HarnessFound"
           }
         }
       }
     },
-    "HarnessOffer": {
+    "HarnessFound": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One harness the host found. refusal is non-null exactly when it cannot be set up. Help and command output are never included.",
+      "description": "One supported harness as the service sees it on its own PATH. binary is null when it was not found; problem is non-null when it was found but cannot be used.",
       "required": [
-        "adapter",
-        "harness_id",
+        "harness",
         "binary",
-        "real_path",
         "version",
-        "args",
-        "env_required",
-        "env_optional",
-        "refusal"
+        "problem"
       ],
       "properties": {
-        "adapter": {
-          "$ref": "#/$defs/HarnessAdapter"
-        },
-        "harness_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+        "harness": {
+          "$ref": "#/$defs/HarnessId"
         },
         "binary": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 4096
-        },
-        "real_path": {
           "oneOf": [
             {
               "type": "string",
@@ -1750,31 +1698,7 @@
             }
           ]
         },
-        "args": {
-          "type": "array",
-          "maxItems": 64,
-          "items": {
-            "type": "string",
-            "maxLength": 256
-          }
-        },
-        "env_required": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
-        },
-        "env_optional": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "$ref": "#/$defs/EnvName"
-          }
-        },
-        "refusal": {
+        "problem": {
           "oneOf": [
             {
               "type": "string",
@@ -1784,25 +1708,6 @@
               "type": "null"
             }
           ]
-        }
-      }
-    },
-    "EnvName": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "An environment variable name the harness may need. Values are never sent.",
-      "required": [
-        "name",
-        "present"
-      ],
-      "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "present": {
-          "type": "boolean"
         }
       }
     },
@@ -1819,11 +1724,28 @@
       "type": "string",
       "enum": ["harness_failed", "timed_out", "canceled", "service_restarted", "invalid_output", "save_failed"]
     },
+    "ImportanceLevel": {
+      "type": "string",
+      "description": "How much a summarized page matters given the user's knowledge base.",
+      "enum": ["high", "medium", "low"]
+    },
+    "RunAnswer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The validated summary answer's headline fields, kept in the run's result.",
+      "required": ["document_type", "category", "importance", "importance_reason"],
+      "properties": {
+        "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "importance": { "$ref": "#/$defs/ImportanceLevel" },
+        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
     "RunView": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339.",
-      "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save"],
+      "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339. answer is filled once the run has a validated answer.",
+      "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save", "answer"],
       "properties": {
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
         "state": { "$ref": "#/$defs/RunState" },
@@ -1842,7 +1764,8 @@
         "session_id": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 256 }, { "type": "null" }] },
         "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 4096 }, { "type": "null" }] },
         "stream_bytes": { "type": "integer", "minimum": 0 },
-        "can_retry_save": { "type": "boolean" }
+        "can_retry_save": { "type": "boolean" },
+        "answer": { "oneOf": [{ "$ref": "#/$defs/RunAnswer" }, { "type": "null" }] }
       }
     },
     "StartRunRequest": {
@@ -1958,6 +1881,66 @@
         "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run": { "$ref": "#/$defs/RunView" }
+      }
+    },
+    "OpenTarget": {
+      "type": "string",
+      "description": "What open_path opens: a run's Codex thread, or agent.env revealed in Finder.",
+      "enum": ["codex_thread", "agent_env"]
+    },
+    "OpenPathRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask the Brauser service to open a run's Codex thread (run_id required) or reveal agent.env, creating it with mode 0600 when missing (run_id null).",
+      "required": ["type", "protocol_version", "request_id", "target", "run_id"],
+      "properties": {
+        "type": { "const": "open_path" },
+        "protocol_version": { "type": "integer", "const": 7 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "target": { "$ref": "#/$defs/OpenTarget" },
+        "run_id": {
+          "oneOf": [{ "type": "string", "minLength": 36, "maxLength": 36 }, { "type": "null" }]
+        }
+      }
+    },
+    "PathOpened": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "path_opened" },
+        "protocol_version": { "type": "integer", "const": 7 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "GetAgentEnvRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask the Brauser service which variable names agent.env sets. Values never leave the service.",
+      "required": ["type", "protocol_version", "request_id"],
+      "properties": {
+        "type": { "const": "get_agent_env" },
+        "protocol_version": { "type": "integer", "const": 7 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "AgentEnvListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The names agent.env sets, sorted, never values. problem is non-null when agent.env cannot be used or not every name is listed.",
+      "required": ["type", "protocol_version", "request_id", "names", "problem"],
+      "properties": {
+        "type": { "const": "agent_env_listed" },
+        "protocol_version": { "type": "integer", "const": 7 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "names": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "problem": {
+          "oneOf": [{ "type": "string", "maxLength": 512 }, { "type": "null" }]
+        }
       }
     },
     "ServiceHelloRequest": {
