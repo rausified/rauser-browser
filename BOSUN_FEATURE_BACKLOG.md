@@ -872,7 +872,7 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — baseline `bdbbbb4`)
+### Current health handoff (2026-10-27 — baseline `21d06c3`)
 
 - Clean workspace; no quarantine failure file. The unfiltered opening gate
   again passes 26 adapter-template tests and 447 host tests, then fails 32
@@ -888,10 +888,10 @@ were folded into `brwr-q7e` above rather than given their own item.
   TESTING.md documents that diagnostic and the restriction. Keep all tests
   enabled and do not change production IPC to fit this runner.
 - The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3` and `bdbbbb4`.
+  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4` and `21d06c3`.
   No commit among the last five is verified green in this runner, so no
-  history reset was attempted. Earlier quarantine recovery is retained; this cycle introduces no product or test change and claims no
-  shipped feature.
+  history reset was attempted. Earlier quarantine recovery is retained; this
+  cycle introduces no product or test change and claims no shipped feature.
 - The driver needs to carry the baseline SHA and an unfiltered external
   gate result into its next handoff, and provide a runner permitting local
   IPC and synchronous child output. Another unchanged restricted cycle will
@@ -913,3 +913,16 @@ were folded into `brwr-q7e` above rather than given their own item.
   No product or test changes can grant the missing runner capability.
   Keep the existing product proposals; adding more internal health work
   would not unblock the assigned Capture Site implementation.
+
+- Latest recheck on `21d06c3` reproduces those exact counts with no test
+  exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
+  and all 13 extension files passing. The script diagnostic still reports
+  8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
+  required build/quality checks pass. The repaired dialog fixture passes.
+  Independent socket and JSON-only child probes still return EPERM. No
+  quarantine file existed and no code repair or reset would restore these
+  denied operations. `brwr-1hj` stays in progress and `brwr-t40` stays open.
+  Before scheduling another unchanged cycle, the driver should establish
+  whether its own unfiltered gate passes and supply that result in the
+  handoff. Product priority remains selected-rule Capture Site review and
+  example artifact grouping, not another health surface.
