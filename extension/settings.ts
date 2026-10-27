@@ -207,6 +207,7 @@ export class ConfigSession {
     return response;
   }
 
+  /** Returns whether the host verified the saved policy before publication. */
   async saveConfig(
     next: ConfigSnapshot,
     pickerToken: string | null,
@@ -214,7 +215,7 @@ export class ConfigSession {
     onCommitted?: () => void,
     resumeAfterConfirmation = false,
     resumeAfterPauseToken: string | null = null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
     // The revision check is the only gate on an ordinary settings change.
     const updated = await this.host.call({
@@ -237,6 +238,7 @@ export class ConfigSession {
       await worker<WorkerStatus>({ kind: "suspend_policy" });
     }
     await this.refreshStatus();
+    return statusVerified && this.configIssue === null && this.adapterIssue === null;
   }
 
   /** The harnesses the host found on its own search path. */
