@@ -43,9 +43,11 @@ use crate::vault::{
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
 // already durable in the log. v4 records log positions and the adapter
 // document fingerprint. v5 counts M1 visits as opens and bounds logged
-// titles. A v4 cache is migrated in place (`migrate_v4_state`) rather than
-// rescanned, so its checkpoints survive the upgrade.
-const STATE_VERSION: u8 = 5;
+// titles. v6 gives `SummaryEvent` its record key and harness, attaches
+// summaries to adapter artifacts, and dates summary Timeline lines. A v4 or
+// v5 cache is migrated in place (`migrate_state`) rather than rescanned, so
+// its checkpoints survive the upgrade.
+const STATE_VERSION: u8 = 6;
 // How often a long regeneration pass publishes its progress. Chrome ends a
 // host soon after its port closes; without checkpoints a pass killed that
 // way would restart at the same sorted prefix every time.
@@ -831,7 +833,12 @@ impl ArtifactIndex {
     /// An unreadable one is ignored like an unreadable cache.
     fn read_pending(&self) -> Option<PendingCatchUp> {
         let mut pending: PendingCatchUp = read_bounded_json(&self.pending_path()).ok()??;
-        if pending.state.version != STATE_VERSION || !self.state_location_matches(&pending.state) {
+        // Only version 5 progress can exist from an older build (#90 added
+        // the file at version 5); anything else restarts the pass.
+        if !self.state_location_matches(&pending.state)
+            || !matches!(pending.state.version, 5 | STATE_VERSION)
+            || !migrate_state(&mut pending.state)
+        {
             return None;
         }
         pending.state.conflicts = std::mem::take(&mut pending.conflicts);
@@ -853,21 +860,15 @@ impl ArtifactIndex {
         atomic_write(&self.pending_path(), &bytes)
     }
 
-    /// The cache for this root and layout, if any. A version 4 cache is
-    /// migrated in place; the flag reports that it must be republished.
+    /// The cache for this root and layout, if any. A version 4 or 5 cache
+    /// is migrated in place; the flag reports that it must be republished.
     fn read_current_state(&self) -> Option<(IndexState, bool)> {
         let mut state = read_state(&self.state_path()).ok()??;
         if !self.state_location_matches(&state) {
             return None;
         }
-        match state.version {
-            STATE_VERSION => Some((state, false)),
-            4 => {
-                migrate_v4_state(&mut state);
-                Some((state, true))
-            }
-            _ => None,
-        }
+        let migrated = state.version != STATE_VERSION;
+        migrate_state(&mut state).then_some((state, migrated))
     }
 
     fn state_location_matches(&self, state: &IndexState) -> bool {
@@ -1273,10 +1274,34 @@ impl ArtifactIndex {
     }
 }
 
-/// Upgrade a version 4 cache without rereading the logs: drop activity a
-/// log rescan would now skip (a title over capture's limit), and mark those
-/// artifacts and every M1 visit's artifact dirty so their owned files are
-/// regenerated with the v5 derivation (M1 visits count as opens).
+/// Bring a cache (or saved catch-up progress) of an older format up to
+/// `STATE_VERSION` without rereading the logs. False means it must be
+/// rebuilt from the logs instead.
+fn migrate_state(state: &mut IndexState) -> bool {
+    match state.version {
+        STATE_VERSION => return true,
+        4 => migrate_v4_state(state),
+        5 => {}
+        _ => return false,
+    }
+    migrate_v5_state(state);
+    true
+}
+
+/// Upgrade a version 5 cache. It holds no `CachedEvent::Summary`: #59's
+/// summary events had no caller, so no log held one, and a cached event of
+/// #59's shape (no record key or harness) fails to deserialize, which makes
+/// the whole cache unreadable and rescanned. Every v6 derivation change
+/// concerns summaries only, so no generated file differs and nothing
+/// becomes dirty.
+fn migrate_v5_state(state: &mut IndexState) {
+    state.version = STATE_VERSION;
+}
+
+/// Upgrade a version 4 cache to version 5: drop activity a log rescan
+/// would now skip (a title over capture's limit), and mark those artifacts
+/// and every M1 visit's artifact dirty so their owned files are regenerated
+/// with the v5 derivation (M1 visits count as opens).
 fn migrate_v4_state(state: &mut IndexState) {
     let dropped = state
         .events
@@ -1298,7 +1323,7 @@ fn migrate_v4_state(state: &mut IndexState) {
             state.dirty.insert(event.artifact_id.clone());
         }
     }
-    state.version = STATE_VERSION;
+    state.version = 5;
 }
 
 fn saturating_u32(value: u64) -> u32 {
@@ -2137,30 +2162,57 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
         ));
     }
     out.push_str("## Timeline\n\n");
+    // Newest first: each summary line, then the day rollups whose latest
+    // date is not after it, so a summary sorts before a rollup of its day.
     const MAX_SUMMARY_LINES: usize = 20;
-    let total_summaries = artifact.summaries.len();
-    let shown_summaries = total_summaries.min(MAX_SUMMARY_LINES);
-    for summary in artifact.summaries.iter().rev().take(shown_summaries) {
-        out.push_str(&format!(
-            "- {} · Summarized: {}\n",
-            summary.occurred_at,
-            markdown::inline(&summary.title, MAX_RENDERED_FIELD_CHARS)
-        ));
-    }
-    if total_summaries > shown_summaries {
-        out.push_str(&format!(
-            "- {} earlier summaries\n",
-            total_summaries - shown_summaries
-        ));
-    }
+    let mut summaries = artifact
+        .summaries
+        .iter()
+        .rev()
+        .take(MAX_SUMMARY_LINES)
+        .peekable();
     for period in timeline_rollups(artifact) {
+        while let Some(summary) =
+            summaries.next_if(|summary| summary_instant(summary).date() >= period.last_date)
+        {
+            out.push_str(&timeline_summary_line(summary));
+        }
         out.push_str(&format!(
             "- {} · {}\n",
             period.label,
             measures(period.focused, period.background, period.opens)
         ));
     }
+    for summary in summaries {
+        out.push_str(&timeline_summary_line(summary));
+    }
+    let earlier = artifact.summaries.len().saturating_sub(MAX_SUMMARY_LINES);
+    if earlier > 0 {
+        out.push_str(&format!("- {earlier} earlier summaries\n"));
+    }
     out
+}
+
+/// A summary's instant in its own offset. Logged events are validated
+/// RFC 3339, so the epoch fallback is never reached in practice.
+fn summary_instant(summary: &SummaryEvent) -> OffsetDateTime {
+    OffsetDateTime::parse(&summary.occurred_at, &Rfc3339).unwrap_or(OffsetDateTime::UNIX_EPOCH)
+}
+
+/// `- YYYY-MM-DD HH:MM · Summarized: <title> — <type>, <importance> importance`,
+/// in the event's own offset and without seconds, so the file does not
+/// churn, worded like the worklog.
+fn timeline_summary_line(summary: &SummaryEvent) -> String {
+    let at = summary_instant(summary);
+    format!(
+        "- {} {:02}:{:02} · Summarized: {} — {}, {} importance\n",
+        at.date(),
+        at.hour(),
+        at.minute(),
+        markdown::inline(&summary.title, MAX_RENDERED_FIELD_CHARS),
+        markdown::inline(&summary.document_type, MAX_RENDERED_FIELD_CHARS),
+        crate::summary::importance_str(summary.importance),
+    )
 }
 
 fn whole_minutes(seconds: u64) -> u64 {
@@ -4883,6 +4935,419 @@ print(json.dumps([tables,row]))"#;
             "a v1 cache must be rescanned, not trusted"
         );
         assert_eq!(artifact_files(root.path()).len(), 1);
+    }
+
+    /// A summary attached to an adapter artifact, as `CaptureStore::record_summary`
+    /// writes it for an `Artifact` record key.
+    fn adapter_summary(
+        artifact_id: &str,
+        artifact_type: &str,
+        url: &str,
+        at: &str,
+    ) -> SummaryEvent {
+        SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: artifact_id.into(),
+            artifact_type: artifact_type.into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: at.into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
+            summary_path: "summaries/a.summary.md".into(),
+            record_key: brauser_protocol::RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Artifact,
+                value: artifact_id.into(),
+            },
+            harness: brauser_protocol::HarnessId::Claude,
+        }
+    }
+
+    fn summary_marker(event: &SummaryEvent) -> String {
+        format!(
+            "<!-- brauser:visit id={} url={} at={} kind=summary data={} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            sha256_hex(event.url.as_bytes()),
+            event.occurred_at,
+            hex::encode(serde_json::to_vec(event).unwrap()),
+        )
+    }
+
+    fn timeline(markdown: &str) -> &str {
+        let start = markdown.find("## Timeline\n\n").expect("a Timeline") + "## Timeline\n\n".len();
+        &markdown[start..]
+    }
+
+    #[test]
+    fn timeline_interleaves_summaries_and_rollups_by_date() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let day1 = activity(
+            "00000000-0000-4000-8000-000000000101",
+            "MIX",
+            "Item",
+            "2026-10-01T12:00:00Z",
+        );
+        let day5 = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000105".into(),
+            occurred_at: "2026-10-05T12:00:00Z".into(),
+            ..day1.clone()
+        };
+        index.record_activities([&day1, &day5], &[]).unwrap();
+        let mut on_day3 = adapter_summary(
+            &day1.artifact_id,
+            &day1.artifact_type,
+            &day1.url,
+            "2026-10-03T08:30:00Z",
+        );
+        on_day3.title = "Day three".into();
+        let mut on_day5 = adapter_summary(
+            &day1.artifact_id,
+            &day1.artifact_type,
+            &day1.url,
+            "2026-10-05T07:00:00Z",
+        );
+        on_day5.title = "Day five".into();
+        on_day5.importance = brauser_protocol::ImportanceLevel::Low;
+        index.record_summary(&on_day3).unwrap();
+        index.record_summary(&on_day5).unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert_eq!(
+            timeline(&markdown),
+            "- 2026-10-05 07:00 · Summarized: Day five — discussion, low importance\n\
+             - 2026-10-05 · focused 2 min · 1 min in background · opened 1×\n\
+             - 2026-10-03 08:30 · Summarized: Day three — discussion, high importance\n\
+             - 2026-10-01 · focused 2 min · 1 min in background · opened 1×\n",
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn a_timeline_merges_summaries_with_m1_legacy_visit_lines() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let url_hash = sha256_hex(url.as_bytes());
+        let legacy_line = format!(
+            "\n- 2026-10-20T10:00:00Z — A good discussion — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+            sha256_hex("legacy-marker-merge".as_bytes()),
+        );
+        let summary = |at: &str| {
+            let mut summary = adapter_summary(
+                &crate::summary::web_page_artifact_id(url).unwrap(),
+                "web.page",
+                url,
+                at,
+            );
+            summary.record_key = crate::vault::url_record_key(url).unwrap();
+            summary
+        };
+        let before = summary("2026-10-19T09:00:00Z");
+        let after = summary("2026-10-26T18:05:59Z");
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-19.md"),
+            format!("{LOG_HEADER}\n{}", summary_marker(&before)),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!("{LOG_HEADER}\n{legacy_line}"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2026-10-26.md"),
+            format!("{LOG_HEADER}\n{}", summary_marker(&after)),
+        )
+        .unwrap();
+
+        assert_eq!(index.reindex().unwrap().written, 1);
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert_eq!(
+            timeline(&markdown),
+            "- 2026-10-26 18:05 · Summarized: A good discussion — discussion, high importance\n\
+             - 2026-10-20 · opened 1×\n\
+             - 2026-10-19 09:00 · Summarized: A good discussion — discussion, high importance\n",
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn a_timeline_summary_line_has_the_title_and_no_seconds() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let mut event = adapter_summary(
+            &crate::summary::web_page_artifact_id(url).unwrap(),
+            "web.page",
+            url,
+            "2026-10-20T09:15:42-07:00",
+        );
+        event.record_key = crate::vault::url_record_key(url).unwrap();
+        index.record_summary(&event).unwrap();
+        index.regenerate_dirty().unwrap();
+
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        // The time stays in the event's own offset, not UTC.
+        assert_eq!(
+            timeline(&markdown),
+            "- 2026-10-20 09:15 · Summarized: A good discussion — discussion, high importance\n",
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn timeline_summary_fields_are_escaped_and_capped_at_twenty_lines() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://jira.example/browse/PROJ-9";
+        for day in 1..=22 {
+            let mut event = adapter_summary(
+                "jira:jira.example/PROJ-9",
+                "jira.issue",
+                url,
+                &format!("2026-09-{day:02}T10:00:00Z"),
+            );
+            event.title = "![x](https://e.example/a.png) `t`".into();
+            event.document_type = "a`b".into();
+            index.record_summary(&event).unwrap();
+        }
+        index.regenerate_dirty().unwrap();
+
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        let lines = timeline(&markdown).lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 21, "{markdown}");
+        assert_eq!(
+            lines[0],
+            format!(
+                "- 2026-09-22 10:00 · Summarized: {} — {}, high importance",
+                markdown::inline(
+                    "![x](https://e.example/a.png) `t`",
+                    MAX_RENDERED_FIELD_CHARS
+                ),
+                markdown::inline("a`b", MAX_RENDERED_FIELD_CHARS),
+            )
+        );
+        assert!(!lines[0].contains('`'), "{}", lines[0]);
+        assert!(lines[19].starts_with("- 2026-09-03 10:00 · Summarized:"));
+        assert_eq!(lines[20], "- 2 earlier summaries");
+    }
+
+    #[test]
+    fn a_summary_on_an_adapter_artifact_without_activity_creates_that_row() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let summary = adapter_summary(
+            "jira:jira.example/PROJ-1",
+            "jira.issue",
+            "https://jira.example/browse/PROJ-1",
+            "2026-10-20T09:00:00Z",
+        );
+        index.record_summary(&summary).unwrap();
+        let row = index
+            .artifact(&summary.artifact_id)
+            .unwrap()
+            .expect("a row");
+        assert_eq!(row.artifact_type, "jira.issue");
+        assert_eq!(row.title, "A good discussion");
+        // A summary is not measured activity.
+        assert_eq!((row.opens, row.focused_seconds), (0, 0));
+
+        let later = ActivityEvent {
+            artifact_id: summary.artifact_id.clone(),
+            artifact_type: "jira.issue".into(),
+            url: "https://jira.example/browse/PROJ-1?focusedCommentId=2".into(),
+            ..activity(
+                "00000000-0000-4000-8000-000000000201",
+                "PROJ-1",
+                "PROJ-1 renamed",
+                "2026-10-21T09:00:00Z",
+            )
+        };
+        index.record_activity(&later, &[]).unwrap();
+        index.regenerate_dirty().unwrap();
+        assert_eq!(artifact_files(root.path()).len(), 1);
+        let row = index.artifact(&summary.artifact_id).unwrap().unwrap();
+        assert_eq!(row.artifact_type, "jira.issue");
+        assert_eq!(row.title, "PROJ-1 renamed");
+        assert_eq!(row.url, later.url);
+        assert_eq!(row.opens, 1);
+    }
+
+    #[test]
+    fn an_adapter_summary_is_a_note_key_candidate() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://jira.example/browse/PROJ-1";
+        let summary = adapter_summary(
+            "jira:jira.example/PROJ-1",
+            "jira.issue",
+            url,
+            "2026-10-20T09:00:00Z",
+        );
+        index.record_summary(&summary).unwrap();
+        assert_eq!(index.artifact_urls(&summary.artifact_id).unwrap(), [url]);
+    }
+
+    #[test]
+    fn web_summaries_never_redirect_note_keys() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let adapter_url = "https://jira.example/browse/PROJ-1";
+        let web_url = "https://jira.example/browse/PROJ-1?view=print";
+        let adapter = ActivityEvent {
+            artifact_id: "jira:jira.example/PROJ-1".into(),
+            artifact_type: "jira.issue".into(),
+            url: adapter_url.into(),
+            modes: Vec::new(),
+            ..activity(
+                "00000000-0000-4000-8000-000000000301",
+                "PROJ-1",
+                "PROJ-1",
+                "2026-10-20T09:00:00Z",
+            )
+        };
+        index.record_activity(&adapter, &[]).unwrap();
+        let web_id = crate::summary::web_page_artifact_id(web_url).unwrap();
+        let mut web = adapter_summary(&web_id, "web.page", web_url, "2026-10-20T10:00:00Z");
+        web.record_key = crate::vault::url_record_key(web_url).unwrap();
+        index.record_summary(&web).unwrap();
+
+        // The web summary's URL stays with its own `web:` artifact and is
+        // never offered as another artifact's note key.
+        assert_eq!(
+            index.artifact_urls(&adapter.artifact_id).unwrap(),
+            [adapter_url]
+        );
+        assert_eq!(index.artifact_urls(&web_id).unwrap(), [web_url]);
+    }
+
+    #[test]
+    fn reusing_a_summary_event_id_with_other_content_bails() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let first = adapter_summary(
+            "jira:jira.example/PROJ-1",
+            "jira.issue",
+            "https://jira.example/browse/PROJ-1",
+            "2026-10-20T09:00:00Z",
+        );
+        index.record_summary(&first).unwrap();
+        // An identical retry is accepted.
+        index.record_summary(&first).unwrap();
+        let mut forged = first.clone();
+        forged.title = "Something else".into();
+        let error = index.record_summary(&forged).unwrap_err().to_string();
+        assert!(error.contains("cannot be reused"), "{error}");
+        assert_eq!(
+            index.artifact(&first.artifact_id).unwrap().unwrap().title,
+            "A good discussion"
+        );
+    }
+
+    #[test]
+    fn a_version_5_state_cache_is_migrated() {
+        assert_eq!(STATE_VERSION, 6);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000401",
+            "V5",
+            "Version five",
+            "2026-10-20T12:00:00Z",
+        );
+        write_log(root.path(), "2026-10-20.md", &[&event]);
+        assert_eq!(index.reindex().unwrap().written, 1);
+        let path = artifact_files(root.path()).pop().unwrap();
+        let current = fs::read_to_string(&path).unwrap();
+        // The clean cache a version 5 build left. It can hold no summary
+        // (#59 had no caller), so nothing it derived renders differently.
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        state["version"] = 5.into();
+        fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+
+        // Migrated in place: no log is reread and no file is rewritten.
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.regenerate_dirty().unwrap().written, 0);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        assert_eq!(fs::read_to_string(&path).unwrap(), current);
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().version,
+            STATE_VERSION
+        );
+        assert!(index.artifact(&event.artifact_id).unwrap().is_some());
+    }
+
+    #[test]
+    fn version_5_catch_up_progress_resumes_and_older_progress_restarts() {
+        for (version, resumes) in [(5, true), (4, false), (3, false)] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let index = index(&root, &cache);
+            let events = (1..=3)
+                .map(|day| {
+                    activity(
+                        &format!("00000000-0000-4000-8000-{:012}", 500 + day),
+                        &format!("P{day}"),
+                        &format!("Item {day}"),
+                        &format!("2026-10-1{day}T12:00:00Z"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut size = 0;
+            for (day, event) in events.iter().enumerate() {
+                size = fs::metadata(write_log(
+                    root.path(),
+                    &format!("2026-10-1{}.md", day + 1),
+                    &[event],
+                ))
+                .unwrap()
+                .len();
+            }
+            // One pass reads two of the three logs and saves its progress.
+            SCAN_LIMIT.with(|value| value.set(size * 5 / 2));
+            LOG_BYTES_READ.with(|count| count.set(0));
+            assert!(index.recent(None, None, 32).is_err());
+            assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 2 * size);
+            let mut pending: serde_json::Value =
+                serde_json::from_slice(&fs::read(index.pending_path()).unwrap()).unwrap();
+            assert_eq!(pending["state"]["version"], STATE_VERSION);
+            pending["state"]["version"] = version.into();
+            fs::write(index.pending_path(), serde_json::to_vec(&pending).unwrap()).unwrap();
+
+            // Version 5 progress migrates and resumes after the logs it read;
+            // progress from any older format is discarded and restarts.
+            LOG_BYTES_READ.with(|count| count.set(0));
+            let result = index.recent(None, None, 32);
+            let read = LOG_BYTES_READ.with(|count| count.get());
+            if resumes {
+                assert_eq!((result.unwrap().0.len(), read), (3, size), "v{version}");
+            } else {
+                assert!(result.is_err(), "v{version}");
+                assert_eq!(read, 2 * size, "v{version}");
+                assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 3);
+            }
+            assert!(!index.pending_path().exists());
+            assert_eq!(
+                read_state(&index.state_path()).unwrap().unwrap().version,
+                STATE_VERSION
+            );
+            SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
+        }
     }
 
     /// Run SQLite's own integrity check on `path`, then one query whose
