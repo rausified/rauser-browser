@@ -1128,6 +1128,46 @@ test("start_run never carries a lone surrogate, whichever field it came from", a
   assert.doesNotMatch(JSON.stringify(request), /\\ud[89a-f][0-9a-f]{2}/i);
 });
 
+test("a slow summary's line stays with the tab it was for", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    intercept: (request) => request.type === "start_run" ? held : startsRun(request),
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  assert.match(page.el("run-area").textContent, /Reading this page/);
+
+  // The user moves to tab 2 while the service cold-starts.
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  assert.doesNotMatch(page.el("run-area").textContent, /Reading this page/);
+  release({ type: "error", code: "service_unavailable", message: "The service did not start." });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(page.el("run-area").textContent, /did not start/);
+});
+
+test("a summary that finishes after a tab switch leaves the new tab's line alone", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    intercept: (request) => request.type === "start_run" ? held : startsRun(request),
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  page.notify({ kind: "summarize_failed", message: "Tab two's own notice.", tab_id: 2, at: Date.now() });
+  await until(() => page.el("run-area").textContent.includes("Tab two's own notice."), "tab 2's notice");
+  release({ type: "run_started", run: RUN_VIEW, existing: false });
+  await until(() => /Queued/.test(page.el("run-area").textContent), "the run card");
+  assert.match(page.el("run-area").textContent, /Tab two's own notice\./);
+});
+
 test("the setup warning shows once", async () => {
   const local = new Map();
   const first = await summarizePanel({ local });

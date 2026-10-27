@@ -682,10 +682,14 @@ async function summarize(): Promise<void> {
       { id: tabId, url: page.url, title: page.title },
       { scripting: chrome.scripting, host: session.host, now: () => new Date() },
     );
-    clearRunLine();
+    // Run cards are not per tab, so the card shows whichever tab is followed
+    // now; only this tab's own line goes.
+    if (runLine?.tabId === tabId) clearRunLine();
     runCards.show(run);
   } catch (error) {
-    showRunLine(tabId, summarizeFailure(error), true);
+    // The panel may follow another tab by now (a slow cold start); this
+    // line is about the tab that was summarized, so it is dropped.
+    if (followedTabId === tabId) showRunLine(tabId, summarizeFailure(error), true);
   } finally {
     summarizing = false;
     updateControls();
