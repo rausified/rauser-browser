@@ -3086,6 +3086,113 @@ id = "jira:{host}/{key}"
             }
             assert_eq!(std::fs::read(&board_path).unwrap(), board_bytes);
         }
+
+        /// endurance-22 case 1: notes and activity were recorded while
+        /// `selectedIssue` was stripped, so ABC-123's stored canonical URL is
+        /// the bare board. Dropping it from `strip_params` through settings
+        /// must not let the board read or autosave over ABC-123's note.
+        #[test]
+        fn unstripping_an_identity_parameter_keeps_the_board_off_an_issues_note() {
+            for activity in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let (root, mut config) = jira_store(&folder);
+                let issue = save(&mut config, ABC_123, "ABC-123 text");
+                if activity {
+                    record_modal_activity(&mut config, ABC_123, "ABC-123");
+                }
+                let issue_path = root.join(&issue.relative_path);
+                let issue_bytes = std::fs::read(&issue_path).unwrap();
+
+                let mut next = config.snapshot().clone();
+                next.strip_params.retain(|name| name != "selectedIssue");
+                let revision = config.revision().to_owned();
+                config.update(next, &revision).unwrap().unwrap();
+
+                let board = note_load(&mut config, BOARD);
+                assert_ne!(board.key, issue.key, "activity={activity}");
+                assert_ne!(board.body, "ABC-123 text", "activity={activity}");
+                let saved = save(&mut config, BOARD, "Notes about the whole board");
+                assert_ne!(saved.relative_path, issue.relative_path, "activity={activity}");
+                assert_eq!(
+                    std::fs::read(&issue_path).unwrap(),
+                    issue_bytes,
+                    "activity={activity}"
+                );
+                assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 text");
+                assert_eq!(
+                    note_load(&mut config, BOARD).body,
+                    "Notes about the whole board"
+                );
+            }
+        }
+
+        const JIRA_BOARD: &str = r#"[[artifacts]]
+type = "jira.board"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/jira/software/projects/ABC/boards/{id:int}", absent = ["selectedIssue"] }]
+id = "jira.board:{host}/{id}"
+"#;
+
+        /// endurance-22 case 2: a live jira.issue adapter whose modal rule
+        /// reads the stripped `selectedIssue`, beside a jira.board adapter.
+        /// Removing only jira.board by hand must keep the board's note
+        /// reachable, and the next autosave must update it, not split it.
+        #[test]
+        fn hand_removing_only_the_board_adapter_keeps_its_note_beside_the_modal_rule() {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            config::fixtures::write(
+                &path,
+                &root,
+                "artifacts_dir = \"artifacts\"",
+                "capture_enabled = true\nstrip_params = [\"selectedIssue\"]",
+                &format!("[adapters]\nformat = 1\n\n{JIRA}\n{JIRA_BOARD}"),
+            );
+            let mut config = loaded(&path);
+            let issue = save(&mut config, ABC_123, "ABC-123 text");
+            let board = save(&mut config, BOARD, "board artifact note");
+            assert_eq!(board.key.kind, RecordKeyKind::Artifact);
+            assert_eq!(board.key.value, "jira.board:acme.atlassian.net/1");
+            let issue_path = root.join(&issue.relative_path);
+            let issue_bytes = std::fs::read(&issue_path).unwrap();
+
+            let mut table: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let artifacts = table
+                .get_mut("artifacts")
+                .and_then(toml::Value::as_array_mut)
+                .expect("top-level [[artifacts]]");
+            let before = artifacts.len();
+            artifacts.retain(|rule| {
+                rule.get("type").and_then(toml::Value::as_str) != Some("jira.board")
+            });
+            assert_eq!(artifacts.len(), before - 1);
+            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            config = loaded(&path);
+
+            let loaded_board = note_load(&mut config, BOARD);
+            assert!(loaded_board.exists, "{loaded_board:?}");
+            assert_eq!(loaded_board.body, "board artifact note");
+            let Response::NoteSaved(saved) = note_save(
+                &mut config,
+                BOARD,
+                "board artifact note, edited",
+                &loaded_board.revision,
+                loaded_board.key,
+            ) else {
+                panic!("expected the board's autosave to succeed")
+            };
+            assert_eq!(saved.relative_path, board.relative_path);
+            assert_eq!(saved.outcome, brauser_protocol::NoteSaveOutcome::Replaced);
+            assert_eq!(
+                note_load(&mut config, BOARD).body,
+                "board artifact note, edited"
+            );
+            assert_eq!(std::fs::read(&issue_path).unwrap(), issue_bytes);
+            assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 text");
+        }
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the
