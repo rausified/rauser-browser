@@ -77,8 +77,8 @@ fn shown(detected: &Detected) -> (Option<String>, Option<String>) {
     }
 }
 
-/// Send [`PROBE_PROMPT`] through `runner` as a run would, and require an
-/// answer containing "ok". The run is killed at `timeout`.
+/// Send [`PROBE_PROMPT`] through `runner` as a run would, and require the
+/// answer OK (see [`answer_is_ok`]). The run is killed at `timeout`.
 pub fn probe(runner: &dyn HarnessRunner, spec: &RunSpec, timeout: Duration) -> Result<(), String> {
     let slot = ProcessSlot::default();
     let (finished, deadline) = mpsc::channel::<()>();
@@ -105,12 +105,24 @@ pub fn probe(runner: &dyn HarnessRunner, spec: &RunSpec, timeout: Duration) -> R
         return Err(format!("timed out after {} seconds", timeout.as_secs()));
     }
     match outcome? {
-        TurnOutcome::Answered { final_text } if final_text.trim().to_lowercase().contains("ok") => {
-            Ok(())
-        }
+        TurnOutcome::Answered { final_text } if answer_is_ok(&final_text) => Ok(()),
         TurnOutcome::Answered { .. } => Err("the answer was not OK".to_owned()),
         TurnOutcome::Failed { reason } => Err(reason),
     }
+}
+
+/// Whether `answer` is the word OK, ignoring case, surrounding whitespace,
+/// and surrounding punctuation or quotes ("OK.", "\"ok\"", "**OK**").
+/// Words that merely contain "ok" ("token", "broken") are not OK.
+fn answer_is_ok(answer: &str) -> bool {
+    answer
+        .trim()
+        .trim_matches(|c: char| {
+            c.is_ascii_punctuation()
+                || c.is_whitespace()
+                || "\u{2018}\u{2019}\u{201c}\u{201d}".contains(c)
+        })
+        .eq_ignore_ascii_case("ok")
 }
 
 /// Set up `request.harness` and return the committed configuration and its
@@ -474,6 +486,9 @@ mod tests {
                 "harness exited with status 3: Invalid API key",
             ),
             ("echo 'Sorry.'", "the answer was not OK"),
+            // Words that merely contain "ok" are not OK.
+            ("echo 'token'", "the answer was not OK"),
+            ("echo 'Look, it is broken'", "the answer was not OK"),
         ] {
             let mut setup = setup(body);
             let before = fs::read(&setup.path).unwrap();
@@ -486,6 +501,20 @@ mod tests {
             assert_eq!(fs::read(&setup.path).unwrap(), before);
             assert_eq!(setup.config.agent_status().state, AgentState::NotSetUp);
         }
+    }
+
+    #[test]
+    fn probe_answer_must_be_exactly_ok() {
+        for answer in ["OK", "ok", " OK.\n", "\"OK\"", "'Ok!'", "**OK**", "`OK`"] {
+            assert!(answer_is_ok(answer), "{answer:?}");
+        }
+        for answer in [
+            "", "token", "look", "broken", "OK then", "not ok", "O K", "...",
+        ] {
+            assert!(!answer_is_ok(answer), "{answer:?}");
+        }
+        let mut setup = setup("echo '\"OK.\"'");
+        setup.run(HarnessId::Claude).unwrap();
     }
 
     #[test]
