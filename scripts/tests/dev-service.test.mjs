@@ -91,7 +91,7 @@ test("plist paths stay POSIX when node:path is win32", () => {
   assert.throws(() => plistPath("C:\\Users\\u", "l"), /absolute/);
 });
 
-test("plist lints",{ skip: process.platform !== "darwin" }, async (t) => {
+test("plist lints", { skip: process.platform !== "darwin" }, async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bdl-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "service.plist");
