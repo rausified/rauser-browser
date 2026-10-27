@@ -1155,11 +1155,32 @@ struct NoteContext {
     older_urls: Vec<String>,
 }
 
-fn note_context(
+/// The key-only part of `note_context`, shared by notes, the run proxy, and
+/// the run finisher, so a run and the page's note always agree on the record
+/// they belong to. It never lists older notes.
+// The run proxy (Task 23) is the first non-test caller; drop this then.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
-    include_older_notes: bool,
-) -> Result<NoteContext, (ErrorCode, &'static str)> {
+) -> Result<RecordKey, (ErrorCode, &'static str)> {
+    resolve_key_parts(config, url).map(|parts| parts.key)
+}
+
+/// What key resolution already computed, kept so `note_context` can build on
+/// it without opening the vault or matching adapters a second time.
+struct KeyParts {
+    canonical: String,
+    vault: Vault,
+    key: RecordKey,
+    /// The artifact id an adapter matched on the original URL, if any.
+    matched_artifact: Option<String>,
+}
+
+fn resolve_key_parts(
+    config: &mut ConfigStore,
+    url: &str,
+) -> Result<KeyParts, (ErrorCode, &'static str)> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
             ErrorCode::InvalidConfig,
@@ -1229,13 +1250,35 @@ fn note_context(
             }
         }
     };
+    Ok(KeyParts {
+        canonical,
+        vault,
+        key,
+        matched_artifact: matched.map(|found| found.artifact_id),
+    })
+}
+
+fn note_context(
+    config: &mut ConfigStore,
+    url: &str,
+    include_older_notes: bool,
+) -> Result<NoteContext, (ErrorCode, &'static str)> {
+    let KeyParts {
+        canonical,
+        vault,
+        key,
+        matched_artifact,
+    } = resolve_key_parts(config, url)?;
     let mut older_urls = vec![canonical.clone()];
-    if let Some(found) = matched
+    if let Some(artifact_id) = matched_artifact
         && include_older_notes
     {
+        let Some(storage) = config.snapshot().storage.as_ref() else {
+            return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        };
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-            && let Ok(urls) = index.artifact_urls(&found.artifact_id)
+            && let Ok(urls) = index.artifact_urls(&artifact_id)
         {
             older_urls.extend(urls);
         }
@@ -1246,7 +1289,7 @@ fn note_context(
                 };
                 if config
                     .adapter_match(&candidate, None)
-                    .is_ok_and(|candidate_match| candidate_match.artifact_id == found.artifact_id)
+                    .is_ok_and(|candidate_match| candidate_match.artifact_id == artifact_id)
                 {
                     older_urls.push(candidate);
                 }
@@ -2230,6 +2273,52 @@ mod tests {
             },
             config,
         )
+    }
+
+    #[test]
+    fn run_key_matches_page_note_key() {
+        // Plain URL on the configured store: a URL key, identical to load_note's.
+        let folder = tempfile::tempdir().unwrap();
+        let mut plain = configured_store(folder.path());
+        let url = "https://example.com/a?b=1";
+        let resolved = resolve_record_key(&mut plain, url).unwrap();
+        assert_eq!(resolved.kind, RecordKeyKind::Url);
+        assert_eq!(resolved, note_load(&mut plain, url).key);
+
+        // Adapter URL: an artifact key, identical to load_note's.
+        let adapter_folder = tempfile::tempdir().unwrap();
+        let root = adapter_folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = adapter_folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "gdoc"
+origin = "https://docs.google.com"
+unscoped = "acknowledged"
+match = [{ path = "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}" }]
+modes = { edit = "edit", view = "view", preview = "view" }
+id = "gdoc:{host}/{id}"
+"#,
+        );
+        let mut adapter = loaded(&path);
+        let doc = "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit";
+        let resolved = resolve_record_key(&mut adapter, doc).unwrap();
+        assert_eq!(resolved.kind, RecordKeyKind::Artifact);
+        assert_eq!(resolved, note_load(&mut adapter, doc).key);
+
+        // Errors match note_context's: no storage is not_configured.
+        let empty_folder = tempfile::tempdir().unwrap();
+        let mut empty = ConfigStore::for_test(empty_folder.path().join("config.toml"));
+        assert!(matches!(
+            resolve_record_key(&mut empty, url),
+            Err((ErrorCode::NotConfigured, _))
+        ));
+        assert!(matches!(
+            resolve_record_key(&mut plain, "not a url"),
+            Err((ErrorCode::InvalidRequest, _))
+        ));
     }
 
     #[test]
