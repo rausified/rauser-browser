@@ -730,6 +730,42 @@ contracts the file held, like a config repair, so notes from adapters
 removed by hand may need **Use as artifact note** again; fixing or moving
 the file by hand does the same.
 
+**Stripped parameters an adapter reads (2026-10-27, `brwr-f4s`).** The
+collisions above start when `strip_params` (§7.3) removes a query parameter
+an adapter rule reads, so the host refuses that at the source. A rule reads
+a parameter when it names it as a key of its `query` table (a capture,
+literal, or presence condition) or in its `absent` list (adapter-templates.md
+§5.3); path, title, alias, and ref templates never read the query. An entry
+strips a parameter by the same rule URL normalization uses: ASCII
+case-insensitively, by prefix for a trailing `*`, so `selected*` and
+`SELECTEDISSUE` both strip `selectedIssue`. The host and the settings page
+each implement that rule, and both are tested against the shared cases in
+`protocol/strip-params/vectors.json`. Readers are the current adapter
+document (valid or inert, read as written), `[[adapter_id_history]]`, and
+the adopted contracts, since each of them still names note keys; an adapter
+a save removes counts as well, because it moves to history. A settings save
+(`update_config`, which Capture Site also uses) that adds a conflict, either a
+new or changed entry stripping a parameter some reader reads or a new or
+changed rule reading a parameter an entry strips, is refused as
+`invalid_config` with a message naming the adapter, its origin, the
+parameter, and the entry; the host checks before the update and again
+under the config lock. While `adopted-contracts.json` is unreadable, a hand-removed reader cannot be checked, so any new or changed entry is refused (naming the file) until it is fixed or moved aside, as adapter additions are; removing or reordering entries still saves. A conflict is one reading rule (with its adapter's
+origin, type, and `id` template) and the entry that strips its parameter, so
+a save that keeps an existing one (reordering entries, pausing capture,
+editing the adapter's other fields, or removing or restoring that adapter)
+is not refused, while a new or changed rule reading the same parameter is.
+A config.toml that already has one therefore keeps loading and saving, and no install is locked out.
+Settings derives the warning from the `strip_params` and adapter document
+`get_config` already returns (no protocol change), names each entry with the
+parameters and adapters involved, and offers a **Stop stripping**
+button for the entry, which removes only that entry through the normal
+revision-checked save. A conflict whose only reader is a retired or adopted
+contract is refused on add but is not shown, because those contracts never
+reach the extension; a known gap, accepted to avoid a protocol change, so
+such a config.toml keeps its colliding stripped URLs until the entry is
+removed by hand. Stored URLs do not record which parameters were
+stripped from them.
+
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
 ### 6.3 Profiles
@@ -1036,7 +1072,7 @@ re-enabled.
 strip_params = ["utm_*", "fbclid", "gclid"]
 ```
 
-`strip_params` is the only privacy setting left. URL normalization drops fragments and the listed tracking parameters after the host has authorized the original URL (§5.1 M1 mechanics). Incognito windows are never logged: the manifest keeps `"incognito": "not_allowed"`, with no setting to change it.
+`strip_params` is the only privacy setting left. URL normalization drops fragments and the listed tracking parameters after the host has authorized the original URL (§5.1 M1 mechanics). An entry may not strip a query parameter an adapter rule reads; the host refuses a save that adds one, and settings offers to remove one already in config.toml (§6.2, "Stripped parameters an adapter reads"). Incognito windows are never logged: the manifest keeps `"incognito": "not_allowed"`, with no setting to change it.
 
 Protocol v6 (2026-10-26, §14) removed the rest. `log_incognito` (which could only be `false`), the agent denylist, and `agent_denylist_confirmed` are gone from the wire and from new config writes. A v5 `config.toml` that still has them loads, ignores them, and drops them on its next save. The first harness setup no longer reviews a denylist, and no AI command waits for one to be confirmed.
 

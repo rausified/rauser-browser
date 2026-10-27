@@ -60,14 +60,14 @@ function statusFor(overrides = {}) {
 }
 
 // A site is on while it has an adapter, so capture defaults to on with one.
-function configWith(adapters, captureEnabled) {
+function configWith(adapters, captureEnabled, stripParams = []) {
   return {
     storage: {
       root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: "summaries", knowledge_base_dir: null,
     },
     capture_enabled: captureEnabled ?? adapters.length > 0,
-    strip_params: [],
+    strip_params: stripParams,
     agent: null,
     summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
@@ -75,12 +75,12 @@ function configWith(adapters, captureEnabled) {
 }
 
 function install({
-  adapters = [], captureEnabled, storage = {}, host = {}, worker = {}, workerStatus = {},
+  adapters = [], captureEnabled, stripParams = [], storage = {}, host = {}, worker = {}, workerStatus = {},
 } = {}) {
   const elements = new Map();
   const state = {
     storage: new Map(Object.entries(storage)),
-    config: { ...configWith(adapters, captureEnabled), adapters: { format: 1, artifacts: adapters } },
+    config: { ...configWith(adapters, captureEnabled, stripParams), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
     adoptedState: { issue: null, revision: "missing", warnings: [] },
@@ -102,7 +102,7 @@ function install({
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-origin", "input"],
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
-    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
+    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
@@ -611,6 +611,65 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
   });
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
+});
+
+const JIRA_MODAL = {
+  type: "jira.issue",
+  origin: "https://acme.atlassian.net",
+  match: [
+    { path: "/browse/{key:jira_key}" },
+    { path: "/jira/{*}", query: { selectedIssue: "{key:jira_key}" } },
+  ],
+  id: "jira:{host}/{key}",
+};
+
+test("a strip_params entry an adapter reads is shown with a one-click fix", async () => {
+  install({ adapters: [JIRA_MODAL], stripParams: ["utm_*", "selectedIssue", "fbclid"] });
+  await openSettings();
+  const notices = env.elements.get("strip-conflicts");
+  assert.match(nodeText(notices), /selectedIssue/);
+  assert.match(nodeText(notices), /jira\.issue on https:\/\/acme\.atlassian\.net/);
+  assert.match(statusText(), /tracking-parameter entr/i);
+  const [fix] = notices.querySelectorAll("button");
+  assert.equal(fix.textContent, "Stop stripping selectedIssue");
+  assert.equal(fix.disabled, false);
+
+  const before = env.requests.filter((request) => request.type === "update_config").length;
+  fix.click();
+  await until(() => env.revision > 1 && idle(), "the fix to save");
+  const updates = env.requests.filter((request) => request.type === "update_config");
+  assert.equal(updates.length, before + 1);
+  // A revision-checked save that removes only that entry.
+  assert.equal(lastUpdate().expected_revision, "1");
+  assert.deepEqual(lastUpdate().config.strip_params, ["utm_*", "fbclid"]);
+  assert.deepEqual(lastUpdate().config.adapters, { format: 1, artifacts: [JIRA_MODAL] });
+  assert.equal(lastUpdate().config.capture_enabled, true);
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(notices.querySelectorAll("button").length, 0);
+  assert.doesNotMatch(nodeText(notices), /selectedIssue/);
+  assert.match(statusText(), /no longer strips selectedIssue/);
+});
+
+test("no strip_params notice without a conflict, and the fix waits for repair", async () => {
+  install({ adapters: [JIRA_MODAL], stripParams: ["utm_*", "fbclid"] });
+  await openSettings();
+  assert.equal(env.elements.get("strip-conflicts").children.length, 0);
+
+  install({
+    adapters: [JIRA_MODAL],
+    stripParams: ["selected*"],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: "choose the folder again",
+        agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [] },
+      }),
+    },
+  });
+  await openSettings();
+  const [fix] = env.elements.get("strip-conflicts").querySelectorAll("button");
+  assert.equal(fix.textContent, "Stop stripping selected*");
+  assert.equal(fix.disabled, true);
 });
 
 test("an unsupported adapter document can be removed without blocking unrelated controls", async () => {

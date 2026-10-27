@@ -241,6 +241,23 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).
+  Failing-first host tests (`config::tests::strip_params_readers`,
+  `native::tests::update_config_refuses_stripping_a_parameter_an_adapter_reads`)
+  showed `update` accepting a `strip_params` entry a Jira modal rule reads,
+  including prefix, case, `absent`, and retired-contract variants. A refusal
+  raised inside `update_with_grants` reaches the extension as `internal`
+  ("could not save configuration") unless native dispatch downcasts its
+  error type, so a new under-the-lock refusal needs its own type
+  (`StripParamsRefusal`) as well as the pre-lock check against the store's
+  last read. Settings tests cover the warning and the one-click fix with the
+  fake DOM; the headless smoke run does not cover it, because it never edits
+  config.toml by hand. Codex review then reproduced an existing conflict
+  masking a new rule on the same adapter that read the same parameter,
+  because conflicts were compared by entry, parameter, origin, and type
+  only; they now include the reading rule and `id` template, and the
+  existing-conflict test adds such a rule first. No browser or native
+  dialog is involved.
 - 2026-10-27: Branch `feat/agent-runners-pr3`. The page extractor caps text in encoded bytes, not characters: it truncates until the JSON-encoded, UTF-8 length of the content plus the selection fits 3 MiB (the selection alone 64 KiB). CJK text is three bytes a character, and quotes and control characters grow under JSON escaping (`\u0001` is six bytes), so a character cap can push a `start_run` frame past the host's 4 MiB `MAX_INBOUND_BYTES`. `maximal extraction stays under the host frame cap` builds the full `start_run` JSON from 1,000,000 CJK characters with interleaved `"` and `\u0001` and checks it.
 - 2026-10-27: Salvage review of Cookie cycle 2 reproduced three page-pattern
   gaps with failing-first tests: unreadable pending-removal state on a

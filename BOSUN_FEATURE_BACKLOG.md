@@ -280,6 +280,9 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 
 ### Focused quality follow-up
 
+- [ ] `brwr-srp` **Record which query parameters were stripped beside stored
+  canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
+  artifacts apart in history; changes the log and index formats.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -351,8 +354,8 @@ rather than Known Issues, and they wait behind the plan work above. Line
 numbers are on 1c32114; re-check them against current main. For each one,
 write the regression test described in its bead first, show it fails, then
 fix, and keep each fix to one cycle. If the test does not fail on current
-main, check the item off as "not reproduced" and say why. The last item,
-`brwr-f4s`, is a decided P2 note-identity follow-up rather than a defect fix.
+main, check the item off as "not reproduced" and say why. The decided
+strip_params note-identity follow-up has shipped (see Shipped).
 
 - [ ] `brwr-q7e` **Non-canonical event IDs are captured, then dropped on
   rescan.** The marker's `id_hash` hashes `parse_event_id()`'s lowercase
@@ -504,15 +507,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   close this bead (its queue status still says `blocked`).
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
-  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
-  stripping a query key that an adapter rule matches on (Jira's
-  `selectedIssue`) is accepted and collapses artifact identity. Decided
-  2026-10-27: a save that adds or changes such an entry is refused with a clear
-  message; an existing config with the conflict still loads and saves, shows a
-  warning, and offers a one-click "Stop stripping <param>" fix. Also record
-  which params were stripped. P2; in progress in the Columbus session (builds
-  on #85).
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
@@ -586,6 +580,7 @@ were folded into `brwr-q7e` above rather than given their own item.
 
 - [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, #125).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
 - [x] `brwr-hrr` **Repair a damaged adopted-adapter record from settings (2026-10-27).** Hand-retired adapter contracts freeze their routes' IDs (#122), and `config_result.adopted_state` (additive protocol v6) now names a damaged `adopted-contracts.json`, why it cannot be used, and that notes on unrecognized pages are paused; settings' **Forget recorded adapters** confirms in the page, sends `forget_adopted_contracts` with the shown revision, and the host backs the file up as `adopted-contracts.json.<timestamp>.bak` and records afresh under the config lock. A full or unwritable record is a non-blocking settings warning. Covered by host, wire, settings and headless smoke tests.
+- **Category:** Bug Fix. `brwr-f4s` **Refuse `strip_params` entries an adapter rule reads (2026-10-27).** A settings save that would make `strip_params` remove a query parameter an adapter rule reads (a `query` key or `absent` entry; current, historical, or hand-removed adapters) is refused with a message naming the adapter, origin, parameter and entry, because the pages that rule tells apart would share one stripped address. Existing conflicts still load and save; settings shows them with a one-click **Stop stripping** fix. Matching uses the host's strip rule, pinned by shared vectors in `protocol/strip-params/vectors.json`. Recording which parameters were stripped is split out as `brwr-srp`.
 
 - **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
 
