@@ -103,6 +103,66 @@ export function overlapText(
   return `${firstName} rule ${warning.first_rule + 1} may overlap ${secondName} rule ${warning.second_rule + 1}; ${firstName} wins.`;
 }
 
+/** A strip_params entry that removes query parameters adapter rules read. */
+export type StripConflict = {
+  entry: string;
+  params: string[];
+  adapters: string[];
+};
+
+function asciiLower(value: string): string {
+  return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+/** Whether a strip_params entry removes the query key `key`: ASCII
+ * case-insensitively, by prefix for a trailing `*`, as the host strips.
+ * The host's `matches_param` (host/src/capture.rs) must agree; both are
+ * tested against protocol/strip-params/vectors.json. */
+export function stripsParam(entry: string, key: string): boolean {
+  const pattern = asciiLower(entry);
+  const name = asciiLower(key);
+  return pattern.endsWith("*") ? name.startsWith(pattern.slice(0, -1)) : name === pattern;
+}
+
+/** The query keys an adapter's rules read: each rule's `query` keys and
+ * `absent` list. Nothing else in a template reads the query. */
+function queryKeysRead(adapter: AdapterObject): string[] {
+  if (!Array.isArray(adapter.match)) return [];
+  return adapter.match.flatMap((rule: unknown) => {
+    if (!isObject(rule)) return [];
+    const keys = isObject(rule.query) ? Object.keys(rule.query) : [];
+    const absent = Array.isArray(rule.absent)
+      ? rule.absent.filter((key): key is string => typeof key === "string")
+      : [];
+    return [...keys, ...absent];
+  });
+}
+
+/**
+ * The strip_params entries that remove a parameter some current adapter
+ * rule reads, in strip_params order. Stripping it gives the pages that rule
+ * tells apart one stored address. The host refuses a save that adds such an
+ * entry or rule (brwr-f4s); one already in config.toml is shown here.
+ */
+export function stripParamConflicts(
+  stripParams: readonly string[],
+  document: AdapterDocument,
+): StripConflict[] {
+  const conflicts: StripConflict[] = [];
+  for (const entry of new Set(stripParams)) {
+    const params = new Set<string>();
+    const adapters = new Set<string>();
+    document.artifacts.forEach((adapter, index) => {
+      const read = queryKeysRead(adapter).filter((key) => stripsParam(entry, key));
+      if (!read.length) return;
+      for (const key of read) params.add(key);
+      adapters.add(`${adapterLabel(adapter, index)} on ${adapterOrigin(adapter) ?? "an invalid origin"}`);
+    });
+    if (params.size) conflicts.push({ entry, params: [...params], adapters: [...adapters] });
+  }
+  return conflicts;
+}
+
 /** Fixed non-artifact cases from DESIGN.md §5.1. The preview is advisory;
  * the native host remains the config authority. */
 export function probeUrls(origin: string): string[] {

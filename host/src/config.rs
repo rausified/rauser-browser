@@ -2,6 +2,7 @@
 //! An update is validated in full before the old file is atomically replaced.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -926,6 +927,14 @@ impl ConfigStore {
             return Ok(None);
         }
         validate_update(&current.config, &next)?;
+        // Another host may have recorded contracts since this one last read
+        // the state file.
+        let adopted = read_adopted_contracts(&adopted_contracts_path(&parent));
+        validate_strip_params_readers(
+            &current.config,
+            &next,
+            &recorded_readers(&current.retired_adapter_contracts, &adopted),
+        )?;
         let adapters_unchanged = current.config.adapters == next.adapters;
         let empty_adapter_document = AdapterDocument {
             format: 1,
@@ -1774,6 +1783,188 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
         validate_storage(storage)?;
     }
     Ok(())
+}
+
+/// A save refused because a `strip_params` entry would remove a query
+/// parameter an adapter rule reads. Native dispatch reports it as
+/// `invalid_config` with this message.
+#[derive(Debug)]
+pub(crate) struct StripParamsRefusal(pub String);
+
+impl fmt::Display for StripParamsRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StripParamsRefusal {}
+
+/// A `strip_params` entry that removes a query parameter an adapter rule
+/// reads: a key in a rule's `query` table or `absent` list
+/// (adapter-templates.md §5.3). Path, title, alias, and ref templates never
+/// read the query. Stripped canonical URLs of the pages that rule tells
+/// apart are equal, so recorded URLs and note candidates stop naming one
+/// artifact (DESIGN.md §6.2).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct StripParamConflict {
+    pub entry: String,
+    pub param: String,
+    pub origin: String,
+    pub artifact_type: String,
+}
+
+/// The query keys an adapter's rules read. Read from the raw document, so
+/// an inert or individually invalid adapter still counts.
+fn query_keys_read(adapter: &serde_json::Value) -> Vec<&str> {
+    let mut keys = Vec::new();
+    for rule in adapter
+        .get("match")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(query) = rule.get("query").and_then(serde_json::Value::as_object) {
+            keys.extend(query.keys().map(String::as_str));
+        }
+        keys.extend(
+            rule.get("absent")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str),
+        );
+    }
+    keys
+}
+
+/// Every conflict between `strip_params` and `readers`, keyed with whether
+/// each reader is current (`false`) or recorded only (`true`). A reader
+/// that is both counts as current.
+fn conflicts_with<'a>(
+    strip_params: &[String],
+    readers: impl IntoIterator<Item = (&'a serde_json::Value, bool)>,
+) -> BTreeMap<StripParamConflict, bool> {
+    let mut found = BTreeMap::new();
+    for (adapter, recorded) in readers {
+        let origin = adapter.get("origin").and_then(serde_json::Value::as_str);
+        let artifact_type = adapter.get("type").and_then(serde_json::Value::as_str);
+        for param in query_keys_read(adapter) {
+            for entry in strip_params {
+                if crate::capture::matches_param(param, entry) {
+                    let conflict = StripParamConflict {
+                        entry: entry.clone(),
+                        param: param.to_owned(),
+                        origin: origin.unwrap_or("an unknown origin").to_owned(),
+                        artifact_type: artifact_type.unwrap_or("unnamed").to_owned(),
+                    };
+                    let slot = found.entry(conflict).or_insert(recorded);
+                    *slot &= recorded;
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The conflicts between `strip_params` and the current adapter document,
+/// as settings shows them (it sees no recorded contracts).
+#[cfg(test)]
+pub(crate) fn strip_param_conflicts(config: &ConfigSnapshot) -> Vec<StripParamConflict> {
+    conflicts_with(
+        &config.strip_params,
+        config
+            .adapters
+            .artifacts
+            .iter()
+            .map(|adapter| (adapter, false)),
+    )
+    .into_keys()
+    .collect()
+}
+
+/// Refuse a save that adds a `strip_params` conflict: a new or changed
+/// entry that removes a parameter some adapter rule reads, or a new or
+/// changed rule reading a parameter an entry removes. `recorded` holds the
+/// contracts that still name note keys without being current
+/// (`[[adapter_id_history]]` and hand-removed adopted contracts); they read
+/// too. A conflict the current config already has is left alone, so an
+/// existing config keeps loading and saving; settings offers to remove the
+/// entry instead (brwr-f4s).
+pub(crate) fn validate_strip_params_readers(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+    recorded: &[serde_json::Value],
+) -> Result<()> {
+    if current.strip_params == next.strip_params && current.adapters == next.adapters {
+        return Ok(());
+    }
+    let recorded = || recorded.iter().map(|contract| (contract, true));
+    let before = conflicts_with(
+        &current.strip_params,
+        current
+            .adapters
+            .artifacts
+            .iter()
+            .map(|adapter| (adapter, false))
+            .chain(recorded()),
+    );
+    // An adapter this save removes moves to [[adapter_id_history]], so it
+    // still reads.
+    let after = conflicts_with(
+        &next.strip_params,
+        next.adapters
+            .artifacts
+            .iter()
+            .map(|adapter| (adapter, false))
+            .chain(
+                current
+                    .adapters
+                    .artifacts
+                    .iter()
+                    .map(|adapter| (adapter, true)),
+            )
+            .chain(recorded()),
+    );
+    let Some((conflict, recorded)) = after
+        .into_iter()
+        .find(|(conflict, _)| !before.contains_key(conflict))
+    else {
+        return Ok(());
+    };
+    let adapter = if recorded {
+        "removed adapter"
+    } else {
+        "adapter"
+    };
+    Err(StripParamsRefusal(format!(
+        "{adapter} {:?} on {} reads the query parameter {:?}, so strip_params cannot remove it with {:?}: pages the adapter tells apart would share one stripped address. Remove {:?} from strip_params or change the adapter.",
+        conflict.artifact_type, conflict.origin, conflict.param, conflict.entry, conflict.entry,
+    ))
+    .into())
+}
+
+impl ConfigStore {
+    /// `validate_strip_params_readers` against this store's last read.
+    pub(crate) fn validate_strip_params(&self, next: &ConfigSnapshot) -> Result<()> {
+        validate_strip_params_readers(
+            &self.config,
+            next,
+            &recorded_readers(&self.retired_adapter_contracts, &self.adopted),
+        )
+    }
+}
+
+/// The recorded contracts `validate_strip_params_readers` counts. An
+/// unreadable adopted-contract state adds none.
+fn recorded_readers(
+    retired: &[serde_json::Value],
+    adopted: &AdoptedContracts,
+) -> Vec<serde_json::Value> {
+    let mut readers = retired.to_vec();
+    if let AdoptedContracts::Read { contracts, .. } = adopted {
+        readers.extend(contracts.iter().cloned());
+    }
+    readers
 }
 
 #[cfg(test)]
@@ -5159,6 +5350,244 @@ mod tests {
         assert!(!stale.exists());
         for path in [&fresh, &other, &config] {
             assert!(path.exists(), "{} was removed", path.display());
+        }
+    }
+
+    /// `strip_params` entries that remove a query parameter an adapter rule
+    /// reads (brwr-f4s). Stripping it would give distinct artifacts, such as
+    /// a Jira board and every issue modal on it, one canonical URL.
+    mod strip_params_readers {
+        use super::*;
+
+        const JIRA: &str = "[[artifacts]]\ntype = \"jira.issue\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/browse/{key:jira_key}\" }, { path = \"/jira/{*}\", query = { selectedIssue = \"{key:jira_key}\" } }]\nid = \"jira:{host}/{key}\"\n";
+        const SEARCH: &str = "[[artifacts]]\ntype = \"work.list\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/lists/{id:int}\", absent = [\"q\"] }]\nid = \"list:{host}/{id}\"\n";
+
+        fn jira_adapter() -> serde_json::Value {
+            json!({
+                "type": "jira.issue",
+                "origin": "https://acme.atlassian.net",
+                "match": [
+                    { "path": "/browse/{key:jira_key}" },
+                    { "path": "/jira/{*}", "query": { "selectedIssue": "{key:jira_key}" } },
+                ],
+                "id": "jira:{host}/{key}",
+            })
+        }
+
+        /// config.toml with `keys` at the top level and `adapters` after it.
+        fn written(folder: &Path, keys: &str, adapters: &[&str]) -> PathBuf {
+            let root = folder.join("notes");
+            fs::create_dir_all(&root).unwrap();
+            let path = folder.join("config.toml");
+            fixtures::write(
+                &path,
+                &root,
+                "",
+                keys,
+                &format!("[adapters]\nformat = 1\n\n{}", adapters.join("\n")),
+            );
+            path
+        }
+
+        fn refused(store: &mut ConfigStore, next: ConfigSnapshot) -> String {
+            let path = store.path.clone();
+            let before = fs::read(&path).unwrap();
+            let revision = store.revision().to_owned();
+            let error = match store.update(next, &revision) {
+                Err(error) => error,
+                Ok(result) => panic!("a conflicting save was accepted: {result:?}"),
+            };
+            assert!(
+                error.downcast_ref::<StripParamsRefusal>().is_some(),
+                "{error:#}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), before, "a refusal wrote config");
+            error.to_string()
+        }
+
+        fn with_strip(store: &ConfigStore, entry: &str) -> ConfigSnapshot {
+            let mut next = store.snapshot().clone();
+            next.strip_params.push(entry.into());
+            next
+        }
+
+        #[test]
+        fn adding_an_entry_an_adapter_reads_is_refused() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA]);
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none(), "{:?}", store.config_issue());
+            let next = with_strip(&store, "selectedIssue");
+            let message = refused(&mut store, next);
+            assert!(message.contains("\"selectedIssue\""), "{message}");
+            assert!(message.contains("jira.issue"), "{message}");
+            assert!(message.contains("https://acme.atlassian.net"), "{message}");
+        }
+
+        #[test]
+        fn prefix_and_case_variants_of_a_read_parameter_are_refused() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA, SEARCH]);
+            let mut store = loaded(&path);
+            // Stripping compares keys ASCII case-insensitively, by prefix
+            // for a trailing *.
+            for entry in ["selected*", "SELECTEDISSUE", "selectedissue", "q", "Q*"] {
+                let next = with_strip(&store, entry);
+                let message = refused(&mut store, next);
+                assert!(message.contains(&format!("{entry:?}")), "{message}");
+            }
+            // An absent key is read too: stripping it would merge the list
+            // with its filtered views.
+            let next = with_strip(&store, "q");
+            assert!(refused(&mut store, next).contains("work.list"));
+            // Entries no rule reads still save.
+            for entry in ["campaign", "selectedIssues", "sel", "q_*"] {
+                let next = with_strip(&store, entry);
+                let revision = store.revision().to_owned();
+                store.update(next, &revision).unwrap().unwrap();
+            }
+        }
+
+        #[test]
+        fn adding_an_adapter_that_reads_a_stripped_parameter_is_refused() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"selected*\"]",
+                &[],
+            );
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none(), "{:?}", store.config_issue());
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(jira_adapter());
+            let message = refused(&mut store, next);
+            assert!(message.contains("\"selectedIssue\""), "{message}");
+            assert!(message.contains("\"selected*\""), "{message}");
+            assert!(message.contains("jira.issue"), "{message}");
+
+            // Adding a reader of that parameter to an existing adapter is
+            // refused the same way.
+            let path = written(
+                folder.path(),
+                "strip_params = [\"selectedIssue\"]",
+                &[
+                    "[[artifacts]]\ntype = \"jira.issue\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/browse/{key:jira_key}\" }]\nid = \"jira:{host}/{key}\"\n",
+                ],
+            );
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts[0] = jira_adapter();
+            refused(&mut store, next);
+        }
+
+        #[test]
+        fn an_existing_conflict_still_loads_saves_and_is_reported() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "capture_enabled = true\nstrip_params = [\"utm_*\", \"selectedIssue\", \"fbclid\"]",
+                &[JIRA],
+            );
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none(), "{:?}", store.config_issue());
+            assert!(
+                store.adapter_issue().is_none(),
+                "{:?}",
+                store.adapter_issue()
+            );
+            assert_eq!(store.capture_origins(), vec!["https://acme.atlassian.net"]);
+            let conflicts = strip_param_conflicts(store.snapshot());
+            assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+            assert_eq!(conflicts[0].entry, "selectedIssue");
+            assert_eq!(conflicts[0].param, "selectedIssue");
+            assert_eq!(conflicts[0].artifact_type, "jira.issue");
+
+            // Unrelated saves keep working: the capture switch, a new
+            // unrelated entry, reordering, and an edit to the conflicting
+            // adapter that reads nothing new.
+            let mut next = store.snapshot().clone();
+            next.capture_enabled = false;
+            next.strip_params.push("campaign".into());
+            next.strip_params.swap(0, 1);
+            next.adapters.artifacts[0]["title"] = json!("[{key:jira_key}] {title} - Jira");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let store = loaded(&path);
+            assert_eq!(
+                store.snapshot().strip_params,
+                ["selectedIssue", "utm_*", "fbclid", "campaign"]
+            );
+            assert_eq!(strip_param_conflicts(store.snapshot()).len(), 1);
+        }
+
+        #[test]
+        fn stopping_stripping_removes_only_that_entry_and_clears_the_conflict() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(
+                folder.path(),
+                "strip_params = [\"utm_*\", \"selectedIssue\", \"fbclid\"]",
+                &[JIRA],
+            );
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.strip_params.retain(|entry| entry != "selectedIssue");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let store = loaded(&path);
+            assert_eq!(store.snapshot().strip_params, ["utm_*", "fbclid"]);
+            assert_eq!(store.snapshot().adapters.artifacts.len(), 1);
+            assert!(strip_param_conflicts(store.snapshot()).is_empty());
+        }
+
+        #[test]
+        fn retired_contracts_count_as_readers() {
+            // Removed through settings: kept in [[adapter_id_history]].
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA]);
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.clear();
+            next.capture_enabled = false;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(store.retired_adapter_contracts.len(), 1);
+            let mut store = loaded(&path);
+            let next = with_strip(&store, "selectedIssue");
+            let message = refused(&mut store, next);
+            assert!(message.contains("removed adapter"), "{message}");
+            assert!(message.contains("jira.issue"), "{message}");
+
+            // Removed from config.toml by hand: kept in the adopted state.
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "", &[JIRA, SEARCH]);
+            let mut store = ConfigStore::for_test(path.clone());
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            written(folder.path(), "", &[SEARCH]);
+            let mut store = loaded(&path);
+            assert!(store.retired_adapter_contracts.is_empty());
+            let next = with_strip(&store, "selected*");
+            let message = refused(&mut store, next);
+            assert!(message.contains("removed adapter"), "{message}");
+        }
+
+        #[test]
+        fn removing_a_conflicting_adapter_is_not_a_new_conflict() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = written(folder.path(), "strip_params = [\"selectedIssue\"]", &[JIRA]);
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.clear();
+            next.capture_enabled = false;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            // Restoring the same contract from history reads nothing new.
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(jira_adapter());
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
         }
     }
 

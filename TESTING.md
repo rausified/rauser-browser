@@ -148,6 +148,18 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).
+  Failing-first host tests (`config::tests::strip_params_readers`,
+  `native::tests::update_config_refuses_stripping_a_parameter_an_adapter_reads`)
+  showed `update` accepting a `strip_params` entry a Jira modal rule reads,
+  including prefix, case, `absent`, and retired-contract variants. A refusal
+  raised inside `update_with_grants` reaches the extension as `internal`
+  ("could not save configuration") unless native dispatch downcasts its
+  error type, so a new under-the-lock refusal needs its own type
+  (`StripParamsRefusal`) as well as the pre-lock check against the store's
+  last read. Settings tests cover the warning and the one-click fix with the
+  fake DOM; the headless smoke run does not cover it, because it never edits
+  config.toml by hand. No browser or native dialog is involved.
 - 2026-10-27: Branch `feat/brauser-home-folder`. The one-time move of an
   older folder layout to the fixed home layout is tested natively against a
   checked-in copy of a real pre-home install (`host/tests/fixtures/pre-home-layout`:

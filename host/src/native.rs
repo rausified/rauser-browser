@@ -307,6 +307,7 @@ fn dispatch(
                 );
             }
             if let Err(validation_error) = validate_config_update(config.snapshot(), &value.config)
+                .and_then(|()| config.validate_strip_params(&value.config))
             {
                 return error(
                     &value.request_id,
@@ -361,9 +362,15 @@ fn dispatch(
                 ),
                 // Saving the same home folder moves its older folders first;
                 // a refusal says which folder is in the way.
-                Err(save_error) => match save_error.downcast_ref::<crate::layout::Refusal>() {
-                    Some(refusal) => error(&value.request_id, ErrorCode::InvalidConfig, &refusal.0),
-                    None => error(
+                Err(save_error) => match (
+                    save_error.downcast_ref::<crate::layout::Refusal>(),
+                    save_error.downcast_ref::<config::StripParamsRefusal>(),
+                ) {
+                    (Some(crate::layout::Refusal(message)), _)
+                    | (_, Some(config::StripParamsRefusal(message))) => {
+                        error(&value.request_id, ErrorCode::InvalidConfig, message)
+                    }
+                    _ => error(
                         &value.request_id,
                         ErrorCode::Internal,
                         "could not save configuration",
@@ -2362,6 +2369,57 @@ mod tests {
             other => panic!("expected a conflict, got {other:?}"),
         }
         assert_eq!(config.revision(), revision);
+    }
+
+    /// brwr-f4s: a strip_params entry an adapter rule reads is refused as
+    /// invalid_config naming the parameter and the adapter, and the config
+    /// is unchanged.
+    #[test]
+    fn update_config_refuses_stripping_a_parameter_an_adapter_reads() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let mut consent = ConsentAuthority::new();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext::new(&env);
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.push(serde_json::json!({
+            "type": "jira.issue",
+            "origin": "https://acme.atlassian.net",
+            "match": [{"path": "/jira/{*}", "query": {"selectedIssue": "{key:jira_key}"}}],
+            "id": "jira:{host}/{key}",
+        }));
+        let revision = config.revision().to_owned();
+        assert!(matches!(
+            dispatch(
+                update_request(&revision, next),
+                &mut config,
+                &mut consent,
+                &context
+            ),
+            Response::ConfigUpdated(_)
+        ));
+        let revision = config.revision().to_owned();
+        let mut next = config.snapshot().clone();
+        next.strip_params.push("selected*".into());
+        match dispatch(
+            update_request(&revision, next),
+            &mut config,
+            &mut consent,
+            &context,
+        ) {
+            Response::Error(value) => {
+                assert_eq!(value.code, ErrorCode::InvalidConfig);
+                assert!(
+                    value.message.contains("\"selectedIssue\""),
+                    "{}",
+                    value.message
+                );
+                assert!(value.message.contains("jira.issue"), "{}", value.message);
+            }
+            other => panic!("expected invalid_config, got {other:?}"),
+        }
+        assert_eq!(config.revision(), revision);
+        assert!(config.snapshot().strip_params.is_empty());
     }
 
     fn configured_store(root: &std::path::Path) -> ConfigStore {
