@@ -1190,9 +1190,6 @@ fn note_context(
     // requires must still be visible here, or this path and capture would
     // disagree on whether the page is recognized.
     let matched = config.adapter_match(url, None).ok();
-    // Whether the key came from the legacy history fallback below, for an
-    // origin config.toml no longer records any adapter contract for.
-    let mut recovered_from_history = false;
     let key = match matched.as_ref() {
         Some(found) => RecordKey {
             kind: RecordKeyKind::Artifact,
@@ -1249,16 +1246,13 @@ fn note_context(
                         .map_err(|_| unavailable())?,
                 );
                 match candidates.len() {
-                    1 => {
-                        recovered_from_history = true;
-                        RecordKey {
-                            kind: RecordKeyKind::Artifact,
-                            value: candidates
-                                .into_iter()
-                                .next()
-                                .expect("checked len == 1 above"),
-                        }
-                    }
+                    1 => RecordKey {
+                        kind: RecordKeyKind::Artifact,
+                        value: candidates
+                            .into_iter()
+                            .next()
+                            .expect("checked len == 1 above"),
+                    },
                     _ => crate::vault::url_record_key(&canonical)
                         .expect("canonical HTTP URL has a key"),
                 }
@@ -1274,18 +1268,17 @@ fn note_context(
     // `recorded` marks evidence already tied to this artifact (the page's
     // own URL, its indexed routes, or its note's creation URL). Only that
     // evidence may stand in for a contract on an origin config.toml no
-    // longer covers; an arbitrary URL note found by the scan never can.
+    // longer covers; an arbitrary URL note found by the scan never can. A
+    // current match is final, as it is for the page's own key: a retired
+    // shape cannot also claim a URL the current policy names differently.
     let names_artifact = |candidate: &str, recorded: bool| {
-        if config
-            .adapter_match(candidate, None)
-            .is_ok_and(|found| found.artifact_id == key.value)
-        {
-            return true;
+        if let Ok(found) = config.adapter_match(candidate, None) {
+            return found.artifact_id == key.value;
         }
         match config.note_key_rule(candidate) {
             NoteKeyRule::Artifact(artifact_id) => artifact_id == key.value,
             NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized => false,
-            NoteKeyRule::Uncovered => recorded && recovered_from_history,
+            NoteKeyRule::Uncovered => recorded,
         }
     };
     let mut older_urls = Vec::new();
@@ -2812,6 +2805,118 @@ id = "jira:{host}/{key}"
         let browse_loaded = note_load(&mut config, browse);
         assert_eq!(browse_loaded.key, modal_loaded.key);
         assert_eq!(browse_loaded.body, "same issue");
+    }
+
+    fn older_note_urls(config: &mut ConfigStore, url: &str) -> Vec<String> {
+        note_load(config, url)
+            .older_notes
+            .into_iter()
+            .map(|note| note.canonical_url)
+            .collect()
+    }
+
+    #[test]
+    fn a_url_the_current_policy_names_another_artifact_is_not_an_older_note() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        // A recognition edit that kept the type and ID template but rebound
+        // the captures leaves the old shape in `[[adapter_id_history]]`.
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}/edit" }, { path = "/items/{id:int}/view" }]
+id = "work:{host}/{id}"
+
+[[adapter_id_history]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{*}", query = { item = "{id:int}" } }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        assert_eq!(config.adapter_issue(), None);
+        let shared = "https://work.example/items/7/edit?item=8";
+        assert_eq!(
+            config.adapter_match(shared, None).unwrap().artifact_id,
+            "work:work.example/7"
+        );
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        note::save_note(&vault, shared, "Item 7 edit", "Item 7 text", "missing").unwrap();
+        let revision = note::load_note(&vault, shared).unwrap().revision;
+
+        assert_eq!(
+            older_note_urls(&mut config, "https://work.example/items/7/view"),
+            vec![shared.to_owned()]
+        );
+        let other = "https://work.example/items/8/view";
+        assert!(older_note_urls(&mut config, other).is_empty());
+        assert!(matches!(
+            use_artifact_note(
+                brauser_protocol::UseArtifactNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "migrate-other".into(),
+                    url: other.into(),
+                    source_url: shared.into(),
+                    expected_revision: revision,
+                },
+                &mut config,
+            ),
+            Response::Error(reply) if reply.code == ErrorCode::Unauthorized
+        ));
+        assert_eq!(note::load_note(&vault, shared).unwrap().body, "Item 7 text");
+    }
+
+    #[test]
+    fn recorded_routes_on_an_origin_without_contracts_stay_older_notes() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            "https://work.example",
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        // The artifact note was created on an origin whose contract a config
+        // repair has since discarded, beside an older URL note there.
+        let old_origin = "http://work.example/items/7";
+        let key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        note::save_keyed_note(&vault, old_origin, &key, "Item 7", "Shared", "missing").unwrap();
+        note::save_note(&vault, old_origin, "Before adapters", "Separate", "missing").unwrap();
+        assert_eq!(
+            config.note_key_rule(old_origin),
+            crate::config::NoteKeyRule::Uncovered
+        );
+
+        let current = note_load(&mut config, "https://work.example/items/7");
+        assert_eq!(current.key, key);
+        assert_eq!(current.body, "Shared");
+        assert_eq!(
+            current
+                .older_notes
+                .iter()
+                .map(|note| note.canonical_url.as_str())
+                .collect::<Vec<_>>(),
+            vec![old_origin]
+        );
     }
 
     /// `strip_params` can remove the query value that is a Jira board modal's

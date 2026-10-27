@@ -526,7 +526,11 @@ matches is not that artifact, even when its canonical form equals one an
 artifact recorded after `strip_params` removed the identifying query value (a
 Jira board and the issue modal opened on it). The older-note list, which also
 authorizes viewing and **Use as artifact note**, keeps only candidate URLs
-that the current policy or these contracts map to the same artifact.
+that map to the same artifact: by the current policy when it matches (a
+current match naming another artifact is final), otherwise by these
+contracts. On an origin no contract covers, only recorded evidence for the
+artifact (its indexed routes and its note's creation URL) qualifies, never an
+arbitrary URL note.
 
 **Policy removal acceptance (2026-10-27).** When config.toml no longer
 records any contract for an origin (for example, a repair replaced the file),
