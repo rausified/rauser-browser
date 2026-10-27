@@ -21,7 +21,8 @@ them ahead of the plan.
 **Resequenced by John, 2026-10-16 (architecture review).** Two product
 decisions are recorded in DESIGN.md §14. First, users never see adapters:
 **Capture Site** in the side panel learns a site's pattern and starts
-capturing, with a plain-language confirmation. That moves Create adapter
+capturing, with a plain-language review (a native confirmation until open
+access, 2026-10-26). That moves Create adapter
 (M1.5b step 7.6), the re-keying it needs, and later agent refinement (step
 7.7) onto the critical path ahead of the rest of M2. Second, Windows support
 is back in scope, starting with Windows CI. The order below already reflects
@@ -32,8 +33,8 @@ findings as P3 unless they describe a concrete user-facing failure.
 **Beads is the machine queue (2026-10-16).** `.beads/issues.jsonl` holds one
 bead per open item below, structured like Privateer's queue. Known Issues
 are P1 and plan work is P2. Cookie's proposals are P3, so none of them outranks
-plan work. Dependencies are only the real ones (for example 8.2 waits for
-6.5-6.7 and the harness-auth decision, then 8.3, 8.4, 8.5 in turn), so
+plan work. Dependencies are only the real ones (for example open access PRs
+2, 3 and 4 follow each other in turn), so
 `bd ready` shows every Known Issue at once. **Take
 them in the order listed here, per the rule above.** **[human]** items carry
 the `human` label (`bd human list`) and depend on the deferred `brwr-hpo`
@@ -242,17 +243,21 @@ and the protocol v6 removals) is done; see Shipped.
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-1hj` **Capture Site (step 7.6 moved forward).** A side-panel
-  button that learns the site's artifact pattern with the structural
-  drafter (no agent) and every step 7.6 safety rule. The native confirmation
-  stays, in plain language: what Brauser will remember here, with real example
-  pages it matched, and what it won't (search, dashboards, login, sharing).
-  The JSON editor becomes an advanced view nobody has to open. Tier 1 is not
-  required. Split into ordered sub-items here if it's too big for one cycle.
-  **2026-10-26:** with standing HTTP(S) access (open access PR 1) the
-  ungranted-tab flow and the grant rollback on cancel no longer apply; the
-  button works on any tab, and the native confirmation is gone, so the
-  plain-language review lives in settings.
+- [ ] `brwr-1hj` **Capture Site (step 7.6 moved forward; rescoped 2026-10-26).**
+  One side-panel "Capture Site" button. Known starter sites (Jira Cloud,
+  SharePoint/OneDrive) produce the adapter from the URL alone; GitHub prompts
+  inline for the work-organization list; unknown sites use the host's
+  structural drafter (no agent) with every safety rule in DESIGN §5.1 and
+  §12.2 step 7.6. The save goes through `update_config` under protocol v6: no
+  Chrome grants, no native confirmation, no ungranted-tab flow, and no
+  pending-grant expiry or rollback. Before the save, a plain-language review
+  shows what Brauser will remember here, with real example pages it matched,
+  and what it won't (search, dashboards, login, sharing). The JSON editor
+  stays an advanced view nobody has to open. Tier 1 is not required. Split
+  into ordered sub-items here if it's too big for one cycle. **Ready once open
+  access PR 1 merges.** It absorbs the choose-and-scope part of
+  the old first-tool setup proposal; keep GitHub PR and issue owner scopes
+  separate rather than inferring one shared value.
 - [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
   hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
   existing activity, notes, and index rows through explicit append-only
@@ -262,44 +267,39 @@ and the protocol v6 removals) is done; see Shipped.
   tests, and clippy, plus the extension checks. Fix code and tests that have
   assumed macOS/Unix since 2026-10-15, and keep the existing Windows code
   paths. Interactive Windows checks are separate **[human]** work.
+  **2026-10-27:** open access PR 1 carries the CI matrix from #63/#64
+  (`macos-15` and `windows-latest` build jobs plus the required "Build and
+  check" gate job), and Windows clippy is clean locally. What remains: get the
+  `windows-latest` job green on GitHub, fix any Windows-only test failures
+  (Windows `cargo test` and the extension tests have not run yet), and gate
+  any test that cannot run on Windows with a stated reason.
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
   Windows CI, record an isolated real-Chrome run with source and OS/browser
-  versions, native registration, picker/consent and first grants, background
-  capture, Pause/revocation, notes, Recent/worklog and later Capture Site.
+  versions, native registration, the folder picker, standing HTTP(S) access,
+  background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
-- [ ] `brwr-9yc` **[human] Decide how a Chrome-spawned host authenticates the
-  AI harness** (DESIGN §14 open M2 question; it affects John's Bedrock setup).
-  Cookie may write an options proposal in §14; John decides. Blocks 8.2.
-- [ ] `brwr-6wz` **M2 step 8.2 — Host invocation, now the Brauser service
-  runners.** Rewritten 2026-10-26: agent runs move to the per-user Brauser
-  service with full-access Codex or Claude Code runs (`docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §5-§6), built
-  as open access PRs 2-3 (`brwr-sv2`, `brwr-sr3`). The allowlisted-environment,
-  templated-argv, and §7.1 canary design it described is replaced.
-- [ ] `brwr-ooy` **Bound AI harness execution on Windows.** Before Windows M2
-  acceptance, prove the same cleared environment, private work directory,
-  bounded output, timeout/cancellation and process-tree containment with fake
-  executables in Windows CI. A Windows build alone is not harness support.
-- [ ] `brwr-jfe` **Concurrent native message loop (before 8.3).** Refactor
-  `serve_with_context` into a stdin reader thread, a worker for long requests,
-  and one serialized writer, reusing `run_bounded`'s thread/mpsc pattern. No
-  protocol change. A short request must be answered while a long one runs,
-  and stdin EOF must tear both down.
-- [ ] `brwr-0cj` **M2 step 8.3 — Streaming protocol.** A reader that stays responsive
-  while a harness runs; chunk, `rejected`, error, `cancel`, and
-  `summary_result` messages correlated by `request_id` under the 900 KiB cap;
-  stdin EOF kills the harness. Takes the next protocol version after v5.
-- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).** After
-  8.2, the configured harness can refine the structural draft under the same
-  isolation, with the same per-rule checks and plain-language confirmation.
+- [ ] `brwr-6wz` **M2 step 8.2 — Host invocation, now open access PRs 2-3.**
+  A tracking pointer: agent runs move to the per-user Brauser service (spec
+  §5, `brwr-sv2`) with full-access Codex or Claude Code runners (spec §6,
+  `brwr-sr3`), per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`. The
+  allowlisted-environment, templated-argv, harness-token, and §7.1 canary
+  design it described is superseded. Close it when `brwr-sv2` and `brwr-sr3`
+  close; don't build it separately.
+- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
+  Structural first, agent second: for unknown sites, "Improve with AI"
+  refines the structural draft by launching an agent job through the Brauser
+  service (open access PR 2 service `brwr-sv2` and PR 3 runners `brwr-sr3`;
+  spec above), not the old M2 step 8.2 harness path. Agent drafts are
+  untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
-- [ ] `brwr-0ij` **M2 step 8.4 — Content extraction.** Rewritten 2026-10-26:
-  pinned Readability extraction, the Summarize & log button, and the
-  context-menu item, per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §5.3 and §6 (open access PR 3, `brwr-sr3`).
-  With standing access there is no `activeTab` trigger, so the real-Chrome
-  `activeTab` checks in `brwr-rva` no longer gate it.
-- [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel.** Rewritten
-  2026-10-26: the summary file, log event, and panel integration follow
-  `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` §7 (open access PR 4, `brwr-so4`); there is no denylist check.
+- [ ] `brwr-0ij` **M2 step 8.4 — Content extraction, now open access PR 3.** A
+  tracking pointer: pinned Readability extraction, the Summarize & log button,
+  and the context-menu item are built in `brwr-sr3` (spec §5.3 and §6). With
+  standing access there is no `activeTab` trigger. Close it with `brwr-sr3`.
+- [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel, now open access PR
+  4.** A tracking pointer: the summary file, log event, and index/panel
+  integration are built in `brwr-so4` (spec §7); there is no denylist check.
+  Close it with `brwr-so4`.
 
 ### Gated plan work (do not start yet)
 
@@ -309,6 +309,11 @@ and the protocol v6 removals) is done; see Shipped.
   Capture Site (`brwr-1hj`, `brwr-f45`), along with the re-keying part of
   7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
   a few weeks; John will lift the gate here when it's time.
+- [ ] `brwr-ooy` **Windows equivalent of the Brauser service (deferred).** The
+  cleared-environment harness lockdown it described is superseded by open
+  access. Agent runs live in the macOS-only Brauser service, which compiles
+  out elsewhere; the spec defers a Windows service. When Windows agent support
+  is scheduled, John approves a Windows design against the spec first.
 - **M3 — Related** (FTS5 in `brauser reindex`, related pages, read later),
   **M4 — Omnibar** (built-in commands, free text, custom commands), and
   **M5 — Release** (installer, store listing, signing and provenance, docs)
@@ -376,13 +381,6 @@ and the protocol v6 removals) is done; see Shipped.
   and measured activity into the append-only log and derived worklog; never
   infer a session from browsing or send it to a service. This should build on
   the artifact card and worklog after M1.5a rather than delay those foundations.
-- [ ] `brwr-ac1` **Make first-tool setup one coherent transaction.** Let a new user choose
-  Jira, SharePoint/OneDrive, or GitHub first, enter the exact tenant and any
-  required scope, then request Chrome access and native-confirm the site plus
-  starter together. Roll back a newly acquired grant on cancel and retain it
-  when notes or another site purpose already needs it. This removes today's
-  confusing intermediate state where a site is enabled but records nothing
-  until a second adapter save and confirmation.
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The immediate repair
   path removes the entire invalid document. Add copy-out and a whole-document,
   format-1 replacement workspace so a user can salvage valid rules without
@@ -425,6 +423,19 @@ and the protocol v6 removals) is done; see Shipped.
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-10-27 queue retarget for open access** (spec
+  `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`). Closed:
+  `brwr-9yc` (decided: `agent.env` in the Brauser service, spec §5.1);
+  `brwr-jfe` and `brwr-0cj` (superseded by polling `get_run`, spec §5.3);
+  `brwr-rva` (no `activeTab` trigger or grant expiry with standing access);
+  `brwr-ac1` (no grant to request or roll back and no native confirmation; its
+  choose-and-scope part folds into Capture Site). `brwr-6wz`, `brwr-0ij`, and
+  `brwr-deo` are now pointers to open access PRs 2-4; `brwr-f45` depends on
+  `brwr-sv2`/`brwr-sr3` instead of `brwr-6wz`; `brwr-ooy` is retargeted and
+  deferred; `brwr-1hj` is reopened with the rescoped Capture Site. Windows
+  support stays in scope (DESIGN §14, 2026-10-16), so `brwr-bzx` and
+  `brwr-i1g` remain open.
 
 - `brwr-ee5` is fixed with a reproduced missing-append regression. The cache
   remains a provisional whole-history snapshot; `brwr-b2e` now records that

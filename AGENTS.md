@@ -106,8 +106,10 @@ itself, from `alarms` and at browser startup, so capture does not depend on
 opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the
 worker to sync now. The rest of the agent integration, search index, signed
 installers, Chrome Web Store listing, and public release do not exist yet. M1
-still needs interactive Chrome checks on macOS, the only supported platform
-(DESIGN.md §13; Windows support was dropped, §14).
+still needs interactive Chrome checks on macOS, the primary platform. Windows
+support was reinstated on 2026-10-16 (DESIGN.md §13, §14): Windows code must
+keep compiling and passing CI, and its interactive checks are separate
+[human] work.
 
 DESIGN.md's principle 9 (standalone product) governs this repo: no file, build
 step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or Astrolabe
@@ -127,7 +129,7 @@ changes a contract.
 - `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading.
 - Product naming (app name, native host ID, storage key, marker, and temp-file prefixes) lives in `extension/brand.ts` (also used by the build and dev scripts) and `host/src/brand.rs`. Page and manifest text use `{{APP_NAME}}`/`{{FULL_NAME}}`, filled in by `extension/build.mjs`. Crate, package, and binary names in `Cargo.toml` and `package.json` still change separately.
 - `scripts/register-dev-host.mjs` registers a per-user development native host for one unpacked extension ID; installers own release registration.
-- `.github/workflows/ci.yml` runs build and quality checks on macOS, the only supported platform, including the headless smoke run (`npm run smoke:macos:headless`).
+- `.github/workflows/ci.yml` runs the build and quality checks on a `macos-15` and `windows-latest` matrix, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only; a `Build and check` gate job, the check branch protection requires, passes only when every platform build passes.
 - `TESTING.md` is this repo's own testing strategy (headless end-to-end recipe, dialog seams, what headless cannot prove). It is self-contained; nothing in this repo should point outside it for testing guidance.
 
 ## Local checks
