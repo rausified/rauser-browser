@@ -57,7 +57,11 @@ fake harnesses on a pinned `PATH` and a cleared host environment.
 
 The Brauser service skeleton (PR 2 of the open-access spec, DESIGN.md §12.2
 step 10.2) is built on `feat/agent-service-pr2` in `host/src/service/`
-(macOS only; it compiles out elsewhere). `brauser service` is a per-user
+(built on every Unix, compiled out on Windows; only the launchd glue is
+macOS-only, so the service and its tests build and run on Linux, where the
+support directory is the XDG config directory `~/.config/brauser` and the host
+never starts the service itself: it uses one started with `brauser service`
+and otherwise answers `service_unavailable`). On macOS `brauser service` is a per-user
 LaunchAgent (`com.rauser.brauser.service`) that listens on a Unix socket in
 Brauser's support directory with the native-messaging framing, and exits after
 10 idle minutes. The short-lived native host forwards `start_run`, `get_run`,

@@ -3,9 +3,9 @@
 //! itself (never launchd), and the only harness the service can run is a
 //! fake `#!/bin/sh` script. Each test has its own short temp `HOME`, a
 //! cleared environment, and a notes folder, so nothing here touches the
-//! user's real configuration, service, or `~/Library`. Without the feature,
-//! or off macOS, this file is empty.
-#![cfg(all(feature = "scripted-dialogs", target_os = "macos"))]
+//! user's real configuration, service, or support directory. Without the
+//! feature, or off Unix, this file is empty.
+#![cfg(all(feature = "scripted-dialogs", unix))]
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -135,9 +135,7 @@ impl World {
     }
 
     fn run_dir(&self, run_id: &str) -> PathBuf {
-        self.path("h")
-            .join("Library/Application Support/Brauser/runs")
-            .join(run_id)
+        self.support().join("runs").join(run_id)
     }
 
     fn command(&self) -> Command {
@@ -455,12 +453,7 @@ fn without_spawn_seam_host_reports_service_unavailable() {
     assert_eq!(reply["code"], "service_unavailable", "{reply}");
     assert!(!world.socket().exists());
     assert!(world.service_pid().is_none());
-    assert!(
-        !world
-            .path("h")
-            .join("Library/Application Support/Brauser/runs")
-            .exists()
-    );
+    assert!(!world.support().join("runs").exists());
 }
 
 #[test]

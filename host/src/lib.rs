@@ -18,7 +18,8 @@ pub mod index;
 pub mod native;
 pub mod note;
 mod presentation;
-#[cfg(target_os = "macos")]
+// The service is plain POSIX; only its launchd glue is macOS-only.
+#[cfg(unix)]
 pub mod service;
 mod summary;
 pub mod vault;

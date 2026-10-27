@@ -1,10 +1,11 @@
 //! The native host's link to the per-user service: connect, start the
-//! service through launchd when it is not running, check that it is this
-//! build, then forward one request.
+//! service when it is not running (through launchd on macOS), check that it
+//! is this build, then forward one request.
 
 use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use anyhow::Result;
 use brauser_protocol::{ErrorCode, PROTOCOL_VERSION, Request, Response, ServiceHelloRequest};
 
 use super::paths::{ServicePaths, build_id};
+#[cfg(target_os = "macos")]
 use crate::brand::SERVICE_LABEL;
 use crate::config::ConfigStore;
 use crate::frame::{FrameError, read_frame, write_request};
@@ -20,6 +22,11 @@ use crate::frame::{FrameError, read_frame, write_request};
 pub const NOT_INSTALLED: &str = "The Brauser service is not installed. Reinstall Brauser, or for a development build run scripts/register-dev-host.mjs.";
 pub const WRONG_BUILD: &str = "The Brauser service is running a different build of Brauser. Reinstall Brauser, or for a development build run scripts/register-dev-host.mjs again.";
 const NOT_STARTED: &str = "The Brauser service did not start in time. Try again in a moment.";
+/// Off macOS there is no launchd job, so nothing starts the service for the
+/// host; a service the user started with `brauser service` is still used.
+#[cfg(not(target_os = "macos"))]
+pub const NO_AUTOSTART: &str =
+    "starting it automatically is only supported on macOS; run `brauser service` and try again";
 const NO_ANSWER: &str = "The Brauser service stopped before answering. Try again in a moment.";
 /// This host is older than the binary on disk, so the running service may
 /// well be the current build; restarting it would kill a newer host's runs.
@@ -218,12 +225,18 @@ fn exchange(stream: &mut UnixStream, request: &Request) -> Result<Response, Serv
     Ok(response)
 }
 
-/// Production starts the LaunchAgent. Tests never do: unit tests get
+/// Production starts the LaunchAgent on macOS and starts nothing elsewhere
+/// ([`NO_AUTOSTART`]). Tests never start anything: unit tests get
 /// `NotInstalled`, and a `scripted-dialogs` build spawns `brauser service`
-/// itself only when `SERVICE_SPAWN_ENV=1`.
-#[cfg(not(any(test, feature = "scripted-dialogs")))]
+/// itself only when `SERVICE_SPAWN_ENV=1`, on any Unix.
+#[cfg(all(target_os = "macos", not(any(test, feature = "scripted-dialogs"))))]
 fn default_launch(_paths: &ServicePaths) -> LaunchFn {
     Box::new(launchd_kickstart)
+}
+
+#[cfg(all(not(target_os = "macos"), not(any(test, feature = "scripted-dialogs"))))]
+fn default_launch(_paths: &ServicePaths) -> LaunchFn {
+    Box::new(|_| Launch::Failed(NO_AUTOSTART.into()))
 }
 
 #[cfg(any(test, feature = "scripted-dialogs"))]
@@ -238,6 +251,7 @@ fn default_launch(paths: &ServicePaths) -> LaunchFn {
 }
 
 /// `/bin/launchctl kickstart [-k] gui/<uid>/<SERVICE_LABEL>`.
+#[cfg(target_os = "macos")]
 pub fn launchd_kickstart(restart: bool) -> Launch {
     let target = format!("gui/{}/{SERVICE_LABEL}", rustix::process::getuid().as_raw());
     let mut command = Command::new("/bin/launchctl");
@@ -259,6 +273,7 @@ pub fn launchd_kickstart(restart: bool) -> Launch {
 }
 
 /// launchctl exits 113 (or says so) when the label is not loaded.
+#[cfg(target_os = "macos")]
 fn kickstart_outcome(code: Option<i32>, stderr: &str) -> Launch {
     match code {
         Some(0) => Launch::Started,
@@ -795,6 +810,7 @@ mod tests {
         assert_eq!((link.launch)(false), Launch::NotInstalled);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn kickstart_output_maps_missing_service_to_not_installed() {
         assert_eq!(kickstart_outcome(Some(113), ""), Launch::NotInstalled);

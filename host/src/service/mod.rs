@@ -1,4 +1,6 @@
-//! The per-user Brauser service that owns agent runs (macOS only).
+//! The per-user Brauser service that owns agent runs. Everything here is
+//! plain POSIX and builds on any Unix; only starting it through launchd
+//! (`client::launchd_kickstart`) is macOS-only. Windows has no service.
 
 pub mod agent_env;
 pub mod client;
@@ -23,7 +25,7 @@ use record::RunStore;
 use server::ServeExit;
 use supervisor::{DEFAULT_RUN_TIMEOUT, ServiceOptions, Supervisor, VaultCheckFinisher};
 
-/// The `brauser service` subcommand launchd runs.
+/// The `brauser service` subcommand (launchd runs it on macOS).
 pub const COMMAND: &str = "service";
 /// How long the service stays up with nothing to do.
 pub const DEFAULT_IDLE_EXIT: Duration = Duration::from_secs(600);

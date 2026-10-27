@@ -21,7 +21,7 @@ use crate::harness::HarnessEnv;
 use crate::harness_setup;
 use crate::index::ArtifactIndex;
 use crate::note;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use crate::service::client::{ServiceError, ServiceLink};
 use crate::vault::Vault;
 
@@ -39,7 +39,7 @@ pub fn serve(config: ConfigStore) -> Result<()> {
 pub struct SetupContext<'a> {
     pub env: &'a HarnessEnv,
     /// Where run messages go. `None` answers them `service_unavailable`.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub service: Option<&'a ServiceLink>,
 }
 
@@ -48,7 +48,7 @@ impl<'a> SetupContext<'a> {
     pub fn new(env: &'a HarnessEnv) -> Self {
         Self {
             env,
-            #[cfg(target_os = "macos")]
+            #[cfg(unix)]
             service: None,
         }
     }
@@ -58,14 +58,14 @@ impl<'a> SetupContext<'a> {
 pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore) -> Result<()> {
     let env = HarnessEnv::from_process(config.dir()?);
     // Building the link never connects; only a run message does.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     let link = ServiceLink::for_config(&config)
         .inspect_err(|link_error| {
             eprintln!("{NAMESPACE}: the service cannot be reached: {link_error:#}");
         })
         .ok();
     let context = SetupContext {
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
         service: link.as_ref(),
         ..SetupContext::new(&env)
     };
@@ -381,15 +381,15 @@ fn dispatch(
             offers: harness_setup::offers(context.env),
         }),
         Request::SetUpHarness(value) => set_up_harness(value, config, context),
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
         // Run ids and offsets are the service's to check.
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
         request @ (Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
         | Request::RetrySave(_)) => forward(&request, context.service),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(unix))]
         Request::StartRun(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
@@ -397,7 +397,7 @@ fn dispatch(
         | Request::RetrySave(_) => error(
             id,
             ErrorCode::ServiceUnavailable,
-            "The Brauser service is only supported on macOS.",
+            "The Brauser service is not supported on Windows.",
         ),
         // service_hello is host-to-service only.
         Request::ServiceHello(_) => error(
@@ -410,7 +410,7 @@ fn dispatch(
 
 /// Check what only the host may decide, then forward: the record key is
 /// always the one the page's note uses, never the extension's.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn start_run(
     mut value: brauser_protocol::StartRunRequest,
     config: &mut ConfigStore,
@@ -449,7 +449,7 @@ fn start_run(
 }
 
 /// Send a run message to the service and return its answer as is.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
     let id = request.request_id();
     let Some(service) = service else {
@@ -1185,8 +1185,8 @@ struct NoteContext {
 /// The key-only part of `note_context`, shared by notes, the run proxy, and
 /// the run finisher, so a run and the page's note always agree on the record
 /// they belong to. It never lists older notes.
-// Only the macOS run proxy calls it outside tests.
-#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+// Only the Unix run proxy calls it outside tests.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
@@ -5390,7 +5390,7 @@ id = "work:{host}/{id}"
 
     /// The run proxy against a fake service on a short `/tmp` socket. No
     /// launchd, no real service, and no harness is ever involved.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     mod run_proxy {
         use super::*;
         use crate::service::client::fake::{self, FakeService};

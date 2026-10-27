@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{Result, bail};
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use brauser_host::service;
 use brauser_host::{
     adapters, brand::NAMESPACE, config::ConfigStore, dialog, index::ArtifactIndex, native,
@@ -39,11 +39,12 @@ fn run() -> Result<()> {
         // Developer and test tooling: evaluates adapter templates without
         // reading the config (adapter-templates.md §12).
         Some(adapters::COMMAND) => adapters::run(args),
-        // launchd runs the per-user service that owns agent runs.
-        #[cfg(target_os = "macos")]
+        // The per-user service that owns agent runs: launchd starts it on
+        // macOS; elsewhere on Unix it is started by hand or by a test seam.
+        #[cfg(unix)]
         Some(service::COMMAND) => service::run(args),
-        #[cfg(not(target_os = "macos"))]
-        Some("service") => bail!("the Brauser service is only supported on macOS"),
+        #[cfg(not(unix))]
+        Some("service") => bail!("the Brauser service is not supported on Windows"),
         Some(command @ dialog::PICK_FOLDER_COMMAND) => dialog::run_child_command(command),
         Some(origin) if origin.starts_with("chrome-extension://") => serve(),
         Some(other) => bail!("unknown command or browser origin: {other}"),

@@ -11,7 +11,8 @@ use anyhow::{Context, Result, bail};
 use crate::brand::{AGENT_ENV_NAME, RUNS_DIR, SOCKET_NAME};
 use crate::config::ConfigStore;
 
-/// macOS `sun_path` holds 104 bytes including the trailing NUL.
+/// macOS `sun_path` holds 104 bytes including the trailing NUL (Linux holds
+/// 108); the smaller limit is used on every Unix.
 const SUN_PATH_CAPACITY: usize = 104;
 
 /// The service's support directory: the directory holding `config.toml`.
