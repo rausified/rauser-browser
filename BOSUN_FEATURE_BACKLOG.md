@@ -532,20 +532,20 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Latest verification (2026-10-27, health recheck on clean `382bf29`):
-  no quarantine failure file or incomplete changes were present.
-  Protocol generation, workspace build, format, both Clippy configurations,
-  npm ci, typecheck, lint, extension build, all 13 extension
-  test files and current-state checks pass. The unfiltered Rust gate remains
-  red: 26 adapter-template tests pass, then 447 host tests pass and 32 fail in
-  service/IPC tests. The repaired dialog fixture passes its 60 exchanges.
-  Independent workspace Unix bind and JSON-only Node `spawnSync` probes both
-  return EPERM. The script gate fails; disabling Node test isolation exposes
-  8 passes, 1 failure and 1 platform skip. No product or test changes, skipped
-  coverage, feature work or history reset. The bead is now marked blocked until
-  a runner permitting local IPC verifies the complete gate. The current run
-  reproduced both denials independently; earlier raw logs remain under ignored
-  `target/overnight-health/cycle-6-*.log`. The commit message is prepared.
+  Latest verification (2026-10-27, clean `8b7acd7`): no quarantine file
+  or incomplete changes. Protocol generation, workspace build, format, both
+  Clippy configurations, offline npm ci, typecheck, lint, extension build,
+  all 13 extension test files, current-state and queue checks pass. The
+  unfiltered Rust gate has 26 adapter-template passes, 447 host passes and
+  32 service/IPC failures; later binaries are not reached. Five dialog tests
+  pass, including the repaired 60-exchange fixture. Independent AF_UNIX bind
+  and connect probes both return EPERM. Node spawnSync reports status 0 but
+  error EPERM and empty output; script diagnostics show 8 passes, 1 failure
+  and 1 platform skip. No source changes, disabled tests, feature work or
+  history reset. Raw logs: `target/overnight-health/baseline-8b7acd7/`.
+  Driver action: run the unfiltered gate with local IPC permitted and include
+  the tested baseline SHA and result in the next cycle's handoff. The absence
+  of a quarantine file does not establish green health.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -904,14 +904,13 @@ were folded into `brwr-q7e` above rather than given their own item.
   `brwr-t40` blocker. The next useful product increment remains host drafting
   with selectable rules and example artifact grouping, using the existing
   private pattern inputs; additional pattern diagnostics do not complete it.
-- Rechecked clean `382bf29`: the same 32 service failures and independent
-  AF_UNIX/Node EPERM probes persist. Build, lint, protocol and extension gates
-  pass, including all 13 extension test files. No feature or test changes were made. The driver
-  should preserve its external full-gate result in the next handoff: the
-  absence of a quarantine file alone does not establish a passing baseline.
-  `brwr-4vb` is now explicitly blocked on this external verification; its
-  implemented fixture repair remains intact, with no acceptance claim.
-- No further product idea is needed while this gate blocks the assigned queue.
-  The useful next action is an unfiltered external gate with its baseline SHA
-  and results carried into the next prompt. Repeating the same denied tests
-  in an unchanged runner consumes cycles without advancing Capture Site.
+- Rechecked clean `8b7acd7`: the same 32 service failures and independent
+  AF_UNIX/Node EPERM probes persist. All other required checks pass; no product
+  or test changes were made. `brwr-4vb` stays blocked on external verification.
+  Preserve the driver's full-gate result and baseline SHA in the next handoff;
+  repeating denied operations in an unchanged runner cannot advance Capture Site.
+- Once verified, continue `brwr-1hj` through `brwr-t40`: combine the existing
+  private inputs with host drafting, selectable rules and example artifact
+  grouping. Resolve the Notion leading-literal contradiction (`brwr-gf1`)
+  explicitly before claiming the named identity cases. No further diagnostic
+  view or self-directed product item is needed ahead of this assigned work.
