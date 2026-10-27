@@ -37,7 +37,10 @@ const panelOpens = [];
 const broadcasts = [];
 // Answers chrome.scripting.executeScript; the default reads a page.
 let executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
-  frameId: 0, result: { title: "Readable", content: "Body", selection: null, truncated: false, readable: true },
+  frameId: 0, result: {
+    title: "Readable", content: "Body", selection: null, truncated: false, readable: true,
+    href: "https://read.example/article",
+  },
 }];
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
@@ -125,8 +128,9 @@ globalThis.chrome = {
     local: storageArea(values),
     session: storageArea(sessionValues),
   },
-  // Chrome grants every HTTP(S) site at install. The worker never asks
-  // Chrome about a permission and never listens for permission changes.
+  // Chrome grants every HTTP(S) site at install. Capture never asks Chrome
+  // about a permission or listens for permission changes; only a summary of
+  // a tab with no address asks (a test replaces this for it).
   permissions: {
     async contains() { throw new Error("the worker must not check Chrome permissions"); },
   },
@@ -174,6 +178,7 @@ const { queueActivityMapRebuild, rebuildActivityMap } = await import("../dist/wo
 const { HostClient, HostError, PROTOCOL_VERSION } = await import("../dist/native.js");
 const { ConfigSession } = await import("../dist/settings.js");
 const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
+const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
 
 function send(message) {
   return new Promise((resolve, reject) => {
@@ -2023,7 +2028,10 @@ test("service_unavailable from the command path is stored as a notice", async ()
   });
   await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
   const notice = sessionValues.get(PANEL_NOTICE_KEY);
-  assert.deepEqual({ ...notice, at: 0 }, { kind: "summarize_failed", message, tab_id: 9, at: 0 });
+  // The same setup instructions the panel shows, then the host's reason.
+  assert.deepEqual({ ...notice, at: 0 }, {
+    kind: "summarize_failed", message: `${SERVICE_SETUP_INSTRUCTIONS} ${message}`, tab_id: 9, at: 0,
+  });
   await until(() => broadcasts.length === 1, "the broadcast notice");
 
   // A page the extractor cannot read never reaches the host.
@@ -2038,6 +2046,38 @@ test("service_unavailable from the command path is stored as a notice", async ()
     assert.ok(ports.slice(opened).every((opened) => !opened.sent.some((sent) => sent.type === "start_run")));
   } finally {
     executeScript = realExecute;
+  }
+});
+
+test("with site access withdrawn, the shortcut points to Brauser's site access", async () => {
+  // Without `tabs`, Chrome gives no URL for a tab Brauser cannot access: an
+  // ungranted page (chrome://, New Tab) or any page once access is withdrawn.
+  const realContains = chrome.permissions.contains;
+  const asked = [];
+  try {
+    for (const [granted, expected] of [
+      [false, /needs site access.*re-enable/i],
+      [true, /^Summaries work on http\(s\) pages\.$/],
+    ]) {
+      chrome.permissions.contains = async (permissions) => { asked.push(permissions); return granted; };
+      sessionValues.clear();
+      onCommand("summarize", { id: 12, title: "Tab", incognito: false });
+      await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the notice");
+      const notice = sessionValues.get(PANEL_NOTICE_KEY);
+      assert.equal(notice.kind, "summarize_failed");
+      assert.match(notice.message, expected);
+    }
+    assert.deepEqual(asked.map((permissions) => [...permissions.origins].sort()),
+      [["http://*/*", "https://*/*"], ["http://*/*", "https://*/*"]]);
+
+    // An unanswered check shows the ordinary message, not a false alarm.
+    chrome.permissions.contains = async () => { throw new Error("unavailable"); };
+    sessionValues.clear();
+    onMenuClicked({ menuItemId: "brauser-summarize" }, { id: 12, title: "Tab", incognito: false });
+    await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the notice");
+    assert.equal(sessionValues.get(PANEL_NOTICE_KEY).message, "Summaries work on http(s) pages.");
+  } finally {
+    chrome.permissions.contains = realContains;
   }
 });
 

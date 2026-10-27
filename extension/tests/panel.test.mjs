@@ -980,8 +980,19 @@ async function readablePage(injection) {
   if (injection.files) return [{ frameId: 0 }];
   return [{
     frameId: 0,
-    result: { title: "Readable title", content: "Body text", selection: "picked", truncated: false, readable: true },
+    result: {
+      title: "Readable title", content: "Body text", selection: "picked", truncated: false, readable: true,
+      href: ARTICLE_URL,
+    },
   }];
+}
+
+// The extractor read a document at `href`, not the page the run is for.
+function pageAt(href) {
+  return async (injection) => {
+    const [answer] = await readablePage(injection);
+    return [injection.files ? answer : { ...answer, result: { ...answer.result, href } }];
+  };
 }
 
 function startsRun(request) {
@@ -999,9 +1010,16 @@ function buttonIn(root, text) {
   return null;
 }
 
+// A harness set up in settings, as config_result reports it.
+const SET_UP = {
+  ...CONFIG,
+  agent: { harness: "codex", binary: "/usr/local/bin/codex", version: "1.0.0", timeout_secs: 600, probed_at: "2026-10-27T09:00:00-07:00" },
+  storage: { ...CONFIG.storage, summaries_dir: "summaries" },
+};
+
 async function summarizePanel(options = {}) {
   const page = await install({
-    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY,
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP,
     executeScript: readablePage, intercept: startsRun, ...options,
   });
   await until(() => page.el("note-editor").hidden === false, "the page to show");
@@ -1066,13 +1084,95 @@ test("an executeScript failure shows \"can't read this page\"", async () => {
   const empty = await summarizePanel({
     local: new Map([[WARNING_SEEN_KEY, true]]),
     executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
-      frameId: 0, result: { title: "", content: "", selection: null, truncated: false, readable: false },
+      frameId: 0, result: { title: "", content: "", selection: null, truncated: false, readable: false, href: ARTICLE_URL },
     }],
   });
   await until(() => empty.el("summarize").disabled === false, "the button to enable");
   empty.el("summarize").click();
   await until(() => /can't read this page/.test(empty.el("run-area").textContent), "the unreadable message");
   assert.equal(empty.sent("start_run").length, 0);
+});
+
+test("Summarize refuses when the tab holds another document by extraction time", async () => {
+  // A navigation, or an SPA's pushState, between the click and the extractor.
+  for (const href of ["https://read.example/next", "https://read.example/article?page=2", undefined]) {
+    const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]), executeScript: pageAt(href) });
+    await until(() => page.el("summarize").disabled === false, "the button to enable");
+    page.el("summarize").click();
+    await until(() => /page changed/.test(page.el("run-area").textContent), "the page-changed message");
+    assert.equal(page.sent("start_run").length, 0);
+    teardown.splice(0).forEach((listener) => listener());
+  }
+
+  // The same address, spelled as Chrome canonicalizes it, is the same page.
+  const same = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]), executeScript: pageAt("HTTPS://READ.example:443/article"),
+  });
+  await until(() => same.el("summarize").disabled === false, "the button to enable");
+  same.el("summarize").click();
+  await until(() => same.sent("start_run").length === 1, "start_run");
+});
+
+test("start_run never carries a lone surrogate, whichever field it came from", async () => {
+  // Chrome's tab title stands in when Readability finds none.
+  const page = await summarizePanel({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab \uD800 title" },
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
+      frameId: 0,
+      result: {
+        title: "", content: "Body \uDC00 text 😀", selection: "\uD83D", truncated: false, readable: true, href: ARTICLE_URL,
+      },
+    }],
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  const [request] = page.sent("start_run");
+  assert.equal(request.title, "Tab \uFFFD title");
+  assert.equal(request.content, "Body \uFFFD text 😀");
+  assert.equal(request.selection, "\uFFFD");
+  assert.doesNotMatch(JSON.stringify(request), /\\ud[89a-f][0-9a-f]{2}/i);
+});
+
+test("a slow summary's line stays with the tab it was for", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    intercept: (request) => request.type === "start_run" ? held : startsRun(request),
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  assert.match(page.el("run-area").textContent, /Reading this page/);
+
+  // The user moves to tab 2 while the service cold-starts.
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  assert.doesNotMatch(page.el("run-area").textContent, /Reading this page/);
+  release({ type: "error", code: "service_unavailable", message: "The service did not start." });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(page.el("run-area").textContent, /did not start/);
+});
+
+test("a summary that finishes after a tab switch leaves the new tab's line alone", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    intercept: (request) => request.type === "start_run" ? held : startsRun(request),
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  page.notify({ kind: "summarize_failed", message: "Tab two's own notice.", tab_id: 2, at: Date.now() });
+  await until(() => page.el("run-area").textContent.includes("Tab two's own notice."), "tab 2's notice");
+  release({ type: "run_started", run: RUN_VIEW, existing: false });
+  await until(() => /Queued/.test(page.el("run-area").textContent), "the run card");
+  assert.match(page.el("run-area").textContent, /Tab two's own notice\./);
 });
 
 test("the setup warning shows once", async () => {
@@ -1094,6 +1194,31 @@ test("the setup warning shows once", async () => {
   await until(() => second.sent("start_run").length === 1, "start_run");
   await until(() => /Queued/.test(second.el("run-area").textContent), "the run card");
   assert.ok(!second.el("run-area").textContent.includes(SETUP_WARNING));
+});
+
+test("the setup warning shows once for a summary the shortcut or menu started", async () => {
+  const listRuns = (request) => request.type === "list_runs" ? { type: "runs_listed", runs: [RUN_VIEW] } : startsRun(request);
+  // The worker opened the panel and stored its notice before the panel loaded.
+  const local = new Map();
+  const session = new Map([[PANEL_NOTICE_KEY, { kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() }]]);
+  const opened = await summarizePanel({ local, session, intercept: listRuns });
+  await until(() => opened.el("run-area").textContent.includes(SETUP_WARNING), "the setup warning");
+  await until(() => /Queued/.test(opened.el("run-area").textContent), "the run card");
+  assert.equal(local.get(WARNING_SEEN_KEY), true);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A panel already open hears the worker's notice; the warning is not shown twice.
+  const fresh = new Map();
+  const open = await summarizePanel({ local: fresh, intercept: listRuns });
+  open.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() });
+  await until(() => open.el("run-area").textContent.includes(SETUP_WARNING), "the live setup warning");
+  assert.equal(fresh.get(WARNING_SEEN_KEY), true);
+  teardown.splice(0).forEach((listener) => listener());
+
+  const again = await summarizePanel({ local: fresh, intercept: listRuns });
+  again.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() + 1 });
+  await until(() => /Queued/.test(again.el("run-area").textContent), "the run card");
+  assert.ok(!again.el("run-area").textContent.includes(SETUP_WARNING));
 });
 
 test("a summarize failure sent before the panel loads is shown when it opens", async () => {
@@ -1120,6 +1245,19 @@ test("a summarize failure sent before the panel loads is shown when it opens", a
   const open = await summarizePanel();
   open.notify({ kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 1, at: Date.now() });
   await until(() => open.el("run-area").textContent.includes("Summaries work on http(s) pages."), "the live notice");
+});
+
+test("with no summary harness set up, opening the panel does not wake the service", async () => {
+  // list_runs makes the host start the registered service (launchctl), which
+  // is on demand: only a set-up harness can have runs to restore.
+  const page = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" } });
+  await until(() => page.el("note-body").disabled === false, "the note to load");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.sent("list_runs").length, 0);
+  teardown.splice(0).forEach((listener) => listener());
+
+  const ready = await summarizePanel();
+  await until(() => ready.sent("list_runs").length === 1, "list_runs");
 });
 
 test("the panel restores run cards on load and shows a run the shortcut started", async () => {

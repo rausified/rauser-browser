@@ -371,8 +371,8 @@ As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per req
 
 **Summarize & log (as built, open access PR 3).**
 
-1. **Trigger.** Every HTTP(S) page has a **Summarize & log** button in the panel, a `summarize` keyboard command (suggested Command+Shift+9 on macOS, Ctrl+Shift+9 elsewhere), and a "Summarize with Brauser" page and selection context-menu item. Brauser holds HTTP(S) access from install (§8), so no trigger needs `activeTab`. The command and menu item open the panel synchronously, before any await, then start the run in the worker; their result reaches the panel as a short-lived notice in `storage.session` and as a live message, so a failure sent before the panel loads is still shown. The button is enabled only while a harness is set up (`agent_status` ready), and the first click shows the setup warning (§7.1) once, without blocking.
-2. **Extraction.** The extension injects a pinned, bundled Readability (`@mozilla/readability` 0.6.0, its hash checked at build time and copied to `dist/vendor/readability.js` with its license) and then one self-contained extractor function, both through `chrome.scripting.executeScript` in the tab's top frame only. The extractor runs Readability on a clone of the document and walks the article into Markdown-like text: headings, list items, preformatted text, and link text without URLs; images, scripts, and styles are dropped. When Readability finds no article it falls back to the body text and marks the page not readable as an article. Caps are in encoded bytes, as the native message measures them: the selection is cut until its JSON-encoded UTF-8 length is at most 64 KiB, and the content until content plus selection is at most 3 MiB, so a `start_run` stays under the host's 4 MiB inbound cap (§4.3) whatever the script or escaping. A page with no text after trimming, or a script failure, is "Brauser can't read this page's content." and starts no run.
+1. **Trigger.** Every HTTP(S) page has a **Summarize & log** button in the panel, a `summarize` keyboard command (suggested Command+Shift+9 on macOS, Ctrl+Shift+9 elsewhere), and a "Summarize with Brauser" page and selection context-menu item. Brauser holds HTTP(S) access from install (§8), so no trigger needs `activeTab`. The command and menu item open the panel synchronously, before any await, then start the run in the worker; their result reaches the panel as a short-lived notice in `storage.session` and as a live message, so a failure sent before the panel loads is still shown. The button is enabled only while a harness is set up (`agent_status` ready), and the first summary from any of the three shows the setup warning (§7.1) once in the panel, without blocking. With Brauser's site access withdrawn in Chrome, the shortcut and menu say to re-enable it rather than that the page is not HTTP(S).
+2. **Extraction.** The extension injects a pinned, bundled Readability (`@mozilla/readability` 0.6.0, its hash checked at build time and copied to `dist/vendor/readability.js` with its license) and then one self-contained extractor function, both through `chrome.scripting.executeScript` in the tab's top frame only. The extractor runs Readability on a clone of the document and walks the article into Markdown-like text: headings, list items, preformatted text, and link text without URLs; images, scripts, and styles are dropped. When Readability finds no article it falls back to the body text and marks the page not readable as an article. Caps are in encoded bytes, as the native message measures them: the selection is cut until its JSON-encoded UTF-8 length is at most 64 KiB, and the content until content plus selection is at most 3 MiB, so a `start_run` stays under the host's 4 MiB inbound cap (§4.3) whatever the script or escaping. Lone UTF-16 surrogates in the text, selection, or title are replaced with U+FFFD before measuring, since the host's JSON parser rejects them, and every cut keeps surrogate pairs whole. A page with no text after trimming, or a script failure, is "Brauser can't read this page's content." and starts no run. The extractor also returns `location.href`; if it no longer names the run's URL (a navigation or a `pushState` since the trigger), the run is refused with "The page changed before it could be read." and nothing is sent.
 3. **`start_run`.** The extension sends the tab URL, title, content, and selection, with no record key and a local `requested_at`; the host derives the record key itself (§6.2) and forwards the run to the service. The service refuses the run as `not_configured` without a harness, or when the knowledge base folder is missing or no longer matches its recorded identity (§6.1). It saves the title, URL, and content as the run's `page.md`, with any selection in its own "Highlighted by the user" section, and queues the run (§12.2 step 10.2). A page with a queued or running run gets that run back.
 4. **The run.** The service runs the chosen harness with the §7.1 prompt in the knowledge base folder, appending the agent's streamed text to the run's `stream.txt`.
 5. **Answer validation.** The agent's final message must be the §7.1 JSON answer. The service parses and normalizes it (`host/src/answer.rs`); if it is invalid, the service sends one repair turn in the same session ("Your previous answer was not valid: … Reply with only the corrected JSON object"), and a second invalid answer fails the run as `invalid_output`, keeping the stream for Copy. The validated answer is stored as the run's `result.json`, and `RunView.answer` carries its type, category, importance, and reason.
@@ -461,7 +461,7 @@ The panel is about the page in the active tab. Capture housekeeping collapses in
 ├────────────────────────────────────────────┤
 │ Designing Data-Intensive Apps — Ch. 5      │  current page; follows the
 │ oreilly.com/library/view/…/ch05            │  active tab
-│ ● Artifact logged  ✦ AI allowed   ☆ Save   │  status chips; ☆ = /save
+│ ● Artifact logged   ☆ Save                 │  status chips; ☆ = /save
 ├────────────────────────────────────────────┤
 │ ARTIFACT  jira.issue PROJ-123   In review  │  only on a recognized page
 │ Focused 2 h over 5 days · last Tue         │  (§5.1); Tier 1 fields
@@ -470,14 +470,14 @@ The panel is about the page in the active tab. Capture housekeeping collapses in
 ├────────────────────────────────────────────┤
 │ [ This page ]   Recent   Read later (3)    │
 ├────────────────────────────────────────────┤
-│ ┌ ANSWER ─────────────────────── ✕ ──────┐ │  only after a question or a
-│ │ Leader-based replication sends every   │ │  sidebar-output command;
-│ │ write through one node…▌               │ │  streams, not saved
-│ │ [Stop]                         [Copy]  │ │
+│ [Summarize & log]                          │  §5.2; on any HTTP(S) page
+│ ┌────────────────────────────────────────┐ │  run cards (#run-area), newest
+│ │ Designing Data-Intensive Apps — Ch. 5  │ │  first; each polls its run
+│ │ Running · 42s                          │ │  state · elapsed time
+│ │ Leader-based replication sends every   │ │  streamed text, as text only
+│ │ write through one node…                │ │
+│ │ [Cancel]  [Open in Codex]              │ │  actions fit the run's state
 │ └────────────────────────────────────────┘ │
-│ SUMMARY                     2 days ago  ↻  │  §5.2, its own file
-│ Replication keeps copies of the same data  │
-│ on several machines…   Show more · Open ↗  │
 │ MY NOTE                          Saved ✓   │  §5.3, autosaves
 │ ┌────────────────────────────────────────┐ │
 │ │ This is how our orders DB fails over.  │ │
@@ -495,6 +495,20 @@ The panel is about the page in the active tab. Capture housekeeping collapses in
 
 The Recent tab (M1.5a, §5.1) lists artifacts by day, with a type filter, a title filter, and a Worklog view with Copy. The Read later tab lists saved pages with a search box and a checkbox to mark each done; done items move to a collapsed "Done" group and their files are kept.
 
+**Summarize & log (as built, open access PR 3, §5.2).** On the This page view, between the artifact card and My note, the **Summarize & log** button sits above the run area (`#run-area`). The button shows on every HTTP(S) tab and is enabled only while a summary harness is ready (`agent_status` ready); otherwise its tooltip reads "Set up a summary harness in settings first." While a click is being handled the run area shows "Reading this page…" for that tab, and a refusal replaces it with one warning line: "Brauser can't read this page's content.", "The page changed before it could be read. Summarize it again." (the tab's address moved before extraction), the service setup instructions, or "Could not start the summary: …". These lines belong to the tab they are about; following another tab removes them, and a reply that arrives after the switch is dropped. The first summary from any path (the button, the `summarize` shortcut, or the context menu) adds the one-time setup warning (§7.1) at the top of the run area with **Got it**; it does not hold the run back. The shortcut and the menu open the panel and report through a short-lived notice that the panel shows as the same line, or as the run's card.
+
+Each run card shows the page title, the state with its elapsed time, the streamed text (text only), and on success the "Type · Category · Importance — reason" line; a refresh problem shows as a warning line in the card. Cards are not per tab: they stay while the panel follows other tabs, newest first.
+
+| Run state | Card | Actions |
+|---|---|---|
+| Queued | "Queued" | Cancel |
+| Running | "Running · 42s", with streamed text | Cancel; Open in Codex (Codex, once it has a thread) or Copy resume command (Claude Code, once it has a session) |
+| Summarized | "Summarized · 1m 05s" and the answer line | Open in Codex or Copy resume command; Retry save when the save can be retried; Dismiss |
+| Failed | "Failed: <reason>" | Copy (the stream, or the reason); Open in Codex or Copy resume command when available; Retry save when available; Dismiss |
+| Canceled | "Canceled" | Dismiss; Open in Codex or Copy resume command when available |
+
+When the panel opens with a summary harness set up, it restores every queued or running run and up to five finished in the last day that were not dismissed (`list_runs`). With no harness set up it does not call `list_runs`, so opening the panel never starts the on-demand service. If the service cannot be reached then, the run area shows the setup instructions with **Open settings**.
+
 Each state changes one area rather than the layout:
 
 | State | Panel |
@@ -505,10 +519,11 @@ Each state changes one area rather than the layout:
 | Origin not enabled | Chip `○ Not logged · Set up artifacts for this site… · Create adapter`, which opens settings with the origin filled in and offers any matching starter adapter. With standing access (protocol v6) the panel's Create adapter button works on any tab (§5.1). Notes, `/log`, and summaries still work. |
 | Site access withdrawn in Chrome | One banner, "Brauser needs site access — re-enable in Chrome", with a button that opens Brauser's extension settings; shown only on HTTP(S) tabs. The note editor returns once access does. |
 | Enabled origin, page not an artifact | No artifact card; chip `○ Not an artifact · Create adapter`. When unrecognized pages recur, a hint also offers to draft one from them (Tier 2, §5.1). |
-| No agent set up | Chip `✦ AI not set up`; the omnibar offers only commands that need no agent, plus a link to settings. |
+| No agent set up | **Summarize & log** is disabled with the tooltip "Set up a summary harness in settings first.", and no run cards are restored. Later milestones add the chip `✦ AI not set up` and an omnibar that offers only commands that need no agent, plus a link to settings. |
+| Brauser service unavailable | The run area shows the service setup instructions and the host's reason: as a notice with **Open settings** when cards are restored, or as the line of the summary that failed (from any path). Notes and capture are unaffected. |
 | Not an HTTP(S) page | The page area names the tab and says Brauser can't use it; only Read later is active. |
 
-Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; the answer card, Summary, and omnibar in M2; Related and Read later in M3; the full command list in M4.
+Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; Summarize & log with its run area and run cards in open access PR 3 (protocol v6); the summary file and log event in PR 4; the answer card and omnibar later; Related and Read later in M3; the full command list in M4.
 
 ## 6. Data Format
 
