@@ -506,6 +506,12 @@ and the protocol v6 removals) is done; see Shipped.
   `brwr-rva`, `brwr-ac1`, `brwr-ahb`, and `brwr-jfe` are closed as recorded
   below; `brwr-4vb` stays open because its fix never merged. Cycle 1's
   Capture Site work (`brwr-qox`, `brwr-t40`, the `brwr-1hj` claim) is kept.
+  `bd import` merges dependency edges and never deletes them, so a database
+  that imported the stale export keeps `brwr-f45`'s retired blocking edges on
+  `brwr-0cj` and `brwr-6wz` after it re-imports this file. Before the next
+  export, run `bd dep remove brwr-f45 brwr-0cj` and
+  `bd dep remove brwr-f45 brwr-6wz` (or rebuild the database from this
+  file), then confirm `bd export` matches the committed rows.
 - Capture Site is split into known-site setup and unknown-site drafting. Keep
   its next slice on the host-owned shaper/drafter path; do not turn arbitrary
   page links into starter rules in the panel. A configured site stays in
