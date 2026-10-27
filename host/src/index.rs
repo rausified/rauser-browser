@@ -31,6 +31,7 @@ use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{
     activity_shape_is_valid, canonical_url, logged_activity_is_bounded, trail_transition_is_valid,
 };
+use crate::markdown::{self, yaml_string};
 use crate::summary::SummaryEvent;
 use crate::vault::{
     STALE_TEMPORARY_AGE, TempFileCleanup, checked_relative_dir, is_generated_temporary,
@@ -2160,10 +2161,9 @@ fn slug(value: &str, fallback: &str) -> String {
 /// `artifacts_dir/<type>/<site>/...md`) to a vault-root-relative target,
 /// e.g. a summary file.
 fn relative_artifact_link(artifacts_dir: &str, artifact: &ArtifactRow, target: &str) -> String {
-    let ups = artifact_path(artifacts_dir, artifact)
-        .parent()
-        .map_or(0, |dir| dir.components().count());
-    format!("{}{target}", "../".repeat(ups))
+    let path = artifact_path(artifacts_dir, artifact);
+    let from_dir = path.parent().unwrap_or(Path::new(""));
+    markdown::relative_link(from_dir, Path::new(target))
 }
 
 fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
@@ -2200,14 +2200,14 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     }
     out.push_str("---\n\n");
     if let Some(why) = &artifact.why {
-        out.push_str(&format!("Why: {}\n\n", safe_markdown(why)));
+        out.push_str(&format!("Why: {}\n\n", markdown::inline(why, 2048)));
     }
     if let Some(summary) = artifact.summaries.last() {
         let link = relative_artifact_link(artifacts_dir, artifact, &summary.summary_path);
         out.push_str(&format!(
             "Summary: [{}, {} importance](<{link}>)\n\n",
-            safe_markdown(&summary.document_type),
-            safe_markdown(&summary.importance),
+            markdown::inline(&summary.document_type, 2048),
+            markdown::inline(&summary.importance, 2048),
         ));
     }
     out.push_str("## Timeline\n\n");
@@ -2218,7 +2218,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
         out.push_str(&format!(
             "- {} · Summarized: {}\n",
             summary.occurred_at,
-            safe_markdown(&summary.title)
+            markdown::inline(&summary.title, 2048)
         ));
     }
     if total_summaries > shown_summaries {
@@ -2237,15 +2237,8 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     out
 }
 
-fn yaml_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
-}
 fn whole_minutes(seconds: u64) -> u64 {
     seconds / 60
-}
-
-fn safe_markdown(value: &str) -> String {
-    crate::presentation::markdown_line(value, 2048)
 }
 
 #[derive(Clone)]
@@ -4645,6 +4638,36 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(artifact_files(root.path()).len(), 1);
         let updated = index.artifact(&expected_id).unwrap().expect("indexed");
         assert_eq!(updated.title, "An even better discussion");
+    }
+
+    #[test]
+    fn the_artifact_summary_link_is_percent_encoded() {
+        use crate::capture::{CapturePolicy, CaptureStore};
+
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let config = storage(root.path());
+        let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
+        let index = index(&root, &cache);
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let mut summary = page_summary(url, &rfc3339_seconds_ago(5));
+        summary.summary_path = "My Summaries/hn-item.summary.md".into();
+
+        assert!(matches!(
+            capture.record_summary(policy, &summary),
+            crate::capture::CaptureOutcome::Persisted { .. }
+        ));
+        assert_eq!(index.reindex().unwrap().written, 1);
+
+        let file = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(file.contains(
+            "Summary: [discussion, high importance](<../../../My%20Summaries/hn-item.summary.md>)"
+        ));
     }
 
     #[test]

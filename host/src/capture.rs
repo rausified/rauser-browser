@@ -418,7 +418,7 @@ impl CaptureStore {
             Err(reason) => return CaptureOutcome::Rejected { reason },
         };
         let (day_dir, _) = self.log_parts(timestamp);
-        let link = relative_log_link(&day_dir, &summary.summary_path);
+        let link = crate::markdown::relative_link(&day_dir, Path::new(&summary.summary_path));
         let title = safe_markdown_line(Some(&summary.title), MAX_TITLE_BYTES);
         let document_type = safe_markdown_line(Some(&summary.document_type), 64);
         let body = format!(
@@ -1407,13 +1407,6 @@ impl CaptureStore {
             .join(format!("{month:02}"));
         (relative_dir, format!("{year:04}-{month:02}-{day:02}.md"))
     }
-}
-
-/// A link from a daily-log entry under `day_dir` (log-dir-relative, e.g.
-/// `log/2026/10`) to a vault-root-relative target, e.g. a summary file.
-fn relative_log_link(day_dir: &Path, target: &str) -> String {
-    let ups = day_dir.components().count();
-    format!("{}{target}", "../".repeat(ups))
 }
 
 fn parse_event_id(value: &str) -> std::result::Result<String, String> {
@@ -2902,7 +2895,7 @@ mod tests {
             panic!("expected persisted summary event");
         };
         let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
-        assert!(markdown.contains("[summary](<../../../My Summaries/hn-item.summary.md>)"));
+        assert!(markdown.contains("[summary](<../../../My%20Summaries/hn-item.summary.md>)"));
     }
 
     #[test]
