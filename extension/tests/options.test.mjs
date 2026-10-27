@@ -980,6 +980,51 @@ test("a host restart drops harness offers only the old host knew", async () => {
   await until(() => !env.elements.get("setup-harness").disabled, "Set up after detecting again");
 });
 
+test("manual artifact refresh confirms a proposed artifact folder first", async () => {
+  // A config from before artifacts_dir: the host only proposes the folder
+  // and refuses to write files there until a save names it.
+  let proposed = true;
+  const state = install({
+    host: {
+      refresh_artifacts: () => proposed
+        ? { type: "error", code: "not_configured", message: "save settings to confirm the artifact files folder first" }
+        : null,
+      update_config: (request, current) => {
+        assert.deepEqual(request.config, current.config);
+        proposed = false;
+        return null;
+      },
+    },
+  });
+  await openSettings();
+  const before = state.revision;
+  env.elements.get("refresh-artifacts").click();
+  await until(() => statusText().startsWith("Artifact files updated"), "artifact refresh after confirming");
+  const types = state.requests.map((request) => request.type);
+  const confirm = types.indexOf("confirm_config");
+  assert.ok(confirm > types.indexOf("refresh_artifacts"));
+  assert.equal(types[confirm + 1], "update_config");
+  assert.equal(state.requests.at(-1).type, "refresh_artifacts");
+  assert.equal(state.revision, before + 1);
+});
+
+test("a declined artifact folder confirmation writes nothing", async () => {
+  const state = install({
+    host: {
+      refresh_artifacts: () =>
+        ({ type: "error", code: "not_configured", message: "save settings to confirm the artifact files folder first" }),
+      confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }),
+    },
+  });
+  await openSettings();
+  const before = state.revision;
+  env.elements.get("refresh-artifacts").click();
+  await until(() => statusText().startsWith("Canceled"), "the declined confirmation");
+  assert.match(statusText(), /Artifact files were not updated/);
+  assert.equal(state.revision, before);
+  assert.ok(!state.requests.some((request) => request.type === "update_config"));
+});
+
 test("manual artifact refresh reports unowned path conflicts", async () => {
   const state = install();
   await openSettings();

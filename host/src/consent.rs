@@ -891,14 +891,15 @@ fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result
 }
 
 /// A proposed artifact folder was never chosen, so a save that records it
-/// chooses it. It is named only in a save that already needs confirmation: a
-/// save that needs none, such as pausing or writing out a Chrome revocation,
-/// must never wait on a dialog about it, so it leaves the folder proposed
-/// (`Authorized::keeps_artifacts_dir_proposed`).
+/// chooses it. It is named in a save that already needs confirmation, and in
+/// one that changes nothing, which is how settings confirms it directly. A
+/// save that only narrows, such as pausing or writing out a Chrome
+/// revocation, must never wait on a dialog about it, so it leaves the folder
+/// proposed (`Authorized::keeps_artifacts_dir_proposed`).
 fn approval_lines<'c>(current: impl Into<Current<'c>>, next: &ConfigSnapshot) -> Vec<String> {
     let view = current.into();
     let lines = change_lines(view.config, next, false);
-    if view.artifacts_dir_proposed && !lines.is_empty() {
+    if view.artifacts_dir_proposed && (!lines.is_empty() || view.config == next) {
         change_lines(view.config, next, true)
     } else {
         lines
@@ -1369,6 +1370,17 @@ mod tests {
             approval_lines(Current::from(&current), &next),
             vec!["Change read-later folder from \"later\" to \"reading\".".to_owned()]
         );
+        // Saving the settings unchanged is how the user confirms it directly.
+        assert_eq!(
+            approval_lines(proposed, &current),
+            vec!["Set artifact files folder to \"artifacts\".".to_owned()]
+        );
+        assert!(approval_lines(Current::from(&current), &current).is_empty());
+        assert!(
+            ConsentAuthority::new()
+                .authorize_update(proposed, "revision", &current, None, None, None)
+                .is_err()
+        );
         let mut authority = ConsentAuthority::new();
         let confirmed = authority
             .confirm_config_with(proposed, "revision", &next, None, |text| {
@@ -1423,7 +1435,7 @@ mod tests {
             sites: Vec::new(),
             ..current.clone()
         };
-        for next in [&current, &paused, &revoked] {
+        for next in [&paused, &revoked] {
             assert!(approval_lines(proposed, next).is_empty());
             let mut authority = ConsentAuthority::new();
             let confirmed = authority

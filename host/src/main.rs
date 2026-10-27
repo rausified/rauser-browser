@@ -56,7 +56,7 @@ fn reindex() -> Result<()> {
             report.written, report.unchanged, report.conflicts
         ),
         None => println!(
-            "Rebuilt index.db. Artifact files are written once you save {APP_NAME} settings to confirm their folder."
+            "Rebuilt index.db. Artifact files are written once you confirm their folder: choose Update artifact files now in {APP_NAME} settings."
         ),
     }
     Ok(())

@@ -1165,17 +1165,32 @@ async function refreshArtifactFiles(): Promise<void> {
   if (busy || !session.config?.storage) return;
   busy = true;
   updateControls();
+  const refresh = () => session.host.call({
+    type: "refresh_artifacts",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+  }, "artifacts_refreshed");
   try {
-    const response = await session.host.call({
-      type: "refresh_artifacts",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-    }, "artifacts_refreshed");
+    let response;
+    try {
+      response = await refresh();
+    } catch (error) {
+      if (!(error instanceof HostError && error.code === "not_configured")) throw error;
+      // A config from before artifacts_dir only proposes the artifact folder.
+      // Saving the settings unchanged asks the host to name it for
+      // confirmation; once recorded, its files can be written.
+      await withConfigMutationLock(() => session.saveConfig({ ...session.config! }, null));
+      response = await refresh();
+    }
     const conflict = response.conflicts
       ? ` ${response.conflicts} unowned path conflict${response.conflicts === 1 ? " remains" : "s remain"}; those files were not overwritten: ${response.conflict_paths.join(", ")}.`
       : "";
     show(`Artifact files updated: ${response.written} written, ${response.unchanged} already current.${conflict}`, response.conflicts > 0);
   } catch (error) {
+    if (error instanceof HostError && error.code === "cancelled") {
+      show("Canceled. Artifact files were not updated.");
+      return;
+    }
     show(`Could not update artifact files: ${describe(error)}`, true);
   } finally {
     busy = false;
