@@ -412,8 +412,8 @@ impl ConfigStore {
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
-    /// in the config directory and, once the folder is trusted, the page
-    /// notes directory. Failures are logged; they never block serving.
+    /// in the config directory and, once the folder is trusted, the notes
+    /// and summaries folders. Failures are logged; they never block serving.
     pub fn sweep_stale_temporaries(&self) {
         if let Some(parent) = self.path.parent()
             && let Err(error) = sweep_config_temporaries(parent)
@@ -438,7 +438,9 @@ impl ConfigStore {
         if let Err(error) = Vault::open_checked(storage, self.root_identity())
             .and_then(|vault| vault.sweep_stale_temporaries())
         {
-            eprintln!("{NAMESPACE}: warning: could not sweep page-note temporaries: {error:#}");
+            eprintln!(
+                "{NAMESPACE}: warning: could not sweep page-note and summary temporaries: {error:#}"
+            );
         }
         // A host killed during an artifact pass leaves its temporaries.
         if let Err(error) = self.cache_dir().and_then(|cache_dir| {

@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::brand::NAMESPACE;
+use crate::markdown::{self, LinkStyle};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{RecordKey, RecordKeyKind, StorageConfig};
 use cap_std::ambient_authority;
@@ -30,6 +31,9 @@ pub(crate) const STALE_TEMPORARY_AGE: Duration = Duration::from_secs(60 * 60);
 pub struct Vault {
     root: Dir,
     pages_dir: PathBuf,
+    /// Where Brauser-owned summary files live (§5.2); absent only for an
+    /// older config that never named one.
+    summaries_dir: Option<PathBuf>,
 }
 
 /// A page that was published under its final name. Warnings describe work that
@@ -59,11 +63,17 @@ impl Vault {
         checked_relative_dir(&storage.log_dir)?;
         checked_relative_dir(&storage.later_dir)?;
         checked_relative_dir(&storage.artifacts_dir)?;
-        if let Some(summaries_dir) = &storage.summaries_dir {
-            checked_relative_dir(summaries_dir)?;
-        }
+        let summaries_dir = storage
+            .summaries_dir
+            .as_deref()
+            .map(checked_relative_dir)
+            .transpose()?;
         let (root, _) = open_selected_root(chosen, expected_identity)?;
-        Ok(Self { root, pages_dir })
+        Ok(Self {
+            root,
+            pages_dir,
+            summaries_dir,
+        })
     }
 
     /// Atomically replace (or create) the whole note. The filename is derived
@@ -95,6 +105,65 @@ impl Vault {
 
     pub fn note_relative_path(&self, key: &RecordKey, canonical_url: &str) -> Result<PathBuf> {
         Ok(self.pages_dir.join(note_filename(key, canonical_url)?))
+    }
+
+    /// The record's summary file, `<summaries_dir>/<note stem>.summary.md`.
+    /// It always passes `summary::validate_page_summary`'s path check: the
+    /// folder is a checked relative path and the name is a slug and a digest.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn summary_relative_path(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+    ) -> Result<PathBuf> {
+        Ok(self
+            .summaries_dir()?
+            .join(crate::summary::summary_filename(key, canonical_url)?))
+    }
+
+    /// A link from the record's summary file to its page note, in `style`:
+    /// a percent-encoded relative Markdown link from the summaries folder, or
+    /// a wikilink to the note's stem. The note need not exist yet.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn note_link(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+        style: LinkStyle,
+    ) -> Result<String> {
+        let summaries_dir = self.summaries_dir()?;
+        let note = note_filename(key, canonical_url)?;
+        Ok(match style {
+            LinkStyle::Relative => format!(
+                "[Page note]({})",
+                markdown::relative_link(summaries_dir, &self.pages_dir.join(&note))
+            ),
+            LinkStyle::Wikilink => {
+                markdown::wikilink(note.strip_suffix(".md").unwrap_or(&note), Some("Page note"))
+            }
+        })
+    }
+
+    /// Replace the record's summary file whole (§4.4): only an absent name or
+    /// a file `summary::owned_summary` accepts for `key` is written; anything
+    /// else is `OwnedWrite::Conflict` and is left untouched.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn write_summary(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+        markdown: &str,
+    ) -> Result<OwnedWrite> {
+        let path = self.summary_relative_path(key, canonical_url)?;
+        replace_owned_file(&self.root, &path, markdown, "summary", &|bytes| {
+            crate::summary::owned_summary(bytes, key)
+        })
+    }
+
+    fn summaries_dir(&self) -> Result<&Path> {
+        self.summaries_dir
+            .as_deref()
+            .context("no summaries folder is configured")
     }
 
     /// Read a page generated from the same canonical URL. Callers must check
@@ -289,28 +358,43 @@ impl Vault {
         ))
     }
 
-    /// Remove page-note temporaries left by a host killed between creating
-    /// and renaming them. Only regular files whose whole name is one this
-    /// module generates, and that are older than `STALE_TEMPORARY_AGE`, are
-    /// removed. Returns how many were removed.
+    /// Remove page-note and summary temporaries left by a host killed between
+    /// creating and publishing them. Only regular files whose whole name is
+    /// one this module generates in that folder (`.{NAMESPACE}-<uuid>.tmp` for
+    /// notes, `.{NAMESPACE}-summary-<uuid>.tmp` for summaries), and that are
+    /// older than `STALE_TEMPORARY_AGE`, are removed. Returns how many were
+    /// removed.
     pub fn sweep_stale_temporaries(&self) -> Result<usize> {
-        let pages = match self.root.open_dir(&self.pages_dir) {
+        let mut removed = self.sweep_temporaries_in(&self.pages_dir, &format!(".{NAMESPACE}-"))?;
+        if let Some(summaries_dir) = &self.summaries_dir {
+            removed +=
+                self.sweep_temporaries_in(summaries_dir, &format!(".{NAMESPACE}-summary-"))?;
+        }
+        Ok(removed)
+    }
+
+    fn sweep_temporaries_in(&self, relative: &Path, prefix: &str) -> Result<usize> {
+        let dir = match self.root.open_dir(relative) {
             Ok(dir) => dir,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
-            Err(error) => return Err(error).context("opening page notes directory"),
+            Err(error) => {
+                return Err(error).with_context(|| format!("opening {}", relative.display()));
+            }
         };
-        let prefix = format!(".{NAMESPACE}-");
         let now = SystemTime::now();
         let mut removed = 0;
-        for entry in pages.entries().context("listing page notes directory")? {
-            let entry = entry.context("listing page notes directory")?;
+        for entry in dir
+            .entries()
+            .with_context(|| format!("listing {}", relative.display()))?
+        {
+            let entry = entry.with_context(|| format!("listing {}", relative.display()))?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            if !is_generated_temporary(name, &prefix) {
+            if !is_generated_temporary(name, prefix) {
                 continue;
             }
             // Not following symlinks: a link is not ours, whatever its name.
-            let Ok(metadata) = pages.symlink_metadata(name) else {
+            let Ok(metadata) = dir.symlink_metadata(name) else {
                 continue;
             };
             let stale = metadata.is_file()
@@ -319,7 +403,7 @@ impl Vault {
                     .ok()
                     .and_then(|modified| now.duration_since(modified.into_std()).ok())
                     .is_some_and(|elapsed| elapsed >= STALE_TEMPORARY_AGE);
-            if stale && pages.remove_file(name).is_ok() {
+            if stale && dir.remove_file(name).is_ok() {
                 removed += 1;
             }
         }
