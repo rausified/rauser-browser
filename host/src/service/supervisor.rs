@@ -19,9 +19,10 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
+use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use brauser_protocol::{ErrorCode, HarnessId, RecordKey, RunErrorKind, RunState, RunView};
@@ -242,6 +243,10 @@ impl RunControl {
     }
 }
 
+/// Test seam: given a thread's name, true makes creating it fail.
+#[cfg(test)]
+type SpawnFault = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 struct Inner {
     store: RunStore,
     scheduler: Mutex<Scheduler>,
@@ -253,6 +258,8 @@ struct Inner {
     last_activity: Mutex<Instant>,
     /// Serializes [`maintenance::prune`] between worker threads.
     prune_lock: Mutex<()>,
+    #[cfg(test)]
+    spawn_fault: std::sync::OnceLock<SpawnFault>,
 }
 
 /// Owns every run of this service process. Cheap to clone.
@@ -271,6 +278,35 @@ impl Supervisor {
         finisher: Box<dyn RunFinisher>,
         options: ServiceOptions,
     ) -> Self {
+        let (supervisor, queued) = Self::recovered(store, registry, finisher, options);
+        supervisor.resume(queued);
+        supervisor
+    }
+
+    /// As [`Supervisor::new`], with thread creation failing wherever `fault`
+    /// says so, from the first resumed run on.
+    #[cfg(test)]
+    fn with_spawn_fault(
+        store: RunStore,
+        registry: HarnessRegistry,
+        finisher: Box<dyn RunFinisher>,
+        options: ServiceOptions,
+        fault: SpawnFault,
+    ) -> Self {
+        let (supervisor, queued) = Self::recovered(store, registry, finisher, options);
+        let _ = supervisor.inner.spawn_fault.set(fault);
+        supervisor.resume(queued);
+        supervisor
+    }
+
+    /// Recover and prune the records a previous process left behind; the
+    /// still-queued runs are returned for [`Supervisor::resume`].
+    fn recovered(
+        store: RunStore,
+        registry: HarnessRegistry,
+        finisher: Box<dyn RunFinisher>,
+        options: ServiceOptions,
+    ) -> (Self, Vec<Uuid>) {
         let now = OffsetDateTime::now_utc();
         let queued =
             maintenance::recover(&store, now, options.service_pid, &group_alive, &kill_group);
@@ -286,10 +322,11 @@ impl Supervisor {
                 options,
                 last_activity: Mutex::new(Instant::now()),
                 prune_lock: Mutex::new(()),
+                #[cfg(test)]
+                spawn_fault: std::sync::OnceLock::new(),
             }),
         };
-        supervisor.resume(queued);
-        supervisor
+        (supervisor, queued)
     }
 
     /// Re-submit recovered queued runs. A run without a recorded working
@@ -587,9 +624,7 @@ impl Inner {
         };
         for id in ready {
             let worker = this.clone();
-            let spawned = thread::Builder::new()
-                .name(format!("run-{id}"))
-                .spawn(move || Inner::run(&worker, id));
+            let spawned = this.spawn(format!("run-{id}"), move || Inner::run(&worker, id));
             if let Err(error) = spawned {
                 eprintln!("brauser service: could not start a worker for run {id}: {error}");
                 this.finish(id, |status| {
@@ -647,13 +682,25 @@ impl Inner {
         let watchdog = {
             let worker = this.clone();
             let control = control.clone();
-            thread::Builder::new()
-                .name(format!("run-{id}-watchdog"))
-                .spawn(move || worker.watch(id, &control))
+            this.spawn(format!("run-{id}-watchdog"), move || {
+                worker.watch(id, &control);
+            })
         };
-        if let Err(error) = &watchdog {
-            eprintln!("brauser service: no watchdog for run {id}: {error}");
-        }
+        // Without a watchdog nothing enforces the timeout, so the harness
+        // never starts.
+        let watchdog = match watchdog {
+            Ok(watchdog) => watchdog,
+            Err(error) => {
+                eprintln!("brauser service: no watchdog for run {id}: {error}");
+                control.end_turn();
+                this.finish_with(&control, id, |status| {
+                    status.state = RunState::Failed;
+                    status.error_kind = Some(RunErrorKind::HarnessFailed);
+                    status.error = Some("The run could not be started.".to_string());
+                });
+                return;
+            }
+        };
 
         let outcome = this.drive(id, &control, &status, launch, env);
         let stopped = control.end_turn();
@@ -667,9 +714,7 @@ impl Inner {
             (None, Ok(final_text)) => this.conclude(id, &status, &final_text),
         };
         this.finish_with(&control, id, |status| finished.apply(status));
-        if let Ok(watchdog) = watchdog {
-            let _ = watchdog.join();
-        }
+        let _ = watchdog.join();
     }
 
     /// Start the harness session and run its turn, streaming events into the
@@ -795,6 +840,20 @@ impl Inner {
                 return;
             }
         }
+    }
+
+    /// Start a named thread. Tests can make this fail through
+    /// [`Supervisor::with_spawn_fault`].
+    fn spawn(
+        &self,
+        name: String,
+        body: impl FnOnce() + Send + 'static,
+    ) -> io::Result<JoinHandle<()>> {
+        #[cfg(test)]
+        if self.spawn_fault.get().is_some_and(|fault| fault(&name)) {
+            return Err(io::Error::other("thread creation failed (test)"));
+        }
+        thread::Builder::new().name(name).spawn(body)
     }
 
     /// A best-effort status change during a run.
@@ -1024,6 +1083,26 @@ mod tests {
             env_error: Option<&str>,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
+            Self::seeded_with_fault(body, run_timeout, env_error, None, seed)
+        }
+
+        /// As [`Fixture::seeded`], with every thread whose name `fault`
+        /// matches failing to start.
+        fn faulty(
+            body: &str,
+            fault: impl Fn(&str) -> bool + Send + Sync + 'static,
+            seed: impl FnOnce(&RunStore, &Path),
+        ) -> Self {
+            Self::seeded_with_fault(body, DEFAULT_RUN_TIMEOUT, None, Some(Arc::new(fault)), seed)
+        }
+
+        fn seeded_with_fault(
+            body: &str,
+            run_timeout: Duration,
+            env_error: Option<&str>,
+            spawn_fault: Option<SpawnFault>,
+            seed: impl FnOnce(&RunStore, &Path),
+        ) -> Self {
             let dir = tempfile::tempdir().unwrap();
             seed(
                 &RunStore::open(dir.path().join("runs")).unwrap(),
@@ -1035,7 +1114,7 @@ mod tests {
             let registry = HarnessRegistry::from_lookup(|name| {
                 (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
             });
-            Self::build(dir, registry, run_timeout, env_error)
+            Self::build(dir, registry, run_timeout, env_error, spawn_fault)
         }
 
         fn without_runner() -> Self {
@@ -1043,6 +1122,7 @@ mod tests {
                 tempfile::tempdir().unwrap(),
                 HarnessRegistry::default(),
                 DEFAULT_RUN_TIMEOUT,
+                None,
                 None,
             )
         }
@@ -1052,6 +1132,7 @@ mod tests {
             registry: HarnessRegistry,
             run_timeout: Duration,
             env_error: Option<&str>,
+            spawn_fault: Option<SpawnFault>,
         ) -> Self {
             let store = RunStore::open(dir.path().join("runs")).unwrap();
             let fail_saves = Arc::new(AtomicUsize::new(0));
@@ -1065,17 +1146,19 @@ mod tests {
                 None => Ok(default_env(dir.path())),
             }));
             let source = env.clone();
-            let supervisor = Supervisor::new(
-                store,
-                registry,
-                Box::new(finisher),
-                ServiceOptions {
-                    run_timeout,
-                    idle_exit: Duration::from_secs(600),
-                    service_pid: std::process::id(),
-                    run_env: Arc::new(move || source.lock().unwrap().clone()),
-                },
-            );
+            let options = ServiceOptions {
+                run_timeout,
+                idle_exit: Duration::from_secs(600),
+                service_pid: std::process::id(),
+                run_env: Arc::new(move || source.lock().unwrap().clone()),
+            };
+            let finisher = Box::new(finisher);
+            let supervisor = match spawn_fault {
+                Some(fault) => {
+                    Supervisor::with_spawn_fault(store, registry, finisher, options, fault)
+                }
+                None => Supervisor::new(store, registry, finisher, options),
+            };
             Self {
                 dir,
                 supervisor,
@@ -1330,6 +1413,23 @@ mod tests {
         for id in [a, b, queued] {
             assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
         }
+        assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn a_run_without_a_watchdog_fails_before_its_harness() {
+        let fixture = Fixture::faulty(
+            "echo ran >> \"$COUNT\"\necho '{}'\n",
+            |name| name.ends_with("-watchdog"),
+            |_, _| {},
+        );
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some("The run could not be started."));
+        assert!(!fixture.path("count").exists(), "the harness ran");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
         assert!(fixture.supervisor.is_idle());
     }
 
