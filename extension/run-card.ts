@@ -13,6 +13,10 @@ export const RESTORE_FINISHED_WITHIN_MS = 24 * 60 * 60 * 1000;
 export const MAX_RESTORED_FINISHED = 5;
 const DISMISSED_RUNS_KEY = storageKey("dismissed_runs_v1");
 const MAX_DISMISSED_RUNS = 200;
+// When a run was last started or shown, kept until a list_runs finds nothing
+// to restore. list_runs starts the on-demand service, so a panel with no
+// harness asks only while this says the service may still hold a run.
+const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
 // A shell word that needs no quoting.
 const PLAIN_SHELL_WORD = /^[A-Za-z0-9._-]+$/;
 
@@ -94,6 +98,39 @@ export function restorable(runs: RunView[], now: number, dismissed: ReadonlySet<
     .slice(0, MAX_RESTORED_FINISHED)
     .map(({ run }) => run);
   return [...active, ...finished];
+}
+
+/** Records, at `at` (ms), that the service may hold a run to restore. */
+export async function markRunsMayExist(storage: Pick<ChromeStorageArea, "set">, at: number): Promise<void> {
+  try {
+    await storage.set({ [RUNS_MAY_EXIST_KEY]: at });
+  } catch {
+    // A panel with a harness set up still restores; this matters only once
+    // the harness is removed.
+  }
+}
+
+/** Whether the service may hold a run a panel should restore. An unreadable
+ * record counts as yes: waking the service costs less than hiding a run. */
+export async function runsMayExist(storage: Pick<ChromeStorageArea, "get">): Promise<boolean> {
+  try {
+    return typeof (await storage.get(RUNS_MAY_EXIST_KEY))[RUNS_MAY_EXIST_KEY] === "number";
+  } catch {
+    return true;
+  }
+}
+
+/** Forgets the record unless a run was recorded after `listedAt`, when the
+ * list_runs that found nothing was sent. */
+async function clearRunsMayExist(storage: ChromeStorageArea, listedAt: number): Promise<void> {
+  try {
+    const at = (await storage.get(RUNS_MAY_EXIST_KEY))[RUNS_MAY_EXIST_KEY];
+    if (typeof at === "number" && at > listedAt) return;
+    if (storage.remove) await storage.remove(RUNS_MAY_EXIST_KEY);
+    else await storage.set({ [RUNS_MAY_EXIST_KEY]: null });
+  } catch {
+    // The next panel asks again.
+  }
 }
 
 function make<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
@@ -216,8 +253,10 @@ class RunCard {
           this.offset = fetched.next_offset;
         }
         this.setView(fetched.run);
-        if (isTerminal(fetched.run) && epoch === this.epoch) this.finalFetched = true;
         this.problem = null;
+        // The final fetch is done only once a finished run's stream is all
+        // here; a later page that fails is retried on the next poll.
+        if (!fetched.more && isTerminal(fetched.run) && epoch === this.epoch) this.finalFetched = true;
         if (!fetched.more || !progressed) break;
       }
     } catch (error) {
@@ -336,6 +375,7 @@ export class RunCards {
   /** Shows the runs a new panel should (see {@link restorable}). */
   async restore(): Promise<void> {
     let runs: RunView[];
+    const listedAt = this.deps.now();
     try {
       runs = (await this.deps.host.call({
         type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
@@ -352,7 +392,9 @@ export class RunCards {
     const dismissed = new Set(await this.dismissedIds());
     if (this.disposed) return;
     this.clearNotice();
-    for (const run of restorable(runs, this.deps.now(), dismissed)) this.add(run, false);
+    const shown = restorable(runs, this.deps.now(), dismissed);
+    for (const run of shown) this.add(run, false);
+    if (shown.length === 0 && this.cards.size === 0) await clearRunsMayExist(this.deps.storage, listedAt);
   }
 
   dispose(): void {
@@ -377,6 +419,7 @@ export class RunCards {
     children.splice(position, 0, card.element);
     this.container.replaceChildren(...children);
     this.cards.set(run.run_id, card);
+    void markRunsMayExist(this.deps.storage, this.deps.now());
     card.start();
   }
 
