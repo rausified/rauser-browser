@@ -46,7 +46,9 @@ export class HostClient {
   private readonly pending = new Map<string, Pending>();
   private readonly listeners: Array<() => void> = [];
   private readonly exitListeners: Array<() => void> = [];
+  private readonly restartListeners: Array<() => void> = [];
   private disposed = false;
+  private started = false;
   // Whether the current port has delivered any frame.
   private answered = false;
   // False once a port closed before its host answered anything, which means
@@ -78,6 +80,15 @@ export class HostClient {
    */
   onHostExit(listener: () => void): void {
     this.exitListeners.push(listener);
+  }
+
+  /**
+   * Call `listener` when a call starts a new host process after an earlier
+   * one, possibly from a rebuilt binary. Calls the listener makes share the
+   * new process.
+   */
+  onHostRestart(listener: () => void): void {
+    this.restartListeners.push(listener);
   }
 
   async call<K extends Exclude<Response["type"], "error">>(
@@ -141,6 +152,8 @@ export class HostClient {
     port.onDisconnect.addListener(() => {
       if (this.port === port) this.onDisconnect();
     });
+    if (this.started) for (const listener of this.restartListeners) listener();
+    this.started = true;
     return port;
   }
 

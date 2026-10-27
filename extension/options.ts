@@ -15,6 +15,7 @@ import {
 } from "./settings.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
+import { hostBuildText } from "./build-info.js";
 import {
   SETUP_WARNING,
   agentStateText,
@@ -40,6 +41,12 @@ import {
 } from "./starter-adapters.js";
 
 const status = element<HTMLDivElement>("status");
+const buildId = element<HTMLSpanElement>("build-id");
+const hostBuild = element<HTMLSpanElement>("host-build");
+
+function showHostBuild(hostVersion: string): void {
+  hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
+}
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
 const siteOrigin = element<HTMLInputElement>("site-origin");
@@ -91,6 +98,13 @@ let githubScopeText = "";
 // save, from this page or another, makes it unusable.
 const session = new ConfigSession(renderConfig, () => {
   picker = null;
+});
+
+// The header names the host process that answered. Another one, possibly
+// from a rebuilt binary, starts on the next call after it exits.
+session.host.onHostExit(() => { hostBuild.textContent = ""; });
+session.host.onHostRestart(() => {
+  void session.hello().then((hello) => showHostBuild(hello.host_version), () => undefined);
 });
 
 // A folder selection's token lives only in the host process that issued it.
@@ -1049,6 +1063,7 @@ void (async () => {
       show(`Native host unavailable: ${describe(error)}. Install or register the development host, then reload this page.`, true);
       return;
     }
+    showHostBuild(hello.host_version);
     try {
       await reloadConfig();
       if (hello.config_issue) show(hello.config_issue, true);

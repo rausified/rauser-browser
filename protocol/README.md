@@ -19,6 +19,13 @@ the typed request. A mismatch returns an `error` response with code
 `unsupported_protocol_version` and the host's protocol version. If malformed
 input has no recoverable request ID, an `error` response may use an empty ID.
 
+`hello_result.host_version` is the host's package version with its build
+commit as semver build metadata, for example `0.1.0+c7c6be06d378` or
+`0.1.0+c7c6be06d378-dirty` when the Rust sources built into it had uncommitted
+changes (`unknown` when built outside a Git checkout). The
+panel and settings page show that commit beside the extension's own and flag a
+different commit; nothing else depends on its format.
+
 Protocol version 6 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
