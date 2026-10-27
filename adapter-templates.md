@@ -1,6 +1,6 @@
 # Adapter Templates — Specification
 
-> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
+> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6), and an adapter may declare a container with `within` (§3, §8.3) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
 
 ## 1. Purpose
 
@@ -398,6 +398,9 @@ id       = "gdoc:{host}/{id}"
 title    = "{title} - Google Docs"
 
 # GitHub pull requests: scoped to an org; case-folded names; review tab.
+# `within` rolls each visit up into the repository too (§8.3); it must be
+# tried before the repository catch-all below, so adapters on this origin
+# keep pull requests and issues ordered ahead of it (DESIGN.md §5.1).
 [[artifacts]]
 type   = "github.pr"
 origin = "https://github.com"
@@ -409,6 +412,18 @@ modes  = { files = "review", commits = "view", checks = "view" }
 id     = "github.pr:{host}/{owner}/{repo}/{number}"
 title  = "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub"
 refs   = [{ type = "jira.issue", find = "jira_key" }]
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+
+# GitHub repositories: a container (§8.3). The catch-all rule has no literal
+# route word; it is valid because the scoped {owner} capture is an anchor
+# (§4.1, §6). No title template: the host derives a container's title and
+# URL from its ID (`owner/repo`), never from a sub-page's title.
+[[artifacts]]
+type   = "github.repo"
+origin = "https://github.com"
+match  = [{ path = "/{owner:name|lower}/{repo:name|lower}/{*}" }]
+scope  = { owner = ["acme-corp"] }
+id     = "github.repo:{host}/{owner}/{repo}"
 
 # Notion: ID at the end of a slugged segment; scoped to a workspace. No literal segment:
 # the fixed-shape hex(32) capture is the anchor (§4.1).
@@ -432,7 +447,7 @@ match     = [
 id        = "sharepoint:{host}/{doc}"
 ```
 
-Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; and Google Docs cannot be scoped by URL.
+Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.
 
 ### 11.1 Adapter documentation
 
