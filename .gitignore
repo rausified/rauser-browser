@@ -38,3 +38,4 @@ BOSUN_FEATURE_BACKLOG.md.bak-*
 .bosun_driver_halt.json.tmp
 .bosun_remediation_log.jsonl
 .bosun_remote_assistant_*.log
+.last_cycle_remote_assistant_output.md

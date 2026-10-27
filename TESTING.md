@@ -19,6 +19,36 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Capture Site coverage
+
+`npm run test:extension` builds on the extension build from the development
+checks. `extension/tests/capture-site.test.mjs` exercises the existing starter
+catalog through the new plan builder: real Jira, SharePoint/OneDrive and GitHub
+URL forms, independent PR/issue scopes, current-page misses, all 27 fixed
+probes, invalid inputs, full-document limits and preservation of other sites.
+`extension/tests/panel.test.mjs` loads the shipped panel markup and JavaScript
+with a scripted native client, worker and Chrome APIs. It covers review/save,
+policy publication, cancel, tab/SPA changes, revision conflicts, pauses and
+removals, missing folders, note edits and copy-out across identity changes,
+title refreshes during a held save, page switches during a held post-save
+note reload (including saving the next edit to the new page), and a failure
+after config commit. It asserts no Chrome permission request or native
+confirmation is sent. The worker regression installs policy with pages
+already open and verifies that
+attention begins immediately, private/non-artifact tabs stay excluded, and no
+cold open is invented; existing expired-lease and upgrade-navigation tests
+keep real opens intact during background renewal. These checks use no real
+accounts, harnesses, network or clipboard.
+
+This proves the composed DOM/client flow with mocks; it does not certify the
+starter URLs against live tools or prove Chrome layout and keyboard focus.
+Those checks remain the existing human starter-certification and interactive
+Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
+Capture Site adds no scripted dialogs; the runner compares answered dialogs
+with its transcript instead of expecting a fixed total. Unknown-site shaping,
+link extraction and structural drafting need the separate DESIGN §12.2
+step 7.6 tests when implemented.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
@@ -133,6 +163,13 @@ This standard is meant to improve with use. When you change it:
   recovery remove `[[adapter_id_history]]` first, as a config repair would,
   because recorded contracts otherwise decide the key. Note-removal fixtures
   are dated from the clock, since capture rejects events older than 30 days.
+- 2026-10-27: Independent review reproduced a tab switch during Capture Site's
+  post-save note reload leaving the editor bound to the previous page. The
+  composed-panel regression holds that load open, switches pages, then verifies
+  the new page's body and the next save's URL. Note loads are suppressed only
+  while the policy transaction can change identity; during the reload, tab
+  events reach NoteEditor's existing cancellation tokens. No browser or native
+  dialog is involved.
 - 2026-10-26: Branch `test/smoke-pause-resume`. The headless smoke run now pauses from the panel and resumes from settings: it checks that pausing shows the "Capture off" strip and a status pointing to Resume in settings with no setup warning (DESIGN.md §5.7), keeps the site's adapter, and measures nothing, that **Resume capture** turns capture back on without opening a native dialog (rebased onto #69, which removed its confirmation), and that a later visit reaches the daily log. The panel's pause button sits inside the collapsed capture strip (`<details>`), so a real click on it does nothing until the runner opens the strip; check the host state after a click rather than trusting it.
 - 2026-10-27: Independent review reproduced an older URL note disappearing
   from a recovered context-only route when the shared note's creation route
