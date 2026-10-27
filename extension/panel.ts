@@ -53,6 +53,7 @@ const artifactLinks = element<HTMLParagraphElement>("artifact-links");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
+const whyPausedHint = element<HTMLParagraphElement>("why-paused-hint");
 const olderNotes = element<HTMLDivElement>("older-notes");
 const olderNoteList = element<HTMLUListElement>("older-note-list");
 const olderNoteView = element<HTMLDivElement>("older-note-view");
@@ -87,6 +88,7 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 // polls to show the queue.
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
+const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
 // The site access the manifest grants at install (host_permissions).
 const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 
@@ -105,6 +107,10 @@ let olderNoteEntries: OlderNote[] = [];
 // user has not saved yet; switching to a different artifact always resets it.
 let whyArtifactId: string | null = null;
 let whyEdited = false;
+// The page URL the card was looked up for. A failed or skipped lookup for
+// another page must not leave this card, and its artifact_id, in place.
+let artifactPageUrl: string | null = null;
+let savingWhy = false;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 let recentLoadSeq = 0;
 let worklogLoadSeq = 0;
@@ -128,13 +134,15 @@ function duration(seconds: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
-function renderArtifact(artifact: ArtifactView | null, recognized: boolean): void {
+function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null = null): void {
   currentArtifact = artifact;
+  artifactPageUrl = artifact ? pageUrl : null;
   artifactCard.hidden = artifact === null;
   artifactStatus.textContent = recognized ? "● Artifact recognized" : "○ Not an artifact";
   if (!artifact) {
     whyArtifactId = null;
     whyEdited = false;
+    updateControls();
     return;
   }
   artifactHeading.textContent = artifact.title;
@@ -160,6 +168,22 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean): voi
   if (!whyEdited) {
     artifactWhy.value = artifact.why ?? "";
   }
+  updateControls();
+}
+
+/** Reports that `page`'s artifact could not be read. The card and any
+ * unsaved "Why I'm here" draft stay when they belong to this page, so a
+ * transient failure or host outage loses nothing. Another page's card goes,
+ * since its artifact_id is not this page's; the draft stays in the field
+ * until a lookup shows a different artifact. */
+function showArtifactUnavailable(page: { url: string }, reason: string): void {
+  if (artifactPageUrl !== page.url) {
+    currentArtifact = null;
+    artifactPageUrl = null;
+    artifactCard.hidden = true;
+  }
+  artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
+  updateControls();
 }
 
 const artifactRefresher = new ArtifactRefresher(
@@ -171,20 +195,22 @@ const artifactRefresher = new ArtifactRefresher(
     title: page.title,
   }, "artifact_result"),
   () => currentPage,
-  (_page, response) => renderArtifact(response.artifact, response.recognized),
-  (_page, error) => {
-    // A transient fetch failure must not discard an in-progress "Why I'm
-    // here" draft or the card's last-known state (renderArtifact(null, ...)
-    // would reset both); only report the error.
-    artifactStatus.textContent = `Artifact status unavailable: ${describe(error)}`;
-  },
+  (page, response) => renderArtifact(response.artifact, response.recognized, page.url),
+  (page, error) => showArtifactUnavailable(page, describe(error)),
 );
 
 /** Pass `force` when the page's history may have changed (context saved,
  * capture delivered, settings changed); otherwise a page already shown is
  * not asked about again. */
 function refreshArtifact(force = false): Promise<void> {
-  if (!currentPage || !session.connected || !session.config?.storage) {
+  const page = currentPage;
+  if (page && !session.connected) {
+    // Keep this page's card and any unsaved draft through a host outage.
+    artifactRefresher.clear();
+    showArtifactUnavailable(page, "the native host is not connected");
+    return Promise.resolve();
+  }
+  if (!page || !session.config?.storage) {
     artifactRefresher.clear();
     renderArtifact(null, false);
     return Promise.resolve();
@@ -203,8 +229,14 @@ async function saveWhy(): Promise<void> {
   const page = currentPage;
   const artifact = currentArtifact;
   const text = artifactWhy.value.trim();
-  if (!page || !artifact || !text || changing()) return;
-  saveWhyButton.disabled = true;
+  if (savingWhy) return;
+  const blocked = whySaveBlocked();
+  if (blocked || !page || !artifact) {
+    show(blocked ?? WHY_WAIT_FOR_ARTIFACT, true);
+    return;
+  }
+  savingWhy = true;
+  updateControls();
   try {
     const response = await session.host.call({
       type: "record_why",
@@ -231,8 +263,25 @@ async function saveWhy(): Promise<void> {
   } catch (error) {
     show(`Could not save artifact context: ${describe(error)}`, true);
   } finally {
-    saveWhyButton.disabled = false;
+    savingWhy = false;
+    updateControls();
   }
+}
+
+function whyCapturePaused(): boolean {
+  return session.config?.capture_enabled === false;
+}
+
+/** Why "Why I'm here" cannot be saved right now, or null when it can. The
+ * host records nothing while capture is paused, so Save waits for Resume. */
+function whySaveBlocked(): string | null {
+  if (!currentPage || !currentArtifact || artifactPageUrl !== currentPage.url) return WHY_WAIT_FOR_ARTIFACT;
+  if (whyCapturePaused()) {
+    return "Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.";
+  }
+  if (!artifactWhy.value.trim()) return "Type why you're here, then save.";
+  if (changing()) return "Wait for the panel to finish its current task, then save.";
+  return null;
 }
 
 function renderOlderNotes(entries: readonly OlderNote[]): void {
@@ -335,6 +384,8 @@ function updateControls(): void {
   discardButton.disabled = changing() || (state?.queued ?? 0) === 0;
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
+  saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
+  whyPausedHint.hidden = !whyCapturePaused();
 }
 
 function renderSetupWarning(): void {
@@ -811,6 +862,7 @@ copyUnsavedButton.addEventListener("click", copyUnsavedText);
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
+  updateControls();
 });
 olderNoteList.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
