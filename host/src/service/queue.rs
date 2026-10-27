@@ -81,6 +81,11 @@ impl Scheduler {
         true
     }
 
+    /// True when `id` is waiting for a slot.
+    pub fn is_waiting(&self, id: Uuid) -> bool {
+        self.waiting.contains(&id)
+    }
+
     /// True when nothing is queued or running.
     pub fn is_idle(&self) -> bool {
         self.running.is_empty() && self.waiting.is_empty()
@@ -152,10 +157,13 @@ mod tests {
         s.submit(&url("3"), c);
         assert_eq!(s.next_ready(), Some(a));
         assert_eq!(s.next_ready(), Some(b));
+        assert!(s.is_waiting(c));
+        assert!(!s.is_waiting(a), "running");
         // Running runs cannot be dequeued; unknown ones neither.
         assert!(!s.dequeue(a));
         assert!(!s.dequeue(Uuid::new_v4()));
         assert!(s.dequeue(c));
+        assert!(!s.is_waiting(c));
         assert!(!s.dequeue(c));
         assert_eq!(s.submit(&url("3"), d), Submit::New);
         s.finished(a);

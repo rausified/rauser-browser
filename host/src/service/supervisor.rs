@@ -445,15 +445,24 @@ impl Supervisor {
         inner.view(id)?;
         let control = lock(&inner.runs).get(&id).cloned();
         let mut scheduler = lock(&inner.scheduler);
-        if scheduler.dequeue(id) {
+        if scheduler.is_waiting(id) {
+            // Dequeue only once `canceled` is durable: a run still `queued`
+            // on disk would be resumed after a restart. The scheduler lock
+            // keeps `pump` from starting it in between.
             let finished = now_timestamp();
             if let Err(error) = inner.update(id, |status| {
                 status.state = RunState::Canceled;
                 status.error_kind = Some(RunErrorKind::Canceled);
                 status.finished_at = Some(finished);
             }) {
+                drop(scheduler);
                 eprintln!("brauser service: recording cancel of run {id}: {error:#}");
+                return Err((
+                    ErrorCode::Internal,
+                    "The run could not be canceled.".to_string(),
+                ));
             }
+            scheduler.dequeue(id);
             drop(scheduler);
             lock(&inner.runs).remove(&id);
             if let Some(control) = control {
@@ -1294,6 +1303,34 @@ mod tests {
             fixture.supervisor.cancel_run(Uuid::new_v4()),
             Err((ErrorCode::InvalidRequest, _))
         ));
+    }
+
+    #[test]
+    fn a_queued_cancel_that_cannot_be_recorded_keeps_the_run_queued() {
+        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
+        let a = fixture.start("a");
+        let b = fixture.start("b");
+        let queued = fixture.start("c");
+        fixture.wait_for(a, |view| view.state == RunState::Running);
+        fixture.wait_for(b, |view| view.state == RunState::Running);
+
+        // A read-only run directory makes the canceled status unwritable.
+        let dir = run_dir(&fixture, queued);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let canceled = fixture.supervisor.cancel_run(queued);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            matches!(canceled, Err((ErrorCode::Internal, _))),
+            "{canceled:?}"
+        );
+        assert_eq!(fixture.view(queued).state, RunState::Queued);
+
+        // The run is still scheduled, so it runs once a slot frees.
+        fixture.release();
+        for id in [a, b, queued] {
+            assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        }
+        assert!(fixture.supervisor.is_idle());
     }
 
     #[test]
