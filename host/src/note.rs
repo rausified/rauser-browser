@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::brand::FRONTMATTER_KEY;
-use crate::native::MAX_OUTBOUND_BYTES;
+use crate::frame::MAX_OUTBOUND_BYTES;
 use crate::vault::Vault;
 
 /// A new note's title is clamped to this many UTF-8 bytes, never refused.

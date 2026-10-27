@@ -5,6 +5,8 @@ export const APP_NAME = "Brauser";
 export const FULL_NAME = "Rauser Browser Assistant";
 export const NATIVE_HOST_NAME = "com.rauser.brauser";
 export const BINARY_NAME = "brauser";
+// launchd label of the per-user service; host/src/brand.rs has the same value.
+export const SERVICE_LABEL = "com.rauser.brauser.service";
 
 export function storageKey(name: string): string {
   return `${BINARY_NAME}_${name}`;
