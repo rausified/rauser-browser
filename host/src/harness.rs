@@ -227,6 +227,23 @@ pub fn detect(env: &HarnessEnv, run_env: &[(OsString, OsString)]) -> Vec<Detecte
         .collect()
 }
 
+/// The program a run with `run_env` starts for `adapter`: found on the same
+/// search [`detect`] uses for that environment, and passing the same install
+/// check, so a run never starts a program setup did not look at. The error is
+/// host-authored text.
+pub(crate) fn resolve_for_run(
+    adapter: Adapter,
+    run_env: &[(OsString, OsString)],
+) -> Result<PathBuf, String> {
+    let program = adapter.program();
+    let found = find_on_path(&HarnessEnv::from_run_env(run_env).search_path, program)
+        .ok_or_else(|| format!("{program} is not on the service's PATH"))?;
+    let real =
+        fs::canonicalize(&found).map_err(|_| format!("{} could not be read", found.display()))?;
+    check_install(&real).map_err(|problem| format!("{program} cannot be used: {problem}"))?;
+    Ok(real)
+}
+
 /// Check the install `found` resolves to, then run its `--version`.
 fn installed_version(
     adapter: Adapter,

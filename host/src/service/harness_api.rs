@@ -19,7 +19,6 @@ use uuid::Uuid;
 use super::claude::ClaudeRunner;
 use super::codex::CodexRunner;
 use crate::answer::answer_schema;
-use crate::harness::search_path;
 
 /// Everything a runner needs to start one run.
 #[derive(Debug, Clone)]
@@ -192,8 +191,9 @@ impl HarnessRegistry {
         Self::from_lookup(|name| std::env::var_os(name))
     }
 
-    /// The real runners, Codex first, each looking its program up on the
-    /// service's `PATH` plus `$HOME/.local/bin`. Test builds instead register
+    /// The real runners, Codex first. Each looks its program up on the run
+    /// environment's `PATH` plus `$HOME/.local/bin` when a run starts, the
+    /// search setup's discovery uses, so agent.env's `PATH` counts. Test builds instead register
     /// a [`CommandRunner`] for both harness ids when `FAKE_HARNESS_ENV` names
     /// an absolute executable, so no test can reach a real harness that way.
     ///
@@ -213,14 +213,16 @@ impl HarnessRegistry {
                 .collect();
             return Self { runners };
         }
-        let home = get("HOME").map(PathBuf::from);
-        let search_path = search_path(get("PATH").as_deref(), home.as_deref());
+        // Only the test fake is looked up; the real runners read nothing
+        // from the service's own environment.
+        #[cfg(not(any(test, feature = "scripted-dialogs")))]
+        let _ = get;
         Self {
             runners: vec![
                 // The installed app-server takes `outputSchema` on
                 // `turn/start` (TESTING.md), so Codex is held to the shape.
-                Box::new(CodexRunner::new(search_path.clone(), Some(answer_schema()))),
-                Box::new(ClaudeRunner::new(search_path)),
+                Box::new(CodexRunner::new(Some(answer_schema()))),
+                Box::new(ClaudeRunner),
             ],
         }
     }
@@ -278,8 +280,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let empty = dir.path().join("bin");
         std::fs::create_dir(&empty).unwrap();
-        // `claude` is found only under $HOME/.local/bin, so a found claude
-        // proves the looked-up HOME was searched. It is never run.
+        // `claude` is found only under the run's $HOME/.local/bin, so a
+        // found claude proves that HOME was searched. It is never run.
         let home = dir.path().join("home");
         let local_bin = home.join(".local").join("bin");
         std::fs::create_dir_all(&local_bin).unwrap();
@@ -302,13 +304,24 @@ mod tests {
         );
         // Codex is preferred when the request names no harness.
         assert_eq!(registry.get(None).unwrap().harness(), HarnessId::Codex);
-        // Codex is looked up on the given PATH only, never the test's own.
+        // Codex is looked up on the run's PATH only, never the test's own.
         let codex = start_error(&registry, HarnessId::Codex, dir.path()).unwrap();
         assert!(
             codex.contains("codex is not on the service's PATH"),
             "{codex}"
         );
-        assert_eq!(start_error(&registry, HarnessId::Claude, dir.path()), None);
+        let mut run = spec(dir.path());
+        run.env = vec![
+            ("PATH".into(), empty.clone().into_os_string()),
+            ("HOME".into(), home.clone().into_os_string()),
+        ];
+        let claude = registry
+            .get(Some(HarnessId::Claude))
+            .unwrap()
+            .start(&run, &ProcessSlot::default());
+        claude.expect("claude found under the run's HOME").close();
+        // The service's own HOME is not searched.
+        assert!(start_error(&registry, HarnessId::Claude, dir.path()).is_some());
 
         // A relative or missing fake does not replace the real runners.
         let relative = HarnessRegistry::from_lookup(|name| {
@@ -336,6 +349,112 @@ mod tests {
             codex.contains("codex is not on the service's PATH"),
             "{codex}"
         );
+    }
+
+    /// A fake `program` in `dir` that answers `--version` and otherwise
+    /// records that it was started, then exits.
+    fn marking_fake(dir: &Path, program: &str, version: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(program);
+        let mark = dir.join("started");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{version}'; exit 0; fi\n\
+                 : > '{}'\nexit 1\n",
+                mark.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// The service's own PATH and the run environment's PATH (agent.env can
+    /// set it) name different fakes. Setup's discovery and the run must
+    /// agree on the run environment's one.
+    #[test]
+    fn runs_start_the_program_setup_detects_on_the_run_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let process_bin = dir.path().join("process-bin");
+        let run_bin = dir.path().join("run-bin");
+        for program in ["codex", "claude"] {
+            marking_fake(&process_bin, program, "codex-cli 1.0.0");
+        }
+        let run_codex = marking_fake(&run_bin, "codex", "codex-cli 2.0.0");
+        let registry = HarnessRegistry::from_lookup(|name| {
+            (name == "PATH").then(|| process_bin.clone().into_os_string())
+        });
+        let run_env = vec![(OsString::from("PATH"), run_bin.clone().into_os_string())];
+
+        let detected = crate::harness::detect(
+            &crate::harness::HarnessEnv::from_run_env(&run_env),
+            &run_env,
+        );
+        assert_eq!(detected[0].binary.as_deref(), Some(run_codex.as_path()));
+        assert_eq!(detected[0].version.as_deref(), Some("2.0.0"));
+
+        let mut run = spec(dir.path());
+        run.env = run_env.clone();
+        let codex = registry.get(Some(HarnessId::Codex)).unwrap();
+        if let Ok(session) = codex.start(&run, &ProcessSlot::default()) {
+            session.close();
+        }
+        assert!(
+            run_bin.join("started").exists(),
+            "the run's codex did not run"
+        );
+        assert!(
+            !process_bin.join("started").exists(),
+            "the service's codex ran"
+        );
+
+        // `claude` is only on the service's PATH, so setup would not find
+        // it, and neither does a run.
+        let mut run = spec(dir.path());
+        run.env = run_env;
+        let claude_run = registry.get(Some(HarnessId::Claude)).unwrap();
+        let error = match claude_run.start(&run, &ProcessSlot::default()) {
+            Ok(mut session) => {
+                session.turn("prompt", &mut |_| {});
+                session.close();
+                String::new()
+            }
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(
+            error.contains("claude is not on the service's PATH"),
+            "{error}"
+        );
+        assert!(
+            !process_bin.join("started").exists(),
+            "the service's claude ran"
+        );
+    }
+
+    /// A run refuses a program that setup's install check would refuse.
+    #[test]
+    fn runs_refuse_a_program_another_user_could_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let codex = marking_fake(&bin, "codex", "codex-cli 1.0.0");
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let registry = HarnessRegistry::from_lookup(|_| None);
+        let mut run = spec(dir.path());
+        run.env = vec![(OsString::from("PATH"), bin.clone().into_os_string())];
+        let error = match registry
+            .get(Some(HarnessId::Codex))
+            .unwrap()
+            .start(&run, &ProcessSlot::default())
+        {
+            Ok(session) => {
+                session.close();
+                String::new()
+            }
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(error.contains("is writable by other users"), "{error}");
+        assert!(!bin.join("started").exists(), "the replaceable codex ran");
     }
 
     #[test]

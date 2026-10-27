@@ -20,7 +20,7 @@ use super::child::{ChildLine, LineChild};
 use super::harness_api::{
     HarnessEvent, HarnessRunner, HarnessSession, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
-use crate::harness::find_on_path;
+use crate::harness::{Adapter, resolve_for_run};
 
 /// The flags every turn passes, before the session flag.
 const PRINT_ARGS: [&str; 6] = [
@@ -39,17 +39,9 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 const STDERR_TAIL: usize = 8 * 1024;
 
 /// Runs `claude -p` once per turn. See the module documentation.
-#[derive(Debug, Clone)]
-pub struct ClaudeRunner {
-    search_path: OsString,
-}
-
-impl ClaudeRunner {
-    /// `search_path` is where `claude` is looked up.
-    pub fn new(search_path: OsString) -> Self {
-        Self { search_path }
-    }
-}
+/// `claude` is looked up on each run's own environment, as setup does.
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeRunner;
 
 impl HarnessRunner for ClaudeRunner {
     fn harness(&self) -> HarnessId {
@@ -57,8 +49,8 @@ impl HarnessRunner for ClaudeRunner {
     }
 
     fn start(&self, spec: &RunSpec, slot: &ProcessSlot) -> anyhow::Result<Box<dyn HarnessSession>> {
-        let program = find_on_path(&self.search_path, "claude")
-            .ok_or_else(|| anyhow::anyhow!("claude is not on the service's PATH"))?;
+        let program =
+            resolve_for_run(Adapter::ClaudeCode, &spec.env).map_err(anyhow::Error::msg)?;
         Ok(Box::new(ClaudeSession {
             program,
             cwd: spec.cwd.clone(),
@@ -365,7 +357,14 @@ pwd -P > "$LOG/cwd.log"
         }
 
         fn runner(&self) -> ClaudeRunner {
-            ClaudeRunner::new(self.dir.path().join("bin").into_os_string())
+            ClaudeRunner
+        }
+
+        /// The run's `PATH`: the fake first, then the system tools.
+        fn search_path(&self) -> OsString {
+            let mut path = self.dir.path().join("bin").into_os_string();
+            path.push(":/usr/bin:/bin");
+            path
         }
 
         fn kb(&self) -> PathBuf {
@@ -381,7 +380,7 @@ pwd -P > "$LOG/cwd.log"
                 page_path: self.dir.path().join("page.md"),
                 prompt: "the prompt".to_string(),
                 env: vec![
-                    (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+                    (OsString::from("PATH"), self.search_path()),
                     (OsString::from("HOME"), OsString::from("/users/someone")),
                     (
                         OsString::from("CLAUDE_CODE_USE_BEDROCK"),
@@ -602,9 +601,10 @@ pwd -P > "$LOG/cwd.log"
 
         // Without `claude` on the search path the run does not start.
         let empty = tempfile::tempdir().unwrap();
-        let runner = ClaudeRunner::new(empty.path().as_os_str().to_owned());
-        let error = runner
-            .start(&fake.spec(), &ProcessSlot::default())
+        let mut spec = fake.spec();
+        spec.env[0].1 = empty.path().as_os_str().to_owned();
+        let error = ClaudeRunner
+            .start(&spec, &ProcessSlot::default())
             .err()
             .expect("no claude to start");
         assert!(error.to_string().contains("claude"), "{error:#}");

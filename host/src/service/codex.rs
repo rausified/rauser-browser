@@ -6,7 +6,6 @@
 //! version this follows and the request and notification shapes.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -19,7 +18,7 @@ use super::harness_api::{
     HarnessEvent, HarnessRunner, HarnessSession, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use crate::brand::{APP_NAME, NAMESPACE};
-use crate::harness::find_on_path;
+use crate::harness::{Adapter, resolve_for_run};
 
 /// The `codex` arguments that start the app-server on stdio.
 pub const APP_SERVER_ARGS: [&str; 3] = ["app-server", "--listen", "stdio://"];
@@ -36,18 +35,15 @@ const EXITED: &str = "codex app-server exited before the turn finished";
 /// Starts a `codex app-server` thread per run. See the module documentation.
 #[derive(Debug, Clone)]
 pub struct CodexRunner {
-    search_path: OsString,
     output_schema: Option<Value>,
 }
 
 impl CodexRunner {
-    /// `search_path` is where `codex` is looked up; `output_schema`, when
-    /// set, is sent with every `turn/start` to constrain the final message.
-    pub fn new(search_path: OsString, output_schema: Option<Value>) -> Self {
-        Self {
-            search_path,
-            output_schema,
-        }
+    /// `codex` is looked up on each run's own environment, as setup does.
+    /// `output_schema`, when set, is sent with every `turn/start` to
+    /// constrain the final message.
+    pub fn new(output_schema: Option<Value>) -> Self {
+        Self { output_schema }
     }
 }
 
@@ -58,12 +54,11 @@ impl HarnessRunner for CodexRunner {
 
     /// The probe asks for one word, which the answer schema would forbid.
     fn for_probe(&self) -> Option<Box<dyn HarnessRunner>> {
-        Some(Box::new(Self::new(self.search_path.clone(), None)))
+        Some(Box::new(Self::new(None)))
     }
 
     fn start(&self, spec: &RunSpec, slot: &ProcessSlot) -> anyhow::Result<Box<dyn HarnessSession>> {
-        let program = find_on_path(&self.search_path, "codex")
-            .ok_or_else(|| anyhow::anyhow!("codex is not on the service's PATH"))?;
+        let program = resolve_for_run(Adapter::Codex, &spec.env).map_err(anyhow::Error::msg)?;
         let mut command = Command::new(&program);
         command
             .args(APP_SERVER_ARGS)
@@ -477,6 +472,7 @@ fn no_answer(method: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::mpsc;
@@ -539,7 +535,14 @@ done
         }
 
         fn runner(&self, schema: Option<Value>) -> CodexRunner {
-            CodexRunner::new(self.dir.path().join("bin").into_os_string(), schema)
+            CodexRunner::new(schema)
+        }
+
+        /// The run's `PATH`: the fake first, then the system tools.
+        fn search_path(&self) -> OsString {
+            let mut path = self.dir.path().join("bin").into_os_string();
+            path.push(":/usr/bin:/bin");
+            path
         }
 
         fn kb(&self) -> PathBuf {
@@ -555,7 +558,7 @@ done
                 page_path: self.dir.path().join("page.md"),
                 prompt: "the prompt".to_string(),
                 env: vec![
-                    (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+                    (OsString::from("PATH"), self.search_path()),
                     (OsString::from("HOME"), OsString::from("/users/someone")),
                     (
                         OsString::from("CODEX_HOME"),
@@ -741,8 +744,9 @@ done
 
         // Without `codex` on the search path the run does not start.
         let empty = tempfile::tempdir().unwrap();
-        let runner = CodexRunner::new(empty.path().as_os_str().to_owned(), None);
-        let error = runner
+        let mut spec = spec;
+        spec.env[0].1 = empty.path().as_os_str().to_owned();
+        let error = CodexRunner::new(None)
             .start(&spec, &ProcessSlot::default())
             .err()
             .expect("no codex to start");
