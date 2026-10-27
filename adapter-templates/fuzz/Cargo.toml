@@ -6,6 +6,7 @@
 #     cargo +nightly fuzz run parse_document
 #     cargo +nightly fuzz run prepare_url
 #     cargo +nightly fuzz run match_title
+#     cargo +nightly fuzz run structural_draft
 
 [package]
 name = "adapter-templates-fuzz"
@@ -42,6 +43,13 @@ bench = false
 [[bin]]
 name = "match_title"
 path = "fuzz_targets/match_title.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "structural_draft"
+path = "fuzz_targets/structural_draft.rs"
 test = false
 doc = false
 bench = false
