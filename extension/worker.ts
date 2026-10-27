@@ -36,7 +36,7 @@ const PAUSE_TOKEN_KEY = storageKey("pause_token_v1");
 // still have adapters in the host config. Capture stays off for them until a
 // received lease no longer carries an adapter on any of them.
 const PENDING_REMOVALS_KEY = storageKey("pending_site_removals_v1");
-// Read once by migratePendingRemovals, then deleted.
+// Honored as pending removals until migratePendingRemovals carries them over.
 const LEGACY_REVOCATIONS_KEY = storageKey("revocations_v1");
 const LEGACY_REMOVED_SITES_KEY = storageKey("locally_removed_sites_v1");
 // Written by the per-origin note grants of earlier builds.
@@ -341,7 +341,7 @@ async function freezeActivity(now = Date.now()): Promise<number> {
   return accepted;
 }
 
-async function readPendingRemovals(): Promise<string[]> {
+async function readStoredPendingRemovals(): Promise<string[]> {
   const stored = await chrome.storage.local.get(PENDING_REMOVALS_KEY);
   const value = stored[PENDING_REMOVALS_KEY];
   if (value === undefined) return [];
@@ -358,19 +358,33 @@ function legacyOrigins(value: unknown, pick: (entry: unknown) => unknown): strin
   return value.map(pick).filter((origin): origin is string => typeof origin === "string");
 }
 
+/** Origins an earlier build removed or saw revoked. Until migration has
+ * carried them into the pending list and deleted the legacy keys, they keep
+ * gating capture, so a failed migration write cannot reopen them. */
+async function readLegacyRemovals(): Promise<string[]> {
+  const stored = await chrome.storage.local.get([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
+  return [
+    ...legacyOrigins(stored[LEGACY_REVOCATIONS_KEY], (entry) => entry),
+    ...legacyOrigins(stored[LEGACY_REMOVED_SITES_KEY], (entry) =>
+      typeof entry === "object" && entry !== null ? (entry as { origin?: unknown }).origin : null),
+  ];
+}
+
+/** Every origin capture must stay off for: the pending list plus any legacy
+ * removal state not yet migrated. */
+async function readPendingRemovals(): Promise<string[]> {
+  return [...new Set([...await readStoredPendingRemovals(), ...await readLegacyRemovals()])].sort();
+}
+
 /** Carry origins that an earlier build removed or saw revoked, but whose
  * adapters the host may still hold, into the one pending-removal list. */
 async function migratePendingRemovals(): Promise<void> {
   const stored = await chrome.storage.local.get([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
   if (!(LEGACY_REVOCATIONS_KEY in stored) && !(LEGACY_REMOVED_SITES_KEY in stored)) return;
-  const origins = new Set([
-    ...await readPendingRemovals(),
-    ...legacyOrigins(stored[LEGACY_REVOCATIONS_KEY], (entry) => entry),
-    ...legacyOrigins(stored[LEGACY_REMOVED_SITES_KEY], (entry) =>
-      typeof entry === "object" && entry !== null ? (entry as { origin?: unknown }).origin : null),
-  ]);
+  const origins = await readPendingRemovals();
+  // Delete the legacy keys only after the merged list is durably written.
   await chrome.storage.local.set({
-    [PENDING_REMOVALS_KEY]: [...origins].sort().slice(0, MAX_PENDING_REMOVALS),
+    [PENDING_REMOVALS_KEY]: origins.slice(0, MAX_PENDING_REMOVALS),
   });
   await chrome.storage.local.remove([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
   // Only a lease received after the list changed may clear it.
@@ -1021,7 +1035,9 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       // pending origin. Until then, capture stays off for those origins.
       const pending = await readPendingRemovals();
       if (pending.length && receivedLease && !holdsPendingRemoval(receivedLease, pending)) {
-        await chrome.storage.local.remove(PENDING_REMOVALS_KEY);
+        await chrome.storage.local.remove([
+          PENDING_REMOVALS_KEY, LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY,
+        ]);
       }
       return currentStatus();
     }
