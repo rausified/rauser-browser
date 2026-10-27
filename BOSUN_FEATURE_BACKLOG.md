@@ -410,7 +410,10 @@ main, check the item off as "not reproduced" and say why. The last item,
   hyphenated UUID, but the hex payload keeps the raw `event_id`, so
   `parse_marker_event` (host/src/index.rs ~1403/1422) rejects the line.
   Canonicalize `event_id` in the payload at capture for single and batch
-  activity and for why (host/src/capture.rs).
+  activity and for why (host/src/capture.rs) the way `record_summary`
+  already does (capture.rs ~408-415). The lane C2 review re-confirmed this
+  (findings 18/25); writers are `record_activity` ~296/~337, `record_why`
+  ~373, and batch activity ~730/~764.
 - [ ] `brwr-u8n` **URLs that grow past 8192 bytes when normalized are
   captured, then dropped on rescan.** Capture bounds the raw URL
   (host/src/capture.rs ~627/~802, `activity_shape_is_valid` ~154/166) but
@@ -444,6 +447,71 @@ main, check the item off as "not reproduced" and say why. The last item,
   warning, and offers a one-click "Stop stripping <param>" fix. Also record
   which params were stripped. P2; depends on `brwr-hrc` (rebase onto it first,
   both edit config.rs).
+
+### Cross-PR seam review defects (lane C2, 2026-10-27)
+
+A 2026-10-27 review of the seams between the PRs merged that night (main at
+6ad6020) confirmed each of these with a probe test that fails on that commit.
+None blocks deploy, so they are P3 bugs, and they wait behind the plan work
+above. Line numbers were re-checked on 0ab41f4; re-check them against current
+main. Same rules as the lane C list: write the regression test in the bead
+first, show it fails, then fix, one cycle each; if it does not fail, check the
+item off as "not reproduced" and say why. Findings 18 and 25 of this review
+were folded into `brwr-q7e` above rather than given their own item.
+
+- [ ] `brwr-jdi` **An adapter change made elsewhere costs the next note edit.**
+  `scheduleReload` (extension/panel.ts ~507) calls `notes.retry()`, which only
+  reloads after a failed load (note-editor.ts ~127), so the editor keeps the
+  old record key and the next autosave gets `key_changed`. Reload the note
+  when the config revision changed.
+- [ ] `brwr-mm0` **A delivery absorbed by Pause, Discard or Dismiss never
+  refreshes the card.** Only `panelTick` (extension/panel.ts ~539) compares
+  `delivered_batches`; the other `refreshStatus()` callers (~559/~581/~596)
+  overwrite it unchecked, so the card keeps stale totals.
+- [ ] `brwr-gob` **The pending-pause Why hint names a disabled button.**
+  `whyPausedReason` (extension/panel.ts ~294) says "Use Pause capture" while
+  `updateControls` (~406) disables it because the host is unreachable.
+- [ ] `brwr-b50` **The card keeps "native host is not connected" after the
+  host returns.** `render()` (extension/panel.ts ~456) runs on reconnect but
+  never calls `refreshArtifact`; refresh on a false-to-true transition.
+- [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
+  sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
+  see show "○ Not an artifact" (~155 via `showNoPage` ~820).
+- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
+  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
+  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
+  whole-second forms. Make them agree.
+- [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
+  the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
+  rejects format 0 or more than 64 adapters, which the host returns with
+  `adapter_issue` set, so the repair prompt is unreachable.
+- [ ] `brwr-ylm` **Queued and resumed runs launch in a stale notes folder.**
+  `run_cwd` (host/src/service/server.rs ~335) skips the identity check and
+  `resume`/`Inner::run` (supervisor.rs ~341/~663) reuse the recorded cwd;
+  re-check under the lock and fail closed. Latent until a runner ships.
+  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
+  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
+  the cap that `write_request` (host/src/frame.rs ~64) enforces after
+  connecting; refuse it as too large before contacting the service.
+  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+- [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
+  host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
+- [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
+  `whyPausedReason`/`whySaveBlocked` (extension/panel.ts ~289-310) ignore
+  `pending_removals`, which the panel's own warning (~448) calls off.
+- [ ] `brwr-hnr` **Summary-only days count as opened days.** The Summary arm
+  of `derive` (host/src/index.rs ~1394) inserts the day with no open, unlike
+  the Activity (~1217) and Legacy (~1340) arms. Latent until summaries ship.
+- [ ] `brwr-t8m` **Capture Site promises a save that retired adapter history
+  will refuse.** `planCaptureSite` (extension/capture-site.ts ~35) cannot see
+  `[[adapter_id_history]]`, so the host's frozen-ID check (host/src/config.rs
+  `validate_adapter_transition_with_history` ~2105) fails at commit. Re-check
+  against #85's retired-contract recording first.
+- [ ] `brwr-rft` **Coalesced activity keeps the old title's refs.**
+  `coalesceActivity` (extension/worker.ts ~285/~295) unions refs while taking
+  the newer title, so the host rejects it with `activity_refs_mismatch`; keep
+  the winning title's refs as activity.ts (~177) does.
 
 ### Cookie's own proposals (only after the plan work above)
 
