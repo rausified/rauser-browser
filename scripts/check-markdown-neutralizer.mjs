@@ -289,6 +289,7 @@ function main() {
     // output followed by another neutralized fragment; `summary` and
     // `summaryWikilink` are the body of a summary file (render_summary) with
     // every agent field set to the input, in each link style, and
+    // `summaryQuery*` the same with the input also in the page URL's query;
     // `frontmatter_summary*` that file's front matter.
     for (const [kind, document] of Object.entries(documents)) {
       // Everything but front matter must render with no code or math.

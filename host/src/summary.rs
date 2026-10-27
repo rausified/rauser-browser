@@ -20,6 +20,7 @@ use anyhow::Result;
 use brauser_protocol::{HarnessId, ImportanceLevel, RecordKey, RecordKeyKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::{Component, Path};
 use url::Url;
 
 use crate::answer::{MAX_ENTITY_CHARS, MAX_LABEL_CHARS, MAX_REASON_CHARS, SummaryAnswer};
@@ -230,11 +231,27 @@ fn yaml_list(items: &[String]) -> String {
 }
 
 /// The page URL as a bracketed link destination. The canonical URL is
-/// host-normalized, so this only guards the destination's own syntax.
+/// host-normalized, but the page chooses it, and WHATWG serialization leaves
+/// a backtick, `$`, `!`, `[` and `]` raw in the query. Those become numeric
+/// entities, as do `%`, `=` and `~` next to the same character (an Obsidian
+/// comment, highlight or strikethrough), so no code span, math, image or
+/// embed syntax reaches Dataview, a math engine or Obsidian's own passes.
+/// CommonMark decodes entities in a destination, so the link target is
+/// unchanged. Controls, whitespace, `<`, `>` and `\\` are percent-encoded to
+/// guard the destination's own syntax.
 fn page_destination(url: &str) -> String {
+    let chars: Vec<char> = url.chars().collect();
     let mut out = String::with_capacity(url.len());
-    for ch in url.chars() {
-        if ch.is_control() || ch.is_whitespace() || matches!(ch, '<' | '>' | '\\') {
+    for (at, &ch) in chars.iter().enumerate() {
+        let doubled = |ch: char| (at > 0 && chars[at - 1] == ch) || chars.get(at + 1) == Some(&ch);
+        let entity = match ch {
+            '`' | '$' | '!' | '[' | ']' => true,
+            '%' | '=' | '~' => doubled(ch),
+            _ => false,
+        };
+        if entity {
+            out.push_str(&format!("&#{};", u32::from(ch)));
+        } else if ch.is_control() || ch.is_whitespace() || matches!(ch, '<' | '>' | '\\') {
             let mut buffer = [0u8; 4];
             for byte in ch.encode_utf8(&mut buffer).bytes() {
                 out.push_str(&format!("%{byte:02X}"));
@@ -248,13 +265,37 @@ fn page_destination(url: &str) -> String {
 
 /// A wikilink to `target` when it can carry `target` unchanged, and the
 /// escaped single-line text otherwise, so a name with `#`, `|` or `[` never
-/// links to some other note.
+/// links to some other note. A backslash (which can escape the closing
+/// bracket), `%%` (an Obsidian comment), `==` (a highlight) or `~~` inside
+/// the link also falls back, since `markdown::wikilink` keeps those.
 fn wikilink_or_text(target: &str, text: &str, limit: usize) -> String {
+    let target = target.trim();
     let link = wikilink(target, None);
-    if link == format!("[[{}]]", target.trim()) {
+    let syntax =
+        target.contains('\\') || ["%%", "==", "~~"].iter().any(|pair| target.contains(pair));
+    if !syntax && link == format!("[[{target}]]") {
         link
     } else {
         inline(text, limit)
+    }
+}
+
+/// A related note path with `/` separators and no `.` components, so the
+/// Related line is portable and Obsidian resolves the wikilink
+/// (`answer::related_notes` keeps the path as the agent gave it, which on
+/// Windows may use `\\`).
+fn portable_note(note: &str) -> String {
+    let parts: Vec<String> = Path::new(note)
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if parts.is_empty() {
+        note.to_owned()
+    } else {
+        parts.join("/")
     }
 }
 
@@ -366,13 +407,16 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
         let related: Vec<String> = answer
             .related_notes
             .iter()
-            .map(|note| match style {
-                LinkStyle::Relative => inline(note, MAX_RELATED_NOTE_CHARS),
-                LinkStyle::Wikilink => wikilink_or_text(
-                    note.strip_suffix(".md").unwrap_or(note),
-                    note,
-                    MAX_RELATED_NOTE_CHARS,
-                ),
+            .map(|note| {
+                let note = portable_note(note);
+                match style {
+                    LinkStyle::Relative => inline(&note, MAX_RELATED_NOTE_CHARS),
+                    LinkStyle::Wikilink => wikilink_or_text(
+                        note.strip_suffix(".md").unwrap_or(&note),
+                        &note,
+                        MAX_RELATED_NOTE_CHARS,
+                    ),
+                }
             })
             .collect();
         out.push_str(&format!("\nRelated: {}\n", related.join(", ")));
@@ -1238,16 +1282,154 @@ mod tests {
             let after_page_link = body.split_once('\n').unwrap().1;
             for (at, _) in after_page_link.match_indices('<') {
                 assert!(
-                    after_page_link[..at].ends_with('\\'),
+                    backslash_escaped(after_page_link, at),
                     "unescaped < in {after_page_link}"
                 );
             }
             for (at, _) in body.match_indices("![") {
-                assert!(body[..at].ends_with('\\'), "unescaped ![ in {body}");
+                assert!(backslash_escaped(body, at), "unescaped ![ in {body}");
             }
             // And nothing for another engine.
             assert!(!body.contains('`') && !body.contains('$'), "{body}");
             write_and_reread(&vault, &key, &rendered);
+        }
+    }
+
+    /// Whether the character at byte `at` of `text` follows an odd run of
+    /// backslashes, so it is backslash-escaped (`\\<` is a live `<`).
+    fn backslash_escaped(text: &str, at: usize) -> bool {
+        !text[..at]
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == b'\\')
+            .count()
+            .is_multiple_of(2)
+    }
+
+    #[test]
+    fn backslash_escapes_are_parity_aware() {
+        assert!(backslash_escaped("\\<", 1));
+        assert!(!backslash_escaped("\\\\<", 2));
+        assert!(backslash_escaped("\\\\\\<", 3));
+        assert!(!backslash_escaped("<", 0));
+    }
+
+    #[test]
+    fn the_page_link_holds_no_code_span_or_math() {
+        let (_root, vault) = fixed_vault();
+        let url =
+            crate::capture::canonical_url("https://evil.example/p?q=`$=dv.el('b','x')`&r=$x$", &[])
+                .unwrap();
+        // WHATWG serialization leaves the backticks and `$` in the query.
+        assert!(url.contains('`') && url.contains('$'), "{url}");
+        let key = url_record_key(&url).unwrap();
+        let answer = answer();
+        for style in [LinkStyle::Relative, LinkStyle::Wikilink] {
+            let mut doc = document(&key, &answer, vault.note_link(&key, &url, style).unwrap());
+            doc.canonical_url = &url;
+            let rendered = render_summary(&doc, style);
+            let body = body(&rendered);
+            assert!(!body.contains('`') && !body.contains('$'), "{body}");
+            // CommonMark decodes the entities, so the link target is the URL.
+            let destination = url
+                .replace('`', "&#96;")
+                .replace('$', "&#36;")
+                .replace('!', "&#33;")
+                .replace('[', "&#91;")
+                .replace(']', "&#93;");
+            assert!(
+                body.starts_with(&format!("[Page](<{destination}>) · ")),
+                "{body}"
+            );
+            assert!(owned_summary(rendered.as_bytes(), &key), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn the_page_destination_escapes_obsidian_syntax_as_entities() {
+        let url = crate::capture::canonical_url(
+            "https://e.example/p?s=![[x]]&t=%%c%%&u=a==b&v=~~d&w=%20=~",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://e.example/p?s=![[x]]&t=%%c%%&u=a==b&v=~~d&w=%20=~"
+        );
+        assert_eq!(
+            page_destination(&url),
+            "https://e.example/p?s=&#33;&#91;&#91;x&#93;&#93;&t=&#37;&#37;c&#37;&#37;\
+             &u=a&#61;&#61;b&v=&#126;&#126;d&w=%20=~"
+        );
+        assert_eq!(
+            page_destination("https://e.example/a b<>\\"),
+            "https://e.example/a%20b%3C%3E%5C"
+        );
+    }
+
+    #[test]
+    fn wikilinks_fall_back_to_text_for_obsidian_syntax() {
+        let (_root, vault) = fixed_vault();
+        let key = url_record_key(PAGE_URL).unwrap();
+        let mut answer = answer();
+        // A trailing backslash escapes the closing bracket; `%%` opens an
+        // Obsidian comment and `==` a highlight inside the link.
+        let odd: Vec<String> = ["a\\", "%%x", "a%%b", "==hi==", "~~s~~", "100% sure"]
+            .map(String::from)
+            .to_vec();
+        answer.entities.technologies = odd.clone();
+        let rendered = render_summary(
+            &document(
+                &key,
+                &answer,
+                vault
+                    .note_link(&key, PAGE_URL, LinkStyle::Wikilink)
+                    .unwrap(),
+            ),
+            LinkStyle::Wikilink,
+        );
+        let mut expected: Vec<String> = odd[..5]
+            .iter()
+            .map(|name| inline(name, MAX_ENTITY_CHARS))
+            .collect();
+        expected.push("[[100% sure]]".into());
+        assert!(
+            rendered.contains(&format!("Technologies: {} · ", expected.join(", "))),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("[[a\\]]") && !rendered.contains("[[%%"));
+    }
+
+    #[test]
+    fn related_notes_are_written_with_forward_slashes() {
+        let (_root, vault) = fixed_vault();
+        let key = url_record_key(PAGE_URL).unwrap();
+        let mut answer = answer();
+        answer.related_notes = vec!["./projects/./widget.md".into()];
+        #[cfg(windows)]
+        answer.related_notes.push(r"projects\gadget.md".into());
+        let mut expected_relative = vec!["projects/widget.md"];
+        let mut expected_wikilink = vec!["[[projects/widget]]"];
+        if cfg!(windows) {
+            expected_relative.push("projects/gadget.md");
+            expected_wikilink.push("[[projects/gadget]]");
+        }
+        for (style, expected) in [
+            (LinkStyle::Relative, expected_relative),
+            (LinkStyle::Wikilink, expected_wikilink),
+        ] {
+            let rendered = render_summary(
+                &document(
+                    &key,
+                    &answer,
+                    vault.note_link(&key, PAGE_URL, style).unwrap(),
+                ),
+                style,
+            );
+            assert!(
+                rendered.ends_with(&format!("\n\nRelated: {}\n", expected.join(", "))),
+                "{rendered}"
+            );
         }
     }
 

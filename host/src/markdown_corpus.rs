@@ -173,13 +173,16 @@ struct Case {
     wikilink: String,
     /// The output followed by each neutralized `FOLLOWERS` fragment.
     joined: Vec<String>,
+    /// The canonical page URL of the last two summaries.
+    query_url: String,
     /// A summary file with every agent field set to the input, in the
-    /// relative and wikilink styles.
-    summaries: [String; 2],
+    /// relative and wikilink styles, for `SUMMARY_URL` and then for
+    /// `query_url`.
+    summaries: [String; 4],
 }
 
-/// A summary file whose agent fields and title are all `input`.
-fn summary_file(input: &str, style: LinkStyle) -> String {
+/// A summary file of `url` whose agent fields and title are all `input`.
+fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
     let answer = SummaryAnswer {
         document_type: input.into(),
         category: input.into(),
@@ -197,7 +200,7 @@ fn summary_file(input: &str, style: LinkStyle) -> String {
         assessment: input.into(),
         related_notes: vec![input.into(), "projects/widget.md".into()],
     };
-    let key = url_record_key(SUMMARY_URL).unwrap();
+    let key = url_record_key(url).unwrap();
     let note_link = match style {
         LinkStyle::Relative => "[Page note](../notes/e-example-a.md)".to_owned(),
         LinkStyle::Wikilink => wikilink("notes/e-example-a", Some("Page note")),
@@ -205,7 +208,7 @@ fn summary_file(input: &str, style: LinkStyle) -> String {
     render_summary(
         &SummaryDocument {
             key: &key,
-            canonical_url: SUMMARY_URL,
+            canonical_url: url,
             title: input,
             summarized_at: "2026-10-26T14:05:00-07:00",
             harness: HarnessId::Codex,
@@ -219,6 +222,19 @@ fn summary_file(input: &str, style: LinkStyle) -> String {
 
 const SUMMARY_URL: &str = "https://e.example/a";
 
+/// A page URL whose query WHATWG serialization leaves a backtick and `$` in.
+const HOSTILE_QUERY_URL: &str = "https://e.example/p?q=`$=dv.el('b','x')`&r=$x$";
+
+/// The canonical URL of `SUMMARY_URL` with `input` as its query, as the host
+/// normalizes it, or of `HOSTILE_QUERY_URL` when that does not parse. The
+/// page chooses its URL, so its query is as hostile as any agent field.
+fn query_url(input: &str) -> String {
+    crate::capture::canonical_url(&format!("{SUMMARY_URL}?q={input}"), &[])
+        .ok()
+        .filter(|url| url_record_key(url).is_ok())
+        .unwrap_or_else(|| crate::capture::canonical_url(HOSTILE_QUERY_URL, &[]).unwrap())
+}
+
 /// A rendered summary's frontmatter (with its fences) and body.
 fn split_summary(file: &str) -> (&str, &str) {
     let end = "---\n".len() + file["---\n".len()..].find("\n---\n").unwrap() + "\n---\n".len();
@@ -231,6 +247,7 @@ fn the_corpus_comes_out_inert() {
         .into_iter()
         .map(|input| {
             let output = neutralize_remote(&input);
+            let query_url = query_url(&input);
             Case {
                 joined: FOLLOWERS
                     .iter()
@@ -239,9 +256,12 @@ fn the_corpus_comes_out_inert() {
                 frontmatter: format!("---\ntitle: {}\n---\n", yaml_string(&input)),
                 inline: inline(&input, 2048),
                 summaries: [
-                    summary_file(&input, LinkStyle::Relative),
-                    summary_file(&input, LinkStyle::Wikilink),
+                    summary_file(&input, SUMMARY_URL, LinkStyle::Relative),
+                    summary_file(&input, SUMMARY_URL, LinkStyle::Wikilink),
+                    summary_file(&input, &query_url, LinkStyle::Relative),
+                    summary_file(&input, &query_url, LinkStyle::Wikilink),
                 ],
+                query_url,
                 wikilink: wikilink(&input, Some(&input)),
                 output,
                 input,
@@ -266,7 +286,15 @@ fn the_corpus_comes_out_inert() {
                 }
                 // The summary body is checked as body text; its frontmatter
                 // as front matter.
-                for (name, file) in ["summary", "summaryWikilink"].iter().zip(&case.summaries) {
+                for (name, file) in [
+                    "summary",
+                    "summaryWikilink",
+                    "summaryQuery",
+                    "summaryQueryWikilink",
+                ]
+                .iter()
+                .zip(&case.summaries)
+                {
                     let (frontmatter, body) = split_summary(file);
                     pair[*name] = body.into();
                     pair[format!("frontmatter_{name}")] = frontmatter.into();
@@ -283,15 +311,16 @@ fn the_corpus_comes_out_inert() {
         inline,
         wikilink,
         joined,
+        query_url,
         summaries,
     } in &cases
     {
         // A summary file keeps its identity and hands nothing to another
         // engine, whatever the agent wrote; its frontmatter values read back
         // as the input's plain line.
-        let key = url_record_key(SUMMARY_URL).unwrap();
-        for file in summaries {
-            assert!(owned_summary(file.as_bytes(), &key), "{file:?}");
+        let keys = [SUMMARY_URL, query_url.as_str()].map(|url| url_record_key(url).unwrap());
+        for (index, file) in summaries.iter().enumerate() {
+            assert!(owned_summary(file.as_bytes(), &keys[index / 2]), "{file:?}");
             let (front, body) = split_summary(file);
             for raw in ["`", "$"] {
                 assert!(
