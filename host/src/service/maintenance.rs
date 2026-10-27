@@ -101,6 +101,16 @@ fn orphan_group(
 /// runs. Queued and running runs, and runs whose age cannot be read, are kept.
 /// Returns how many were removed.
 pub fn prune(store: &RunStore, now: OffsetDateTime) -> usize {
+    prune_with(store, now, |_, remove| remove())
+}
+
+/// [`prune`], with each removal passed through `guarded`, which runs the
+/// removal it is given (returning its result) or skips it (returning false).
+pub fn prune_with(
+    store: &RunStore,
+    now: OffsetDateTime,
+    mut guarded: impl FnMut(Uuid, &mut dyn FnMut() -> bool) -> bool,
+) -> usize {
     let runs = store.list();
     let outside = runs.len().saturating_sub(KEEP_NEWEST);
     let cutoff = now - time::Duration::days(KEEP_DAYS);
@@ -116,9 +126,15 @@ pub fn prune(store: &RunStore, now: OffsetDateTime) -> usize {
         let Ok(id) = Uuid::parse_str(&status.run_id) else {
             continue;
         };
-        match store.remove(id) {
-            Ok(()) => removed += 1,
-            Err(error) => eprintln!("brauser service: pruning run {id}: {error:#}"),
+        let mut remove = || match store.remove(id) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("brauser service: pruning run {id}: {error:#}");
+                false
+            }
+        };
+        if guarded(id, &mut remove) {
+            removed += 1;
         }
     }
     removed

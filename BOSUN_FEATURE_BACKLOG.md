@@ -362,6 +362,12 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
 
 ### Focused quality follow-up
 
+- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
+  durable.** From the PR #75 Codex review: a failed terminal status write
+  still frees the run's slot and key, so the record says running and a second
+  run for the same key can start. Use bounded retries and an in-memory end
+  state, keeping the key reserved, rather than holding the queue on a failing
+  disk.
 - [ ] `brwr-hme` **One Brauser home folder (P1, John 2026-10-27).** The user
   picks one home folder; Brauser creates its notes, artifacts, summaries, logs,
   config and state inside it. Owned by the Columbus session (design, then a

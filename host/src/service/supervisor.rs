@@ -917,10 +917,18 @@ impl Inner {
     }
 
     /// Apply retention after a run finishes, then drop the locks of runs
-    /// whose records are gone.
+    /// whose records are gone. A record whose lock is held (a retry save in
+    /// progress) is skipped this time. The lock map stays locked across each
+    /// removal, so no new holder can appear while the directory goes.
     fn prune(&self) {
         let _guard = lock(&self.prune_lock);
-        maintenance::prune(&self.store, OffsetDateTime::now_utc());
+        maintenance::prune_with(&self.store, OffsetDateTime::now_utc(), |id, remove| {
+            let locks = lock(&self.record_locks);
+            match locks.get(&id) {
+                None => remove(),
+                Some(record_lock) => record_lock.try_lock().is_ok_and(|_held| remove()),
+            }
+        });
         lock(&self.record_locks).retain(|id, _| self.store.run_dir(*id).exists());
     }
 }
@@ -1662,6 +1670,43 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn pruning_skips_a_run_whose_record_is_in_use() {
+        let mut old = Vec::new();
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            for _ in 0..maintenance::KEEP_NEWEST {
+                old.push(seed_record(
+                    store,
+                    cwd,
+                    RunState::Succeeded,
+                    "2020-01-01T00:00:00.000000000Z",
+                ));
+            }
+        });
+        // Equal `created_at`, so the smallest id is the first pruned.
+        let oldest = *old.iter().min_by_key(|id| id.to_string()).unwrap();
+        let inner = &fixture.supervisor.inner;
+        let record_lock = inner.record_lock(oldest).expect("the run exists");
+        let held = lock(&record_lock);
+        // One more finished run puts the oldest past retention.
+        seed_record(
+            &inner.store,
+            fixture.dir.path(),
+            RunState::Succeeded,
+            "2021-01-01T00:00:00.000000000Z",
+        );
+        // A run in retry_save holds its record lock; retention leaves it.
+        inner.prune();
+        assert!(
+            run_dir(&fixture, oldest).exists(),
+            "a held record was pruned"
+        );
+        drop(held);
+        inner.prune();
+        assert!(!run_dir(&fixture, oldest).exists());
+        assert!(!lock(&inner.record_locks).contains_key(&oldest));
     }
 
     #[test]
