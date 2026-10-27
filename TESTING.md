@@ -115,6 +115,18 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Index catch-up is tested through the native handlers by restoring
+  valid older cache files after a durable append, reopening configuration, then
+  querying or delivering another single/batched event without replaying the
+  missing one. Assertions cover Recent, worklog, and the actual SQLite rows.
+  Separate faults replace index.db with a directory or add a sparse oversized
+  log: capture stays acknowledged, all three history APIs return unavailable,
+  and clearing the fault restores history without duplicate log bytes. Index
+  tests cover checkpoint migration, changed-file-only reads, a completed
+  trailing marker, dirty tracking, and the aggregate read cap without partial
+  publication. These are local filesystem fixtures; no macOS browser run is
+  claimed and the scripted-dialog count remains 14.
+
 - 2026-10-27: The single/batch activity parity test covers 13 scenarios through
   both native handlers with separate stores, explicit expected outcomes and
   reasons, correlated event IDs, no log/index writes on refusal, and decoded
