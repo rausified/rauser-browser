@@ -593,6 +593,9 @@ mod tests {
 
     #[test]
     fn not_installed_service_gives_service_unavailable() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let (link, calls) = link(fake::socket_in(&dir), |_| Launch::NotInstalled);
         assert_eq!(
@@ -604,6 +607,9 @@ mod tests {
 
     #[test]
     fn a_failed_launch_is_service_unavailable_with_its_reason() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let (link, _) = link(fake::socket_in(&dir), |_| Launch::Failed("boom".into()));
         match link.request(&list_runs()) {
@@ -638,6 +644,9 @@ mod tests {
 
     #[test]
     fn a_service_that_never_listens_is_unavailable_after_the_wait() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
         let dir = fake::short_dir();
         let (mut link, calls) = link(fake::socket_in(&dir), |_| Launch::Started);
         link.wait = Duration::from_millis(300);
