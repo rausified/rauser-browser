@@ -5,6 +5,7 @@
 pub mod agent_env;
 pub mod child;
 pub mod client;
+pub mod codex;
 pub mod command_runner;
 pub mod harness_api;
 pub mod maintenance;

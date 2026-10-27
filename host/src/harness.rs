@@ -503,7 +503,7 @@ fn discover_adapter(adapter: Adapter, env: &HarnessEnv) -> Option<Candidate> {
 }
 
 /// The first executable file with this name, like a shell's lookup.
-fn find_on_path(search_path: &OsStr, program: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(search_path: &OsStr, program: &str) -> Option<PathBuf> {
     std::env::split_paths(search_path)
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(program))
