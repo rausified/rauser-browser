@@ -1219,7 +1219,7 @@ impl ArtifactIndex {
                     "Summarized: {} — {}, {} importance",
                     plain_text(&summary.title),
                     plain_text(&summary.document_type),
-                    summary.importance
+                    crate::summary::importance_str(summary.importance)
                 );
                 // A future adapter-attached summary (spec §7.2's "the
                 // adapter does recognize the page" branch) can land on an
@@ -2133,7 +2133,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
         out.push_str(&format!(
             "Summary: [{}, {} importance](<{link}>)\n\n",
             markdown::inline(&summary.document_type, MAX_RENDERED_FIELD_CHARS),
-            markdown::inline(&summary.importance, MAX_RENDERED_FIELD_CHARS),
+            crate::summary::importance_str(summary.importance),
         ));
     }
     out.push_str("## Timeline\n\n");
@@ -4496,8 +4496,11 @@ print(json.dumps([tables,row]))"#;
             occurred_at: occurred_at.into(),
             document_type: "discussion".into(),
             category: "reading".into(),
-            importance: "high".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
             summary_path: "pages/hn-item.summary.md".into(),
+            record_key: crate::vault::url_record_key(url).unwrap(),
+            artifact_type: "web.page".into(),
+            harness: brauser_protocol::HarnessId::Codex,
         }
     }
 
@@ -4527,7 +4530,7 @@ print(json.dumps([tables,row]))"#;
         let summary = page_summary(url, &rfc3339_seconds_ago(5));
 
         assert!(matches!(
-            capture.record_summary(policy, &summary),
+            capture.record_summary(policy, &summary).0,
             crate::capture::CaptureOutcome::Persisted { .. }
         ));
 
@@ -4558,13 +4561,58 @@ print(json.dumps([tables,row]))"#;
         let mut again = page_summary(url, &rfc3339_seconds_ago(0));
         again.title = "An even better discussion".into();
         assert!(matches!(
-            capture.record_summary(policy, &again),
+            capture.record_summary(policy, &again).0,
             crate::capture::CaptureOutcome::Persisted { .. }
         ));
         index.reindex().unwrap();
         assert_eq!(artifact_files(root.path()).len(), 1);
         let updated = index.artifact(&expected_id).unwrap().expect("indexed");
         assert_eq!(updated.title, "An even better discussion");
+    }
+
+    #[test]
+    fn record_summary_returns_the_event_it_wrote() {
+        use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore};
+
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let capture = CaptureStore::open_in(&storage(root.path()), None, cache.path()).unwrap();
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        let url = "https://jira.example/browse/PROJ-1";
+        let web = page_summary(url, &rfc3339_seconds_ago(5));
+        let adapter = crate::summary::PageSummary {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            record_key: brauser_protocol::RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Artifact,
+                value: "jira:PROJ-1".into(),
+            },
+            artifact_type: "jira.issue".into(),
+            harness: brauser_protocol::HarnessId::Claude,
+            ..page_summary(url, &rfc3339_seconds_ago(4))
+        };
+        for summary in [web, adapter] {
+            let (CaptureOutcome::Persisted { relative_path }, Some(event)) =
+                capture.record_summary(policy, &summary)
+            else {
+                panic!("expected a persisted summary");
+            };
+            let log = fs::read_to_string(root.path().join(relative_path)).unwrap();
+            let replayed = parse_log(&log)
+                .into_iter()
+                .filter_map(|replayed| match replayed {
+                    CachedEvent::Summary(replayed) => Some(replayed),
+                    _ => None,
+                })
+                .find(|replayed| replayed.event_id == event.event_id)
+                .expect("the written summary replays");
+            assert_eq!(replayed, event);
+            assert_eq!(event.record_key, summary.record_key);
+            assert_eq!(event.harness, summary.harness);
+        }
     }
 
     #[test]
@@ -4588,7 +4636,7 @@ print(json.dumps([tables,row]))"#;
         summary.summary_path = format!("{}/hn item.summary.md", crate::layout::SUMMARIES_DIR);
 
         assert!(matches!(
-            capture.record_summary(policy, &summary),
+            capture.record_summary(policy, &summary).0,
             crate::capture::CaptureOutcome::Persisted { .. }
         ));
         assert_eq!(index.reindex().unwrap().written, 1);
@@ -4622,8 +4670,10 @@ print(json.dumps([tables,row]))"#;
             occurred_at: "2026-10-26T18:00:00Z".into(),
             document_type: "discussion".into(),
             category: "reading".into(),
-            importance: "high".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
             summary_path: "pages/hn-item.summary.md".into(),
+            record_key: crate::vault::url_record_key(url).unwrap(),
+            harness: brauser_protocol::HarnessId::Codex,
         };
         let payload = hex::encode(serde_json::to_vec(&event).unwrap());
         let summary_line = format!(
@@ -4669,8 +4719,10 @@ print(json.dumps([tables,row]))"#;
             occurred_at: "2026-10-26T18:00:00Z".into(),
             document_type: "discussion".into(),
             category: "reading".into(),
-            importance: "high".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
             summary_path: "pages/hn-item.summary.md".into(),
+            record_key: crate::vault::url_record_key(url).unwrap(),
+            harness: brauser_protocol::HarnessId::Codex,
         };
         let payload = hex::encode(serde_json::to_vec(&event).unwrap());
         let line = format!(
@@ -4704,8 +4756,10 @@ print(json.dumps([tables,row]))"#;
                 occurred_at: "2026-10-15T12:00:00Z".into(),
                 document_type: "discussion".into(),
                 category: "reading".into(),
-                importance: "high".into(),
+                importance: brauser_protocol::ImportanceLevel::High,
                 summary_path: "pages/hn-item.summary.md".into(),
+                record_key: crate::vault::url_record_key(url).unwrap(),
+                harness: brauser_protocol::HarnessId::Codex,
             })
             .unwrap();
 
@@ -4750,8 +4804,13 @@ print(json.dumps([tables,row]))"#;
                 occurred_at: "2026-10-15T13:00:00Z".into(),
                 document_type: "ticket".into(),
                 category: "work".into(),
-                importance: "high".into(),
+                importance: brauser_protocol::ImportanceLevel::High,
                 summary_path: "pages/proj-1.summary.md".into(),
+                record_key: brauser_protocol::RecordKey {
+                    kind: brauser_protocol::RecordKeyKind::Artifact,
+                    value: event.artifact_id.clone(),
+                },
+                harness: brauser_protocol::HarnessId::Claude,
             })
             .unwrap();
 
@@ -4781,8 +4840,10 @@ print(json.dumps([tables,row]))"#;
             occurred_at: "2026-10-26T18:00:00Z".into(),
             document_type: "discussion".into(),
             category: "reading".into(),
-            importance: "high".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
             summary_path: "pages/hn-item.summary.md".into(),
+            record_key: crate::vault::url_record_key(url).unwrap(),
+            harness: brauser_protocol::HarnessId::Codex,
         };
         let payload = hex::encode(serde_json::to_vec(&event).unwrap());
         let line = format!(

@@ -387,23 +387,33 @@ impl CaptureStore {
         )
     }
 
-    /// Record a "Summarize & log" result (spec §7.2) for a page no adapter
-    /// recognizes. Unlike every other entry, this is allowed on any HTTP(S)
-    /// page regardless of the site allowlist or whether capture is paused;
-    /// only the master `capture_enabled` toggle still applies. The host
-    /// derives the `web.page` artifact identity from the normalized URL —
-    /// callers never supply or influence it. This never invokes a harness
-    /// and never writes the summary file itself; `summary.summary_path` is
-    /// an opaque reference the caller already produced.
+    /// Record a "Summarize & log" result (spec §7.2). Unlike every other
+    /// entry, this is allowed on any HTTP(S) page regardless of the site
+    /// allowlist or whether capture is paused; only the master
+    /// `capture_enabled` toggle still applies. The host derives the artifact
+    /// identity from `summary.record_key` and the normalized URL
+    /// (`crate::summary::summary_artifact_id`): a `Url` key is the page's
+    /// `web.page` artifact, and an `Artifact` key attaches the summary to the
+    /// adapter artifact that recognizes the page. Callers never supply an
+    /// artifact ID. This never invokes a harness and never writes the summary
+    /// file itself; `summary.summary_path` is an opaque reference the caller
+    /// already produced.
+    ///
+    /// The event is the marker payload exactly as written, so the caller can
+    /// index it with `ArtifactIndex::record_summary` without deriving it a
+    /// second time. It is `Some` only for `Persisted`.
     pub fn record_summary(
         &self,
         policy: CapturePolicy<'_>,
         summary: &crate::summary::PageSummary,
-    ) -> CaptureOutcome {
+    ) -> (CaptureOutcome, Option<crate::summary::SummaryEvent>) {
         if let Err(reason) = crate::summary::validate_page_summary(summary) {
-            return CaptureOutcome::Rejected {
-                reason: reason.into(),
-            };
+            return (
+                CaptureOutcome::Rejected {
+                    reason: reason.into(),
+                },
+                None,
+            );
         }
         // Canonicalize now: the marker payload below must carry the exact
         // spelling `record_entry` hashes into `id_hash`, or a valid but
@@ -411,11 +421,11 @@ impl CaptureStore {
         // mismatch and the summary silently vanishes on reindex/restart.
         let event_id = match parse_event_id(&summary.event_id) {
             Ok(value) => value,
-            Err(reason) => return CaptureOutcome::Rejected { reason },
+            Err(reason) => return (CaptureOutcome::Rejected { reason }, None),
         };
         let timestamp = match parse_event_time(&summary.occurred_at) {
             Ok(value) => value,
-            Err(reason) => return CaptureOutcome::Rejected { reason },
+            Err(reason) => return (CaptureOutcome::Rejected { reason }, None),
         };
         let (day_dir, _) = self.log_parts(timestamp);
         let link = crate::markdown::relative_link(&day_dir, Path::new(&summary.summary_path));
@@ -423,7 +433,10 @@ impl CaptureStore {
         let document_type = crate::markdown::inline(&summary.document_type, 64);
         let body = format!(
             "{} — Summarized: {} — {}, {} importance — [summary](<{link}>)",
-            summary.occurred_at, title, document_type, summary.importance
+            summary.occurred_at,
+            title,
+            document_type,
+            crate::summary::importance_str(summary.importance)
         );
         let visit = VisitEvent {
             event_id: event_id.clone(),
@@ -432,6 +445,9 @@ impl CaptureStore {
             occurred_at: summary.occurred_at.clone(),
             incognito: false,
         };
+        // `record_entry` adds the normalized `url` and the derived
+        // `artifact_id`, and checks `record_key` and `artifact_type` against
+        // them.
         let marker = serde_json::json!({
             "event_id": event_id,
             "title": summary.title,
@@ -440,14 +456,34 @@ impl CaptureStore {
             "category": summary.category,
             "importance": summary.importance,
             "summary_path": summary.summary_path,
+            "record_key": summary.record_key,
+            "artifact_type": summary.artifact_type,
+            "harness": summary.harness,
         });
-        self.record_entry(
+        let mut written = None;
+        let outcome = self.record_entry_with_payload(
             policy,
             &visit,
             Some(&body),
             Some(("summary", marker)),
             EntryGate::AnyHttpPage,
-        )
+            &mut written,
+        );
+        if !matches!(outcome, CaptureOutcome::Persisted { .. }) {
+            return (outcome, None);
+        }
+        match written.map(serde_json::from_value::<crate::summary::SummaryEvent>) {
+            Some(Ok(event)) => (outcome, Some(event)),
+            // Unreachable: the payload was built from a `SummaryEvent`'s
+            // fields above. Report it rather than claim an event that was
+            // never written in that shape.
+            _ => (
+                CaptureOutcome::Retryable {
+                    message: "summary event did not round-trip".into(),
+                },
+                None,
+            ),
+        }
     }
 
     /// Append the durable evidence for worker-side buffer loss. The batch ID
@@ -787,6 +823,22 @@ impl CaptureStore {
         marker_payload: Option<(&str, serde_json::Value)>,
         gate: EntryGate,
     ) -> CaptureOutcome {
+        self.record_entry_with_payload(policy, event, custom_body, marker_payload, gate, &mut None)
+    }
+
+    /// `record_entry`, also leaving in `written` the marker payload exactly
+    /// as rendered into the entry (with the normalized `url` and, for a
+    /// summary, the derived `artifact_id`). `written` is meaningful only when
+    /// the outcome is `Persisted`.
+    fn record_entry_with_payload(
+        &self,
+        policy: CapturePolicy<'_>,
+        event: &VisitEvent,
+        custom_body: Option<&str>,
+        marker_payload: Option<(&str, serde_json::Value)>,
+        gate: EntryGate,
+        written: &mut Option<serde_json::Value>,
+    ) -> CaptureOutcome {
         // Summarize & log is an explicit, one-page action, not automatic
         // capture: it must still append its event while capture is paused
         // (spec §7.2/§7.3), so only `SiteAllowlist` entries honor the toggle.
@@ -849,7 +901,7 @@ impl CaptureStore {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("url".into(), serde_json::Value::String(normalized.clone()));
                     if kind == "summary" {
-                        let artifact_id = match crate::summary::web_page_artifact_id(&normalized) {
+                        let artifact_id = match summary_marker_artifact_id(object, &normalized) {
                             Ok(value) => value,
                             Err(reason) => {
                                 return CaptureOutcome::Rejected {
@@ -858,20 +910,18 @@ impl CaptureStore {
                             }
                         };
                         object.insert("artifact_id".into(), serde_json::Value::String(artifact_id));
-                        object.insert(
-                            "artifact_type".into(),
-                            serde_json::Value::String("web.page".into()),
-                        );
                     }
                 }
-                match serde_json::to_vec(&payload) {
-                    Ok(json) => Some(format!(" kind={kind} data={}", hex::encode(json))),
+                let rendered = match serde_json::to_vec(&payload) {
+                    Ok(json) => format!(" kind={kind} data={}", hex::encode(json)),
                     Err(_) => {
                         return CaptureOutcome::Rejected {
                             reason: "invalid_event_metadata".into(),
                         };
                     }
-                }
+                };
+                *written = Some(payload);
+                Some(rendered)
             }
             None => None,
         };
@@ -1470,6 +1520,25 @@ fn parse_page_url(value: &str) -> std::result::Result<Url, String> {
 pub fn canonical_url(raw: &str, strip_params: &[String]) -> Result<String> {
     let url = parse_page_url(raw).map_err(anyhow::Error::msg)?;
     normalize_url(url, strip_params).map_err(anyhow::Error::msg)
+}
+
+/// The artifact ID of a summary marker: `record_summary` put the caller's
+/// `record_key` and `artifact_type` in the payload, and they must agree with
+/// the host's normalized URL (`crate::summary::summary_artifact_id`).
+fn summary_marker_artifact_id(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    normalized_url: &str,
+) -> std::result::Result<String, &'static str> {
+    let key = payload
+        .get("record_key")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<brauser_protocol::RecordKey>(value).ok())
+        .ok_or("invalid_summary_key")?;
+    let artifact_type = payload
+        .get("artifact_type")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("invalid_summary_key")?;
+    crate::summary::summary_artifact_id(&key, artifact_type, normalized_url)
 }
 
 /// Check the original URL's exact origin against the capture origins. Call
@@ -2748,9 +2817,218 @@ mod tests {
                 .unwrap(),
             document_type: "discussion".into(),
             category: "reading".into(),
-            importance: "medium".into(),
+            importance: brauser_protocol::ImportanceLevel::Medium,
             summary_path: "pages/hn-item.summary.md".into(),
+            // A credential URL has no record key; its test expects the
+            // URL check to reject it first.
+            record_key: crate::vault::url_record_key(url).unwrap_or_else(|_| {
+                brauser_protocol::RecordKey {
+                    kind: brauser_protocol::RecordKeyKind::Url,
+                    value: String::new(),
+                }
+            }),
+            artifact_type: "web.page".into(),
+            harness: brauser_protocol::HarnessId::Codex,
         }
+    }
+
+    fn adapter_summary(url: &str) -> crate::summary::PageSummary {
+        crate::summary::PageSummary {
+            record_key: brauser_protocol::RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Artifact,
+                value: "jira:PROJ-1".into(),
+            },
+            artifact_type: "jira.issue".into(),
+            harness: brauser_protocol::HarnessId::Claude,
+            ..page_summary(url)
+        }
+    }
+
+    fn summary_payload(markdown: &str) -> serde_json::Value {
+        let marker_line = markdown
+            .lines()
+            .find(|line| line.contains(MARKER_PREFIX) && line.contains(" kind=summary "))
+            .expect("summary marker line present");
+        let data = marker_line
+            .split(" data=")
+            .nth(1)
+            .and_then(|rest| rest.strip_suffix(" -->"))
+            .expect("data field present");
+        serde_json::from_slice(&hex::decode(data).unwrap()).unwrap()
+    }
+
+    fn open_policy() -> CapturePolicy<'static> {
+        CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        }
+    }
+
+    #[test]
+    fn a_summary_on_an_adapter_page_attaches_to_that_artifact() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let summary = adapter_summary("https://jira.example/browse/PROJ-1");
+        let (CaptureOutcome::Persisted { relative_path }, Some(event)) =
+            store.record_summary(open_policy(), &summary)
+        else {
+            panic!("expected persisted summary event");
+        };
+        let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+        let payload = summary_payload(&markdown);
+        assert_eq!(payload["artifact_id"], "jira:PROJ-1");
+        assert_eq!(payload["artifact_type"], "jira.issue");
+        assert_eq!(event.artifact_id, "jira:PROJ-1");
+        assert_eq!(event.artifact_type, "jira.issue");
+        assert!(!event.artifact_id.starts_with("web:"));
+    }
+
+    #[test]
+    fn a_url_key_that_disagrees_with_the_normalized_url_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        // The caller keyed the page by its raw URL, but the capture policy
+        // strips `utm_source`, so the host's normalized URL hashes differently.
+        let url = "https://news.ycombinator.com/item?id=1&utm_source=x";
+        let strip = ["utm_source".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &strip,
+        };
+        let (outcome, event) = store.record_summary(policy, &page_summary(url));
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected {
+                reason: "invalid_summary_key".into()
+            }
+        );
+        assert!(event.is_none());
+
+        let mut other = page_summary("https://news.ycombinator.com/item?id=1");
+        other.record_key =
+            crate::vault::url_record_key("https://news.ycombinator.com/item?id=2").unwrap();
+        let (outcome, event) = store.record_summary(open_policy(), &other);
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected {
+                reason: "invalid_summary_key".into()
+            }
+        );
+        assert!(event.is_none());
+
+        let mut adapter_type = page_summary("https://news.ycombinator.com/item?id=1");
+        adapter_type.artifact_type = "jira.issue".into();
+        assert_eq!(
+            store.record_summary(open_policy(), &adapter_type).0,
+            CaptureOutcome::Rejected {
+                reason: "invalid_summary_key".into()
+            }
+        );
+        assert!(!root.path().join("log").exists(), "nothing was logged");
+    }
+
+    #[test]
+    fn an_artifact_key_cannot_claim_web_page_or_a_web_id() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let web_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let mut web_type = adapter_summary(url);
+        web_type.artifact_type = "web.page".into();
+        let mut web_value = adapter_summary(url);
+        web_value.record_key.value = web_id;
+        let mut empty_type = adapter_summary(url);
+        empty_type.artifact_type = String::new();
+        let mut long_type = adapter_summary(url);
+        long_type.artifact_type = "t".repeat(65);
+        let mut empty_value = adapter_summary(url);
+        empty_value.record_key.value = String::new();
+        for (name, summary) in [
+            ("web.page type", web_type),
+            ("web: value", web_value),
+            ("empty type", empty_type),
+            ("long type", long_type),
+            ("empty value", empty_value),
+        ] {
+            let (outcome, event) = store.record_summary(open_policy(), &summary);
+            assert_eq!(
+                outcome,
+                CaptureOutcome::Rejected {
+                    reason: "invalid_summary_key".into()
+                },
+                "{name}"
+            );
+            assert!(event.is_none(), "{name}");
+        }
+        assert!(!root.path().join("log").exists(), "nothing was logged");
+    }
+
+    #[test]
+    fn the_event_records_the_harness_and_record_key() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        for summary in [page_summary(url), adapter_summary(url)] {
+            let (CaptureOutcome::Persisted { relative_path }, Some(event)) =
+                store.record_summary(open_policy(), &summary)
+            else {
+                panic!("expected persisted summary event");
+            };
+            let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+            let payload = markdown
+                .lines()
+                .filter(|line| line.contains(" kind=summary "))
+                .map(|line| {
+                    let data = line
+                        .split(" data=")
+                        .nth(1)
+                        .and_then(|rest| rest.strip_suffix(" -->"))
+                        .unwrap();
+                    serde_json::from_slice::<serde_json::Value>(&hex::decode(data).unwrap())
+                        .unwrap()
+                })
+                .find(|payload| payload["event_id"] == event.event_id.as_str())
+                .expect("this summary's marker");
+            assert_eq!(
+                payload["harness"],
+                serde_json::to_value(summary.harness).unwrap()
+            );
+            assert_eq!(
+                payload["record_key"],
+                serde_json::to_value(&summary.record_key).unwrap()
+            );
+            assert_eq!(payload["importance"], "medium");
+            assert_eq!(event.harness, summary.harness);
+            assert_eq!(event.record_key, summary.record_key);
+        }
+    }
+
+    #[test]
+    fn a_duplicate_summary_returns_no_event() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        assert!(store.record_summary(open_policy(), &summary).1.is_some());
+        let (outcome, event) = store.record_summary(open_policy(), &summary);
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Suppressed {
+                reason: "duplicate_event".into()
+            }
+        );
+        assert!(event.is_none());
     }
 
     #[test]
@@ -2766,7 +3044,8 @@ mod tests {
             strip_params: &[],
         };
         let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
-        let CaptureOutcome::Persisted { relative_path } = store.record_summary(policy, &summary)
+        let (CaptureOutcome::Persisted { relative_path }, Some(_)) =
+            store.record_summary(policy, &summary)
         else {
             panic!("expected persisted summary event");
         };
@@ -2793,10 +3072,9 @@ mod tests {
             strip_params: &[],
         };
         let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
-        assert!(matches!(
-            store.record_summary(policy, &summary),
-            CaptureOutcome::Persisted { .. }
-        ));
+        let (outcome, event) = store.record_summary(policy, &summary);
+        assert!(matches!(outcome, CaptureOutcome::Persisted { .. }));
+        assert!(event.is_some());
     }
 
     #[test]
@@ -2811,13 +3089,15 @@ mod tests {
             strip_params: &[],
         };
         let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
-        summary.importance = "urgent".into();
+        summary.category = String::new();
+        let (outcome, event) = store.record_summary(policy, &summary);
         assert_eq!(
-            store.record_summary(policy, &summary),
+            outcome,
             CaptureOutcome::Rejected {
-                reason: "invalid_summary_importance".into()
+                reason: "invalid_summary_category".into()
             }
         );
+        assert!(event.is_none());
     }
 
     #[test]
@@ -2832,12 +3112,14 @@ mod tests {
             strip_params: &[],
         };
         let summary = page_summary("https://user:pass@news.ycombinator.com/item?id=1");
+        let (outcome, event) = store.record_summary(policy, &summary);
         assert_eq!(
-            store.record_summary(policy, &summary),
+            outcome,
             CaptureOutcome::Rejected {
                 reason: "url_contains_credentials".into()
             }
         );
+        assert!(event.is_none());
     }
 
     #[test]
@@ -2858,7 +3140,8 @@ mod tests {
         let canonical = Uuid::new_v4().hyphenated().to_string();
         let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
         summary.event_id = canonical.to_uppercase().replace('-', "");
-        let CaptureOutcome::Persisted { relative_path } = store.record_summary(policy, &summary)
+        let (CaptureOutcome::Persisted { relative_path }, Some(_)) =
+            store.record_summary(policy, &summary)
         else {
             panic!("expected persisted summary event");
         };
@@ -2892,7 +3175,8 @@ mod tests {
         };
         let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
         summary.summary_path = "My Summaries/hn-item.summary.md".into();
-        let CaptureOutcome::Persisted { relative_path } = store.record_summary(policy, &summary)
+        let (CaptureOutcome::Persisted { relative_path }, Some(_)) =
+            store.record_summary(policy, &summary)
         else {
             panic!("expected persisted summary event");
         };

@@ -33,8 +33,12 @@ pub const MAX_DOCUMENT_TYPE_BYTES: usize = 64;
 pub const MAX_CATEGORY_BYTES: usize = 64;
 pub const MAX_SUMMARY_PATH_BYTES: usize = 1024;
 
-/// What a caller supplies to record a summary. The host derives the
-/// `web.page` artifact identity from `url`; callers never supply one.
+/// What a caller supplies to record a summary. `record_key` is the page's
+/// record key, resolved by the caller under `lock_current`, and
+/// `artifact_type` is `web.page` for a `Url` key or the recognizing
+/// adapter's type for an `Artifact` key. The host derives the artifact ID
+/// from them and the normalized URL (`summary_artifact_id`); callers never
+/// supply one.
 #[derive(Clone, Debug)]
 pub struct PageSummary {
     pub event_id: String,
@@ -43,28 +47,41 @@ pub struct PageSummary {
     pub occurred_at: String,
     pub document_type: String,
     pub category: String,
-    pub importance: String,
+    pub importance: ImportanceLevel,
     pub summary_path: String,
+    pub record_key: RecordKey,
+    pub artifact_type: String,
+    pub harness: HarnessId,
 }
 
 /// The durable, indexed form of a `PageSummary`: the marker payload stored in
 /// the daily log and replayed by `ArtifactIndex`. `url` and `artifact_id`
 /// hold the normalized URL and the identity derived from it, not whatever a
-/// caller originally supplied.
+/// caller originally supplied. Every field is required: no caller wrote a
+/// summary event before `record_key` and `harness` existed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryEvent {
     pub event_id: String,
     pub artifact_id: String,
     pub artifact_type: String,
+    pub record_key: RecordKey,
     pub url: String,
     pub title: String,
     pub occurred_at: String,
     pub document_type: String,
     pub category: String,
-    pub importance: String,
+    pub importance: ImportanceLevel,
     pub summary_path: String,
+    pub harness: HarnessId,
 }
+
+/// The artifact type of a summary on a page no adapter recognizes.
+pub const WEB_PAGE_TYPE: &str = "web.page";
+/// The most bytes of an adapter artifact type, as for activity events.
+pub const MAX_ARTIFACT_TYPE_BYTES: usize = 64;
+/// The most bytes of an artifact record key, as `note_filename` allows.
+pub const MAX_ARTIFACT_KEY_BYTES: usize = 512;
 
 pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'static str> {
     if summary.title.trim().is_empty() || summary.title.len() > MAX_TITLE_BYTES {
@@ -78,10 +95,46 @@ pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'stati
     if summary.category.trim().is_empty() || summary.category.len() > MAX_CATEGORY_BYTES {
         return Err("invalid_summary_category");
     }
-    if !matches!(summary.importance.as_str(), "high" | "medium" | "low") {
-        return Err("invalid_summary_importance");
-    }
     check_summary_path(&summary.summary_path)
+}
+
+/// The artifact a summary attaches to (spec §7.2), from the caller's record
+/// key and the host's own normalization of the page URL:
+/// - a `Url` key is a `web.page` artifact, `web_page_artifact_id(normalized)`,
+///   and its key must be that same URL's hash, so the caller's key and the
+///   host's normalization agree;
+/// - an `Artifact` key is the adapter's artifact itself: its ID is the key's
+///   value, which never starts with `web:`, and its type is 1-64 bytes and
+///   never `web.page`.
+///
+/// Any other combination is `invalid_summary_key`.
+pub(crate) fn summary_artifact_id(
+    key: &RecordKey,
+    artifact_type: &str,
+    normalized_url: &str,
+) -> Result<String, &'static str> {
+    match key.kind {
+        RecordKeyKind::Url => {
+            let artifact_id = web_page_artifact_id(normalized_url)?;
+            let hash = hex::encode(Sha256::digest(normalized_url.as_bytes()));
+            if artifact_type != WEB_PAGE_TYPE || key.value != hash {
+                return Err("invalid_summary_key");
+            }
+            Ok(artifact_id)
+        }
+        RecordKeyKind::Artifact => {
+            if key.value.is_empty()
+                || key.value.len() > MAX_ARTIFACT_KEY_BYTES
+                || key.value.starts_with("web:")
+                || artifact_type.is_empty()
+                || artifact_type.len() > MAX_ARTIFACT_TYPE_BYTES
+                || artifact_type == WEB_PAGE_TYPE
+            {
+                return Err("invalid_summary_key");
+            }
+            Ok(key.value.clone())
+        }
+    }
 }
 
 /// The `summary_path` rule shared by `validate_page_summary` and
@@ -111,8 +164,10 @@ pub(crate) fn check_summary_path(path: &str) -> Result<(), &'static str> {
 }
 
 /// Re-validate a `SummaryEvent` replayed from the log: everything
-/// `validate_page_summary` checks, plus the identity invariant that only
-/// exists once a URL has been normalized and hashed.
+/// `validate_page_summary` checks, plus the identity invariants
+/// `summary_artifact_id` enforces once a URL has been normalized. A
+/// `web.page` event is accepted only for the `web_page_artifact_id` of its
+/// own `url`.
 pub(crate) fn validate_summary_event(event: &SummaryEvent) -> bool {
     let as_summary = PageSummary {
         event_id: event.event_id.clone(),
@@ -121,14 +176,17 @@ pub(crate) fn validate_summary_event(event: &SummaryEvent) -> bool {
         occurred_at: event.occurred_at.clone(),
         document_type: event.document_type.clone(),
         category: event.category.clone(),
-        importance: event.importance.clone(),
+        importance: event.importance,
         summary_path: event.summary_path.clone(),
+        record_key: event.record_key.clone(),
+        artifact_type: event.artifact_type.clone(),
+        harness: event.harness,
     };
     if validate_page_summary(&as_summary).is_err() {
         return false;
     }
-    event.artifact_type == "web.page"
-        && web_page_artifact_id(&event.url).as_deref() == Ok(event.artifact_id.as_str())
+    summary_artifact_id(&event.record_key, &event.artifact_type, &event.url).as_deref()
+        == Ok(event.artifact_id.as_str())
 }
 
 /// The `web:<host>/<sha256(url)>` identity `host/src/index.rs`'s legacy
@@ -191,7 +249,6 @@ pub struct SummaryDocument<'a> {
 }
 
 /// The importance level's wire name, as `ImportanceLevel` serializes.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn importance_str(level: ImportanceLevel) -> &'static str {
     match level {
         ImportanceLevel::High => "high",
@@ -428,16 +485,53 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
 mod tests {
     use super::*;
 
+    const HN_URL: &str = "https://news.ycombinator.com/item?id=50251344";
+
     fn summary() -> PageSummary {
         PageSummary {
             event_id: "11111111-1111-1111-1111-111111111111".into(),
-            url: "https://news.ycombinator.com/item?id=50251344".into(),
+            url: HN_URL.into(),
             title: "A good discussion".into(),
             occurred_at: "2026-10-26T18:00:00Z".into(),
             document_type: "discussion".into(),
             category: "reading".into(),
-            importance: "medium".into(),
+            importance: ImportanceLevel::Medium,
             summary_path: "pages/news-ycombinator-com.summary.md".into(),
+            record_key: url_record_key(HN_URL).unwrap(),
+            artifact_type: "web.page".into(),
+            harness: HarnessId::Codex,
+        }
+    }
+
+    /// The event `CaptureStore::record_summary` writes for `summary()`.
+    fn event() -> SummaryEvent {
+        let s = summary();
+        SummaryEvent {
+            event_id: s.event_id,
+            artifact_id: web_page_artifact_id(HN_URL).unwrap(),
+            artifact_type: s.artifact_type,
+            record_key: s.record_key,
+            url: s.url,
+            title: s.title,
+            occurred_at: s.occurred_at,
+            document_type: s.document_type,
+            category: s.category,
+            importance: s.importance,
+            summary_path: s.summary_path,
+            harness: s.harness,
+        }
+    }
+
+    fn adapter_event() -> SummaryEvent {
+        SummaryEvent {
+            artifact_id: "jira:PROJ-1".into(),
+            artifact_type: "jira.issue".into(),
+            record_key: RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "jira:PROJ-1".into(),
+            },
+            harness: HarnessId::Claude,
+            ..event()
         }
     }
 
@@ -448,11 +542,100 @@ mod tests {
 
     #[test]
     fn an_unknown_importance_is_rejected() {
-        let mut bad = summary();
-        bad.importance = "urgent".into();
+        // `importance` is an `ImportanceLevel`, so a forged log line with
+        // any other value fails to deserialize and is skipped on replay.
+        let mut json = serde_json::to_value(event()).unwrap();
+        assert_eq!(json["importance"], "medium");
+        json["importance"] = "urgent".into();
+        assert!(serde_json::from_value::<SummaryEvent>(json).is_err());
+    }
+
+    #[test]
+    fn the_event_serializes_the_wire_names_of_harness_and_importance() {
+        let json = serde_json::to_value(adapter_event()).unwrap();
+        assert_eq!(json["harness"], "claude");
+        assert_eq!(json["importance"], "medium");
         assert_eq!(
-            validate_page_summary(&bad),
-            Err("invalid_summary_importance")
+            json["record_key"],
+            serde_json::json!({"kind": "artifact", "value": "jira:PROJ-1"})
+        );
+    }
+
+    #[test]
+    fn the_new_event_fields_are_required() {
+        for field in ["record_key", "harness"] {
+            let mut json = serde_json::to_value(event()).unwrap();
+            json.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<SummaryEvent>(json).is_err(),
+                "{field} must be required"
+            );
+        }
+    }
+
+    #[test]
+    fn well_formed_web_and_adapter_events_replay() {
+        assert!(validate_summary_event(&event()));
+        assert!(validate_summary_event(&adapter_event()));
+    }
+
+    #[test]
+    fn a_replayed_adapter_summary_with_a_web_page_type_is_ignored() {
+        let mut forged = adapter_event();
+        forged.artifact_type = "web.page".into();
+        assert!(!validate_summary_event(&forged));
+    }
+
+    #[test]
+    fn a_replayed_artifact_key_cannot_claim_a_web_id() {
+        let mut forged = adapter_event();
+        let web_id = web_page_artifact_id(HN_URL).unwrap();
+        forged.artifact_id = web_id.clone();
+        forged.record_key.value = web_id;
+        assert!(!validate_summary_event(&forged));
+    }
+
+    #[test]
+    fn a_replayed_artifact_summary_must_use_its_key_as_its_id() {
+        let mut forged = adapter_event();
+        forged.artifact_id = "jira:PROJ-2".into();
+        assert!(!validate_summary_event(&forged));
+        for bad_type in ["", &"t".repeat(65)] {
+            let mut bad = adapter_event();
+            bad.artifact_type = bad_type.into();
+            assert!(!validate_summary_event(&bad), "type {bad_type:?}");
+        }
+    }
+
+    #[test]
+    fn a_replayed_url_summary_must_match_its_url() {
+        let mut other_key = event();
+        other_key.record_key = url_record_key("https://news.ycombinator.com/item?id=1").unwrap();
+        assert!(!validate_summary_event(&other_key));
+        let mut adapter_type = event();
+        adapter_type.artifact_type = "jira.issue".into();
+        assert!(!validate_summary_event(&adapter_type));
+    }
+
+    #[test]
+    fn summary_artifact_id_follows_the_record_key() {
+        let s = summary();
+        assert_eq!(
+            summary_artifact_id(&s.record_key, "web.page", HN_URL),
+            Ok(web_page_artifact_id(HN_URL).unwrap())
+        );
+        let adapter = adapter_event();
+        assert_eq!(
+            summary_artifact_id(&adapter.record_key, "jira.issue", HN_URL),
+            Ok("jira:PROJ-1".to_owned())
+        );
+        let long = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "a".repeat(513),
+        };
+        assert_eq!(
+            summary_artifact_id(&long, "jira.issue", HN_URL),
+            Err("invalid_summary_key")
         );
     }
 
@@ -508,16 +691,8 @@ mod tests {
     fn a_summary_event_with_a_forged_artifact_id_is_invalid() {
         let id = web_page_artifact_id("https://news.ycombinator.com/item?id=50251344").unwrap();
         let event = SummaryEvent {
-            event_id: summary().event_id,
             artifact_id: "web:evil.example/0000".into(),
-            artifact_type: "web.page".into(),
-            url: "https://news.ycombinator.com/item?id=50251344".into(),
-            title: summary().title,
-            occurred_at: summary().occurred_at,
-            document_type: summary().document_type,
-            category: summary().category,
-            importance: summary().importance,
-            summary_path: summary().summary_path,
+            ..event()
         };
         assert_ne!(event.artifact_id, id);
         assert!(!validate_summary_event(&event));
