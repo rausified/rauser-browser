@@ -101,7 +101,8 @@ the artifact card can name what holds an artifact and what it holds:
 - `within`: `null`, or an `ArtifactRefView` (`artifact_id`, `artifact_type`,
   `title`, `url`) for the container an adapter's `within` places this
   artifact in, such as the GitHub repository of a pull request. A container
-  is always titled from its ID (`owner/repo`), never from a sub-page title.
+  is titled from its ID (`owner/repo`), never from a sub-page title, while
+  some adapter declares `within` its type.
 - `contained`: at most 20 `ContainedArtifactView` entries (the same four
   fields plus `focused_seconds`), the artifacts recorded within this one,
   most focused first, ties broken by `artifact_id`. It is empty for an
@@ -110,6 +111,9 @@ the artifact card can name what holds an artifact and what it holds:
 Totals are unchanged in meaning: a contained artifact's seconds count in its
 own view and once in its container's, and recent and worklog totals still
 count each second once. No message is added or removed.
+
+Downgrading after adding repositories is unsupported: older hosts reject
+`within` in the adapter config and in adapter history.
 
 Version 6 goes with standing HTTP(S)
 access: the extension requests `http://*/*` and `https://*/*` at install, so

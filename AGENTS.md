@@ -221,7 +221,9 @@ same save) without tripping the existing-history freeze. Protocol version 7
 exposes the relationship to the panel: `ArtifactView.within` and `.contained`
 on `get_artifact`/`list_artifacts`, with the card showing "In <repo>" on a
 contained artifact's own card and "Worked on inside" with its rolled-up
-contents on a container's card.
+contents on a container's card. Downgrading after adding repositories is
+unsupported: older hosts reject `within` in the adapter config and in adapter
+history.
 
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
