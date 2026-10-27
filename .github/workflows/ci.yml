@@ -73,6 +73,17 @@ jobs:
       - name: Audit npm lockfile
         run: npm audit --audit-level=high
 
+  # Branch protection requires a check named "Build and check"; the matrix
+  # jobs report with a platform suffix, so this job stands for all of them.
+  build-gate:
+    name: Build and check
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every platform build to pass
+        run: test "${{ needs.build.result }}" = success
+
   cargo-deny:
     name: Rust dependency policy
     runs-on: ubuntu-24.04
