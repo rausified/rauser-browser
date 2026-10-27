@@ -1189,6 +1189,31 @@ test("the setup warning shows once", async () => {
   assert.ok(!second.el("run-area").textContent.includes(SETUP_WARNING));
 });
 
+test("the setup warning shows once for a summary the shortcut or menu started", async () => {
+  const listRuns = (request) => request.type === "list_runs" ? { type: "runs_listed", runs: [RUN_VIEW] } : startsRun(request);
+  // The worker opened the panel and stored its notice before the panel loaded.
+  const local = new Map();
+  const session = new Map([[PANEL_NOTICE_KEY, { kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() }]]);
+  const opened = await summarizePanel({ local, session, intercept: listRuns });
+  await until(() => opened.el("run-area").textContent.includes(SETUP_WARNING), "the setup warning");
+  await until(() => /Queued/.test(opened.el("run-area").textContent), "the run card");
+  assert.equal(local.get(WARNING_SEEN_KEY), true);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A panel already open hears the worker's notice; the warning is not shown twice.
+  const fresh = new Map();
+  const open = await summarizePanel({ local: fresh, intercept: listRuns });
+  open.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() });
+  await until(() => open.el("run-area").textContent.includes(SETUP_WARNING), "the live setup warning");
+  assert.equal(fresh.get(WARNING_SEEN_KEY), true);
+  teardown.splice(0).forEach((listener) => listener());
+
+  const again = await summarizePanel({ local: fresh, intercept: listRuns });
+  again.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() + 1 });
+  await until(() => /Queued/.test(again.el("run-area").textContent), "the run card");
+  assert.ok(!again.el("run-area").textContent.includes(SETUP_WARNING));
+});
+
 test("a summarize failure sent before the panel loads is shown when it opens", async () => {
   const message = "The Brauser service is not running. Register it again.";
   const session = new Map([[PANEL_NOTICE_KEY, { kind: "summarize_failed", message, tab_id: 1, at: Date.now() }]]);

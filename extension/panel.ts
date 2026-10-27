@@ -637,7 +637,8 @@ function clearRunLine(): void {
   runLine = null;
 }
 
-/** Shows SETUP_WARNING (spec §6.1) before the first summary ever. It does not
+/** Shows SETUP_WARNING (spec §6.1) with the first summary ever, from any
+ * path: the button, or the shortcut or context menu (showNotice). It does not
  * hold the run back. */
 async function showSetupWarningOnce(): Promise<void> {
   try {
@@ -696,6 +697,9 @@ function showNotice(notice: PanelNotice): boolean {
   const id = `${notice.kind}:${notice.tab_id}:${notice.at}`;
   if (id === shownNotice) return true;
   shownNotice = id;
+  // The shortcut and the context menu start a summary without the panel's
+  // button, so the one-time warning (spec §6.1) shows here for them.
+  void showSetupWarningOnce();
   if (notice.kind === "summarize_failed") {
     showRunLine(notice.tab_id, notice.message, true);
   } else {
