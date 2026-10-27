@@ -91,6 +91,17 @@ async function pruneSitePatterns(lease: PolicyLease | null): Promise<void> {
   await chrome.storage.local.set({ [SITE_PATTERNS_KEY]: await patternSamples(lease) });
 }
 
+// Removal, pause and suspension promise to clear samples. If the pruned rows
+// cannot be written, delete every sample instead; report only when even
+// deletion fails, so the caller can retry rather than revive the rows.
+async function purgeSitePatterns(lease: PolicyLease | null): Promise<void> {
+  try {
+    await pruneSitePatterns(lease);
+  } catch {
+    await chrome.storage.local.remove(SITE_PATTERNS_KEY);
+  }
+}
+
 function patternFailure(): void {
   console.warn(`${APP_NAME} site patterns unavailable`);
 }
@@ -706,17 +717,15 @@ async function installPolicy(
   const queue = await readQueue();
   queue.items = queue.items.filter((item) =>
     effectiveLease.capture_enabled && matchingArtifact(effectiveLease, item.event.url));
-  // Removing a site promises to clear its samples, so the purge commits with
-  // the policy or not at all. Unreadable samples are dropped, not kept.
-  const samples = await patternSamples(effectiveLease.capture_enabled ? effectiveLease : null)
-    .catch(() => ({}));
   await chrome.storage.local.set({
     [POLICY_KEY]: lease,
     [PAUSE_KEY]: false,
     [QUEUE_KEY]: queue,
-    [SITE_PATTERNS_KEY]: samples,
   });
   await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
+  // The narrower policy is already committed, so a purge failure cannot
+  // leave a removed origin capturing.
+  await purgeSitePatterns(effectiveLease.capture_enabled ? effectiveLease : null);
   // A page installing policy may have just enabled capture on an open tab.
   // Background renewal must leave its in-flight navigation unmapped until
   // captureNavigation records the real open after renewal completes.
@@ -920,8 +929,8 @@ async function suspendPolicy(): Promise<WorkerStatus> {
   // A repairable host config issue is not a site removal. Remove the
   // capture lease immediately, but leave queued visits and an explicit
   // local pause untouched until a valid host policy can reconcile them.
-  // Samples go with the lease in one write, so neither outlives the other.
-  await chrome.storage.local.set({ [POLICY_KEY]: null, [SITE_PATTERNS_KEY]: {} });
+  await chrome.storage.local.set({ [POLICY_KEY]: null });
+  await purgeSitePatterns(null);
   return currentStatus();
 }
 
@@ -1085,9 +1094,8 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
         [POLICY_KEY]: null, [QUEUE_KEY]: queue,
       });
       await narrowActivity(null);
-      // Pausing promises to clear these samples. Report a failed purge so the
-      // user can retry it instead of resuming with the old rows intact.
-      await pruneSitePatterns(null);
+      // Pausing promises to clear these samples.
+      await purgeSitePatterns(null);
       return currentStatus(null, queue);
     }
     case "get_pending_ids":
@@ -1374,7 +1382,15 @@ void runMigration();
 
 async function pruneCurrentSitePatterns(): Promise<void> {
   await ensureTrustedStorage();
-  await pruneSitePatterns(await activeLease());
+  let lease: PolicyLease | null;
+  try {
+    lease = await activeLease();
+  } catch (error) {
+    // Unreadable policy state enables no origin, so samples still expire.
+    await pruneSitePatterns(null);
+    throw error;
+  }
+  await pruneSitePatterns(lease);
 }
 
 // Expiry and policy removals apply on a cold worker start, too.

@@ -34,6 +34,8 @@ const ports = [];
 let badgeText = "";
 // When set, a storage.local.set whose items this returns true for rejects.
 let rejectLocalSet = null;
+// When true, a storage.local.remove rejects.
+let rejectLocalRemove = false;
 
 function storageArea(entries) {
   return {
@@ -49,6 +51,7 @@ function storageArea(entries) {
       for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
     },
     async remove(keys) {
+      if (entries === values && rejectLocalRemove) throw new Error("storage remove failed");
       for (const name of Array.isArray(keys) ? keys : [keys]) entries.delete(name);
     },
     async setAccessLevel() {},
@@ -1020,48 +1023,59 @@ test("an unreadable tab on a same-origin skipped page still stops measuring the 
   assert.equal(values.get(storageKey("site_patterns_v1"))?.[origin], undefined);
 });
 
-test("a failed sample purge during pause is reported, not hidden", async () => {
+test("a failed sample purge during pause deletes the samples, or else is reported", async () => {
   values.clear();
   sessionValues.clear();
   tabs.clear();
   const origin = "https://pause-purge.example";
   const key = storageKey("site_patterns_v1");
+  const seed = () => values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
   values.set(storageKey("policy_v1"), lease(origin));
-  values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  seed();
   rejectLocalSet = (items) => Object.hasOwn(items, key);
   try {
-    await assert.rejects(send({ kind: "pause_capture" }), /quota exceeded/);
-  } finally { rejectLocalSet = null; }
+    await send({ kind: "pause_capture" });
+    assert.equal(values.has(key), false, "an unwritable purge falls back to deleting every sample");
+    seed();
+    rejectLocalRemove = true;
+    await assert.rejects(send({ kind: "pause_capture" }), /storage remove failed/);
+  } finally { rejectLocalSet = null; rejectLocalRemove = false; }
   assert.equal(values.get(storageKey("pause_pending_v1")), true, "the pause itself still took effect");
   await send({ kind: "pause_capture" });
   assert.deepEqual(values.get(key), {}, "retrying the pause clears the samples");
 });
 
-test("a failed sample purge on site removal fails the install instead of keeping the rows", async () => {
+test("a failed sample purge on site removal still installs the narrower policy and drops the rows", async () => {
   values.clear();
   sessionValues.clear();
   tabs.clear();
   const kept = "https://kept-site.example";
   const removed = "https://removed-site.example";
   const key = storageKey("site_patterns_v1");
-  const both = { ...lease(kept), adapters: { format: 1, artifacts: [artifact(kept), artifact(removed)] } };
+  const narrow = lease(kept);
+  const both = { ...narrow, revision: "host-revision:both", adapters: { format: 1, artifacts: [artifact(kept), artifact(removed)] } };
   values.set(storageKey("policy_v1"), both);
   const row = () => [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }];
   values.set(key, { [kept]: row(), [removed]: row() });
   const install = () => send({
-    kind: "install_policy", lease: lease(kept), resume_after_confirmation: false, resume_after_pause_token: null,
+    kind: "install_policy", lease: narrow, resume_after_confirmation: false, resume_after_pause_token: null,
   });
   rejectLocalSet = (items) => Object.hasOwn(items, key);
   try {
-    await assert.rejects(install(), /quota exceeded/);
-  } finally { rejectLocalSet = null; }
-  assert.deepEqual(values.get(storageKey("policy_v1")), both,
-    "the removal is not reported as done while its samples remain");
+    await install();
+    assert.deepEqual(values.get(storageKey("policy_v1")), narrow,
+      "a sample write failure must not leave the removed site's policy active");
+    assert.equal(values.has(key), false, "the purge falls back to deleting every sample");
+    values.set(key, { [kept]: row(), [removed]: row() });
+    rejectLocalRemove = true;
+    await assert.rejects(install(), /storage remove failed/);
+    assert.deepEqual(values.get(storageKey("policy_v1")), narrow, "the policy still narrows first");
+  } finally { rejectLocalSet = null; rejectLocalRemove = false; }
   await install();
   assert.deepEqual(Object.keys(values.get(key)), [kept], "retrying the install clears the removed site's samples");
 });
 
-test("a failed sample purge on suspend fails the suspend instead of keeping the rows", async () => {
+test("a failed sample purge on suspend still suspends and drops the rows", async () => {
   values.clear();
   sessionValues.clear();
   tabs.clear();
@@ -1071,11 +1085,10 @@ test("a failed sample purge on suspend fails the suspend instead of keeping the 
   values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
   rejectLocalSet = (items) => Object.hasOwn(items, key);
   try {
-    await assert.rejects(send({ kind: "suspend_policy" }), /quota exceeded/);
+    await send({ kind: "suspend_policy" });
   } finally { rejectLocalSet = null; }
-  await send({ kind: "suspend_policy" });
   assert.equal(values.get(storageKey("policy_v1")), null);
-  assert.deepEqual(values.get(key), {}, "retrying the suspend clears the samples");
+  assert.equal(values.has(key), false, "the purge falls back to deleting every sample");
 });
 
 test("private pattern samples include skipped pages but never enter delivery or native messages", async () => {
@@ -2203,4 +2216,12 @@ test("worker wake and maintenance alarms expire samples without starting a host"
   await flush();
   assert.deepEqual(values.get(key), {});
   assert.equal(ports.length, 0);
+
+  // Unreadable removal state blocks capture, but must not let samples
+  // outlive their retention: maintenance then treats no origin as enabled.
+  values.set(key, { [origin]: [fresh] });
+  values.set(storageKey("pending_site_removals_v1"), "unreadable");
+  onAlarm({ name: "brauser-sync" });
+  await flush();
+  assert.deepEqual(values.get(key), {});
 });
