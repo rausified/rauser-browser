@@ -446,6 +446,24 @@ The older M2 design follows.
 - Notes work on any HTTP(S) page, not only logged sites. Brauser holds HTTP(S) access from install (§8), so the panel reads the active tab's URL and title directly and the user can type a note at once: there is no first-note gesture, toolbar or keyboard workaround, or per-origin request (protocol v6, 2026-10-26). A note does not enable logging.
 - The note's title comes from the page's title when the note is created (or its host name when the page has none); the panel asks only for the note text.
 - The panel autosaves: it sends the whole note about one second after the user stops typing, and again when the active tab changes or the panel closes. There is no Save button. A small indicator shows "Saving…", "Saved", or an error.
+- **Local recovery (built 2026-10-27, `brwr-3nq`).** Closing the panel cannot
+  await native saves, so every input synchronously publishes the current URL
+  and text in the extension origin's browser-local storage before scheduling
+  autosave. Each snapshot has an immutable random key; the new copy is written
+  before the previous one is retired, and a native acknowledgement deletes only
+  its own exact snapshot. Another panel's stale acknowledgement or discard
+  cannot remove newer edits. On reopen, the current host note loads normally
+  and recovered text appears separately with **Copy** and **Discard recovery
+  copies**. Recovery never fills the editor or sends a save automatically,
+  including when the note's revision or artifact identity changed. Conflicts,
+  failed saves and empty deletions remain recoverable; conflict copies stay
+  until explicit discard. Copies contain note text and URLs, stay local to
+  this browser profile (outside the home folder), and are not synced by Brauser.
+  Blocked storage, quota and cleanup errors show a warning without preventing
+  native saves; when a new local write fails, older durable bytes and the
+  newest in-memory copy-out remain available, but the newest edit cannot be
+  promised after teardown. Browser data removal or extension uninstall also
+  removes browser-local recovery.
 - The side panel is the only supported editor. The files stay plain Markdown and can be read anywhere, but an edit made outside Brauser can be overwritten. The version check in §4.4 exists so two Brauser windows do not overwrite each other: when a save is refused, the panel loads the newer note and shows the text it could not save so the user can copy it back.
 - A page note holds only the user's thoughts. Agent output never goes into a note; it goes to the page's separate summary file (§5.2) or wherever a command sends it (§5.6).
 - Notes created by M1 load into the editor normally. M1 review drafts are left in place and are not merged.
