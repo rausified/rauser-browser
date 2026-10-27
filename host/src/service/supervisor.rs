@@ -617,21 +617,32 @@ impl Inner {
     }
 
     /// Start a worker for every run that can take a free slot.
+    ///
+    /// A run whose worker cannot be created fails, freeing its slot for the
+    /// next queued run, so the queue is taken again until a pass starts
+    /// every ready run. Each failure ends a run, so this terminates.
     fn pump(this: &Arc<Self>) {
-        let ready: Vec<Uuid> = {
-            let mut scheduler = lock(&this.scheduler);
-            std::iter::from_fn(|| scheduler.next_ready()).collect()
-        };
-        for id in ready {
-            let worker = this.clone();
-            let spawned = this.spawn(format!("run-{id}"), move || Inner::run(&worker, id));
-            if let Err(error) = spawned {
-                eprintln!("brauser service: could not start a worker for run {id}: {error}");
-                this.finish(id, |status| {
-                    status.state = RunState::Failed;
-                    status.error_kind = Some(RunErrorKind::HarnessFailed);
-                    status.error = Some("The run could not be started.".to_string());
-                });
+        loop {
+            let ready: Vec<Uuid> = {
+                let mut scheduler = lock(&this.scheduler);
+                std::iter::from_fn(|| scheduler.next_ready()).collect()
+            };
+            let mut freed = false;
+            for id in ready {
+                let worker = this.clone();
+                let spawned = this.spawn(format!("run-{id}"), move || Inner::run(&worker, id));
+                if let Err(error) = spawned {
+                    eprintln!("brauser service: could not start a worker for run {id}: {error}");
+                    this.finish(id, |status| {
+                        status.state = RunState::Failed;
+                        status.error_kind = Some(RunErrorKind::HarnessFailed);
+                        status.error = Some("The run could not be started.".to_string());
+                    });
+                    freed = true;
+                }
+            }
+            if !freed {
+                return;
             }
         }
     }
@@ -1853,6 +1864,33 @@ mod tests {
         assert_eq!(view.started_at, None);
         assert_eq!(view.stream_bytes, 0);
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn worker_spawn_failures_do_not_strand_the_rest_of_the_queue() {
+        // More queued runs than slots, and no worker thread can be created:
+        // each failure frees a slot that the next queued run must take.
+        let mut queued = Vec::new();
+        let fixture = Fixture::faulty(
+            ANSWER,
+            |name| !name.ends_with("-watchdog"),
+            |store, cwd| {
+                for second in 0..4 {
+                    queued.push(seed_record(
+                        store,
+                        cwd,
+                        RunState::Queued,
+                        &format!("2026-10-26T09:00:0{second}.000000000Z"),
+                    ));
+                }
+            },
+        );
+        for id in queued {
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Failed, "{view:?}");
+            assert_eq!(view.error.as_deref(), Some("The run could not be started."));
+        }
+        assert!(fixture.supervisor.is_idle());
     }
 
     #[test]
