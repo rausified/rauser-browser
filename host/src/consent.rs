@@ -483,7 +483,9 @@ impl ConsentAuthority {
         Ok(Authorized {
             selected_identity,
             harness_commit: None,
-            keeps_artifacts_dir_proposed: view.artifacts_dir_proposed && !needs_confirmation,
+            keeps_artifacts_dir_proposed: view.artifacts_dir_proposed
+                && !needs_confirmation
+                && next.storage.is_some(),
         })
     }
 
@@ -1439,6 +1441,15 @@ mod tests {
                 .unwrap();
             assert!(authorized.keeps_artifacts_dir_proposed);
         }
+        // Clearing the notes folder leaves no artifact folder to keep.
+        let cleared = ConfigSnapshot {
+            storage: None,
+            ..paused.clone()
+        };
+        let authorized = ConsentAuthority::new()
+            .authorize_update(proposed, "revision", &cleared, None, None, None)
+            .unwrap();
+        assert!(!authorized.keeps_artifacts_dir_proposed);
         // A folder the user chose is simply kept.
         let authorized = ConsentAuthority::new()
             .authorize_update(&current, "revision", &paused, None, None, None)

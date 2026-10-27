@@ -301,10 +301,12 @@ fn dispatch(
                         value.consent_token.as_deref(),
                         value.harness_token.as_deref(),
                     );
+                    // A kept artifact folder proposal follows the saved
+                    // notes folder, so reply with what was written.
                     Response::ConfigUpdated(ConfigUpdated {
                         protocol_version: PROTOCOL_VERSION,
                         request_id: value.request_id,
-                        config: value.config,
+                        config: config.snapshot().clone(),
                         revision,
                     })
                 }

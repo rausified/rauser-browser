@@ -686,6 +686,8 @@ impl ConfigStore {
                 .as_ref()
                 .map(|storage| storage.artifacts_dir.clone())
         };
+        // Clearing the notes folder leaves no artifact folder to keep.
+        let keep_artifacts_dir_proposed = keep_artifacts_dir_proposed && next.storage.is_some();
         if keep_artifacts_dir_proposed
             && (!current.artifacts_dir_proposed
                 || artifacts_dir(&current.config) != artifacts_dir(&next))
@@ -693,6 +695,7 @@ impl ConfigStore {
             self.adopt(current);
             return Ok(None);
         }
+        let mut next = next;
         let adapters_unchanged = current.config.adapters == next.adapters;
         let empty_adapter_document = AdapterDocument {
             format: 1,
@@ -777,6 +780,17 @@ impl ConfigStore {
                 Some(actual)
             }
         };
+        // A kept proposal is remade for the folder being saved, as reading
+        // the file back would, so a new notes folder gets one of its own.
+        if keep_artifacts_dir_proposed && let Some(storage) = next.storage.as_mut() {
+            storage.artifacts_dir = unused_artifacts_dir(storage, |_| Ok(false))
+                .expect("a config-only check never fails");
+            if let Ok((root, _)) =
+                open_selected_root(Path::new(&storage.root), next_identity.as_deref())
+            {
+                propose_in_root(storage, &root);
+            }
+        }
         let mut stored = StoredConfig::from_snapshot(
             &next,
             next_identity.clone(),
@@ -1004,6 +1018,18 @@ fn unused_artifacts_dir(
     None
 }
 
+/// Refine a config-only artifact folder proposal through the verified notes
+/// root. If no name is provably free, the config-only one is kept.
+fn propose_in_root(storage: &mut StorageConfig, root: &cap_std::fs::Dir) {
+    if let Some(name) = unused_artifacts_dir(storage, |name| match root.symlink_metadata(name) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }) {
+        storage.artifacts_dir = name;
+    }
+}
+
 /// `[agent]` as §7.1 shows it: the chosen harness and its entry.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1221,19 +1247,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     // Probe for existing folders only through the verified
                     // root. If no name is provably free, keep the config-only
                     // proposal: it is still only written once confirmed.
-                    Ok((root, _)) if artifacts_dir_proposed => {
-                        if let Some(name) = unused_artifacts_dir(storage, |name| {
-                            match root.symlink_metadata(name) {
-                                Ok(_) => Ok(true),
-                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                                    Ok(false)
-                                }
-                                Err(error) => Err(error),
-                            }
-                        }) {
-                            storage.artifacts_dir = name;
-                        }
-                    }
+                    Ok((root, _)) if artifacts_dir_proposed => propose_in_root(storage, &root),
                     Ok(_) => {}
                     Err(_) => folder_changed = true,
                 }
@@ -2306,6 +2320,56 @@ mod tests {
             "brauser-artifacts"
         );
         assert!(!fs::read_to_string(&path).unwrap().contains("artifacts_dir"));
+    }
+
+    #[test]
+    fn keeping_the_artifact_proposal_follows_a_new_notes_folder() {
+        // The proposal was made for the old folder; the new one already has
+        // an `artifacts` folder of the user's own.
+        let folder = tempfile::tempdir().unwrap();
+        let old_root = folder.path().join("old");
+        let new_root = folder.path().join("new");
+        fs::create_dir(&old_root).unwrap();
+        fs::create_dir_all(new_root.join("artifacts")).unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, &old_root, "", "capture_enabled = false", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        assert_eq!(next.storage.as_ref().unwrap().artifacts_dir, "artifacts");
+        next.storage.as_mut().unwrap().root = new_root.to_string_lossy().into_owned();
+        let identity = selected_root_identity(&new_root).unwrap();
+        let revision = store.revision().to_owned();
+        store
+            .update_with_grants(next, &revision, Some(&identity), None, true)
+            .unwrap()
+            .unwrap();
+        assert!(store.artifacts_dir_proposed());
+        assert_eq!(
+            store.snapshot().storage.as_ref().unwrap().artifacts_dir,
+            "brauser-artifacts"
+        );
+        assert_eq!(store.snapshot(), loaded(&path).snapshot());
+    }
+
+    #[test]
+    fn keeping_the_artifact_proposal_allows_clearing_the_notes_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
+        let mut store = loaded(&path);
+        let next = ConfigSnapshot {
+            storage: None,
+            ..store.snapshot().clone()
+        };
+        let revision = store.revision().to_owned();
+        assert!(
+            store
+                .update_with_grants(next, &revision, None, None, true)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!store.artifacts_dir_proposed());
+        assert!(store.snapshot().storage.is_none());
     }
 
     #[test]
