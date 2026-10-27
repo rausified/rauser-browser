@@ -134,7 +134,7 @@ function hostReply(request, config = CONFIG) {
         type: "config_result", revision: "1", config, config_issue: null,
         agent_status: { state: "not_set_up", harness_version: null, message: "Set up an AI harness." },
         adapter_issue: null, adapter_warnings: [],
-        adopted_state: { issue: null, revision: "missing", warnings: [] },
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       };
     case "load_note":
       return {

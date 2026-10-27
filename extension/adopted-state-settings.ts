@@ -1,11 +1,12 @@
 // Settings view of the host's record of adopted adapters
 // (adopted-contracts.json). A damaged record pauses notes on pages the
 // current adapters do not recognize; Forget recorded adapters is its repair.
-// Recording warnings are notices only: nothing is paused.
+// Recording warnings are notices only: nothing is paused. Forget is also
+// offered for a full record (adopted_state.full), which a fresh record fixes.
 import { HostError } from "./native.js";
 import { type ConfigSession, describe, element } from "./settings.js";
 
-const FORGOTTEN = "Recorded adapters forgotten. The old record was backed up beside it, and notes on pages the current adapters do not recognize work again.";
+const FORGOTTEN = "Recorded adapters forgotten. The old record was backed up beside it, and a fresh record holds the adapters you have now.";
 const CHANGED = "The record of adopted adapters changed since this page read it. Review it again before forgetting it.";
 
 export class AdoptedStateControls {
@@ -46,8 +47,10 @@ export class AdoptedStateControls {
       item.textContent = warning;
       return item;
     }));
-    if (issue === null) this.confirmBox.hidden = true;
-    this.forgetButton.hidden = issue === null || !this.confirmBox.hidden;
+    // A full record is the one recording warning forgetting repairs.
+    const forgettable = issue !== null || state?.full === true;
+    if (!forgettable) this.confirmBox.hidden = true;
+    this.forgetButton.hidden = !forgettable || !this.confirmBox.hidden;
     const usable = this.session.connected && !this.forgetting;
     this.forgetButton.disabled = !usable;
     this.confirmButton.disabled = !usable;

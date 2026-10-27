@@ -136,6 +136,8 @@ pub struct ConfigStore {
     /// Why the last attempt under the lock to record them failed, until one
     /// succeeds; reported in `adopted_state().warnings`.
     adopted_warning: Option<String>,
+    /// That failure was the record's bound, which forgetting repairs.
+    adopted_full: bool,
 }
 
 /// The config lock from `ConfigStore::lock_current`. While it is alive,
@@ -477,6 +479,7 @@ impl ConfigStore {
             adopted: AdoptedContracts::Unread,
             recordable: None,
             adopted_warning: None,
+            adopted_full: false,
         }
     }
 
@@ -516,6 +519,7 @@ impl ConfigStore {
             match record_adopted_contracts(&path, recordable) {
                 Ok(adopted) => {
                     self.adopted_warning = None;
+                    self.adopted_full = false;
                     adopted
                 }
                 // The contracts stay current, so a later refresh retries.
@@ -526,6 +530,7 @@ impl ConfigStore {
                         "{NAMESPACE}: warning: could not record adopted adapter contracts: {error:#}"
                     );
                     let state = path.display();
+                    self.adopted_full = error.downcast_ref::<RecordFull>().is_some();
                     self.adopted_warning = Some(match error.downcast_ref::<RecordFull>() {
                         Some(full) => format!(
                             "Brauser's record of the adapters it has used ({state}) is full (1,024 adapters or 1 MiB), so {} in use {} not recorded. If one of them is removed from config.toml by hand, its pages fall back to URL notes. Forget recorded adapters starts a fresh record.",
@@ -691,12 +696,15 @@ impl ConfigStore {
             issue,
             revision,
             warnings: self.adopted_warning.iter().cloned().collect(),
+            full: self.adopted_full,
         }
     }
 
     /// A refresh that could not take the config lock records nothing; say
     /// so until a locked attempt succeeds.
     pub(crate) fn warn_adopted_unrecorded(&mut self, error: &anyhow::Error) {
+        // Forgetting needs the same lock, so it cannot help here.
+        self.adopted_full = false;
         self.adopted_warning = Some(format!(
             "Brauser could not take its configuration lock to record the adapters it uses in {}: {error:#}. Until it can, an adapter removed from config.toml by hand leaves its pages on URL notes.",
             self.adopted_contracts_display()
@@ -741,6 +749,7 @@ impl ConfigStore {
         }
         self.adopted = AdoptedContracts::Unread;
         self.adopted_warning = None;
+        self.adopted_full = false;
         // Still under the lock: the refresh records the current contracts.
         self.refresh()?;
         Ok(true)
@@ -4054,6 +4063,9 @@ mod tests {
                 "{:?}",
                 adopted.warnings
             );
+            // Forgetting starts a fresh record, so settings offers it.
+            assert!(adopted.full);
+            assert!(adopted.warnings[0].contains("Forget recorded adapters"));
         }
 
         #[cfg(unix)]
@@ -4073,6 +4085,9 @@ mod tests {
             let warnings = store.adopted_state().warnings;
             assert_eq!(warnings.len(), 1, "{warnings:?}");
             assert!(warnings[0].contains("could not be updated"), "{warnings:?}");
+            // Forgetting cannot fix a write failure, so it is not offered.
+            assert!(!warnings[0].contains("Forget"), "{warnings:?}");
+            assert!(!store.adopted_state().full);
             // An unlocked refresh does not retry, so the warning stays.
             store.refresh().unwrap();
             assert_eq!(store.adopted_state().warnings.len(), 1);
