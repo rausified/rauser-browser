@@ -164,7 +164,8 @@ impl World {
         PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
     }
 
-    /// A config with a notes folder chosen.
+    /// A config with a notes folder chosen and Codex set up for summaries
+    /// (the fake harness answers for it; the binary is never run).
     fn write_config(&self) {
         let root = fs::canonicalize(self.path("notes")).unwrap();
         let metadata = fs::metadata(&root).unwrap();
@@ -173,7 +174,7 @@ impl World {
         fs::write(
             &self.config,
             format!(
-                "root_picker_confirmed = true\nroot_identity = {:?}\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n",
+                "root_picker_confirmed = true\nroot_identity = {:?}\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n\n[summarizer]\nharness = \"codex\"\nbinary = \"/usr/local/bin/codex\"\nversion = \"0.144.4\"\ntimeout_secs = 600\nprobed_at = \"2026-10-27T10:00:00Z\"\n",
                 identity,
                 root.to_str().unwrap(),
             ),
@@ -318,7 +319,7 @@ fn start_run_request() -> Value {
         "title": "An article",
         "content": "# An article\n\nSome text.\n",
         "selection": null,
-        // The config has no harness entry, so the request names one.
+        // The extension sends null; naming the set-up harness is the same.
         "harness": "codex",
         "record_key": null,
         "requested_at": OffsetDateTime::now_utc()

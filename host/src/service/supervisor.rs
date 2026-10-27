@@ -45,7 +45,7 @@ use super::record::{
     page_markdown,
 };
 use crate::answer::parse_answer;
-use crate::config::{ConfigStore, default_summary_vocabulary};
+use crate::config::{ConfigStore, default_summary_vocabulary, valid_summary_vocabulary};
 use crate::open::Opener;
 use crate::vault::Vault;
 
@@ -205,7 +205,8 @@ enum Stop {
 #[derive(Debug, Default)]
 struct StopState {
     reason: Option<Stop>,
-    /// Set once the harness turn has returned; later stops kill nothing.
+    /// Set once the answer is accepted or the harness turn has returned;
+    /// later stops kill nothing and do not change how the run ends.
     turn_done: bool,
 }
 
@@ -249,7 +250,13 @@ impl RunControl {
         self.slot.kill();
     }
 
-    /// Mark the turn over and return why it was stopped, if it was.
+    /// Whether a cancel or timeout has been requested.
+    fn stop_requested(&self) -> bool {
+        lock(&self.stop).reason.is_some()
+    }
+
+    /// Mark the turn over and return why it was stopped, if it was. Later
+    /// stops change nothing; calling this again returns the same reason.
     fn end_turn(&self) -> Option<Stop> {
         let mut stop = lock(&self.stop);
         stop.turn_done = true;
@@ -373,13 +380,20 @@ impl Supervisor {
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
-                    // The run's own limit and vocabulary were not recorded;
-                    // use the service's and the defaults.
-                    let timeout = inner.options.timeout_for(None);
-                    let launch = Launch {
-                        cwd,
-                        vocabulary: default_summary_vocabulary(),
-                    };
+                    // The run's own limit and vocabulary, as recorded when
+                    // it was queued; a record without them (or with a
+                    // vocabulary no configuration could hold) gets the
+                    // service's limit and the default lists.
+                    let requested = status
+                        .run_timeout_secs
+                        .filter(|secs| *secs > 0)
+                        .map(Duration::from_secs);
+                    let timeout = inner.options.timeout_for(requested);
+                    let vocabulary = status
+                        .vocabulary
+                        .filter(valid_summary_vocabulary)
+                        .unwrap_or_else(default_summary_vocabulary);
+                    let launch = Launch { cwd, vocabulary };
                     let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
@@ -447,6 +461,8 @@ impl Supervisor {
                 error_kind: None,
                 summary_path: None,
                 stream_truncated: false,
+                run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
+                vocabulary: Some(req.vocabulary.clone()),
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
@@ -874,6 +890,11 @@ impl Inner {
             TurnOutcome::Answered { final_text } => match self.finisher.accept(status, &final_text)
             {
                 Ok(result) => Driven::Accepted(result),
+                // A cancel or timeout between the turns starts no repair
+                // turn; the stop decides how the run ends.
+                Err(_) if control.stop_requested() => {
+                    Driven::Failed("The run was stopped.".to_string())
+                }
                 Err(problem) => match session.turn(&repair_prompt(&problem), &mut sink) {
                     TurnOutcome::Failed { reason } => Driven::Failed(reason),
                     TurnOutcome::Answered { final_text } => {
@@ -887,6 +908,13 @@ impl Inner {
                 },
             },
         };
+        // An accepted answer stands: a cancel or timeout from here on (while
+        // the session closes, which can take a while for Codex, or while the
+        // answer is saved) cannot overturn it. A stop already requested
+        // still wins.
+        if matches!(driven, Driven::Accepted(_)) {
+            control.end_turn();
+        }
         session.close();
         driven
     }
@@ -1127,7 +1155,7 @@ mod tests {
 
     use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
-    use crate::service::harness_api::HarnessRegistry;
+    use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::record::{RunStatusFile, RunStore};
 
     struct TestFinisher {
@@ -1367,6 +1395,137 @@ mod tests {
                     RunState::Succeeded | RunState::Failed | RunState::Canceled
                 )
             })
+        }
+    }
+
+    /// Where a [`ScriptedRunner`] session calls its hook: before answering
+    /// turn `n`, or in `close`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum At {
+        Turn(usize),
+        Close,
+    }
+
+    type ScriptHook = Arc<dyn Fn(At) + Send + Sync>;
+
+    /// An in-process harness that starts no process: turn `n` answers
+    /// `answers[n - 1]`, after calling `hook`.
+    struct ScriptedRunner {
+        answers: Vec<String>,
+        turns: Arc<AtomicUsize>,
+        hook: ScriptHook,
+    }
+
+    struct ScriptedSession {
+        answers: Vec<String>,
+        turns: Arc<AtomicUsize>,
+        hook: ScriptHook,
+    }
+
+    impl HarnessRunner for ScriptedRunner {
+        fn harness(&self) -> HarnessId {
+            HarnessId::Codex
+        }
+
+        fn start(
+            &self,
+            _spec: &RunSpec,
+            _slot: &ProcessSlot,
+        ) -> anyhow::Result<Box<dyn HarnessSession>> {
+            Ok(Box::new(ScriptedSession {
+                answers: self.answers.clone(),
+                turns: self.turns.clone(),
+                hook: self.hook.clone(),
+            }))
+        }
+    }
+
+    impl HarnessSession for ScriptedSession {
+        fn turn(&mut self, _prompt: &str, _sink: &mut dyn FnMut(HarnessEvent)) -> TurnOutcome {
+            let n = self.turns.fetch_add(1, Ordering::SeqCst) + 1;
+            (self.hook)(At::Turn(n));
+            match self.answers.get(n - 1) {
+                Some(answer) => TurnOutcome::Answered {
+                    final_text: answer.clone(),
+                },
+                None => TurnOutcome::Failed {
+                    reason: "no more turns".to_string(),
+                },
+            }
+        }
+
+        fn close(self: Box<Self>) {
+            (self.hook)(At::Close);
+        }
+    }
+
+    /// A supervisor whose only harness is a [`ScriptedRunner`]. `hook` gets
+    /// the supervisor, so it can stop the run from inside the session.
+    fn scripted(
+        answers: &[&str],
+        hook: impl Fn(&Supervisor, At) + Send + Sync + 'static,
+    ) -> (Fixture, Arc<AtomicUsize>) {
+        let turns = Arc::new(AtomicUsize::new(0));
+        let supervisor = Arc::new(std::sync::OnceLock::<Supervisor>::new());
+        let runner = ScriptedRunner {
+            answers: answers.iter().map(|answer| answer.to_string()).collect(),
+            turns: turns.clone(),
+            hook: {
+                let supervisor = supervisor.clone();
+                Arc::new(move |at| hook(supervisor.get().expect("the fixture is built"), at))
+            },
+        };
+        let fixture = Fixture::build(
+            tempfile::tempdir().unwrap(),
+            HarnessRegistry::of(vec![Box::new(runner)]),
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+        );
+        let _ = supervisor.set(fixture.supervisor.clone());
+        (fixture, turns)
+    }
+
+    /// Stop every run as `reason`, as cancel or the watchdog would, without
+    /// waiting for it to end.
+    fn stop_all(supervisor: &Supervisor, reason: Stop) {
+        let controls: Vec<_> = lock(&supervisor.inner.runs).values().cloned().collect();
+        for control in controls {
+            control.request_stop(reason);
+        }
+    }
+
+    /// A cancel that lands after the first answer is refused but before the
+    /// repair turn starts ends the run canceled, with no repair turn.
+    #[test]
+    fn a_cancel_before_the_repair_turn_starts_no_repair_turn() {
+        let (fixture, turns) = scripted(&["not json", TEST_ANSWER], |supervisor, at| {
+            if at == At::Turn(1) {
+                stop_all(supervisor, Stop::Cancel);
+            }
+        });
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Canceled, "{view:?}");
+        assert_eq!(turns.load(Ordering::SeqCst), 1, "a repair turn ran");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// Once the answer is accepted, a cancel or timeout that lands while the
+    /// session closes does not overturn it.
+    #[test]
+    fn a_stop_after_the_answer_is_accepted_does_not_overturn_it() {
+        for reason in [Stop::Cancel, Stop::Timeout] {
+            let (fixture, turns) = scripted(&[TEST_ANSWER], move |supervisor, at| {
+                if at == At::Close {
+                    stop_all(supervisor, reason);
+                }
+            });
+            let id = fixture.start("a");
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Succeeded, "{reason:?}: {view:?}");
+            assert_eq!(turns.load(Ordering::SeqCst), 1);
+            assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
         }
     }
 
@@ -2039,6 +2198,8 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
+            run_timeout_secs: None,
+            vocabulary: None,
         }
     }
 
@@ -2105,6 +2266,8 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
+            run_timeout_secs: None,
+            vocabulary: None,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
@@ -2137,6 +2300,56 @@ mod tests {
         assert_eq!(view.state, RunState::Succeeded, "{view:?}");
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
         assert!(fixture.supervisor.is_idle());
+    }
+
+    fn custom_vocabulary() -> SummaryVocabulary {
+        SummaryVocabulary {
+            document_types: vec!["memo".to_string()],
+            categories: vec!["legal review".to_string()],
+        }
+    }
+
+    /// A queued run records its own limit and vocabulary, so a restart
+    /// does not trade them for the service's limit and the default lists.
+    #[test]
+    fn a_queued_run_records_its_limit_and_vocabulary() {
+        let fixture = Fixture::new(ANSWER);
+        let mut request = fixture.request("a");
+        request.timeout = Some(Duration::from_secs(900));
+        request.vocabulary = custom_vocabulary();
+        let (view, _) = fixture.supervisor.start_run(request).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        let status = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(status.run_timeout_secs, Some(900));
+        assert_eq!(status.vocabulary, Some(custom_vocabulary()));
+        fixture.wait_finished(id);
+    }
+
+    #[test]
+    fn a_resumed_queued_run_keeps_its_recorded_limit_and_vocabulary() {
+        let mut queued = None;
+        let fixture = Fixture::seeded(
+            "/bin/cat > \"$COUNT.prompt\"\nexec /bin/sleep 30\n",
+            DEFAULT_RUN_TIMEOUT,
+            |store, cwd| {
+                let id = seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                );
+                let mut status = store.status(id).unwrap();
+                status.run_timeout_secs = Some(1);
+                status.vocabulary = Some(custom_vocabulary());
+                store.write_status(&status).unwrap();
+                queued = Some(id);
+            },
+        );
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.error_kind, Some(RunErrorKind::TimedOut), "{view:?}");
+        assert_eq!(view.error.as_deref(), Some("Timed out after 1 second"));
+        let prompt = read(&fixture.path("count.prompt"));
+        assert!(prompt.contains("legal review"), "{prompt}");
     }
 
     #[test]

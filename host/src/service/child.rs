@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use rustix::process::{Pid, Signal, kill_process_group};
 
-use super::harness_api::ProcessSlot;
+use super::harness_api::{ProcessSlot, has_exited};
 
 /// The longest stdout line delivered; the rest of a longer line is dropped.
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -34,6 +34,10 @@ pub enum ChildLine {
 /// A spawned child with piped stdio. See the module documentation.
 pub struct LineChild {
     child: Child,
+    /// Reaps the child, so it forgets the group once the id may be reused.
+    slot: ProcessSlot,
+    /// The exit status, once reaped.
+    status: Option<ExitStatus>,
     stdin: Option<ChildStdin>,
     lines: Receiver<ChildLine>,
 }
@@ -65,6 +69,8 @@ impl LineChild {
         }
         Ok(Self {
             child,
+            slot: slot.clone(),
+            status: None,
             stdin,
             lines,
         })
@@ -102,21 +108,36 @@ impl LineChild {
         }
     }
 
-    /// The child's exit status if it has exited.
+    /// Whether the child has exited, without reaping it.
+    pub fn has_exited(&self) -> bool {
+        self.status.is_some() || has_exited(&self.child).unwrap_or(true)
+    }
+
+    /// The child's exit status if it has exited. An exited child's process
+    /// group is first sent SIGKILL, which ends anything it left running in
+    /// the background holding the pipes open; the unreaped leader still
+    /// holds the group's id then, so the signal cannot reach a reused one.
+    /// The child is then reaped and the slot forgets its group.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
-    }
-
-    /// SIGKILL the child's process group, which also ends anything it left
-    /// running in the background holding the pipes open.
-    pub fn kill_group(&self) {
+        if self.status.is_some() {
+            return Ok(self.status);
+        }
+        if !has_exited(&self.child)? {
+            return Ok(None);
+        }
         let _ = kill_process_group(Pid::from_child(&self.child), Signal::KILL);
+        self.status = self.slot.try_reap(&mut self.child)?;
+        Ok(self.status)
     }
 
-    /// Close stdin and wait for the child to exit.
+    /// Close stdin and wait for the child to exit, then reap it and forget
+    /// its group in the slot.
     pub fn wait(mut self) -> io::Result<ExitStatus> {
         self.close_stdin();
-        self.child.wait()
+        match self.status {
+            Some(status) => Ok(status),
+            None => self.slot.reap(&mut self.child),
+        }
     }
 }
 
@@ -339,7 +360,10 @@ mod tests {
     #[test]
     fn killed_slot_yields_closed() {
         let slot = ProcessSlot::default();
-        let child = LineChild::spawn(&slot, sh("echo started; sleep 30; echo late")).unwrap();
+        // `sleep` is forked before "started" is printed: a kill racing the
+        // fork could miss the new process and leave it holding the pipes.
+        let child =
+            LineChild::spawn(&slot, sh("sleep 30 & echo started; wait; echo late")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             assert!(Instant::now() < deadline, "the child never started");
@@ -357,5 +381,50 @@ mod tests {
             LineChild::spawn(&slot, sh("true"))
                 .is_err_and(|e| e.kind() == io::ErrorKind::Interrupted)
         );
+    }
+
+    /// Once its leader is reaped, a group's id can be reused, so the slot
+    /// forgets it and a later kill signals nothing.
+    #[test]
+    fn reaping_the_child_forgets_its_group() {
+        let slot = ProcessSlot::default();
+        let child = LineChild::spawn(&slot, sh("true")).unwrap();
+        assert!(slot.group().is_some());
+        assert!(child.wait().unwrap().success());
+        assert_eq!(slot.group(), None);
+
+        let mut child = LineChild::spawn(&slot, sh("exit 3")).unwrap();
+        assert!(slot.group().is_some());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "the child never exited");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(status.code(), Some(3));
+        assert_eq!(slot.group(), None);
+        // A later kill still refuses new spawns.
+        slot.kill();
+        assert!(slot.was_killed());
+    }
+
+    /// `try_wait` ends what the exited child left running in its group.
+    #[test]
+    fn try_wait_after_exit_kills_the_rest_of_the_group() {
+        let slot = ProcessSlot::default();
+        let mut child = LineChild::spawn(&slot, sh("sleep 30 & echo $!")).unwrap();
+        let group = slot.group().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the child never exited");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let pid = Pid::from_raw(group).unwrap();
+        while rustix::process::test_kill_process_group(pid).is_ok() {
+            assert!(Instant::now() < deadline, "the background sleep survived");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }

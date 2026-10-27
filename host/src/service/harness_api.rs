@@ -9,11 +9,13 @@ use std::ffi::OsString;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
+use std::time::Duration;
 
 use brauser_protocol::HarnessId;
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use uuid::Uuid;
 
 use super::claude::ClaudeRunner;
@@ -62,6 +64,9 @@ pub enum TurnOutcome {
     Answered { final_text: String },
     Failed { reason: String },
 }
+
+/// How often [`ProcessSlot::reap`] polls when `waitid` cannot wait.
+const REAP_POLL: Duration = Duration::from_millis(10);
 
 /// Called with each new child's process group as soon as it is spawned.
 type SpawnHook = Arc<dyn Fn(i32) + Send + Sync>;
@@ -141,6 +146,43 @@ impl ProcessSlot {
         }
     }
 
+    /// Reap `child` if it has exited, and then forget its group: once the
+    /// leader is reaped its id can be reused, so a later
+    /// [`ProcessSlot::kill`] must not signal it. The slot lock is held across
+    /// the reap, so a concurrent kill either reaches the group while the
+    /// unreaped leader still holds its id or finds it already forgotten.
+    pub fn try_reap(&self, child: &mut Child) -> io::Result<Option<ExitStatus>> {
+        let mut state = self.lock();
+        let status = child.try_wait()?;
+        if status.is_some() && state.group == Some(Pid::from_child(child).as_raw_pid()) {
+            state.group = None;
+        }
+        Ok(status)
+    }
+
+    /// Wait for `child` to exit, then reap it as [`ProcessSlot::try_reap`]
+    /// does. The wait itself holds no lock, so a kill is never held up
+    /// behind it.
+    pub fn reap(&self, child: &mut Child) -> io::Result<ExitStatus> {
+        let pid = Pid::from_child(child);
+        loop {
+            // Wait without reaping: the leader keeps the group's id until
+            // `try_reap` takes it under the lock.
+            match waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            ) {
+                Err(rustix::io::Errno::INTR) => continue,
+                Ok(_) => {}
+                // Already reaped, or waitid is unusable: poll instead.
+                Err(_) => thread::sleep(REAP_POLL),
+            }
+            if let Some(status) = self.try_reap(child)? {
+                return Ok(status);
+            }
+        }
+    }
+
     /// The process group of the most recently spawned child, if any.
     pub fn group(&self) -> Option<i32> {
         self.lock().group
@@ -148,6 +190,21 @@ impl ProcessSlot {
 
     pub fn was_killed(&self) -> bool {
         self.lock().killed
+    }
+}
+
+/// Whether `child` has exited, without reaping it, so its process group id
+/// stays reserved and the group can still be signalled safely. A child that
+/// was already reaped counts as exited.
+pub fn has_exited(child: &Child) -> io::Result<bool> {
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG;
+    loop {
+        match waitid(WaitId::Pid(Pid::from_child(child)), options) {
+            Ok(status) => return Ok(status.is_some()),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::CHILD) => return Ok(true),
+            Err(error) => return Err(error.into()),
+        }
     }
 }
 
@@ -185,6 +242,12 @@ impl HarnessRegistry {
             .iter()
             .find(|runner| id.is_none_or(|id| runner.harness() == id))
             .map(|runner| runner.as_ref())
+    }
+
+    /// A registry of exactly `runners`, for tests with in-process harnesses.
+    #[cfg(test)]
+    pub(crate) fn of(runners: Vec<Box<dyn HarnessRunner>>) -> Self {
+        Self { runners }
     }
 
     pub fn from_environment() -> Self {

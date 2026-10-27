@@ -365,7 +365,7 @@ impl CodexSession {
         if let Some(mut child) = self.child.take() {
             child.close_stdin();
             let deadline = Instant::now() + CLOSE_GRACE;
-            while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+            while Instant::now() < deadline && !child.has_exited() {
                 std::thread::sleep(POLL);
             }
             self.slot.kill();
@@ -912,6 +912,22 @@ done
         let turns = run(fake.runner(None), fake.spec(), &["the prompt", "fix it"]);
         assert_eq!(turns[0].1, answered("not json"));
         assert_eq!(turns[1], (Vec::new(), failed(EXITED)));
+    }
+
+    /// Closing reaps the app-server, so the slot no longer names its group
+    /// and a late cancel or timeout signals nothing.
+    #[test]
+    fn close_leaves_no_group_to_kill() {
+        let fake = Fake::turns(&simple_turn());
+        let slot = ProcessSlot::default();
+        let mut session = fake.runner(None).start(&fake.spec(), &slot).unwrap();
+        assert_eq!(
+            session.turn("the prompt", &mut |_| {}),
+            answered("{\"ok\":true}")
+        );
+        assert!(slot.group().is_some());
+        session.close();
+        assert_eq!(slot.group(), None);
     }
 
     #[test]

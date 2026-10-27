@@ -1410,6 +1410,13 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
+/// Whether both lists of `vocabulary` pass the checks a saved
+/// configuration's `[summary_vocabulary]` must.
+pub(crate) fn valid_summary_vocabulary(vocabulary: &SummaryVocabulary) -> bool {
+    validate_vocabulary("document type", &vocabulary.document_types).is_ok()
+        && validate_vocabulary("category", &vocabulary.categories).is_ok()
+}
+
 /// One summary vocabulary list: 1-64 distinct entries (ignoring case) of
 /// 1-64 characters, none of them control characters.
 fn validate_vocabulary(name: &str, values: &[String]) -> Result<()> {

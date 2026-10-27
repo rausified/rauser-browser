@@ -120,10 +120,9 @@ impl HarnessSession for CommandSession {
                     Ok(None) => {}
                     Err(error) => wait_error = Some(error),
                 }
+                // `try_wait` also ends what the child left running in its
+                // group, closing the pipes such children hold.
                 if exit.is_some() || wait_error.is_some() {
-                    // Nothing the harness left in the background outlives
-                    // the turn; this also closes pipes such children hold.
-                    child.kill_group();
                     drain_deadline = Some(Instant::now() + DRAIN_GRACE);
                 }
             }
@@ -371,5 +370,25 @@ mod tests {
         let outcome = session.turn(&spec.prompt, &mut |event| events.push(event));
         assert!(events.is_empty(), "{events:?}");
         assert!(matches!(outcome, TurnOutcome::Failed { .. }), "{outcome:?}");
+    }
+
+    /// After a turn its child is reaped, so the slot no longer names the
+    /// group a later cancel or timeout would kill.
+    #[test]
+    fn a_finished_turn_leaves_no_group_to_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = spec(dir.path());
+        for body in ["echo answer\n", "echo bad >&2\nexit 2\n"] {
+            let program = script(dir.path(), "fake", body);
+            let runner = CommandRunner {
+                harness: HarnessId::Claude,
+                program,
+            };
+            let slot = ProcessSlot::default();
+            let mut session = runner.start(&spec, &slot).unwrap();
+            session.turn(&spec.prompt, &mut |_| {});
+            assert_eq!(slot.group(), None, "{body}");
+            session.close();
+        }
     }
 }

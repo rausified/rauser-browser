@@ -256,10 +256,9 @@ impl HarnessSession for ClaudeSession {
                     Ok(None) => {}
                     Err(error) => wait_error = Some(error),
                 }
+                // `try_wait` also ends what claude left running in its
+                // group, closing the pipes such children hold.
                 if exit.is_some() || wait_error.is_some() {
-                    // Nothing claude left in the background outlives the
-                    // turn; this also closes pipes such children hold.
-                    child.kill_group();
                     drain_deadline = Some(Instant::now() + DRAIN_GRACE);
                 }
             }
