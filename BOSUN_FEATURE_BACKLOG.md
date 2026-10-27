@@ -519,9 +519,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   close this bead (its queue status still says `blocked`).
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-smk` **Make the macOS headless smoke run deterministic under load (P1).**
-  main's required macOS smoke has failed on every merge since #98 with three
-  timing stops (loadUnpacked timeout, empty hourly totals, no claude runs).
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
   `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
   stripping a query key that an adapter rule matches on (Jira's
@@ -603,6 +600,8 @@ were folded into `brwr-q7e` above rather than given their own item.
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- [x] `brwr-smk` **The macOS headless smoke waits for state, not time (2026-10-27).** Since #98, main's required smoke had stopped three ways, each passing on rerun. `Extensions.loadUnpacked` had 15 s to cover Chrome's whole cold start. A reopened panel's restored Codex card was taken for the new Claude Code run. The capture step navigated before the worker was shown to hold the new lease. A fourth stop showed up under load: one timed-out `chrome.sidePanel.open` ended the run. `scripts/smoke-macos.mjs` now has one helper, `waitUntil(what, observe, accept)`, whose timeout reports the last state observed. It is used to wait for Chrome before loading the extension, for the worker's lease (`workerHoldsHostPolicy`, `reloadSettings`), for a new run card that the service did not already list (`summarizeFromPanel(harness)`), and to retry opening the panel safely. TESTING.md "Waiting for state, not time" documents it for later smoke steps. No product race was found, and no step asserts less. **Metrics:** before, 3 of 3 idle and 3 of 5 under full CPU load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load).
 
 - [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, #125).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
 

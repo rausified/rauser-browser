@@ -45,6 +45,8 @@ const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 const PROTOCOL_VERSION = 6;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
+// Keep in step with POLICY_STORAGE_KEY in extension/model.ts.
+const POLICY_KEY = storageKey("policy_v1");
 const EXTENSION_ID = /^[a-p]{32}$/;
 // Keep in step with PROBE_PROMPT in host/src/harness.rs and repair_prompt in
 // host/src/service/prompt.rs: the fakes answer the setup probe and the repair
@@ -502,7 +504,7 @@ class Cdp {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Chrome ${method} timed out`));
+        reject(new Error(`Chrome ${method} timed out after ${timeout / 1000}s`));
       }, timeout);
       this.pending.set(id, {
         method,
@@ -777,6 +779,46 @@ async function waitFor(check, { timeout = 12_000, interval = 400, signal } = {})
   }
 }
 
+const describeState = (state) => {
+  const text = JSON.stringify(state) ?? String(state);
+  return text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text;
+};
+
+// Poll until the state a step depends on holds. `observe` reads the current
+// state (anything JSON can show) and `accept` says whether it is the state
+// wanted; the accepted state is returned. On timeout the error names what was
+// awaited, how long it waited, and the last state observed (and the last
+// error, if observing failed), so a stop says what the run saw, not only what
+// it expected. An error marked `fatal` stops the wait at once.
+async function waitUntil(what, observe, accept, { timeout = 30_000, interval = 500, signal } = {}) {
+  const started = Date.now();
+  let observed = false;
+  let lastState;
+  let lastError = null;
+  for (;;) {
+    if (signal?.aborted) throw signal.reason;
+    try {
+      const state = await observe();
+      if (await accept(state)) return state;
+      observed = true;
+      lastState = state;
+      lastError = null;
+    } catch (error) {
+      if (error.fatal) throw error;
+      lastError = error;
+    }
+    const waited = Date.now() - started;
+    if (waited >= timeout) {
+      const seen = [
+        observed ? `last observed ${describeState(lastState)}` : "nothing observed",
+        ...(lastError ? [`last error: ${lastError.message}`] : []),
+      ].join("; ");
+      throw new Error(`Timed out after ${(waited / 1000).toFixed(1)}s waiting for ${what}; ${seen}`);
+    }
+    await delay(interval);
+  }
+}
+
 async function run() {
   const options = argumentsForRun(process.argv.slice(2));
   if (!options) return;
@@ -889,24 +931,30 @@ async function run() {
     return cdp.withTarget(target.targetId, action);
   }
 
-  async function openPanel() {
-    if (await cdp.targetFor(panelUrl())) return;
-    // Opening the side panel needs a user gesture in an extension page.
-    // Evaluate with a gesture in the settings page, or a temporary tab.
+  // Opening the side panel needs a user gesture in an extension page.
+  // Evaluate with a gesture in the settings page, or a temporary tab. Each
+  // failure names the call that failed.
+  async function requestPanel() {
     let source = await cdp.targetFor(settingsUrl());
     let temporary = null;
     if (!source) {
       temporary = await cdp.send("Target.createTarget", { url: panelUrl(), background: true });
       source = { targetId: temporary.targetId };
     }
+    const stage = async (name, action) => {
+      try { return await action(); } catch (error) {
+        throw new Error(`${name}: ${error.message}`);
+      }
+    };
     try {
       await cdp.withTarget(source.targetId, async (page) => {
-        await waitFor(() => page.evaluate("typeof chrome.sidePanel?.open === 'function' || Promise.reject(new Error('loading'))"));
-        const windowId = await page.evaluate("chrome.tabs.getCurrent().then((tab) => tab.windowId)");
-        await page.evaluate(`chrome.sidePanel.open({ windowId: ${Number(windowId)} })`, { userGesture: true });
+        await stage("waiting for chrome.sidePanel", () => waitFor(() =>
+          page.evaluate("typeof chrome.sidePanel?.open === 'function' || Promise.reject(new Error('loading'))")));
+        const windowId = await stage("chrome.tabs.getCurrent",
+          () => page.evaluate("chrome.tabs.getCurrent().then((tab) => tab.windowId)"));
+        await stage("chrome.sidePanel.open", () =>
+          page.evaluate(`chrome.sidePanel.open({ windowId: ${Number(windowId)} })`, { userGesture: true }));
       });
-    } catch (error) {
-      console.log(`  Could not open the side panel automatically (${error.message}).`);
     } finally {
       if (temporary) {
         await cdp.send("Target.closeTarget", { targetId: temporary.targetId }).catch(() => undefined);
@@ -915,10 +963,22 @@ async function run() {
           "Temporary tab is still closing")).catch(() => undefined);
       }
     }
+  }
+
+  async function openPanel() {
+    if (await cdp.targetFor(panelUrl())) return;
+    // On a loaded machine one request can time out, or the panel can appear
+    // only after it returns, so look for the panel before asking again.
+    // Opening an open panel changes nothing.
     try {
-      await waitFor(async () => requireCondition(await cdp.targetFor(panelUrl()), "Side panel did not open"),
-        { timeout: 4_000 });
-    } catch {
+      await waitUntil("the side panel to open", async () => {
+        if (await cdp.targetFor(panelUrl())) return true;
+        await requestPanel();
+        return Boolean(await cdp.targetFor(panelUrl()));
+      }, (open) => open, { timeout: 60_000, interval: 1_000, signal: abort.signal });
+    } catch (error) {
+      if (error.fatal || abort.signal.aborted) throw error;
+      console.log(`  Could not open the side panel automatically (${error.message}).`);
       await userAction(`Click the ${APP_NAME} toolbar button to open the side panel.`,
         async () => requireCondition(await cdp.targetFor(panelUrl()), "Side panel is not open yet"));
     }
@@ -944,6 +1004,44 @@ async function run() {
   async function settingsConnected() {
     await waitFor(() => onSettings(async (page) =>
       requireCondition(await page.enabled("#choose-folder"), "Settings page is not connected to the host")));
+  }
+
+  // Page.reload can return while the old document still answers, connected
+  // and holding the previous policy, so mark it and wait for an unmarked
+  // document that has connected. Settings enables its controls only after
+  // its first load has published the host's policy to the worker.
+  async function reloadSettings() {
+    await inSettings(async (page) => {
+      await page.evaluate("window.smokeReloading = true");
+      await cdp.send("Page.reload", {}, page.sessionId);
+    });
+    await waitUntil("the reloaded settings page to connect to the host", () => onSettings(async (page) => ({
+      reloaded: await page.evaluate("window.smokeReloading !== true"),
+      connected: await page.enabled("#choose-folder"),
+      status: await page.text("#status"),
+    })), (state) => state.reloaded && state.connected, { timeout: 30_000, signal: abort.signal });
+  }
+
+  // The policy lease the worker stored, read from the settings page, which
+  // shares chrome.storage.local with the worker.
+  const workerLease = () => onSettings((page) => page.evaluate(`chrome.storage.local.get(${JSON.stringify(POLICY_KEY)})
+    .then((stored) => {
+      const lease = stored[${JSON.stringify(POLICY_KEY)}];
+      return lease ? { revision: lease.revision, capture_enabled: lease.capture_enabled,
+        adapters: (lease.adapters?.artifacts ?? []).map((adapter) => adapter.type),
+        expires_in_ms: lease.expires_at - Date.now() } : null;
+    })`));
+
+  // The worker judges each navigation by its stored lease when the
+  // navigation commits, and never revisits one it judged by an older lease.
+  // Before a step navigates and expects capture, wait until the worker holds
+  // the host's current revision.
+  async function workerHoldsHostPolicy() {
+    const reply = await hostConfig(wrapper);
+    return waitUntil(`the worker to hold the host's policy revision ${reply.revision}`, workerLease,
+      (lease) => lease?.revision === reply.revision && lease.capture_enabled === reply.config.capture_enabled &&
+        lease.expires_in_ms > 0,
+      { timeout: 30_000, signal: abort.signal });
   }
 
   async function fixtureTarget(origin) {
@@ -1105,16 +1203,32 @@ async function run() {
     });
 
     cdp = new Cdp(chrome);
-    const loaded = await cdp.send("Extensions.loadUnpacked", { path: dist });
+    // A cold Chrome on a loaded runner can take longer than one request's
+    // timeout to start reading its DevTools pipe, so wait for it to answer
+    // a harmless request before asking it to load the extension.
+    const launchedAt = Date.now();
+    const seconds = (since) => `${((Date.now() - since) / 1000).toFixed(1)}s`;
+    await waitUntil("Chrome to answer on its DevTools pipe", async () => {
+      if (chrome.exitCode !== null || chrome.signalCode !== null) {
+        throw Object.assign(new Error(`Chrome exited (${chrome.exitCode ?? chrome.signalCode})`), { fatal: true });
+      }
+      return (await cdp.send("Browser.getVersion", {}, undefined, 5_000)).product;
+    }, (product) => typeof product === "string", { timeout: 120_000, interval: 250, signal: abort.signal });
+    console.log(`Chrome answered after ${seconds(launchedAt)}.`);
+    // One request, never retried: Chrome may still finish a timed-out load.
+    const loadingAt = Date.now();
+    const loaded = await cdp.send("Extensions.loadUnpacked", { path: dist }, undefined, 60_000);
     const loadedId = loaded?.id;
     requireCondition(loadedId === extensionId,
       `Chrome loaded extension ID ${loadedId ?? "none"}; expected ${extensionId}`);
-    await waitFor(async () => {
-      const discovered = await extensionIdsInProfile(profile, dist);
-      requireCondition(discovered.length === 1 && discovered[0] === extensionId,
-        `Expected ${extensionId} for ${dist} in this isolated Chrome profile; found ${discovered.join(", ") || "none"}`);
-    });
-    console.log(`Loaded and confirmed isolated Chrome profile extension ID ${extensionId}.`);
+    console.log(`Chrome loaded the extension in ${seconds(loadingAt)}.`);
+    // Chrome writes Preferences on a delay of about ten seconds, so this
+    // wait needs room beyond that on a loaded runner.
+    await waitUntil(`the isolated Chrome profile to record ${extensionId} for ${dist}`,
+      () => extensionIdsInProfile(profile, dist),
+      (discovered) => discovered.length === 1 && discovered[0] === extensionId,
+      { timeout: 60_000, interval: 500, signal: abort.signal });
+    console.log(`Loaded and confirmed isolated Chrome profile extension ID ${extensionId} after ${seconds(loadingAt)}.`);
     await nativeHostPreflight(cdp, extensionId);
     console.log("Chrome-to-native-host hello passed.");
     console.log(`The runner drives ${APP_NAME}'s pages itself. Answer only the prompts it names; press Ctrl+C to stop.`);
@@ -1331,8 +1445,10 @@ async function run() {
       requireCondition(reply.config.adapters.artifacts.length === 1 &&
         reply.config.adapters.artifacts[0].type === "smoke.page",
       "The fixture adapter was not saved");
-      await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
-      await settingsConnected();
+      await reloadSettings();
+      const lease = await workerHoldsHostPolicy();
+      requireCondition(lease.capture_enabled && lease.adapters.length === 1 && lease.adapters[0] === "smoke.page",
+        `The worker's lease: ${JSON.stringify(lease)}`);
     });
 
     const logRows = async () => {
@@ -1378,14 +1494,16 @@ async function run() {
       await navigate(origin, allowed);
       await navigate(origin, blocked);
       await openSettingsTab();
-      await waitFor(async () => {
+      await waitUntil("one open of the allowed page in the hourly totals", async () => {
         const totals = await activityTotals();
+        if (totals.some((total) => total.url.includes("/blocked/"))) {
+          throw Object.assign(new Error("The blocked path was measured"), { fatal: true });
+        }
+        return { totals: totals.map(({ url, opens }) => ({ url, opens })), lease: await workerLease() };
+      }, ({ totals }) => {
         const forAllowed = totals.filter((total) => total.url === allowed);
-        requireCondition(forAllowed.length === 1 && forAllowed[0].opens === 1,
-          `Expected one open of the allowed page in the hourly totals; found ${JSON.stringify(forAllowed)}`);
-        requireCondition(!totals.some((total) => total.url.includes("/blocked/")),
-          "The blocked path was measured");
-      }, { timeout: 20_000, interval: 1_000 });
+        return forAllowed.length === 1 && forAllowed[0].opens === 1;
+      }, { timeout: 20_000, interval: 1_000, signal: abort.signal });
     });
 
     await step("A completed hour of activity reaches the daily log", async () => {
@@ -1544,14 +1662,18 @@ async function run() {
         const strip = await page.text("#capture-strip-summary");
         requireCondition(strip?.includes("Capture on"), `Capture strip says: ${strip}`);
       }), { timeout: 20_000 });
+      const lease = await workerHoldsHostPolicy();
+      requireCondition(lease.capture_enabled && lease.adapters.includes("smoke.page"),
+        `The worker's lease after resuming: ${JSON.stringify(lease)}`);
       await closePanel();
       await navigate(origin, afterResume);
       await openSettingsTab();
-      await waitFor(async () => {
-        const forResumed = (await activityTotals()).filter((total) => total.url === afterResume);
-        requireCondition(forResumed.length === 1 && forResumed[0].opens === 1,
-          `Expected one open of the resumed page in the hourly totals; found ${JSON.stringify(forResumed)}`);
-      }, { timeout: 20_000, interval: 1_000 });
+      await waitUntil("one open of the resumed page in the hourly totals", async () => ({
+        totals: (await activityTotals()).map(({ url, opens }) => ({ url, opens })), lease: await workerLease(),
+      }), ({ totals }) => {
+        const forResumed = totals.filter((total) => total.url === afterResume);
+        return forResumed.length === 1 && forResumed[0].opens === 1;
+      }, { timeout: 20_000, interval: 1_000, signal: abort.signal });
       await openPanel();
       await waitFor(async () => {
         if (activityRows((await logRows()).rows, afterResume).length === 0) {
@@ -1672,15 +1794,22 @@ async function run() {
         requireCondition(await page.enabled("#summarize"), "Summarize & log is disabled");
       }), { timeout: 20_000 });
     }
-    // Click Summarize & log; resolves with the new card's run id.
-    async function summarizeFromPanel() {
-      const before = new Set((await runCards()).map((card) => card.id));
+    // Click Summarize & log; resolves with the new card's run id. A new
+    // panel enables Summarize & log before it restores earlier runs' cards
+    // from list_runs, so a card that appears after the click may be a
+    // restored one: a run the service already listed is never the new one.
+    async function summarizeFromPanel(harness) {
+      const listed = await agentRequest({ type: "list_runs" });
+      requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
+      const before = new Set([...listed.runs.map((run) => run.run_id), ...(await runCards()).map((card) => card.id)]);
       await onPanel((page) => page.click("#summarize"));
-      return waitFor(async () => {
-        const fresh = (await runCards()).find((card) => !before.has(card.id));
-        requireCondition(fresh, "Summarize & log showed no new run card");
-        return fresh.id;
-      }, { timeout: 30_000, signal: abort.signal });
+      const cards = await waitUntil("a new run card after Summarize & log", runCards,
+        (shown) => shown.some((card) => !before.has(card.id)), { timeout: 30_000, signal: abort.signal });
+      const fresh = cards.filter((card) => !before.has(card.id));
+      requireCondition(fresh.length === 1, `Summarize & log showed ${fresh.length} new run cards: ${JSON.stringify(fresh)}`);
+      const { run } = await getRun(fresh[0].id);
+      requireCondition(run?.harness === harness, `The new run ${fresh[0].id} uses ${run?.harness}; expected ${harness}`);
+      return fresh[0].id;
     }
     const newRuns = async (since) => (await harnessRuns(argvLog)).slice(since).filter((run) => !isVersionCheck(run));
     const anyArgvHasArticle = (runs) => runs.some((run) => run.argv.some((arg) => arg.includes(articleText(caseId))));
@@ -1760,7 +1889,7 @@ async function run() {
         await navigate(origin, article);
         await panelOnArticle();
         const since = (await harnessRuns(argvLog)).length;
-        runIds.codex = await summarizeFromPanel();
+        runIds.codex = await summarizeFromPanel("codex");
         const card = await cardIn(runIds.codex, finished);
         requireCondition(card.state.startsWith("Summarized"), `The run card says: ${card.state}`);
         requireCondition(/Importance: high/.test(card.answer), `The run card's answer: ${card.answer}`);
@@ -1805,7 +1934,7 @@ async function run() {
         await setAgentMode("badjson-once");
         await panelOnArticle();
         const since = (await harnessRuns(argvLog)).length;
-        runIds.claude = await summarizeFromPanel();
+        runIds.claude = await summarizeFromPanel("claude");
         const card = await cardIn(runIds.claude, finished);
         requireCondition(card.state.startsWith("Summarized"), `The run card says: ${card.state}`);
         const runs = await newRuns(since);
@@ -1840,7 +1969,7 @@ async function run() {
 
       await step("Second invalid answer", async () => {
         await setAgentMode("badjson");
-        runIds.badjson = await summarizeFromPanel();
+        runIds.badjson = await summarizeFromPanel("claude");
         const card = await cardIn(runIds.badjson, finished);
         requireCondition(card.state.startsWith("Failed") && card.state.includes("not valid"),
           `The run card says: ${card.state}`);
@@ -1852,7 +1981,7 @@ async function run() {
 
       await step("Cancel", async () => {
         await setAgentMode("slow");
-        runIds.slow = await summarizeFromPanel();
+        runIds.slow = await summarizeFromPanel("claude");
         await cardIn(runIds.slow, ["Running"]);
         const group = await waitFor(async () => {
           const status = JSON.parse(await readFile(path.join(runDirOf(runIds.slow), "status.json"), "utf8"));
@@ -1916,8 +2045,7 @@ async function run() {
         const value = `smoke-agent-value-${caseId}`;
         await atomicWrite(path.join(support, "agent.env"), `SMOKE_AGENT_NAME=${value}\n`, 0o600);
         await openSettingsTab();
-        await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
-        await settingsConnected();
+        await reloadSettings();
         await waitFor(() => onSettings(async (page) => {
           const names = await page.text("#agent-env-names");
           requireCondition(names?.includes("SMOKE_AGENT_NAME"), `Settings shows agent.env as: ${names}`);
