@@ -6988,9 +6988,7 @@ id = "work:{host}/{id}"
                     request,
                     config,
                     &mut ConsentAuthority::new(),
-                    &SetupContext {
-                        env: &no_harnesses(self.folder.path()),
-                    },
+                    &SetupContext::new(&no_harnesses(self.folder.path())),
                 )
             }
 
