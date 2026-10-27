@@ -48,7 +48,7 @@ await copyFile(join(readabilityDir, "LICENSE.md"), join(outputDir, "vendor", "re
 for (const name of [
   "capture-site.js", "capture-site-panel.js", "activity.js", "adapter-review.js", "artifact-refresh.js", "adapter-templates.js", "agent.js", "brand.js", "coordination.js", "extract.js",
   "model.js", "native.js", "note-editor.js", "options.js", "panel.js", "protocol-shape.js",
-  "settings.js", "starter-adapters.js", "worker.js",
+  "settings.js", "starter-adapters.js", "summarize.js", "worker.js",
 ]) {
   await copyFile(join(intermediateDir, "extension", name), join(outputDir, name));
 }

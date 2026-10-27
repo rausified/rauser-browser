@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
+const { SETUP_WARNING } = await import("../dist/agent.js");
+const { storageKey } = await import("../dist/brand.js");
+const { EXTRACT_LIMITS } = await import("../dist/extract.js");
 
 // Run after build:extension. Each test loads a fresh copy of the side panel
 // against a fake DOM built from the shipped panel.html, a scripted native
@@ -92,6 +96,27 @@ const CONFIG = {
   adapters: { format: 1, artifacts: [] },
 };
 
+const NOT_SET_UP = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
+const READY = { state: "ready", harness_version: "1.0.0", message: null };
+
+function storageArea(entries) {
+  return {
+    async get(keys) {
+      const result = {};
+      for (const name of Array.isArray(keys) ? keys : [keys]) {
+        if (entries.has(name)) result[name] = structuredClone(entries.get(name));
+      }
+      return result;
+    },
+    async set(items) {
+      for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
+    },
+    async remove(keys) {
+      for (const name of Array.isArray(keys) ? keys : [keys]) entries.delete(name);
+    },
+  };
+}
+
 let loads = 0;
 let teardown = [];
 
@@ -131,11 +156,20 @@ function hostReply(request, config = CONFIG) {
 // to hold it); a falsy result falls back to the default reply. `workerReply`
 // does the same for messages to the worker. With `state.hostDead`, a new host
 // process closes its port without answering, as one that cannot start does.
+// `executeScript(injection)` answers chrome.scripting.executeScript; `local`
+// and `session` are Maps backing chrome.storage, so a test can share them
+// between panel loads.
 async function install({
   tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null,
-  intercept = () => null, workerReply = () => undefined,
+  intercept = () => null, workerReply = () => undefined, agentStatus = NOT_SET_UP,
+  executeScript = async () => { throw new Error("Cannot access contents of the page"); },
+  local = new Map(), session = new Map(),
 }) {
   const elements = pageElements();
+  const listeners = () => {
+    const registered = [];
+    return { registered, addListener(listener) { registered.push(listener); } };
+  };
   const state = {
     tab: tab === undefined ? undefined : { incognito: false, ...tab },
     contains,
@@ -147,6 +181,11 @@ async function install({
     removed: [],
     ports: [],
     hostDead: false,
+    agentStatus,
+    injections: [],
+    local,
+    session,
+    runtimeMessages: listeners(),
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
@@ -160,10 +199,6 @@ async function install({
   globalThis.window = {
     addEventListener(type, listener) { if (type === "pagehide") teardown.push(listener); },
     confirm: () => false,
-  };
-  const listeners = () => {
-    const registered = [];
-    return { registered, addListener(listener) { registered.push(listener); } };
   };
   const tabActivated = listeners();
   const tabUpdated = listeners();
@@ -192,7 +227,8 @@ async function install({
               let reply = await intercept(request, state);
               if (!reply && request.type === "get_config") {
                 reply = { ...hostReply(request), config: state.config, revision: state.revision,
-                  config_issue: state.configIssue, adapter_issue: state.adapterIssue };
+                  config_issue: state.configIssue, adapter_issue: state.adapterIssue,
+                  agent_status: state.agentStatus };
               }
               if (!reply && request.type === "update_config") {
                 if (request.expected_revision !== state.revision) {
@@ -221,14 +257,18 @@ async function install({
         state.workerRequests.push(structuredClone(request));
         return (await workerReply(request)) ?? { ok: true, value: structuredClone(state.workerStatus) };
       },
+      onMessage: state.runtimeMessages,
     },
     storage: {
-      local: {
-        async get() { return {}; },
-        async set() {},
-        async remove() {},
-      },
+      local: storageArea(local),
+      session: storageArea(session),
       onChanged: listeners(),
+    },
+    scripting: {
+      async executeScript(injection) {
+        state.injections.push(injection);
+        return executeScript(injection);
+      },
     },
     tabs: {
       async query() {
@@ -282,6 +322,12 @@ async function install({
       return found;
     },
     calls: (name) => state.counts.get(name) ?? 0,
+    // The worker broadcasts a notice to open extension pages.
+    notify(notice) {
+      for (const listener of state.runtimeMessages.registered) {
+        listener(notice, { id: "test-id", url: "chrome-extension://test-id/worker.js" }, () => undefined);
+      }
+    },
     sent: (type) => state.requests.filter((request) => request.type === type),
     // The followed tab moves to another address in place.
     followLink(url, title) {
@@ -910,4 +956,163 @@ test("Save why stays disabled while a local pause waits for the host", async () 
   await settle();
   assert.equal(page.sent("record_why").length, 0);
   assert.match(page.el("status").textContent, /Use Pause capture to finish/);
+});
+
+// --- Summarize & log (plan Task 39) -----------------------------------------
+
+const ARTICLE_URL = "https://read.example/article";
+const RUN_VIEW = {
+  run_id: "00000000-0000-4000-8000-000000000039", state: "queued", harness: "codex",
+  record_key: { kind: "url", value: ARTICLE_URL }, written_record_key: null,
+  url: ARTICLE_URL, title: "Readable title", cwd: null,
+  created_at: "2026-10-27T09:00:00-07:00", started_at: null, finished_at: null,
+  error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+  stream_bytes: 0, can_retry_save: false, answer: null,
+};
+const WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
+
+// A page Readability can read: the bundled library loads, then the extractor
+// returns the page.
+async function readablePage(injection) {
+  if (injection.files) return [{ frameId: 0 }];
+  return [{
+    frameId: 0,
+    result: { title: "Readable title", content: "Body text", selection: "picked", truncated: false, readable: true },
+  }];
+}
+
+function startsRun(request) {
+  return request.type === "start_run" ? { type: "run_started", run: RUN_VIEW, existing: false } : null;
+}
+
+function buttonIn(root, text) {
+  for (const child of root.children) {
+    if (child.tagName === "BUTTON" && child.textContent === text) return child;
+    const found = buttonIn(child, text);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function summarizePanel(options = {}) {
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY,
+    executeScript: readablePage, intercept: startsRun, ...options,
+  });
+  await until(() => page.el("note-editor").hidden === false, "the page to show");
+  return page;
+}
+
+test("Summarize & log shows on any HTTP(S) tab and needs a ready harness", async () => {
+  const unset = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" } });
+  await until(() => unset.el("summarize").hidden === false, "the Summarize button");
+  // The note loads only after the panel has read the host config.
+  await until(() => unset.el("note-body").disabled === false, "the note to load");
+  assert.equal(unset.el("summarize").disabled, true);
+  assert.equal(unset.el("summarize").title, "Set up a summary harness in settings first.");
+  teardown.splice(0).forEach((listener) => listener());
+
+  const ready = await summarizePanel();
+  await until(() => ready.el("summarize").disabled === false, "the button to enable");
+  assert.equal(ready.el("summarize").hidden, false);
+  assert.equal(ready.el("summarize").title, "");
+  teardown.splice(0).forEach((listener) => listener());
+
+  const other = await install({ tab: { id: 1, url: "chrome://extensions/", title: "Extensions" }, agentStatus: READY });
+  await until(() => other.el("page-unusable").hidden === false, "the not-a-web-page state");
+  assert.equal(other.el("summarize").hidden, true);
+});
+
+test("clicking Summarize extracts in the top frame then sends start_run with no record key and a local requested_at", async () => {
+  const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]) });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+
+  const [library, extract] = page.state.injections;
+  assert.deepEqual(library, { target: { tabId: 1, frameIds: [0] }, files: ["vendor/readability.js"] });
+  assert.deepEqual(extract.target, { tabId: 1, frameIds: [0] });
+  assert.equal(extract.func.name, "extractReadablePage");
+  assert.deepEqual(extract.args, [EXTRACT_LIMITS]);
+
+  const [request] = page.sent("start_run");
+  assert.equal(request.url, ARTICLE_URL);
+  assert.equal(request.title, "Readable title");
+  assert.equal(request.content, "Body text");
+  assert.equal(request.selection, "picked");
+  assert.equal(request.harness, null);
+  assert.equal(request.record_key, null);
+  assert.match(request.requested_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
+  await until(() => /Summariz/.test(page.el("run-area").textContent), "the run to show");
+});
+
+test("an executeScript failure shows \"can't read this page\"", async () => {
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async () => { throw new Error("Cannot access contents of the page"); },
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => /can't read this page/.test(page.el("run-area").textContent), "the unreadable message");
+  assert.equal(page.sent("start_run").length, 0);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // Readability and the body text both came back empty.
+  const empty = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
+      frameId: 0, result: { title: "", content: "", selection: null, truncated: false, readable: false },
+    }],
+  });
+  await until(() => empty.el("summarize").disabled === false, "the button to enable");
+  empty.el("summarize").click();
+  await until(() => /can't read this page/.test(empty.el("run-area").textContent), "the unreadable message");
+  assert.equal(empty.sent("start_run").length, 0);
+});
+
+test("the setup warning shows once", async () => {
+  const local = new Map();
+  const first = await summarizePanel({ local });
+  await until(() => first.el("summarize").disabled === false, "the button to enable");
+  first.el("summarize").click();
+  await until(() => first.el("run-area").textContent.includes(SETUP_WARNING), "the setup warning");
+  // The warning does not hold the run back.
+  await until(() => first.sent("start_run").length === 1, "start_run");
+  assert.equal(local.get(WARNING_SEEN_KEY), true);
+  buttonIn(first.el("run-area"), "Got it").click();
+  assert.ok(!first.el("run-area").textContent.includes(SETUP_WARNING));
+  teardown.splice(0).forEach((listener) => listener());
+
+  const second = await summarizePanel({ local });
+  await until(() => second.el("summarize").disabled === false, "the button to enable");
+  second.el("summarize").click();
+  await until(() => second.sent("start_run").length === 1, "start_run");
+  await until(() => /Summariz/.test(second.el("run-area").textContent), "the run to show");
+  assert.ok(!second.el("run-area").textContent.includes(SETUP_WARNING));
+});
+
+test("a summarize failure sent before the panel loads is shown when it opens", async () => {
+  const message = "The Brauser service is not running. Register it again.";
+  const session = new Map([[PANEL_NOTICE_KEY, { kind: "summarize_failed", message, tab_id: 1, at: Date.now() }]]);
+  const page = await summarizePanel({ session });
+  await until(() => page.el("run-area").textContent.includes(message), "the stored notice");
+  await until(() => !session.has(PANEL_NOTICE_KEY), "the notice to clear");
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A notice older than two minutes, or for another tab, is cleared unseen.
+  for (const stale of [
+    { kind: "summarize_failed", message, tab_id: 1, at: Date.now() - 3 * 60_000 },
+    { kind: "summarize_failed", message, tab_id: 2, at: Date.now() },
+  ]) {
+    const later = new Map([[PANEL_NOTICE_KEY, stale]]);
+    const other = await summarizePanel({ session: later });
+    await until(() => !later.has(PANEL_NOTICE_KEY), "the stale notice to clear");
+    assert.ok(!other.el("run-area").textContent.includes(message));
+    teardown.splice(0).forEach((listener) => listener());
+  }
+
+  // A notice the worker sends while the panel is open shows at once.
+  const open = await summarizePanel();
+  open.notify({ kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 1, at: Date.now() });
+  await until(() => open.el("run-area").textContent.includes("Summaries work on http(s) pages."), "the live notice");
 });

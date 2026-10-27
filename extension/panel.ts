@@ -1,12 +1,18 @@
 import {
+  PANEL_NOTICE_KEY,
+  PANEL_NOTICE_MAX_AGE_MS,
   isHttpUrl,
+  isPanelNotice,
   localTimestamp,
+  type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
-import { PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
-import { APP_NAME } from "./brand.js";
+import { APP_NAME, storageKey } from "./brand.js";
+import { SETUP_WARNING, serviceSetupText } from "./agent.js";
+import { summarizeTab } from "./summarize.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
@@ -72,6 +78,8 @@ const recentList = element<HTMLDivElement>("recent-list");
 const worklogPeriod = element<HTMLSelectElement>("worklog-period");
 const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
+const summarizeButton = element<HTMLButtonElement>("summarize");
+const runArea = element<HTMLDivElement>("run-area");
 
 const session = new ConfigSession(render);
 let captureSite: CaptureSitePanel | null = null;
@@ -91,6 +99,8 @@ const NOTE_SAVE_DEBOUNCE_MS = 1_000;
 const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
 // The site access the manifest grants at install (host_permissions).
 const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
+const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
+const SUMMARIZE_NEEDS_HARNESS = "Set up a summary harness in settings first.";
 
 // --- Page area (§5.3, §5.7) --------------------------------------------------
 // The panel follows the active tab. `tabRefreshSeq` lets a refresh whose tab
@@ -111,6 +121,12 @@ let whyEdited = false;
 // another page must not leave this card, and its artifact_id, in place.
 let artifactPageUrl: string | null = null;
 let savingWhy = false;
+let summarizing = false;
+// The run area's latest line and the tab it is about; another tab's line goes
+// when the panel follows a different tab.
+let runLine: { tabId: number; element: HTMLElement } | null = null;
+// The last worker notice shown, since one can arrive both live and stored.
+let shownNotice: string | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 let recentLoadSeq = 0;
 let worklogLoadSeq = 0;
@@ -396,6 +412,10 @@ function updateControls(): void {
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
+  const harnessReady = session.agentStatus?.state === "ready";
+  summarizeButton.hidden = currentPage === null;
+  summarizeButton.disabled = !harnessReady || summarizing || currentPage?.tabId === undefined;
+  summarizeButton.title = harnessReady ? "" : SUMMARIZE_NEEDS_HARNESS;
   const paused = whyPausedReason();
   whyPausedHint.hidden = paused === null;
   if (paused !== null) whyPausedHint.textContent = paused;
@@ -582,6 +602,113 @@ async function dismissNotices(): Promise<void> {
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
     updateControls();
   }
+}
+
+// --- Summarize & log ---------------------------------------------------------
+
+function withoutRunAreaChild(child: Element): Element[] {
+  return Array.from(runArea.children).filter((other) => other !== child);
+}
+
+function showRunLine(tabId: number, text: string, warning = false): void {
+  const line = document.createElement("p");
+  line.className = warning ? "run-line warning" : "run-line";
+  line.textContent = text;
+  const kept = runLine ? withoutRunAreaChild(runLine.element) : Array.from(runArea.children);
+  runArea.replaceChildren(...kept, line);
+  runLine = { tabId, element: line };
+}
+
+function clearRunLineUnlessFor(tabId: number | undefined): void {
+  if (!runLine || runLine.tabId === tabId) return;
+  runArea.replaceChildren(...withoutRunAreaChild(runLine.element));
+  runLine = null;
+}
+
+// Plan Task 40 replaces this line with the polling run card for the run.
+function showRunStarted(tabId: number, existing: boolean): void {
+  showRunLine(tabId, existing ? "Already summarizing this page…" : "Summarizing this page…");
+}
+
+/** Shows SETUP_WARNING (spec §6.1) before the first summary ever. It does not
+ * hold the run back. */
+async function showSetupWarningOnce(): Promise<void> {
+  try {
+    const stored = await chrome.storage.local.get(SUMMARIZE_WARNING_SEEN_KEY);
+    if (stored[SUMMARIZE_WARNING_SEEN_KEY] === true) return;
+    await chrome.storage.local.set({ [SUMMARIZE_WARNING_SEEN_KEY]: true });
+  } catch {
+    return;
+  }
+  const box = document.createElement("div");
+  box.className = "setup-warning";
+  const text = document.createElement("p");
+  text.textContent = SETUP_WARNING;
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "secondary compact";
+  dismiss.textContent = "Got it";
+  dismiss.addEventListener("click", () => runArea.replaceChildren(...withoutRunAreaChild(box)));
+  box.append(text, dismiss);
+  runArea.replaceChildren(box, ...Array.from(runArea.children));
+}
+
+function summarizeFailure(error: unknown): string {
+  if (error instanceof HostError && error.code === "unreadable") return error.message;
+  if (error instanceof HostError && error.code === "service_unavailable") return serviceSetupText(error.message);
+  return `Could not start the summary: ${describe(error)}`;
+}
+
+async function summarize(): Promise<void> {
+  const page = currentPage;
+  if (summarizing || !page || page.tabId === undefined) return;
+  const tabId = page.tabId;
+  summarizing = true;
+  updateControls();
+  showRunLine(tabId, "Reading this page…");
+  try {
+    await showSetupWarningOnce();
+    const { existing } = await summarizeTab(
+      { id: tabId, url: page.url, title: page.title },
+      { scripting: chrome.scripting, host: session.host, now: () => new Date() },
+    );
+    showRunStarted(tabId, existing);
+  } catch (error) {
+    showRunLine(tabId, summarizeFailure(error), true);
+  } finally {
+    summarizing = false;
+    updateControls();
+  }
+}
+
+/** Shows a notice from the worker's shortcut or context-menu summary when it
+ * is about the followed tab. Returns whether it is now shown. */
+function showNotice(notice: PanelNotice): boolean {
+  if (notice.tab_id !== followedTabId) return false;
+  const id = `${notice.kind}:${notice.tab_id}:${notice.at}`;
+  if (id === shownNotice) return true;
+  shownNotice = id;
+  if (notice.kind === "summarize_failed") showRunLine(notice.tab_id, notice.message, true);
+  else showRunStarted(notice.tab_id, false);
+  return true;
+}
+
+function clearStoredNotice(): Promise<void> {
+  return (chrome.storage.session.remove?.(PANEL_NOTICE_KEY) ?? Promise.resolve()).catch(() => undefined);
+}
+
+/** A notice the worker stored before this panel loaded, such as a
+ * service_unavailable from the shortcut that opened it. It is read once. */
+async function showStoredNotice(): Promise<void> {
+  let stored: unknown;
+  try {
+    stored = (await chrome.storage.session.get(PANEL_NOTICE_KEY))[PANEL_NOTICE_KEY];
+  } catch {
+    return;
+  }
+  if (stored === undefined) return;
+  await clearStoredNotice();
+  if (isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS) showNotice(stored);
 }
 
 // --- Page area and note (§5.3, §5.7) ---------------------------------------
@@ -819,6 +946,7 @@ async function showNoPage(title: string, url: string, state: "none" | "unusable"
  * Tab, file://) or after the user withdrew that access in Chrome. */
 async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   const seq = tabRefreshSeq;
+  clearRunLineUnlessFor(tab?.id);
   if (!tab || tab.incognito) {
     await showNoPage("No page yet", "", "none");
     return;
@@ -895,6 +1023,13 @@ recentType.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
 worklogPeriod.addEventListener("change", () => void loadWorklog());
 copyWorklogButton.addEventListener("click", copyWorklog);
+summarizeButton.addEventListener("click", () => void summarize());
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (sender.id === chrome.runtime.id && isPanelNotice(message) && showNotice(message)) {
+    void clearStoredNotice();
+  }
+  return false;
+});
 session.watchPolicy(scheduleReload);
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 // Withdrawing or restoring site access in Chrome changes what this tab shows.
@@ -940,6 +1075,7 @@ void (async () => {
     updateControls();
   }
   await refreshActiveTab();
+  await showStoredNotice();
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();
 })();

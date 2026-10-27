@@ -28,6 +28,17 @@ let frameEntered = null;
 let onAlarm;
 let onStartup;
 let onInstalled;
+let onCommand;
+let onMenuClicked;
+const menus = [];
+// sidePanel.open calls, in order, and whether each came before any await.
+const panelOpens = [];
+// Messages the worker broadcast to extension pages.
+const broadcasts = [];
+// Answers chrome.scripting.executeScript; the default reads a page.
+let executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
+  frameId: 0, result: { title: "Readable", content: "Body", selection: null, truncated: false, readable: true },
+}];
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
@@ -92,16 +103,23 @@ globalThis.chrome = {
     onInstalled: { addListener(listener) { onInstalled = listener; } },
     onStartup: { addListener(listener) { onStartup = listener; } },
     connectNative: () => fakePort(),
+    // No panel is listening, as when the panel has not loaded yet.
+    async sendMessage(message) {
+      broadcasts.push(structuredClone(message));
+      throw new Error("Could not establish connection. Receiving end does not exist.");
+    },
   },
+  commands: { onCommand: { addListener(listener) { onCommand = listener; } } },
+  scripting: { executeScript: (injection) => executeScript(injection) },
   alarms: {
     async create(name, info) { alarms.set(name, { name, ...info }); },
     async get(name) { return alarms.get(name); },
     onAlarm: { addListener(listener) { onAlarm = listener; } },
   },
   contextMenus: {
-    create() {},
-    removeAll(callback) { callback?.(); },
-    onClicked: { addListener() {} },
+    create(properties) { menus.push(properties); },
+    removeAll(callback) { menus.length = 0; callback?.(); },
+    onClicked: { addListener(listener) { onMenuClicked = listener; } },
   },
   storage: {
     local: storageArea(values),
@@ -146,12 +164,16 @@ globalThis.chrome = {
     async queryState() { return "active"; },
     onStateChanged: { addListener(listener) { onIdleStateChanged = listener; } },
   },
-  sidePanel: { async setPanelBehavior() {} },
+  sidePanel: {
+    async setPanelBehavior() {},
+    async open(options) { panelOpens.push(options); },
+  },
 };
 
 const { queueActivityMapRebuild, rebuildActivityMap } = await import("../dist/worker.js");
 const { HostClient, HostError, PROTOCOL_VERSION } = await import("../dist/native.js");
 const { ConfigSession } = await import("../dist/settings.js");
+const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
 
 function send(message) {
   return new Promise((resolve, reject) => {
@@ -1921,4 +1943,120 @@ test("installing Capture Site policy measures already-open pages without inventi
   } finally {
     Date.now = realNow;
   }
+});
+
+// --- Summarize & log (plan Task 39) -----------------------------------------
+
+const SUMMARY_URL = "https://read.example/article";
+const SUMMARY_RUN = {
+  run_id: "00000000-0000-4000-8000-000000000039", state: "queued", harness: "codex",
+  record_key: { kind: "url", value: SUMMARY_URL }, written_record_key: null,
+  url: SUMMARY_URL, title: "Readable", cwd: null,
+  created_at: "2026-10-27T09:00:00-07:00", started_at: null, finished_at: null,
+  error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+  stream_bytes: 0, can_retry_save: false, answer: null,
+};
+
+// The port the summary run opened, once it has sent start_run.
+async function startRunPort(after) {
+  let found = null;
+  await until(() => {
+    found = ports.slice(after).find((port) => port.sent.some((message) => message.type === "start_run")) ?? null;
+    return found !== null;
+  }, "start_run");
+  return { port: found, request: found.sent.find((message) => message.type === "start_run") };
+}
+
+test("summarize command opens the panel before any await and starts a run", async () => {
+  sessionValues.clear();
+  panelOpens.length = 0;
+  broadcasts.length = 0;
+  const before = ports.length;
+  onCommand("summarize", { id: 7, windowId: 1, url: SUMMARY_URL, title: "Tab", incognito: false });
+  // Chrome lets a shortcut open the panel only inside the gesture.
+  assert.deepEqual(panelOpens, [{ tabId: 7 }]);
+
+  const { port, request } = await startRunPort(before);
+  assert.equal(request.url, SUMMARY_URL);
+  assert.equal(request.title, "Readable");
+  assert.equal(request.content, "Body");
+  assert.equal(request.record_key, null);
+  assert.equal(request.harness, null);
+  assert.match(request.requested_at, /[+-]\d\d:\d\d$/);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: SUMMARY_RUN, existing: false,
+  });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
+  const notice = sessionValues.get(PANEL_NOTICE_KEY);
+  assert.equal(notice.kind, "run_started");
+  assert.equal(notice.run_id, SUMMARY_RUN.run_id);
+  assert.equal(notice.tab_id, 7);
+  assert.equal(typeof notice.at, "number");
+  await until(() => broadcasts.length === 1, "the broadcast notice");
+  assert.deepEqual(broadcasts[0], notice);
+  await until(() => port.closed, "the summary host port to close");
+
+  // Another command is ignored, and a non-HTTP(S) tab gets a notice at once.
+  onCommand("other", { id: 7, url: SUMMARY_URL, incognito: false });
+  assert.equal(panelOpens.length, 1);
+  sessionValues.clear();
+  onCommand("summarize", { id: 8, url: "chrome://extensions/", incognito: false });
+  assert.deepEqual(panelOpens.at(-1), { tabId: 8 });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the non-HTTP(S) notice");
+  assert.deepEqual(
+    { ...sessionValues.get(PANEL_NOTICE_KEY), at: 0 },
+    { kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 8, at: 0 },
+  );
+});
+
+test("service_unavailable from the command path is stored as a notice", async () => {
+  sessionValues.clear();
+  broadcasts.length = 0;
+  const before = ports.length;
+  const message = "The Brauser service is not running. Register it again.";
+  onCommand("summarize", { id: 9, url: SUMMARY_URL, title: "Tab", incognito: false });
+  const { port, request } = await startRunPort(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "service_unavailable", message,
+  });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
+  const notice = sessionValues.get(PANEL_NOTICE_KEY);
+  assert.deepEqual({ ...notice, at: 0 }, { kind: "summarize_failed", message, tab_id: 9, at: 0 });
+  await until(() => broadcasts.length === 1, "the broadcast notice");
+
+  // A page the extractor cannot read never reaches the host.
+  sessionValues.clear();
+  const realExecute = executeScript;
+  executeScript = async () => { throw new Error("Cannot access contents of the page"); };
+  try {
+    const opened = ports.length;
+    onCommand("summarize", { id: 10, url: SUMMARY_URL, title: "Tab", incognito: false });
+    await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the unreadable notice");
+    assert.match(sessionValues.get(PANEL_NOTICE_KEY).message, /can't read this page/);
+    assert.ok(ports.slice(opened).every((opened) => !opened.sent.some((sent) => sent.type === "start_run")));
+  } finally {
+    executeScript = realExecute;
+  }
+});
+
+test("context menu item is registered on install", async () => {
+  onInstalled({ reason: "install" });
+  await until(() => menus.length === 1, "the context menu item");
+  assert.deepEqual(menus, [{ id: "brauser-summarize", title: "Summarize with Brauser", contexts: ["page", "selection"] }]);
+
+  sessionValues.clear();
+  panelOpens.length = 0;
+  const before = ports.length;
+  onMenuClicked({ menuItemId: "brauser-summarize" }, { id: 11, url: SUMMARY_URL, title: "Tab", incognito: false });
+  assert.deepEqual(panelOpens, [{ tabId: 11 }]);
+  const { port, request } = await startRunPort(before);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: SUMMARY_RUN, existing: true,
+  });
+  await until(() => sessionValues.get(PANEL_NOTICE_KEY)?.tab_id === 11, "the menu notice");
+  onMenuClicked({ menuItemId: "someone-else" }, { id: 11, url: SUMMARY_URL, incognito: false });
+  assert.equal(panelOpens.length, 1);
 });
