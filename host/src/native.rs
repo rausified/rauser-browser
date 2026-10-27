@@ -425,10 +425,8 @@ fn dispatch(
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
-        // Placeholder until the drafting handlers land (plan Task 8).
-        Request::DraftSite(_) | Request::CheckSiteDraft(_) => {
-            error(id, ErrorCode::InvalidRequest, "not yet")
-        }
+        Request::DraftSite(value) => crate::capture_site::draft_site(value, config),
+        Request::CheckSiteDraft(value) => crate::capture_site::check_site_draft(value, config),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
@@ -6200,6 +6198,58 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected config_result, got {other:?}"),
         }
+    }
+
+    /// The drafting pair over the wire: a draft, then its re-check at the
+    /// draft's revision, on a host with no home folder chosen yet.
+    #[test]
+    fn draft_site_then_check_site_draft_round_trip_over_the_wire() {
+        let folder = tempfile::tempdir().unwrap();
+        let config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let draft = serde_json::json!({
+            "type": "draft_site",
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "draft-1",
+            "origin": "https://tools.example.com",
+            "visited": [{"shape": "/items/{num}", "count": 3}],
+            "links": []
+        })
+        .to_string();
+        let responses = served(&[draft], config);
+        let Response::SiteDrafted(site) = &responses[0] else {
+            panic!("expected site_drafted, got {:?}", responses[0]);
+        };
+        assert_eq!(site.request_id, "draft-1");
+        assert_eq!(site.adapters.len(), 1);
+        let table = site.adapters[0].adapter.clone();
+        let check = serde_json::json!({
+            "type": "check_site_draft",
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "check-1",
+            "origin": "https://tools.example.com",
+            "expected_revision": site.revision,
+            "adapters": [table],
+            "provenance": [["drafted"]],
+            "scope": [null],
+            "visited": [{"shape": "/items/{num}", "count": 3}],
+            "links": []
+        })
+        .to_string();
+        let config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let responses = served(&[check], config);
+        let Response::SiteDraftChecked(checked) = &responses[0] else {
+            panic!("expected site_draft_checked, got {:?}", responses[0]);
+        };
+        assert_eq!(checked.request_id, "check-1");
+        assert_eq!(
+            checked.rules[0][0].verdict,
+            brauser_protocol::RuleVerdictKind::Kept
+        );
+        assert_eq!(checked.preview[0].adapter, Some(0));
+        assert!(
+            !folder.path().join("config.toml").exists(),
+            "drafting never writes config.toml"
+        );
     }
 
     #[test]

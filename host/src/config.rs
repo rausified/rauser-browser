@@ -715,6 +715,25 @@ impl ConfigStore {
         }
     }
 
+    /// The artifact types of every recorded contract: the retired contracts
+    /// in `[[adapter_id_history]]` and the host's adopted contracts, which
+    /// `note_key_rule` reads. A recorded type still names note keys, so a
+    /// drafted adapter must not take it (DESIGN §5.1). Sorted and distinct.
+    pub(crate) fn recorded_adapter_types(&self) -> Vec<String> {
+        let adopted: &[serde_json::Value] = match &self.adopted {
+            AdoptedContracts::Read { contracts, .. } => contracts,
+            AdoptedContracts::Unread | AdoptedContracts::Unreadable => &[],
+        };
+        self.retired_adapter_contracts
+            .iter()
+            .chain(adopted)
+            .filter_map(|contract| contract.get("type").and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     pub fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()

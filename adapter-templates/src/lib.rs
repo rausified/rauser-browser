@@ -28,7 +28,7 @@ pub use ctype::{BaseType, CType, CaseMod};
 pub use document::{Adapter, Document, MAX_ADAPTERS, MAX_RULES, Mode, SHARED_ORIGINS};
 pub use draft::{
     DraftOutcome, DraftRulesReport, Provenance, ResolvedScope, RuleVerdict, Scope, ScopeChoice,
-    ScopeState, check_draft, check_draft_rules, resolve_scope_choice,
+    ScopeState, check_draft, check_draft_rules, resolve_scope_choice, scope_state,
 };
 pub use error::{DraftErrorCode, ErrorCode, Field, ValidationError};
 pub use eval::{
