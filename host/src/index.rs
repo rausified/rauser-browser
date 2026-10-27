@@ -1291,9 +1291,13 @@ fn migrate_state(state: &mut IndexState) -> bool {
 /// Upgrade a version 5 cache. It holds no `CachedEvent::Summary`: #59's
 /// summary events had no caller, so no log held one, and a cached event of
 /// #59's shape (no record key or harness) fails to deserialize, which makes
-/// the whole cache unreadable and rescanned. Every v6 derivation change
-/// concerns summaries only, so no generated file differs and nothing
-/// becomes dirty.
+/// the whole cache unreadable and rescanned. Version 6 changes summary
+/// parse acceptance (the record key and harness, adapter artifact types)
+/// and summary derivation only, so no generated file differs and nothing
+/// becomes dirty. The checkpoints are kept, so a log a version 5 build
+/// checkpointed after skipping a version 6 summary marker (a downgrade,
+/// then an upgrade) is not reread until it changes; `brauser reindex`
+/// recovers that summary.
 fn migrate_v5_state(state: &mut IndexState) {
     state.version = STATE_VERSION;
 }
@@ -1662,7 +1666,8 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         legacy_visits: Vec::new(),
                         latest_at: at,
                     });
-                row.days.insert(day.clone());
+                // A summary moves first and last seen but is not an open,
+                // so it never adds to the days opened.
                 if day < row.first_seen {
                     row.first_seen = day.clone();
                 }
@@ -2164,13 +2169,21 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     out.push_str("## Timeline\n\n");
     // Newest first: each summary line, then the day rollups whose latest
     // date is not after it, so a summary sorts before a rollup of its day.
+    // Rollups and summary lines are both dated in their event's own offset,
+    // so the 20 newest summaries (by instant) are merged by that local date,
+    // newest instant first within a date; across offsets (travel) the lines
+    // can then differ from instant order, but each stays above its own
+    // day's rollup.
     const MAX_SUMMARY_LINES: usize = 20;
-    let mut summaries = artifact
+    let mut shown = artifact
         .summaries
         .iter()
         .rev()
         .take(MAX_SUMMARY_LINES)
-        .peekable();
+        .map(|summary| (summary_instant(summary), summary))
+        .collect::<Vec<_>>();
+    shown.sort_by(|(left, _), (right, _)| right.date().cmp(&left.date()).then(right.cmp(left)));
+    let mut summaries = shown.into_iter().map(|(_, summary)| summary).peekable();
     for period in timeline_rollups(artifact) {
         while let Some(summary) =
             summaries.next_if(|summary| summary_instant(summary).date() >= period.last_date)
@@ -2196,7 +2209,7 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
 /// A summary's instant in its own offset. Logged events are validated
 /// RFC 3339, so the epoch fallback is never reached in practice.
 fn summary_instant(summary: &SummaryEvent) -> OffsetDateTime {
-    OffsetDateTime::parse(&summary.occurred_at, &Rfc3339).unwrap_or(OffsetDateTime::UNIX_EPOCH)
+    parsed_timestamp(&summary.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 /// `- YYYY-MM-DD HH:MM · Summarized: <title> — <type>, <importance> importance`,
@@ -5024,6 +5037,66 @@ print(json.dumps([tables,row]))"#;
              - 2026-10-01 · focused 2 min · 1 min in background · opened 1×\n",
             "{markdown}"
         );
+        // A summary-only day is not a day opened.
+        assert!(
+            markdown.contains("  opens: 2\n  days_opened: 2\n"),
+            "{markdown}"
+        );
+        assert_eq!(
+            index
+                .artifact(&day1.artifact_id)
+                .unwrap()
+                .unwrap()
+                .days_opened,
+            2
+        );
+    }
+
+    #[test]
+    fn timeline_merges_summaries_across_offsets_by_their_own_date() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let day5 = activity(
+            "00000000-0000-4000-8000-000000000111",
+            "TRAVEL",
+            "Item",
+            "2026-10-05T12:00:00Z",
+        );
+        let day6 = ActivityEvent {
+            event_id: "00000000-0000-4000-8000-000000000112".into(),
+            occurred_at: "2026-10-06T12:00:00Z".into(),
+            ..day5.clone()
+        };
+        index.record_activities([&day5, &day6], &[]).unwrap();
+        // The later instant has the earlier local date.
+        let mut late_evening = adapter_summary(
+            &day5.artifact_id,
+            &day5.artifact_type,
+            &day5.url,
+            "2026-10-05T23:30:00-07:00",
+        );
+        late_evening.title = "Late evening".into();
+        let mut early_morning = adapter_summary(
+            &day5.artifact_id,
+            &day5.artifact_type,
+            &day5.url,
+            "2026-10-06T01:00:00+09:00",
+        );
+        early_morning.title = "Early morning".into();
+        index.record_summary(&late_evening).unwrap();
+        index.record_summary(&early_morning).unwrap();
+        index.regenerate_dirty().unwrap();
+
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert_eq!(
+            timeline(&markdown),
+            "- 2026-10-06 01:00 · Summarized: Early morning — discussion, high importance\n\
+             - 2026-10-06 · focused 2 min · 1 min in background · opened 1×\n\
+             - 2026-10-05 23:30 · Summarized: Late evening — discussion, high importance\n\
+             - 2026-10-05 · focused 2 min · 1 min in background · opened 1×\n",
+            "{markdown}"
+        );
     }
 
     #[test]
@@ -5160,7 +5233,13 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(row.artifact_type, "jira.issue");
         assert_eq!(row.title, "A good discussion");
         // A summary is not measured activity.
-        assert_eq!((row.opens, row.focused_seconds), (0, 0));
+        assert_eq!((row.opens, row.focused_seconds, row.days_opened), (0, 0, 0));
+        index.regenerate_dirty().unwrap();
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(
+            markdown.contains("  opens: 0\n  days_opened: 0\n"),
+            "{markdown}"
+        );
 
         let later = ActivityEvent {
             artifact_id: summary.artifact_id.clone(),
@@ -5180,7 +5259,7 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(row.artifact_type, "jira.issue");
         assert_eq!(row.title, "PROJ-1 renamed");
         assert_eq!(row.url, later.url);
-        assert_eq!(row.opens, 1);
+        assert_eq!((row.opens, row.days_opened), (1, 1));
     }
 
     #[test]
@@ -5200,7 +5279,7 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
-    fn web_summaries_never_redirect_note_keys() {
+    fn a_web_summary_url_stays_with_its_own_web_artifact() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -5224,8 +5303,10 @@ print(json.dumps([tables,row]))"#;
         web.record_key = crate::vault::url_record_key(web_url).unwrap();
         index.record_summary(&web).unwrap();
 
-        // The web summary's URL stays with its own `web:` artifact and is
-        // never offered as another artifact's note key.
+        // The web summary's URL is indexed under its own `web:` artifact,
+        // not the adapter artifact on the same host. This checks the index
+        // side only; `resolve_note_context`'s `names_artifact` filter is
+        // what keeps a URL from becoming another artifact's note key.
         assert_eq!(
             index.artifact_urls(&adapter.artifact_id).unwrap(),
             [adapter_url]
