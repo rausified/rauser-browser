@@ -43,7 +43,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     }
     let config = ConfigStore::load()?;
     let paths = ServicePaths::for_config(&config)?;
-    let options = options(&paths);
+    let options = options(&paths, &config);
     let exit = server::serve(&paths, config, &options, || {
         let store = RunStore::open(paths.runs())?;
         let finisher = VaultCheckFinisher::new(ConfigStore::load()?);
@@ -60,7 +60,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     Ok(())
 }
 
-fn options(paths: &ServicePaths) -> ServiceOptions {
+fn options(paths: &ServicePaths, config: &ConfigStore) -> ServiceOptions {
     #[allow(unused_mut)]
     let mut options = ServiceOptions {
         run_timeout: DEFAULT_RUN_TIMEOUT,
@@ -68,6 +68,7 @@ fn options(paths: &ServicePaths) -> ServiceOptions {
         idle_exit: DEFAULT_IDLE_EXIT,
         service_pid: std::process::id(),
         run_env: server::env_source(paths),
+        run_cwd: server::cwd_check(config.reopen()),
         opener: crate::open::default_opener(),
     };
     #[cfg(feature = "scripted-dialogs")]

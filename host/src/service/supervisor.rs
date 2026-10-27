@@ -137,6 +137,13 @@ impl RunFinisher for VaultCheckFinisher {
 /// run's error, so it must never carry a value from the file.
 pub type EnvSource = Arc<dyn Fn() -> Result<Vec<(OsString, OsString)>, String> + Send + Sync>;
 
+/// Checks, when a run leaves the queue (including a queued run resumed after
+/// a restart), that the folder it was queued to run in is still the
+/// knowledge base folder the user picked, so a folder replaced or remounted
+/// at the same path while the run waited is never handed to a harness. The
+/// error is shown as the run's error.
+pub type CwdCheck = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ServiceOptions {
     /// The limit for a run that brings none of its own.
@@ -152,6 +159,9 @@ pub struct ServiceOptions {
     /// restart; a run whose environment cannot be built fails before its
     /// harness starts.
     pub run_env: EnvSource,
+    /// Run at the start of every run, right after `run_env`; a run whose
+    /// folder fails it ends before its harness starts.
+    pub run_cwd: CwdCheck,
     /// Opens a run's Codex thread and reveals `agent.env`.
     pub opener: Opener,
 }
@@ -748,6 +758,19 @@ impl Inner {
                 return;
             }
         };
+        // The folder as it is now, not as it was when the run was queued.
+        if let Some(Err(reason)) = launch
+            .as_ref()
+            .map(|launch| (this.options.run_cwd)(&launch.cwd))
+        {
+            control.end_turn();
+            this.finish_with(&control, id, |status| {
+                status.state = RunState::Failed;
+                status.error_kind = Some(RunErrorKind::HarnessFailed);
+                status.error = Some(reason);
+            });
+            return;
+        }
         let started = now_timestamp();
         let status = this.update(id, |status| {
             status.state = RunState::Running;
@@ -1196,6 +1219,11 @@ mod tests {
 
     type SharedEnv = Arc<Mutex<Result<Vec<(OsString, OsString)>, String>>>;
 
+    /// A file in a fixture run's folder that makes the fixture's folder
+    /// check fail, as if the knowledge base folder had been replaced.
+    const FOLDER_CHANGED: &str = "folder-changed";
+    const FOLDER_CHANGED_ERROR: &str = "The knowledge base folder changed.";
+
     struct Fixture {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
@@ -1307,6 +1335,13 @@ mod tests {
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
+                run_cwd: Arc::new(|cwd: &Path| {
+                    if cwd.join(FOLDER_CHANGED).exists() {
+                        Err(FOLDER_CHANGED_ERROR.to_string())
+                    } else {
+                        Ok(())
+                    }
+                }),
                 opener: crate::open::default_opener(),
             };
             let finisher = Box::new(finisher);
@@ -1811,6 +1846,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id(),
             run_env: Arc::new(|| Ok(Vec::new())),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
             opener: crate::open::default_opener(),
         };
         let own = Duration::from_secs(5);
@@ -2424,6 +2460,76 @@ mod tests {
         assert!(fixture.supervisor.is_idle());
     }
 
+    /// The folder check runs when a queued run leaves the queue, not when it
+    /// was queued: a folder replaced while the run waited fails it before
+    /// its harness starts.
+    #[test]
+    fn a_queued_run_whose_folder_changed_fails_before_its_harness() {
+        let fixture = Fixture::new(&format!(
+            "/bin/echo started >> \"$COUNT\"\n{BLOCK_THEN_ANSWER}"
+        ));
+        let first = fixture.start("a");
+        let second = fixture.start("b");
+        let queued = fixture.start("c");
+        fixture.wait_for(first, |view| view.state == RunState::Running);
+        fixture.wait_for(second, |view| view.state == RunState::Running);
+        assert_eq!(fixture.view(queued).state, RunState::Queued);
+        // Wait until both running harnesses have logged their start.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::fs::read_to_string(fixture.path("count"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+            < 2
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the running harnesses never started"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::write(fixture.path(FOLDER_CHANGED), "").unwrap();
+        fixture.release();
+        for id in [first, second] {
+            assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        }
+        let view = fixture.wait_finished(queued);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some(FOLDER_CHANGED_ERROR));
+        assert_eq!(view.started_at, None);
+        assert_eq!(view.stream_bytes, 0);
+        assert_eq!(read(&fixture.path("count")).lines().count(), 2);
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 2);
+        assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn a_resumed_queued_run_whose_folder_changed_fails_before_its_harness() {
+        let mut queued = None;
+        let fixture = Fixture::seeded(
+            "/bin/echo started >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n",
+            DEFAULT_RUN_TIMEOUT,
+            |store, cwd| {
+                std::fs::write(cwd.join(FOLDER_CHANGED), "").unwrap();
+                queued = Some(seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                ));
+            },
+        );
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some(FOLDER_CHANGED_ERROR));
+        assert_eq!(view.started_at, None);
+        assert!(!fixture.path("count").exists());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+        assert!(fixture.supervisor.is_idle());
+    }
+
     #[test]
     fn a_resumed_queued_run_fails_when_agent_env_is_unreadable() {
         let mut queued = None;
@@ -2456,6 +2562,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
             run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
             opener: crate::open::default_opener(),
         };
         let debug = format!("{options:?}");
