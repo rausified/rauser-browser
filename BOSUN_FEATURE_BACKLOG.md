@@ -531,16 +531,20 @@ were folded into `brwr-q7e` above rather than given their own item.
   for EOF. No production dialog behavior changed. Full verification remains
   pending outside the sandbox; no shipped claim or bead closure this cycle.
 
-  Cycle 2 verification (2026-10-27): clean baseline, no failure-gate file;
-  the fixture passes in both normal and scripted-dialog builds. The required
-  full gate still fails at 32 socket-dependent host tests (447 pass), and an
-  independent Unix bind in this workspace returns EPERM. All 13 extension
-  files and both Clippy gates pass. Diagnostic filtering gives 493 Rust passes
-  with 39 host tests excluded; this is not full-suite acceptance. The script
-  suite has 8 passes, 1 platform skip and 1 failure: a standalone Node
-  `spawnSync` probe confirms EPERM and empty stdout. No new code, feature,
-  test suppression or reset was attempted. An unrestricted driver verification
-  is needed before closing this item or starting the next feature cycle.
+  Latest verification (2026-10-27, quarantine recovery on `90f88b4`):
+  recovered cycle 4's documentation from its quarantine branch; the driver
+  rejected it for a missing `.bosun_commit_msg`, which is now written.
+  Protocol generation, workspace build, format, both Clippy configurations,
+  cached offline npm install, typecheck, lint, extension build, all 13 extension
+  test files and current-state checks pass. The unfiltered Rust gate remains
+  red: 26 adapter-template tests pass, then 447 host tests pass and 32 fail in
+  service/IPC tests. The repaired dialog fixture passes its 60 exchanges.
+  Independent workspace Unix bind and JSON-only Node `spawnSync` probes both
+  return EPERM. The script gate fails; disabling Node test isolation exposes
+  8 passes, 1 failure and 1 platform skip. No product or test changes, skipped
+  coverage, feature work or history reset. Keep this bead open until a runner
+  permitting local IPC verifies the complete gate; logs are under ignored
+  `target/overnight-health/`.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -878,16 +882,23 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Cycle observations (2026-10-27 — repeated restricted health gate)
+### Current health handoff (2026-10-27 — quarantine recovery)
 
-- Cycle 2 confirms the same IPC restriction on the clean merged baseline.
-  No recent commit is verified green inside this sandbox, so resetting to
-  older code would discard work without restoring the denied OS capability.
-  Retain `00dbc75`; full socket and script coverage must remain enabled.
-- The useful next action is for the driver to run the full gate where Unix
-  bind/connect and Node synchronous child output are permitted, then make
-  that result available to the next cycle. Repeating the restricted run does
-  not establish `brwr-4vb`'s acceptance criteria.
+- Recovered cycle 4 documentation; its missing commit message is now present.
+  This cycle still begins red, so no new feature was started.
+- The same IPC restriction persists on clean merged baselines `728b200` and
+  `90f88b4`. The last five commits contain no state verified green under this
+  restriction. A history reset cannot restore a denied OS capability; retain
+  `00dbc75` and leave all socket and script coverage enabled.
+- The root blocker is runner capability, not an incomplete code change. The
+  driver should run the unfiltered gate where Unix bind/connect and Node
+  synchronous child output are permitted, and preserve that result for the
+  next cycle. No approval or code rollback can resolve EPERM inside this run.
+  Current raw health logs are under ignored `target/overnight-health/`.
+- For useful script diagnostics here, run
+  `node --test --test-isolation=none scripts/tests/dev-service.test.mjs`.
+  The normal test-isolated runner reports only a failed file; the diagnostic
+  reports the actual win32 simulation failure. Neither invocation passes.
 - Once the health gate is genuinely green, resume `brwr-1hj` through its
   `brwr-t40` blocker. The next useful product increment remains host drafting
   with selectable rules and example artifact grouping, using the existing

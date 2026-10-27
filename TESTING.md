@@ -98,15 +98,24 @@ that restriction. An explicitly filtered local run can diagnose the remaining
 tests, but is not a passing full gate. The dialog repair remains in progress
 until that external gate passes.
 
-On the clean `728b200` baseline, a second restricted run reproduced the same
-32 failures (447 host tests passed). A Python `AF_UNIX` bind under the
-workspace also failed with `PermissionError: [Errno 1] Operation not permitted`,
-independently of the service code. Node's restriction can be misleading:
-`spawnSync` returned `status: 0` alongside `error.code: "EPERM"` and empty
-stdout. The script suite therefore reported `Unexpected end of JSON input`
-in its win32 simulation. Inspect the spawn result's `error` as well as its
-exit status when diagnosing this runner. An independent child that only
-prints JSON reproduced it; no registration or launchd call is needed.
+The restricted runs on baselines `728b200` and `90f88b4` reproduced the
+same failures. To distinguish a runner denial from a service regression,
+try an independent Python `AF_UNIX` bind in a temporary workspace directory.
+Do not change service paths or permissions to work around a denied bind.
+Node's restriction can be misleading: a JSON-only `spawnSync` child returned
+`status: 0` alongside `error.code: "EPERM"` and empty stdout. Inspect the
+spawn result's `error` as well as its exit status. The script suite consequently
+reported `Unexpected end of JSON input` in its win32 simulation; no real
+registration or launchd call was involved.
+
+If `npm run test:scripts` reports only a failed file, use
+`node --test --test-isolation=none scripts/tests/dev-service.test.mjs` for
+diagnosis. On this runner it exposes the win32 simulation's empty-output
+JSON parse error (8 pass, 1 fail, 1 platform skip). This changes only the
+diagnostic invocation; the required script gate remains unmodified and failing.
+The required opening gate stops Cargo after the failing host test binary,
+so its 26 adapter-template passes and 447 host passes do not establish that
+later integration and documentation tests passed.
 
 The diagnostic workspace run excluding `service::client::tests::`,
 `service::server::tests::` and `native::tests::run_proxy::` passed 493 tests
