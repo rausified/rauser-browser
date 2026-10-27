@@ -370,6 +370,26 @@ and the protocol v6 removals) is done; see Shipped.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
+- [ ] `brwr-rq5` **Make Unix-socket tests sandbox-aware (P2).** When binding a Unix
+  socket fails with EPERM/EACCES and `BRAUSER_REQUIRE_IPC_TESTS` is not `1`,
+  skip with a printed reason; with the flag set, fail. Applies to the host
+  service tests and `npm run test:scripts`. Cookie's codex workspace-write
+  sandbox denies local IPC, so its health gate saw 32 socket-test failures and
+  refused product work for 10 cycles. CI sets the flag, so CI never skips.
+  Waits for `brwr-sr3` (PR #98): open access PR 3 rewrites those tests.
+- [ ] `brwr-2za` **Neutralize `$` math in daily-log titles and Why text.**
+  `safe_markdown_line` (host/src/capture.rs) still allows `$` math there.
+  Moving them to `markdown::inline` needs a second frozen renderer generation
+  so intent-journal recovery (`pre_sanitizer_entry`) still matches lines
+  journaled byte-exact in the old form. DESIGN.md §5.2 and spec §7.1 record
+  the gap. From Lane E / PR 4; related to `brwr-3cc`.
+- [ ] `brwr-647` **Flaky extension test: Capture Site dwell sum.** On the slow
+  Linux VM, "installing Capture Site policy measures already-open pages
+  without inventing opens" (extension/tests/worker.test.mjs ~2321)
+  intermittently gets `actual: 8519, expected: 15000`. It seeds its clock
+  from the real wall clock; check local-hour boundary splits and unmocked
+  time reads first.
+
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
 A 2026-10-27 review of main at 1c32114 confirmed each of these with a probe
