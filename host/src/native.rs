@@ -1252,12 +1252,12 @@ fn note_context(
             "configuration is unavailable or needs repair",
         ));
     }
-    let Some(storage) = config.snapshot().storage.as_ref() else {
+    let Some(storage) = config.snapshot().storage.clone() else {
         return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
     };
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
-    let vault = Vault::open_checked(storage, config.root_identity())
+    let vault = Vault::open_checked(&storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
@@ -1271,73 +1271,53 @@ fn note_context(
             value: found.artifact_id.clone(),
         },
         // No adapter currently recognizes this URL (for example, its
-        // adapter or last enabled site was removed). Before falling back to
-        // a fresh URL key, check whether it was previously recorded under an
-        // artifact, so that artifact's existing shared note stays reachable
-        // instead of appearing empty. The note's own stored identity is
-        // checked first because it survives independently of activity (a
-        // note saved while capture was paused, or before any activity was
-        // ever delivered, has no index row to recover from); the index is
-        // only a fallback for a note saved under a different alternate URL.
-        None => {
-            // Collect every distinct match from BOTH sources into one set
-            // before deciding uniqueness: stripped query identity can make
-            // two different artifacts share the same canonical URL, and
-            // trusting either source alone -- even one that is itself
-            // unambiguous -- could still miss a conflicting match the
-            // other source holds. Guessing between them would silently
-            // redirect a save into an unrelated artifact's note, so the
-            // recovery is trusted only when the union is unambiguous.
-            let mut candidates = std::collections::BTreeSet::new();
-            if let Ok(note_candidates) = vault.note_candidates() {
-                candidates.extend(note_candidates.iter().filter_map(|contents| {
-                    note::artifact_keyed_note_identity(contents, &canonical)
-                }));
-            }
-            if let Ok(cache_dir) = config.cache_dir()
-                && let Ok(index) =
-                    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                && let Ok(ids) = index.artifact_candidates_for_url(&canonical)
-            {
-                candidates.extend(ids);
-            }
-            match candidates.len() {
-                1 => RecordKey {
-                    kind: RecordKeyKind::Artifact,
-                    value: candidates
-                        .into_iter()
-                        .next()
-                        .expect("checked len == 1 above"),
-                },
-                _ => {
-                    crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
-                }
-            }
-        }
+        // adapter or last enabled site was removed). Keep that artifact's
+        // existing shared note reachable instead of appearing empty, but only
+        // when a retained contract maps this original URL to it. Recorded
+        // canonical URLs are not evidence: strip_params can collapse a page
+        // that is not an artifact (a Jira board) and every artifact opened
+        // over it onto one URL, and guessing from them would redirect a save
+        // into an unrelated artifact's note. A retained ID without a note
+        // keeps the URL key, so recognition alone never changes the key.
+        None => config
+            .retained_artifact_id(url)
+            .map(|artifact_id| RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: artifact_id,
+            })
+            .filter(|retained| matches!(vault.read_note(retained, &canonical), Ok(Some(_))))
+            .unwrap_or_else(|| {
+                crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
+            }),
     };
-    let mut older_urls = vec![canonical.clone()];
+    let mut older_urls = Vec::new();
     if let Some(found) = matched
         && include_older_notes
     {
+        older_urls.push(canonical.clone());
         if let Ok(cache_dir) = config.cache_dir()
-            && let Ok(index) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+            && let Ok(index) = ArtifactIndex::open_in(&storage, config.root_identity(), &cache_dir)
             && let Ok(urls) = index.artifact_urls(&found.artifact_id)
         {
             older_urls.extend(urls);
         }
         if let Ok(candidates) = vault.note_candidates() {
-            for contents in candidates {
-                let Some(candidate) = note::url_keyed_note_url(&contents) else {
-                    continue;
-                };
-                if config
-                    .adapter_match(&candidate, None)
-                    .is_ok_and(|candidate_match| candidate_match.artifact_id == found.artifact_id)
-                {
-                    older_urls.push(candidate);
-                }
-            }
+            older_urls.extend(
+                candidates
+                    .iter()
+                    .filter_map(|contents| note::url_keyed_note_url(contents)),
+            );
         }
+        // older_urls authorizes view_older_note and use_artifact_note, so
+        // every source passes the same test: the adapters must map the URL
+        // itself to this artifact. This page's canonical form and the
+        // index's recorded URLs are stripped, and a stripped URL that no
+        // longer carries this artifact's identity may be another page's note.
+        older_urls.retain(|candidate| {
+            config
+                .adapter_match(candidate, None)
+                .is_ok_and(|candidate_match| candidate_match.artifact_id == found.artifact_id)
+        });
         older_urls.sort();
         older_urls.dedup();
     }
@@ -2705,9 +2685,10 @@ id = "work:{host}/{id}"
             other => panic!("expected note_saved, got {other:?}"),
         }
 
-        // Remove the adapter. The URL no longer resolves through any
-        // adapter, as if its site had been removed.
-        write_adapter_config(&path, &root, "https://work.example", "");
+        // Remove the adapter through the settings path, which retires its
+        // contract. The URL no longer resolves through any live adapter, as
+        // if its site had been removed.
+        remove_adapters(&mut config);
 
         let loaded_after = note_load(&mut config, url);
         assert!(
@@ -2754,7 +2735,7 @@ id = "work:{host}/{id}"
             other => panic!("expected note_saved, got {other:?}"),
         }
 
-        write_adapter_config(&path, &root, "https://work.example", "");
+        remove_adapters(&mut config);
 
         let loaded_after = note_load(&mut config, url);
         assert!(
@@ -2810,6 +2791,192 @@ id = "jira:{host}/{key}"
         let browse_loaded = note_load(&mut config, browse);
         assert_eq!(browse_loaded.key, modal_loaded.key);
         assert_eq!(browse_loaded.body, "same issue");
+    }
+
+    /// The Jira board-modal fixture with `selectedIssue` in strip_params, so
+    /// every issue opened from the board records the bare board URL as its
+    /// canonical URL.
+    fn jira_board_with_stripped_identity(folder: &tempfile::TempDir) -> ConfigStore {
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://acme.atlassian.net\", path_prefix = \"/\" }]\nstrip_params = [\"selectedIssue\"]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "jira.issue"
+origin = "https://acme.atlassian.net"
+match = [{ path = "/browse/{key:jira_key}" }, { path = "/jira/{*}", query = { selectedIssue = "{key:jira_key}" } }]
+id = "jira:{host}/{key}"
+"#,
+        );
+        loaded(&path)
+    }
+
+    /// Remove every adapter the way settings does, so the host retires their
+    /// contracts into `[[adapter_id_history]]`.
+    fn remove_adapters(config: &mut ConfigStore) {
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.clear();
+        let revision = config.revision().to_owned();
+        config.update(next, &revision).unwrap().unwrap();
+    }
+
+    const JIRA_BOARD: &str = "https://acme.atlassian.net/jira/software/projects/ABC/boards/1";
+
+    fn jira_modal(issue: &str) -> String {
+        format!("{JIRA_BOARD}?selectedIssue={issue}")
+    }
+
+    fn save_loaded(config: &mut ConfigStore, url: &str, body: &str) -> String {
+        let loaded = note_load(config, url);
+        match note_save(config, url, body, &loaded.revision, loaded.key) {
+            Response::NoteSaved(saved) => saved.revision,
+            other => panic!("expected note_saved, got {other:?}"),
+        }
+    }
+
+    fn record_jira_activity(config: &mut ConfigStore, issue: &str) {
+        let response = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: format!("activity-{issue}"),
+                event: ActivityEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: format!("jira:acme.atlassian.net/{issue}"),
+                    artifact_type: "jira.issue".into(),
+                    url: jira_modal(issue),
+                    title: Some(issue.into()),
+                    occurred_at: "2026-10-16T13:00:00Z".into(),
+                    incognito: false,
+                    opens: 1,
+                    focused_seconds: 3,
+                    background_seconds: 0,
+                    modes: Vec::new(),
+                    trails: Vec::new(),
+                    refs: Vec::new(),
+                },
+            },
+            config,
+        );
+        assert!(
+            matches!(
+                response,
+                Response::ActivityRecorded(ActivityRecorded {
+                    outcome: VisitOutcome::Persisted,
+                    ..
+                })
+            ),
+            "{response:?}"
+        );
+    }
+
+    #[test]
+    fn a_page_no_rule_matches_keeps_its_own_url_note_despite_a_stripped_artifact_url() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = jira_board_with_stripped_identity(&folder);
+        let browse = "https://acme.atlassian.net/browse/ABC-123";
+        save_loaded(&mut config, &jira_modal("ABC-123"), "ABC-123 private note");
+
+        // The bare board matches no rule; that ABC-123's note recorded the
+        // same stripped canonical URL must not make the board ABC-123.
+        let board = note_load(&mut config, JIRA_BOARD);
+        assert_eq!(board.key.kind, RecordKeyKind::Url);
+        assert!(!board.exists);
+        save_loaded(&mut config, JIRA_BOARD, "board standup text");
+        assert_eq!(note_load(&mut config, browse).body, "ABC-123 private note");
+
+        // Delivered modal activity, also stored stripped, must not flip it.
+        record_jira_activity(&mut config, "ABC-123");
+        let board = note_load(&mut config, JIRA_BOARD);
+        assert_eq!(board.key.kind, RecordKeyKind::Url);
+        assert_eq!(board.body, "board standup text");
+    }
+
+    #[test]
+    fn a_non_artifact_pages_note_is_not_an_older_note_of_artifacts_sharing_its_stripped_url() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = jira_board_with_stripped_identity(&folder);
+        let board_revision = save_loaded(&mut config, JIRA_BOARD, "notes about the whole board");
+        record_jira_activity(&mut config, "ABC-123");
+
+        for page in [
+            jira_modal("ABC-456"),
+            jira_modal("ABC-999"),
+            "https://acme.atlassian.net/browse/ABC-123".to_owned(),
+        ] {
+            let loaded = note_load(&mut config, &page);
+            assert_eq!(loaded.key.kind, RecordKeyKind::Artifact, "{page}");
+            assert!(
+                loaded.older_notes.is_empty(),
+                "{page}: {:?}",
+                loaded.older_notes
+            );
+            let viewed = view_older_note(
+                brauser_protocol::ViewOlderNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "view".into(),
+                    url: page.clone(),
+                    source_url: JIRA_BOARD.into(),
+                },
+                &mut config,
+            );
+            assert!(
+                matches!(&viewed, Response::Error(e) if e.code == ErrorCode::Unauthorized),
+                "{page}: {viewed:?}"
+            );
+            let migrated = use_artifact_note(
+                brauser_protocol::UseArtifactNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "migrate".into(),
+                    url: page.clone(),
+                    source_url: JIRA_BOARD.into(),
+                    expected_revision: board_revision.clone(),
+                },
+                &mut config,
+            );
+            assert!(
+                matches!(&migrated, Response::Error(e) if e.code == ErrorCode::Unauthorized),
+                "{page}: {migrated:?}"
+            );
+        }
+        let board = note_load(&mut config, JIRA_BOARD);
+        assert_eq!(board.key.kind, RecordKeyKind::Url);
+        assert_eq!(board.body, "notes about the whole board");
+    }
+
+    #[test]
+    fn a_removed_adapters_note_is_recovered_only_on_pages_its_contract_mapped_to_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = jira_board_with_stripped_identity(&folder);
+        save_loaded(&mut config, &jira_modal("ABC-123"), "ABC-123 private note");
+        record_jira_activity(&mut config, "ABC-123");
+
+        remove_adapters(&mut config);
+
+        // Every issue opened from the board recorded the same stripped URL,
+        // so only the retired contract, evaluated on the original URL, can
+        // tell ABC-456 and the board itself apart from ABC-123.
+        for page in [jira_modal("ABC-456"), JIRA_BOARD.to_owned()] {
+            let loaded = note_load(&mut config, &page);
+            assert_eq!(loaded.key.kind, RecordKeyKind::Url, "{page}");
+            assert!(!loaded.exists, "{page}");
+        }
+        for page in [
+            jira_modal("ABC-123"),
+            "https://acme.atlassian.net/browse/ABC-123".to_owned(),
+        ] {
+            assert_eq!(
+                note_load(&mut config, &page).body,
+                "ABC-123 private note",
+                "{page}"
+            );
+        }
     }
 
     #[test]
