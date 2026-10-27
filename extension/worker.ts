@@ -598,8 +598,13 @@ async function captureNavigation(
   if (shape) {
     try {
       const samples = await patternSamples(lease);
-      samplePattern(samples, url.origin, shape, Date.now());
-      await chrome.storage.local.set({ [SITE_PATTERNS_KEY]: samples });
+      // The lease can expire while the tab and samples are read; recheck so
+      // an expired policy never gains a sample.
+      const now = Date.now();
+      if (leaseActive(lease, now)) {
+        samplePattern(samples, url.origin, shape, now);
+        await chrome.storage.local.set({ [SITE_PATTERNS_KEY]: samples });
+      }
     } catch { patternFailure(); }
   }
   const match = matchingArtifact(lease, details.url);

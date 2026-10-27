@@ -1045,6 +1045,32 @@ test("a failed sample purge during pause deletes the samples, or else is reporte
   assert.deepEqual(values.get(key), {}, "retrying the pause clears the samples");
 });
 
+test("a lease that expires while a navigation reads its tab retains no sample", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://expiring-sample.example";
+  const key = storageKey("site_patterns_v1");
+  const realNow = Date.now;
+  const realGet = chrome.tabs.get;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: now + 1_000 });
+    tabs.set(58, { id: 58, url: `${origin}/search`, incognito: false });
+    chrome.tabs.get = async (tabId) => {
+      now += 5_000;
+      return realGet(tabId);
+    };
+    onCommitted({ tabId: 58, frameId: 0, documentLifecycle: "active", url: `${origin}/search`, timeStamp: now });
+    await flush();
+    assert.equal(values.get(key)?.[origin], undefined, "an expired lease must not retain a new sample");
+  } finally {
+    Date.now = realNow;
+    chrome.tabs.get = realGet;
+  }
+});
+
 test("a failed sample purge on site removal still installs the narrower policy and drops the rows", async () => {
   values.clear();
   sessionValues.clear();
