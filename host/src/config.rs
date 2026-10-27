@@ -70,15 +70,15 @@ const ADOPTED_CONTRACTS_FORMAT: u32 = 1;
 /// Moving it aside forgets its contracts, like a config repair.
 const ADOPTED_CONTRACTS_REPAIR: &str = "Choose Forget recorded adapters in Brauser settings, which backs the file up and starts a fresh record, or fix the file, to restore notes on pages the current adapters do not recognize; once it is forgotten, notes from adapters removed by hand may need Use as artifact note again.";
 
-/// The host-owned record of every adapter contract a host has adopted under
-/// the config lock (see `AdoptedContracts`). It lives beside config.toml in
-/// the OS config directory, or beside an injected test config; like the rest
-/// of the host's state, it stays out of the home folder (DESIGN.md §6.1).
 /// How every refusal of a note key while the adopted-contract state file
 /// cannot be used begins (`ConfigStore::adopted_contracts_unavailable`).
 pub(crate) const ADOPTED_CONTRACTS_PAUSED: &str =
     "Notes on this page are paused to protect note identity";
 
+/// The host-owned record of every adapter contract a host has adopted under
+/// the config lock (see `AdoptedContracts`). It lives beside config.toml in
+/// the OS config directory, or beside an injected test config; like the rest
+/// of the host's state, it stays out of the home folder (DESIGN.md §6.1).
 pub(crate) fn adopted_contracts_path(config_dir: &Path) -> PathBuf {
     config_dir.join("adopted-contracts.json")
 }
