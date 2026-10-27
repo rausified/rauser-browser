@@ -119,14 +119,16 @@ pub fn serve_with_context<R: Read + Send + 'static, W: Write>(
         // Drop order matters: cancel before scope joins the request worker,
         // and drop the job sender so an idle worker can finish as well.
         let _cancel_on_return = CancelOnDrop(cancel);
-        let mut pending = VecDeque::<Vec<u8>>::new();
+        // Each pending body carries its live-query classification, computed
+        // once on arrival, so polling during a long request never reparses it.
+        let mut pending = VecDeque::<(Vec<u8>, bool)>::new();
         let mut pending_bytes = 0;
         let mut active = false;
         let mut long_running = false;
         let mut eof = false;
         loop {
             if !active {
-                if let Some(body) = pending.pop_front() {
+                if let Some((body, _)) = pending.pop_front() {
                     pending_bytes -= body.len();
                     long_running = is_long_request(&body);
                     jobs.send(body).context("native request worker stopped")?;
@@ -139,8 +141,8 @@ pub fn serve_with_context<R: Read + Send + 'static, W: Write>(
             // short request was finishing. It must also bypass a long request
             // that has now started, regardless of reader/worker scheduling.
             if long_running {
-                while let Some(index) = pending.iter().position(|body| is_live_query(body)) {
-                    let body = pending.remove(index).expect("pending query exists");
+                while let Some(index) = pending.iter().position(|(_, live)| *live) {
+                    let (body, _) = pending.remove(index).expect("pending query exists");
                     pending_bytes -= body.len();
                     let response = dispatch_json(
                         &body,
@@ -166,7 +168,8 @@ pub fn serve_with_context<R: Read + Send + 'static, W: Write>(
                     // These queries mint no grants and write no user data.
                     // During a long request they observe the latest committed
                     // disk state, independently of the worker's consent state.
-                    if long_running && is_live_query(&body) {
+                    let live = is_live_query(&body);
+                    if long_running && live {
                         let response = dispatch_json(
                             &body,
                             &mut query_config,
@@ -187,7 +190,7 @@ pub fn serve_with_context<R: Read + Send + 'static, W: Write>(
                             )?;
                             bail!("native request queue exceeded its limit");
                         }
-                        pending.push_back(body);
+                        pending.push_back((body, live));
                     }
                 }
                 Event::Input(Ok(None)) => eof = true,
