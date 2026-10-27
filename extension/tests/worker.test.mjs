@@ -28,12 +28,28 @@ let frameEntered = null;
 let onAlarm;
 let onStartup;
 let onInstalled;
+let onCommand;
+let onMenuClicked;
+const menus = [];
+// sidePanel.open calls, in order, and whether each came before any await.
+const panelOpens = [];
+// Messages the worker broadcast to extension pages.
+const broadcasts = [];
+// Answers chrome.scripting.executeScript; the default reads a page.
+let executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
+  frameId: 0, result: {
+    title: "Readable", content: "Body", selection: null, truncated: false, readable: true,
+    href: "https://read.example/article",
+  },
+}];
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
 let badgeText = "";
 // When set, a storage.local.set whose items this returns true for rejects.
 let rejectLocalSet = null;
+// When true, a storage.local.remove rejects.
+let rejectLocalRemove = false;
 
 function storageArea(entries) {
   return {
@@ -49,6 +65,7 @@ function storageArea(entries) {
       for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
     },
     async remove(keys) {
+      if (entries === values && rejectLocalRemove) throw new Error("storage remove failed");
       for (const name of Array.isArray(keys) ? keys : [keys]) entries.delete(name);
     },
     async setAccessLevel() {},
@@ -92,23 +109,31 @@ globalThis.chrome = {
     onInstalled: { addListener(listener) { onInstalled = listener; } },
     onStartup: { addListener(listener) { onStartup = listener; } },
     connectNative: () => fakePort(),
+    // No panel is listening, as when the panel has not loaded yet.
+    async sendMessage(message) {
+      broadcasts.push(structuredClone(message));
+      throw new Error("Could not establish connection. Receiving end does not exist.");
+    },
   },
+  commands: { onCommand: { addListener(listener) { onCommand = listener; } } },
+  scripting: { executeScript: (injection) => executeScript(injection) },
   alarms: {
     async create(name, info) { alarms.set(name, { name, ...info }); },
     async get(name) { return alarms.get(name); },
     onAlarm: { addListener(listener) { onAlarm = listener; } },
   },
   contextMenus: {
-    create() {},
-    removeAll(callback) { callback?.(); },
-    onClicked: { addListener() {} },
+    create(properties) { menus.push(properties); },
+    removeAll(callback) { menus.length = 0; callback?.(); },
+    onClicked: { addListener(listener) { onMenuClicked = listener; } },
   },
   storage: {
     local: storageArea(values),
     session: storageArea(sessionValues),
   },
-  // Chrome grants every HTTP(S) site at install. The worker never asks
-  // Chrome about a permission and never listens for permission changes.
+  // Chrome grants every HTTP(S) site at install. Capture never asks Chrome
+  // about a permission or listens for permission changes; only a summary of
+  // a tab with no address asks (a test replaces this for it).
   permissions: {
     async contains() { throw new Error("the worker must not check Chrome permissions"); },
   },
@@ -146,12 +171,17 @@ globalThis.chrome = {
     async queryState() { return "active"; },
     onStateChanged: { addListener(listener) { onIdleStateChanged = listener; } },
   },
-  sidePanel: { async setPanelBehavior() {} },
+  sidePanel: {
+    async setPanelBehavior() {},
+    async open(options) { panelOpens.push(options); },
+  },
 };
 
 const { queueActivityMapRebuild, rebuildActivityMap } = await import("../dist/worker.js");
 const { HostClient, HostError, PROTOCOL_VERSION } = await import("../dist/native.js");
 const { ConfigSession } = await import("../dist/settings.js");
+const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
+const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
 
 function send(message) {
   return new Promise((resolve, reject) => {
@@ -603,6 +633,75 @@ test("a tracked tab that navigates to a pending-removal origin stops gaining tim
     "the previous page's entry ends even though the stored lease still holds the origin");
 });
 
+test("removing a site strips its trails from other sites' live and undispatched hours", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://trail-source.example";
+  const keptOrigin = "https://trail-target.example";
+  const both = {
+    ...lease(keptOrigin), revision: "both-sites", expires_at: Date.now() + 2 * 60 * 60_000,
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  };
+  values.set(storageKey("policy_v1"), both);
+  const follow = (tabId, from, to, timeStamp) => {
+    tabs.set(tabId, { id: tabId, windowId: 1, url: `${removedOrigin}/items/${from}`, title: from, incognito: false });
+    onCommitted({
+      tabId, frameId: 0, documentId: `${tabId}-from`, documentLifecycle: "active",
+      url: `${removedOrigin}/items/${from}`, transitionType: "typed", timeStamp,
+    });
+    tabs.set(tabId, { id: tabId, windowId: 1, url: `${keptOrigin}/items/${to}`, title: to, incognito: false });
+    onCommitted({
+      tabId, frameId: 0, documentId: `${tabId}-to`, documentLifecycle: "active",
+      url: `${keptOrigin}/items/${to}`, transitionType: "link", timeStamp: timeStamp + 1000,
+    });
+  };
+  // A completed hour freezes into the queue; the current hour stays live.
+  follow(60, "src", "pr7", Date.now() - 2 * 60 * 60_000);
+  follow(61, "src2", "pr8", Date.now());
+  await flush();
+  await send({ kind: "get_status" });
+  const fromRemoved = (trail) => trail.from_url?.startsWith(removedOrigin) ||
+    trail.from_artifact_id?.startsWith("test:trail-source.example/");
+  const queuedTarget = () => values.get(storageKey("queue_v1")).items
+    .filter((item) => item.event.url === `${keptOrigin}/items/pr7`);
+  const liveTarget = () => values.get(storageKey("activity_totals_v1")).totals
+    .filter((total) => total.url === `${keptOrigin}/items/pr8`);
+  assert.ok(queuedTarget()[0].event.trails.some(fromRemoved), "precondition: queued hour has the trail");
+  assert.ok(liveTarget()[0].trails.some(fromRemoved), "precondition: live hour has the trail");
+  // An event already handed to the host is frozen for interrupted-write recovery.
+  const queue = values.get(storageKey("queue_v1"));
+  const frozenTrail = {
+    from_artifact_id: "test:trail-source.example/old",
+    from_url: `${removedOrigin}/items/old`, transition: "link",
+  };
+  queue.items.push({
+    ...activityVisit("frozen-target", `${keptOrigin}/items/pr6`, {
+      artifact_id: "test:trail-target.example/pr6", trails: [frozenTrail],
+    }),
+    dispatched: true, batch_id: "c5d9a1d2-0f7b-4b8a-9a9e-6f3c2a1b0d4e",
+  });
+  values.set(storageKey("queue_v1"), queue);
+
+  // Remove Site: the host's next lease no longer has the source origin's adapter.
+  await send({
+    kind: "install_policy",
+    lease: { ...lease(keptOrigin), revision: "target-only", expires_at: Date.now() + 2 * 60 * 60_000 },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+
+  const [queued] = queuedTarget();
+  assert.ok(queued, "the other site's completed hour is kept");
+  assert.equal(queued.event.trails.some(fromRemoved), false);
+  assert.ok(queued.event.opens >= 1, "its measures are kept");
+  const [live] = liveTarget();
+  assert.ok(live, "the other site's live hour is kept");
+  assert.equal(live.trails.some(fromRemoved), false);
+  const frozen = values.get(storageKey("queue_v1")).items
+    .find((item) => item.event.event_id === "frozen-target");
+  assert.deepEqual(frozen.event.trails, [frozenTrail], "a dispatched event is never edited");
+});
+
 test("a pending local pause does not keep pending removals from clearing", async () => {
   values.clear();
   sessionValues.clear();
@@ -933,7 +1032,10 @@ test("adapter rules and scope fail closed before buffering", async () => {
     url: `${origin}/teams/personal/items/7`, timeStamp: Date.now(),
   });
   await flush();
-  assert.equal(tabReads, initialReads, "unrecognized URLs never expose tab metadata");
+  assert.equal(tabReads, initialReads + 2, "sampling checks the tab's incognito flag before retaining a shape");
+  const patterns = await send({ kind: "get_site_patterns", origin });
+  assert.deepEqual(patterns.map((row) => row.shape).sort(), ["/search", "/teams/personal/items/{num}"].sort());
+  assert.doesNotMatch(JSON.stringify(patterns), /Personal|Search|items\/7/);
   assert.equal(values.get(storageKey("queue_v1")), undefined);
   assert.equal((await send({ kind: "get_activity" })).length, 0);
 
@@ -944,6 +1046,289 @@ test("adapter rules and scope fail closed before buffering", async () => {
   });
   await flush();
   assert.equal((await send({ kind: "get_activity" })).length, 1);
+});
+
+test("an oversized skipped navigation stops measuring the previous artifact", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://long-navigation.example";
+  const realNow = Date.now;
+  let now = new Date("2026-10-16T10:15:00Z").getTime();
+  Date.now = () => now;
+  try {
+    tabs.set(55, { id: 55, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, incognito: false });
+    await send({ kind: "install_policy", lease: lease(origin), resume_after_confirmation: false, resume_after_pause_token: null });
+    now += 10_000;
+    const url = `${origin}/search?state=${"x".repeat(8_192)}`;
+    tabs.get(55).url = url;
+    onCommitted({ tabId: 55, frameId: 0, documentLifecycle: "active", url, timeStamp: now });
+    await flush();
+    now += 20_000;
+    await send({ kind: "get_status" });
+    const totals = values.get(storageKey("activity_totals_v1")).totals;
+    assert.equal(totals.reduce((sum, total) => sum + total.focused_ms, 0), 10_000,
+      "time on an oversized non-artifact page must not accrue to the previous artifact");
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[55], undefined);
+    assert.equal(values.get(storageKey("site_patterns_v1"))[origin], undefined);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("unreadable removal state on a same-origin skipped page still stops measuring the previous artifact", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://unreadable-navigation.example";
+  const realNow = Date.now;
+  let now = new Date("2026-10-16T10:15:00Z").getTime();
+  Date.now = () => now;
+  try {
+    tabs.set(56, { id: 56, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, incognito: false });
+    await send({ kind: "install_policy", lease: lease(origin), resume_after_confirmation: false, resume_after_pause_token: null });
+    assert.ok(sessionValues.get(storageKey("activity_session_v1")).tabs[56], "the artifact tab is tracked first");
+    now += 10_000;
+    values.set(storageKey("pending_site_removals_v1"), "unreadable");
+    const url = `${origin}/search`;
+    tabs.get(56).url = url;
+    onCommitted({ tabId: 56, frameId: 0, documentLifecycle: "active", url, timeStamp: now });
+    await flush();
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[56], undefined,
+      "a policy read failure must not leave the previous artifact mapped");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an unreadable tab on a same-origin skipped page still stops measuring the previous artifact", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://unreadable-tab.example";
+  tabs.set(57, { id: 57, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, incognito: false });
+  await send({ kind: "install_policy", lease: lease(origin), resume_after_confirmation: false, resume_after_pause_token: null });
+  assert.ok(sessionValues.get(storageKey("activity_session_v1")).tabs[57], "the artifact tab is tracked first");
+  // The tab read fails (for example, the tab closed mid-commit), so the
+  // committed navigation cannot be sampled or captured.
+  tabs.delete(57);
+  onCommitted({ tabId: 57, frameId: 0, documentLifecycle: "active", url: `${origin}/search`, timeStamp: Date.now() });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[57], undefined,
+    "a failed tab read must not leave the previous artifact mapped");
+  assert.equal(values.get(storageKey("site_patterns_v1"))?.[origin], undefined);
+});
+
+test("a failed sample purge during pause deletes the samples, or else is reported", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://pause-purge.example";
+  const key = storageKey("site_patterns_v1");
+  const seed = () => values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  values.set(storageKey("policy_v1"), lease(origin));
+  seed();
+  rejectLocalSet = (items) => Object.hasOwn(items, key);
+  try {
+    await send({ kind: "pause_capture" });
+    assert.equal(values.has(key), false, "an unwritable purge falls back to deleting every sample");
+    seed();
+    rejectLocalRemove = true;
+    await assert.rejects(send({ kind: "pause_capture" }), /storage remove failed/);
+  } finally { rejectLocalSet = null; rejectLocalRemove = false; }
+  assert.equal(values.get(storageKey("pause_pending_v1")), true, "the pause itself still took effect");
+  await send({ kind: "pause_capture" });
+  assert.deepEqual(values.get(key), {}, "retrying the pause clears the samples");
+});
+
+test("a lease that expires while a navigation reads its tab retains no sample", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://expiring-sample.example";
+  const key = storageKey("site_patterns_v1");
+  const realNow = Date.now;
+  const realGet = chrome.tabs.get;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: now + 1_000 });
+    tabs.set(58, { id: 58, url: `${origin}/search`, incognito: false });
+    chrome.tabs.get = async (tabId) => {
+      now += 5_000;
+      return realGet(tabId);
+    };
+    onCommitted({ tabId: 58, frameId: 0, documentLifecycle: "active", url: `${origin}/search`, timeStamp: now });
+    await flush();
+    assert.equal(values.get(key)?.[origin], undefined, "an expired lease must not retain a new sample");
+  } finally {
+    Date.now = realNow;
+    chrome.tabs.get = realGet;
+  }
+});
+
+test("a failed sample purge on site removal still installs the narrower policy and drops the rows", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const kept = "https://kept-site.example";
+  const removed = "https://removed-site.example";
+  const key = storageKey("site_patterns_v1");
+  const narrow = lease(kept);
+  const both = { ...narrow, revision: "host-revision:both", adapters: { format: 1, artifacts: [artifact(kept), artifact(removed)] } };
+  values.set(storageKey("policy_v1"), both);
+  const row = () => [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }];
+  values.set(key, { [kept]: row(), [removed]: row() });
+  const install = () => send({
+    kind: "install_policy", lease: narrow, resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  rejectLocalSet = (items) => Object.hasOwn(items, key);
+  try {
+    await install();
+    assert.deepEqual(values.get(storageKey("policy_v1")), narrow,
+      "a sample write failure must not leave the removed site's policy active");
+    assert.equal(values.has(key), false, "the purge falls back to deleting every sample");
+    values.set(key, { [kept]: row(), [removed]: row() });
+    rejectLocalRemove = true;
+    await assert.rejects(install(), /storage remove failed/);
+    assert.deepEqual(values.get(storageKey("policy_v1")), narrow, "the policy still narrows first");
+  } finally { rejectLocalSet = null; rejectLocalRemove = false; }
+  await install();
+  assert.deepEqual(Object.keys(values.get(key)), [kept], "retrying the install clears the removed site's samples");
+});
+
+test("a failed sample purge on suspend still suspends and drops the rows", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://suspend-purge.example";
+  const key = storageKey("site_patterns_v1");
+  values.set(storageKey("policy_v1"), lease(origin));
+  values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  rejectLocalSet = (items) => Object.hasOwn(items, key);
+  try {
+    await send({ kind: "suspend_policy" });
+  } finally { rejectLocalSet = null; }
+  assert.equal(values.get(storageKey("policy_v1")), null);
+  assert.equal(values.has(key), false, "the purge falls back to deleting every sample");
+});
+
+test("private pattern samples include skipped pages but never enter delivery or native messages", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://patterns.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  const navigate = async (url, options = {}) => {
+    tabs.set(51, { id: 51, url, title: "CONFIDENTIAL CUSTOMER TITLE", incognito: false, ...options });
+    onCommitted({ tabId: 51, frameId: 0, documentLifecycle: "active", url, timeStamp: Date.now() });
+    await flush();
+  };
+  await navigate(`${origin}/wiki/pages/123456/Customer-Launch?customer=PrivateValue#private-fragment`);
+  await navigate(`${origin}/wiki/pages/789012/Another-Customer?customer=OtherValue`);
+  assert.deepEqual((await send({ kind: "get_site_patterns", origin })).map(({ shape, count }) => ({ shape, count })), [
+    { shape: "/wiki/pages/{num}/{slug}?customer={slug}", count: 2 },
+  ]);
+  const stored = JSON.stringify(values.get(storageKey("site_patterns_v1")));
+  assert.doesNotMatch(stored, /123456|789012|Customer|PrivateValue|private-fragment|CONFIDENTIAL|https:[^\"]*\/wiki/);
+  assert.equal(values.get(storageKey("queue_v1")), undefined);
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  assert.equal(ports.length, 0, "pattern inspection never starts a native host");
+  // Merely reading a sample doesn't count as another visit.
+  assert.equal((await send({ kind: "get_site_patterns", origin }))[0].count, 2);
+  await send({ kind: "clear_site_patterns", origin });
+  assert.deepEqual(await send({ kind: "get_site_patterns", origin }), []);
+  assert.equal(values.get(storageKey("policy_v1")).capture_enabled, true);
+  await navigate(`${origin}/wiki/pages/123456/Customer-Launch?customer=PrivateValue`);
+  assert.equal((await send({ kind: "get_site_patterns", origin }))[0].count, 1);
+});
+
+test("pattern samples exclude incognito, missing tabs, subframes, inactive documents and unconfigured origins", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://private-patterns.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  const base = { tabId: 52, frameId: 0, documentLifecycle: "active", url: `${origin}/pages/42`, timeStamp: Date.now() };
+  tabs.set(52, { id: 52, url: base.url, incognito: true });
+  onCommitted(base);
+  await flush();
+  tabs.set(52, { id: 52, url: base.url });
+  onCommitted(base);
+  await flush();
+  tabs.delete(52);
+  onCommitted(base);
+  await flush();
+  tabs.set(52, { id: 52, url: base.url, incognito: false });
+  onCommitted({ ...base, frameId: 1 });
+  onCommitted({ ...base, documentLifecycle: "prerender" });
+  onCommitted({ ...base, url: "https://unconfigured.example/pages/42" });
+  await flush();
+  assert.deepEqual(await send({ kind: "get_site_patterns", origin }), []);
+});
+
+test("pattern budgets, expiry, removal, suspension and local/global pauses apply in the worker", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://pattern-budget.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  for (let index = 0; index < 25; index += 1) {
+    const url = `${origin}/route${String.fromCharCode(97 + index)}/123456`;
+    tabs.set(53, { id: 53, url, incognito: false });
+    onHistoryStateUpdated({ tabId: 53, frameId: 0, documentLifecycle: "active", url, timeStamp: Date.now() });
+    await flush();
+  }
+  assert.equal((await send({ kind: "get_site_patterns", origin })).length, 20);
+  const key = storageKey("site_patterns_v1");
+  const now = Date.now();
+  const old = { shape: "/old/{num}", count: 1, last_seen: now - 7 * 24 * 60 * 60_000 };
+  const recent = { shape: "/recent/{num}", count: 1, last_seen: now };
+  values.set(key, { [origin]: [old, recent], "https://removed.example": [recent] });
+  assert.deepEqual((await send({ kind: "get_site_patterns", origin })).map((row) => row.shape), ["/recent/{num}"]);
+  assert.deepEqual(Object.keys(values.get(key)), [origin]);
+  await send({ kind: "install_policy", lease: { ...lease(origin), revision: "patterns-paused", capture_enabled: false }, resume_after_confirmation: true, resume_after_pause_token: null });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  await send({ kind: "pause_capture" });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  await send({ kind: "suspend_policy" });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  values.set(storageKey("pause_pending_v1"), false);
+  values.set(storageKey("pending_site_removals_v1"), [origin]);
+  await send({ kind: "install_policy", lease: { ...lease(origin), revision: "patterns-removal" }, resume_after_confirmation: false, resume_after_pause_token: null });
+  assert.deepEqual(values.get(key), {});
+  values.set(key, { [origin]: [recent] });
+  values.set(storageKey("policy_v1"), { ...lease(origin), revision: "expired-patterns", expires_at: Date.now() - 1 });
+  assert.deepEqual(await send({ kind: "get_site_patterns", origin }), []);
+  assert.deepEqual(values.get(key), {});
+});
+
+test("sample storage failures leave recognized capture working and invalid origins are refused", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://pattern-failure.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  tabs.set(54, { id: 54, url: `${origin}/items/42`, incognito: false });
+  rejectLocalSet = (items) => Object.hasOwn(items, storageKey("site_patterns_v1"));
+  try {
+    onCommitted({ tabId: 54, frameId: 0, documentLifecycle: "active", url: `${origin}/items/42`, timeStamp: Date.now() });
+    await flush();
+    assert.equal((await send({ kind: "get_activity" })).length, 1);
+    await assert.rejects(send({ kind: "clear_site_patterns", origin }), /quota exceeded/);
+  } finally { rejectLocalSet = null; }
+  for (const invalid of [null, "https://pattern-failure.example/path", "https://user:pw@pattern-failure.example", "file:///tmp"] ) {
+    await assert.rejects(send({ kind: "get_site_patterns", origin: invalid }), /Invalid site pattern origin/);
+  }
+  values.set(storageKey("pending_site_removals_v1"), "unreadable");
+  values.set(storageKey("site_patterns_v1"), { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  await assert.rejects(send({ kind: "get_site_patterns", origin }), /unreadable/);
+  assert.deepEqual(await send({ kind: "clear_site_patterns", origin }), []);
+  assert.deepEqual(values.get(storageKey("site_patterns_v1")), {}, "a local privacy clear works even if policy is unreadable");
 });
 
 test("worker-start map rebuild restores recognized tabs without counting opens", async () => {
@@ -1349,12 +1734,13 @@ test("host config shape requires every v6 agent and adapter key and no retired p
     },
     capture_enabled: false, strip_params: [],
     agent: null,
+    summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
   };
   assert.equal(isConfig(config), true);
   const agent = {
-    harness_id: "claude-code", adapter: "claude_code", binary: "/usr/local/bin/claude",
-    args: ["-p", "{prompt}"], env_allow: [], timeout_secs: 120,
+    harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284",
+    timeout_secs: 600, probed_at: "2026-10-27T10:00:00Z",
   };
   assert.equal(isConfig({ ...config, agent }), true);
   for (const key of ["agent", "adapters"]) {
@@ -1365,7 +1751,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   assert.equal(isConfig({ ...config, agent_denylist: ["bank.example"] }), false);
   assert.equal(isConfig({ ...config, agent_denylist_confirmed: false }), false);
   assert.equal(isConfig({ ...config, log_incognito: false }), false);
-  assert.equal(isConfig({ ...config, agent: { ...agent, adapter: "claude-code" } }), false);
+  assert.equal(isConfig({ ...config, agent: { ...agent, harness: "claude-code" } }), false);
   // The host always sends summaries_dir, as null until a folder is chosen.
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
@@ -1386,35 +1772,22 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   assert.equal(isResponseShape({ ...result, agent_status: { ...agentStatus, state: "on" } }), false);
   assert.equal(isResponseShape({
     type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0",
-  }), true);
+  }), false);
 
-  // Harness setup: every offer key is present, nullable ones as null.
-  const offer = {
-    adapter: "claude_code", harness_id: "claude-code",
-    binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-    args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
-    env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
-  };
-  const refused = {
-    ...offer, adapter: "codex", harness_id: "codex", real_path: null,
-    version: null, env_optional: [], refusal: "codex --version output was not recognized",
-  };
-  const discovered = { type: "harnesses_discovered", offers: [offer, refused] };
+  // Discovery reports both harnesses, every key present, nullable ones as null.
+  const found = { harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284", problem: null };
+  const unusable = { harness: "codex", binary: "/usr/local/bin/codex", version: null,
+    problem: "codex --version output was not recognized" };
+  const discovered = { type: "harnesses_discovered", harnesses: [unusable, found] };
   assert.equal(isResponseShape(discovered), true);
-  assert.equal(isResponseShape({ ...discovered, offers: [] }), true);
-  assert.equal(isResponseShape({ ...discovered, offers: null }), false);
-  for (const key of Object.keys(offer)) {
-    const without = { ...offer };
+  assert.equal(isResponseShape({ ...discovered, harnesses: [] }), true);
+  assert.equal(isResponseShape({ ...discovered, harnesses: null }), false);
+  for (const key of Object.keys(found)) {
+    const without = { ...found };
     delete without[key];
-    assert.equal(isResponseShape({ ...discovered, offers: [without] }), false, key);
+    assert.equal(isResponseShape({ ...discovered, harnesses: [without] }), false, key);
   }
-  assert.equal(isResponseShape({ ...discovered, offers: [{ ...offer, adapter: "generic" }] }), false);
-  assert.equal(isResponseShape({
-    ...discovered, offers: [{ ...offer, env_optional: ["ANTHROPIC_API_KEY"] }],
-  }), false);
-  assert.equal(isResponseShape({
-    ...discovered, offers: [{ ...offer, env_optional: [{ name: "X", present: "yes" }] }],
-  }), false);
+  assert.equal(isResponseShape({ ...discovered, harnesses: [{ ...found, harness: "generic" }] }), false);
 
   // Harness setup answers config_updated; the v5 token response is gone.
   const setUp = { type: "harness_setup_confirmed", harness_token: "t", config, summary: "Harness" };
@@ -1461,6 +1834,7 @@ function configResult(request, origin, overrides = {}) {
       },
       capture_enabled: true, strip_params: [],
       agent: null,
+      summary_vocabulary: { document_types: ["report"], categories: ["news"] },
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,
@@ -1525,6 +1899,43 @@ test("with no extension page open, the worker freezes and delivers a completed a
   // The panel refreshes its artifact card when this generation moves, since
   // the queue length alone can be empty both before and after a delivery.
   assert.equal(after.delivered_batches, before + 1);
+});
+
+test("a trail from a pending-removal origin is stripped before delivery", async () => {
+  const removedOrigin = "https://pending-source.example";
+  const keptOrigin = "https://pending-target.example";
+  resetSync(keptOrigin, 2 * HOUR_MS);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin), expires_at: Date.now() + 2 * HOUR_MS,
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  const past = Date.now() - 2 * HOUR_MS;
+  tabs.set(12, { id: 12, windowId: 1, url: `${removedOrigin}/items/src`, title: "Source", incognito: false });
+  onCommitted({
+    tabId: 12, frameId: 0, documentId: "pending-src", documentLifecycle: "active",
+    url: `${removedOrigin}/items/src`, transitionType: "typed", timeStamp: past,
+  });
+  tabs.set(12, { id: 12, windowId: 1, url: `${keptOrigin}/items/pr`, title: "Target", incognito: false });
+  onCommitted({
+    tabId: 12, frameId: 0, documentId: "pending-dst", documentLifecycle: "active",
+    url: `${keptOrigin}/items/pr`, transitionType: "link", timeStamp: past + 1000,
+  });
+  await flush();
+  await send({ kind: "get_status" });
+  // An upgrade carries the source origin into the pending-removal list while
+  // the host, and the stored lease, still hold its adapter.
+  values.set(storageKey("pending_site_removals_v1"), [removedOrigin]);
+
+  onAlarm({ name: DELIVER_ALARM });
+  const port = await until(() => ports[0], "the worker to start the host");
+  const request = await sentOn(port, 1);
+  assert.equal(request.type, "record_batch");
+  const events = request.events.map((item) => item.activity);
+  assert.deepEqual(events.map((event) => event.url), [`${keptOrigin}/items/pr`]);
+  assert.deepEqual(events[0].trails, [], "the pending-removal source never reaches the host");
+  port.reply(batchRecorded(request));
+  await until(() => values.get(storageKey("queue_v1")).items
+    .every((item) => item.event.url !== `${keptOrigin}/items/pr`), "the delivered hour to clear");
 });
 
 test("a status wake hands off completed hours before reporting live activity", async () => {
@@ -1932,4 +2343,186 @@ test("installing Capture Site policy measures already-open pages without inventi
   } finally {
     Date.now = realNow;
   }
+});
+
+// --- Summarize & log (plan Task 39) -----------------------------------------
+
+const SUMMARY_URL = "https://read.example/article";
+const SUMMARY_RUN = {
+  run_id: "00000000-0000-4000-8000-000000000039", state: "queued", harness: "codex",
+  record_key: { kind: "url", value: SUMMARY_URL }, written_record_key: null,
+  url: SUMMARY_URL, title: "Readable", cwd: null,
+  created_at: "2026-10-27T09:00:00-07:00", started_at: null, finished_at: null,
+  error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+  stream_bytes: 0, can_retry_save: false, answer: null,
+};
+
+// The port the summary run opened, once it has sent start_run.
+async function startRunPort(after) {
+  let found = null;
+  await until(() => {
+    found = ports.slice(after).find((port) => port.sent.some((message) => message.type === "start_run")) ?? null;
+    return found !== null;
+  }, "start_run");
+  return { port: found, request: found.sent.find((message) => message.type === "start_run") };
+}
+
+test("summarize command opens the panel before any await and starts a run", async () => {
+  sessionValues.clear();
+  panelOpens.length = 0;
+  broadcasts.length = 0;
+  const before = ports.length;
+  onCommand("summarize", { id: 7, windowId: 1, url: SUMMARY_URL, title: "Tab", incognito: false });
+  // Chrome lets a shortcut open the panel only inside the gesture.
+  assert.deepEqual(panelOpens, [{ tabId: 7 }]);
+
+  const { port, request } = await startRunPort(before);
+  assert.equal(request.url, SUMMARY_URL);
+  assert.equal(request.title, "Readable");
+  assert.equal(request.content, "Body");
+  assert.equal(request.record_key, null);
+  assert.equal(request.harness, null);
+  assert.match(request.requested_at, /[+-]\d\d:\d\d$/);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: SUMMARY_RUN, existing: false,
+  });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
+  const notice = sessionValues.get(PANEL_NOTICE_KEY);
+  assert.equal(notice.kind, "run_started");
+  assert.equal(notice.run_id, SUMMARY_RUN.run_id);
+  assert.equal(notice.tab_id, 7);
+  assert.equal(typeof notice.at, "number");
+  // A later panel restores the run even if the harness is removed meanwhile.
+  assert.equal(typeof values.get(storageKey("runs_may_exist_v1")), "number");
+  await until(() => broadcasts.length === 1, "the broadcast notice");
+  assert.deepEqual(broadcasts[0], notice);
+  await until(() => port.closed, "the summary host port to close");
+
+  // Another command is ignored, and a non-HTTP(S) tab gets a notice at once.
+  onCommand("other", { id: 7, url: SUMMARY_URL, incognito: false });
+  assert.equal(panelOpens.length, 1);
+  sessionValues.clear();
+  onCommand("summarize", { id: 8, url: "chrome://extensions/", incognito: false });
+  assert.deepEqual(panelOpens.at(-1), { tabId: 8 });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the non-HTTP(S) notice");
+  assert.deepEqual(
+    { ...sessionValues.get(PANEL_NOTICE_KEY), at: 0 },
+    { kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 8, at: 0 },
+  );
+});
+
+test("service_unavailable from the command path is stored as a notice", async () => {
+  sessionValues.clear();
+  broadcasts.length = 0;
+  const before = ports.length;
+  const message = "The Brauser service is not running. Register it again.";
+  onCommand("summarize", { id: 9, url: SUMMARY_URL, title: "Tab", incognito: false });
+  const { port, request } = await startRunPort(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "service_unavailable", message,
+  });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
+  const notice = sessionValues.get(PANEL_NOTICE_KEY);
+  // The same setup instructions the panel shows, then the host's reason.
+  assert.deepEqual({ ...notice, at: 0 }, {
+    kind: "summarize_failed", message: `${SERVICE_SETUP_INSTRUCTIONS} ${message}`, tab_id: 9, at: 0,
+  });
+  await until(() => broadcasts.length === 1, "the broadcast notice");
+
+  // A page the extractor cannot read never reaches the host.
+  sessionValues.clear();
+  const realExecute = executeScript;
+  executeScript = async () => { throw new Error("Cannot access contents of the page"); };
+  try {
+    const opened = ports.length;
+    onCommand("summarize", { id: 10, url: SUMMARY_URL, title: "Tab", incognito: false });
+    await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the unreadable notice");
+    assert.match(sessionValues.get(PANEL_NOTICE_KEY).message, /can't read this page/);
+    assert.ok(ports.slice(opened).every((opened) => !opened.sent.some((sent) => sent.type === "start_run")));
+  } finally {
+    executeScript = realExecute;
+  }
+});
+
+test("with site access withdrawn, the shortcut points to Brauser's site access", async () => {
+  // Without `tabs`, Chrome gives no URL for a tab Brauser cannot access: an
+  // ungranted page (chrome://, New Tab) or any page once access is withdrawn.
+  const realContains = chrome.permissions.contains;
+  const asked = [];
+  try {
+    for (const [granted, expected] of [
+      [false, /needs site access.*re-enable/i],
+      [true, /^Summaries work on http\(s\) pages\.$/],
+    ]) {
+      chrome.permissions.contains = async (permissions) => { asked.push(permissions); return granted; };
+      sessionValues.clear();
+      onCommand("summarize", { id: 12, title: "Tab", incognito: false });
+      await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the notice");
+      const notice = sessionValues.get(PANEL_NOTICE_KEY);
+      assert.equal(notice.kind, "summarize_failed");
+      assert.match(notice.message, expected);
+    }
+    assert.deepEqual(asked.map((permissions) => [...permissions.origins].sort()),
+      [["http://*/*", "https://*/*"], ["http://*/*", "https://*/*"]]);
+
+    // An unanswered check shows the ordinary message, not a false alarm.
+    chrome.permissions.contains = async () => { throw new Error("unavailable"); };
+    sessionValues.clear();
+    onMenuClicked({ menuItemId: "brauser-summarize" }, { id: 12, title: "Tab", incognito: false });
+    await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the notice");
+    assert.equal(sessionValues.get(PANEL_NOTICE_KEY).message, "Summaries work on http(s) pages.");
+  } finally {
+    chrome.permissions.contains = realContains;
+  }
+});
+
+test("context menu item is registered on install", async () => {
+  onInstalled({ reason: "install" });
+  await until(() => menus.length === 1, "the context menu item");
+  assert.deepEqual(menus, [{ id: "brauser-summarize", title: "Summarize with Brauser", contexts: ["page", "selection"] }]);
+
+  sessionValues.clear();
+  panelOpens.length = 0;
+  const before = ports.length;
+  onMenuClicked({ menuItemId: "brauser-summarize" }, { id: 11, url: SUMMARY_URL, title: "Tab", incognito: false });
+  assert.deepEqual(panelOpens, [{ tabId: 11 }]);
+  const { port, request } = await startRunPort(before);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: SUMMARY_RUN, existing: true,
+  });
+  await until(() => sessionValues.get(PANEL_NOTICE_KEY)?.tab_id === 11, "the menu notice");
+  onMenuClicked({ menuItemId: "someone-else" }, { id: 11, url: SUMMARY_URL, incognito: false });
+  assert.equal(panelOpens.length, 1);
+});
+
+test("worker wake and maintenance alarms expire samples without starting a host", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://pattern-wake.example";
+  const key = storageKey("site_patterns_v1");
+  const fresh = { shape: "/pages/{num}", count: 1, last_seen: Date.now() };
+  const expired = { shape: "/old/{num}", count: 2, last_seen: Date.now() - 7 * 24 * 60 * 60_000 };
+  values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() + 2 * 60 * 60_000 });
+  values.set(key, { [origin]: [expired, fresh], "https://removed.example": [fresh] });
+  await import("../dist/worker.js?pattern-wake");
+  await flush();
+  assert.deepEqual(values.get(key), { [origin]: [fresh] });
+  values.set(key, { [origin]: [expired] });
+  onAlarm({ name: "brauser-sync" });
+  await flush();
+  assert.deepEqual(values.get(key), {});
+  assert.equal(ports.length, 0);
+
+  // Unreadable removal state blocks capture, but must not let samples
+  // outlive their retention: maintenance then treats no origin as enabled.
+  values.set(key, { [origin]: [fresh] });
+  values.set(storageKey("pending_site_removals_v1"), "unreadable");
+  onAlarm({ name: "brauser-sync" });
+  await flush();
+  assert.deepEqual(values.get(key), {});
 });

@@ -45,9 +45,84 @@ starter URLs against live tools or prove Chrome layout and keyboard focus.
 Those checks remain the existing human starter-certification and interactive
 Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
 Capture Site adds no scripted dialogs; the runner compares answered dialogs
-with its transcript instead of expecting a fixed total. Unknown-site shaping,
-link extraction and structural drafting need the separate DESIGN §12.2
-step 7.6 tests when implemented.
+with its transcript instead of expecting a fixed total. Unknown-site structural
+drafting still needs the separate DESIGN §12.2 step 7.6 safety, grouping,
+scope and identity tests when implemented.
+
+## Page-pattern review coverage
+
+`extension/tests/site-patterns.test.mjs` covers the shared URL shaper against
+the recorded starter vectors and named Confluence, SharePoint, Notion,
+Google Docs, encoded-name and mixed-case forms. Privacy assertions check
+placeholder classes, query-value removal, literal/length limits, corrupt
+stored values and metadata stripping. The link-reader tests serialize the
+bundled function into a fresh VM context with a fake top-frame DOM, catching
+module dependencies that would break Chrome's `scripting` serialization.
+They verify exact URL/origin checks before and after href reads, singleton
+literal generalization even for duplicated planted links, same-origin-only
+results, the 500-anchor scan cap and the 50-shape result cap.
+
+Worker tests exercise recognized and skipped navigations, incognito/missing
+tabs, subframes, SPA events, count/shape caps, expiry, cold worker wake and
+maintenance alarms, pending removals, policy suspension, pause and explicit
+clear. They assert samples reach neither activity/delivery nor a native host,
+and that sample-storage failures leave recognized capture working. Composed
+panel tests assert isolated top-frame injection only after a click, read-only
+results on unknown sites, cancellation/navigation races, collapse cleanup and
+scripting failures. Composed settings tests inspect and clear patterns without
+native messages, including during host repair.
+
+These checks use mocked Chrome APIs and DOM objects; the serialized function
+has been exercised, but real Chrome injection, disclosure layout and keyboard
+focus still need the macOS interactive/headless gates. No scripted dialog or
+smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
+claim that it passed here. Structural drafting and unknown-site enabling are
+still unbuilt, so these tests do not certify any machine-drafted rule.
+
+## Dialog reply fixture and restricted runners
+
+`dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
+child that reads the length line and exactly that many body bytes before
+printing its reply. It exercises 60 exchanges across empty, short and 64 KiB
+UTF-8 bodies. Do not replace the reader with an immediate `printf`: that
+closes stdin before the parent finishes writing and races into `EPIPE`. Do
+not read until EOF either: the parent keeps stdin open until the child exits.
+The fixture uses the same `head -c` tool as the neighboring timeout fixture.
+
+A restricted runner can deny Unix socket creation and connection with EPERM,
+even under a temporary directory. On 2026-10-27 this caused 32 host service
+test failures, confirmed with an independent Unix-socket bind. The same
+runner denied Node `spawnSync`, preventing `test:scripts` from running its
+win32 path simulation. Keep these tests enabled; run the full gate outside
+that restriction. An explicitly filtered local run can diagnose the remaining
+tests, but is not a passing full gate. The dialog repair remains in progress
+until that external gate passes.
+
+The restricted runs on baselines `728b200` and `90f88b4` reproduced the
+same failures. To distinguish a runner denial from a service regression,
+try an independent Python `AF_UNIX` bind in a temporary workspace directory.
+Do not change service paths or permissions to work around a denied bind.
+Node's restriction can be misleading: a JSON-only `spawnSync` child returned
+`status: 0` alongside `error.code: "EPERM"` and empty stdout. Inspect the
+spawn result's `error` as well as its exit status. The script suite consequently
+reported `Unexpected end of JSON input` in its win32 simulation; no real
+registration or launchd call was involved.
+
+If `npm run test:scripts` reports only a failed file, use
+`node --test --test-isolation=none scripts/tests/dev-service.test.mjs` for
+diagnosis. On this runner it exposes the win32 simulation's empty-output
+JSON parse error (8 pass, 1 fail, 1 platform skip). This changes only the
+diagnostic invocation; the required script gate remains unmodified and failing.
+The required opening gate stops Cargo after the failing host test binary,
+so its 26 adapter-template passes and 447 host passes do not establish that
+later integration and documentation tests passed.
+
+The diagnostic workspace run excluding `service::client::tests::`,
+`service::server::tests::` and `native::tests::run_proxy::` passed 493 tests
+with 39 host tests filtered out. The scripted-dialog unit group passed 10
+tests. Neither result substitutes for the unfiltered gate, and neither
+justifies disabling the socket tests or changing production IPC to fit the
+runner. Verify the full gate in a runner that permits these local operations.
 
 ## UI-free end-to-end: the recipe
 
@@ -102,7 +177,19 @@ Never let a UI-free run find or start the real program, and never make a real mo
 - Before clicking anything that runs a program, check that every offered program's resolved path is inside the fake install directory, and stop the run if not.
 
 - **The Brauser service.** Never let a test reach launchd: no `launchctl bootstrap`, `kickstart`, or `bootout`, and nothing under the real `~/Library`. The headless runner starts the service child itself, as `<host wrapper> service` with the same cleared environment and temporary `HOME`, logging to `service.log` in the run directory, and waits for `service.sock`. Before that, the host runs without the test-only spawn seam, so a `start_run` must answer `service_unavailable` and no socket may appear. The Rust integration test `host/tests/service.rs` instead lets the host spawn the service directly through the `BRAUSER_SERVICE_SPAWN` seam; unit tests inject the launch function. `scripts/register-dev-host.mjs` and `scripts/dev-service.mjs` take an injectable `run` so their tests (`npm run test:scripts`) record launchctl argv without running it.
-- **The fake agent.** Service runs use one test-only harness named by `BRAUSER_FAKE_HARNESS` (honored only in `scripted-dialogs` builds): a `/bin/sh` script outside the fake `PATH` directory, so harness discovery never sees it. It reads a mode file in the temporary `HOME` (`ok`, `slow`, or `fail`), writes a diagnostic line to stderr so `run.log` exists, and prints a JSON answer.
+- **The fake agent (Rust tests).** The service's own Rust tests (`host/tests/service.rs` and the server, supervisor, setup, and registry unit tests) use one test-only harness named by `BRAUSER_FAKE_HARNESS` (honored only in test and `scripted-dialogs` builds, and only for an absolute executable): a `/bin/sh` script outside any search path, so detection never sees it, registered for both harness ids through the plain stdin-to-stdout `CommandRunner`. It reads a mode file in the temporary `HOME`, writes a diagnostic line to stderr so `run.log` exists, and prints a JSON answer. The headless smoke run no longer sets it.
+- **Fake `codex` and `claude` (headless smoke).** The smoke runner's fakes are Node scripts with a `#!<this node>` shebang in the fake `PATH` directory, so the service detects them and the real Codex and Claude Code runners drive them. `codex --version` prints `codex-cli 0.144.4` and `codex app-server --listen stdio://` answers `initialize`, `thread/start` (thread `fake-thread-1`), `thread/name/set`, and `turn/start`, then streams `item/agentMessage/delta`, `item/completed`, and `turn/completed`; `claude --version` prints `2.1.310 (Claude Code)` and `claude -p …` prints `system`/`init` (session `fake-session-1`), text deltas, the assistant message, and `result`. Both read `$HOME/fake-agent.mode`: `ok` (a valid §6.4 answer in two deltas), `slow` (no answer until killed), `fail` (stderr and a failed turn or exit 3), `badjson-once` (not JSON, then a valid answer to the repair turn), and `badjson` (never JSON); the setup probe is answered `OK` except in `fail`. Each logs one JSON line per start to `harness-argv.log` with its argv, cwd, and environment variable names (never values), then what it read (each JSON-RPC request, or Claude's whole stdin prompt), so the run can check that no argv carries article text and that the prompt arrived on stdin.
+- **The opener.** Tests never run `/usr/bin/open`. In test and `scripted-dialogs` builds the opener (`host/src/open.rs`) appends what it would have opened to the file named by `BRAUSER_OPEN_LOG` and fails when that is unset; the smoke wrapper sets it to `open.log` in the run directory and checks `codex://threads/fake-thread-1` there after **Open in Codex**.
+- **The Codex app-server runner (`host/src/service/codex.rs`).** Unit tests put a `#!/bin/sh` fake named `codex` in a private `bin` directory and pass that directory as the runner's search path. The fake answers JSON-RPC ids 1-3 (`initialize`, `thread/start`, `thread/name/set`) in order, runs a per-test turn script for later ids, logs every stdin line to `rpc.log`, and logs its argv, cwd and environment variable names (never values). What the runner sends and reads follows the installed `codex` 0.144.4 (aarch64-apple-darwin, from `~/.codex/packages/standalone/current/codex-package.json`), checked on 2026-10-27 by reading the installed binary's strings, not by running it:
+  - argv `codex app-server --listen stdio://`, which the binary's help text lists as the default transport. There is no `--session-source` flag, so none is passed.
+  - `thread/start` takes `sandbox: "danger-full-access"` (kebab-case), while `turn/start` takes `sandboxPolicy: {type: "dangerFullAccess"}` (camelCase); both use `approvalPolicy: "never"`.
+  - The `turn/start` params include `outputSchema`, documented as an "Optional JSON Schema used to constrain the final assistant message for this turn", so the production registry passes the answer schema (`answer_schema()`) as `outputSchema`.
+  - Notifications read: `item/agentMessage/delta` (`params.itemId`, `params.delta`), `item/completed` with `params.item.type == "agentMessage"` (`item.id`, `item.text`), and `turn/completed` (`params.turn.status` of `completed`, `interrupted` or `failed`, with `params.turn.error.message`).
+  - **[human]** Confirm on a machine where running `codex` is allowed: `codex --version` and `codex app-server generate-json-schema --out target/codex-schema`, then `grep -rl '"outputSchema"' target/codex-schema`.
+- **The Claude Code runner (`host/src/service/claude.rs`).** Unit tests put a `#!/bin/sh` fake named `claude` in a private `bin` directory and pass that directory as the runner's search path. Each run of the fake appends its argv to `argv.log`, saves its stdin per run, logs its cwd and environment variable names (never values), and prints per-test stream-json lines. What the runner passes and reads follows the installed Claude Code 2.1.311 (arm64 Mach-O, from the `~/.local/bin/claude` symlink target `~/.local/share/claude/versions/2.1.311`), checked on 2026-10-27 by reading the installed binary's strings, not by running it:
+  - argv for the first turn: `claude -p --output-format stream-json --verbose --include-partial-messages --dangerously-skip-permissions --session-id <uuid>`, with a UUID Brauser chooses; a later turn passes the same flags with `--resume <id>` in place of `--session-id`, using the id the first turn's `system`/`init` event reported. The help text says `stream-json` requires `--verbose` in print mode and `--include-partial-messages` works only with `--print` and `--output-format=stream-json`. `--session-id` must be a valid UUID. `--no-session-persistence` exists but is never passed, so the session can be resumed. The prompt goes on stdin, which is then closed.
+  - Lines read: `{"type":"system","subtype":"init","session_id":...}`; `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":...}}}`; `{"type":"assistant","message":{"content":[{"type":"text","text":...}, ...]}}`, streamed only when the turn had no deltas; and `{"type":"result","subtype":"success"|"error_during_execution"|...,"is_error":...,"result":...}`, where an error result may carry `errors` instead of `result`. A turn succeeds only with exit 0 and a `result` with `is_error: false`, whose `result` is the answer.
+  - **[human]** Confirm on a machine where running `claude` is allowed: `claude --version` and `claude --help` show these flags, and one `claude -p --output-format stream-json --verbose --include-partial-messages` turn prints the event shapes above.
 - **A short `HOME` under `/tmp`.** The service socket lives in the support directory under `HOME`, and a Unix socket path must fit in `sun_path` (104 bytes on macOS, 108 on Linux; Brauser enforces 104 on every Unix). A temporary directory under `$TMPDIR` (`/var/folders/...`) is long enough to break that, so the runner and the Rust service tests make their `HOME` with a short prefix directly under `/tmp` (`mkdtemp("/tmp/bsh-")`, `tempdir_in("/tmp")`) and remove it at the end.
 - **The service on Linux.** The service, its unit tests, and `host/tests/service.rs` build and run on any Unix; only the launchd glue is macOS-only (`cfg(target_os = "macos")`). On Linux the tests' temporary `HOME` resolves the support directory to `$HOME/.config/brauser` (the tests ask the host with `--config-path` rather than hard-coding it), and the `scripted-dialogs` spawn seam starts the service exactly as on macOS. A production Linux host never starts the service: with nothing listening it answers `service_unavailable`. To type-check the Linux build from a Mac, run `cargo check`/`cargo clippy --target x86_64-unknown-linux-gnu`; `rfd`'s `wayland-sys` build script needs a `pkg-config` that allows cross builds, so point `PKG_CONFIG` at a stub that exits 0 and set `PKG_CONFIG_ALLOW_CROSS=1` (check never links). A native Linux build needs the real `libwayland-dev` and `pkg-config`.
 
@@ -120,6 +207,9 @@ Don't just assume headless means invisible; check it. List on-screen windows (`C
 - Real idle and screen-lock transitions: the headless run has no way to drive them, and `chrome.idle.queryState` reported `active` throughout.
 - Visual or OS-level effects such as focus, cursors, and window lifetime (for example, the macOS busy cursor, or whether the real folder picker closes when the host goes away).
 - launchd: that `launchctl bootstrap` loads the dev LaunchAgent, that `launchctl kickstart` starts it on demand and `kickstart -k` replaces a stale build, that it exits after its idle timeout, and the environment launchd gives it. A release install's `SMAppService` registration (M5) is not built or tested at all. Real harness logins (Codex's stored login, Claude Code on Bedrock through `agent.env`) are not exercised either.
+- Real harnesses: that the installed `codex` and `claude` accept the recorded argv and JSON-RPC and stream-json shapes end to end (the fakes only follow what was read off the binaries), the quality of a real model's answer and whether it follows the §6.4 shape without a repair turn, and how a real agent with full access behaves on a hostile page.
+- The Codex Desktop deep link: that `/usr/bin/open codex://threads/<id>` opens the thread in Codex Desktop. The smoke run only sees the URL in `open.log`.
+- Readability on arbitrary sites: the fixture article and the unit tests' fake documents prove the extractor's shape and byte caps, not how Readability 0.6.0 does on real pages (single-page apps, paywalls, heavy layouts, very large pages).
 
 Cover these in real-UI acceptance, and don't claim them from a headless pass.
 
@@ -135,7 +225,9 @@ Real-UI checks run on a desktop, so:
 Checks of this kind in this repo:
 
 - `npm run smoke:macos -- --auto`: the full flow with the real folder picker, answered through UI scripting. It takes keyboard focus.
-- **[human] The Brauser service under launchd** (PR 2 of the open-access spec; also tracked as `brwr-sv2` in BOSUN_FEATURE_BACKLOG.md). It changes the user's own launchd domain, so a person runs it: (1) register the dev build with `node scripts/register-dev-host.mjs <extension ID> "$(pwd)/target/debug/brauser"` and close Chrome; (2) reopen Chrome and send a `start_run` from the panel's DevTools console; (3) confirm that `launchctl print gui/$UID/com.rauser.brauser.service` shows the service, and that it exits after 10 idle minutes; (4) confirm that `agent.env` values reach a run (this needs a real runner, so it waits for PR 3); (5) confirm that a rebuild plus a request restarts the service. *Not yet run.*
+- **[human] The Brauser service under launchd** (PR 2 of the open-access spec; also tracked as `brwr-sv2` in BOSUN_FEATURE_BACKLOG.md). It changes the user's own launchd domain, so a person runs it: (1) register the dev build with `node scripts/register-dev-host.mjs <extension ID> "$(pwd)/target/debug/brauser"` and close Chrome; (2) reopen Chrome and send a `start_run` from the panel's DevTools console; (3) confirm that `launchctl print gui/$UID/com.rauser.brauser.service` shows the service, and that it exits after 10 idle minutes; (4) confirm that `agent.env` values reach a run (possible since PR 3 registered the real runners); (5) confirm that a rebuild plus a request restarts the service. *Not yet run.*
+
+- **[human] Real summaries from the dev build** (PR 3 of the open-access spec; tracked with `brwr-sr3` in BOSUN_FEATURE_BACKLOG.md). It runs real agents with full access on the user's login, so a person runs it: (1) register the dev build and set up Codex in settings (**Detect harnesses**, then **Test and use**); (2) on a page you trust, click **Summarize & log** and confirm the card reaches "Summarized" with a sensible type, category, and importance line; (3) click **Open in Codex** and confirm Codex Desktop opens that thread; (4) set up Claude Code (for Bedrock, through `agent.env`), summarize a page, and confirm the card reaches "Summarized" and **Copy resume command** resumes the session in a terminal. *Not yet run.*
 
 ## Changing this document
 
@@ -165,6 +257,35 @@ This standard is meant to improve with use. When you change it:
   only; they now include the reading rule and `id` template, and the
   existing-conflict test adds such a rule first. No browser or native
   dialog is involved.
+- 2026-10-27: Branch `feat/agent-runners-pr3`. The page extractor caps text in encoded bytes, not characters: it truncates until the JSON-encoded, UTF-8 length of the content plus the selection fits 3 MiB (the selection alone 64 KiB). CJK text is three bytes a character, and quotes and control characters grow under JSON escaping (`\u0001` is six bytes), so a character cap can push a `start_run` frame past the host's 4 MiB `MAX_INBOUND_BYTES`. `maximal extraction stays under the host frame cap` builds the full `start_run` JSON from 1,000,000 CJK characters with interleaved `"` and `\u0001` and checks it.
+- 2026-10-27: Salvage review of Cookie cycle 2 reproduced three page-pattern
+  gaps with failing-first tests: unreadable pending-removal state on a
+  same-origin skipped page left the previous artifact mapped for attention
+  time; a failed sample purge during pause was hidden, so resuming could keep
+  the old rows; and a failed visited-sample read discarded the page's own
+  shapes in the panel. The link reader now walks the lazy `document.links`
+  collection and never reads its length, so the 500-link cap also bounds work
+  on a hostile page; the site-pattern test's mock fails if length is read.
+  A same-URL reload kept a completed review's link shapes, since the panel
+  compared only tab ID and URL; any `loading` or URL update in the reviewed
+  tab now discards the review, held reads included.
+  A failed sample purge on site removal or policy suspension was likewise
+  only logged, so re-enabling the origin revived its rows. Every purge now
+  runs after the narrower policy commits (never blocking it), falls back to
+  deleting all samples, and reports only if deletion fails too; maintenance
+  also expires samples when pause or removal state is unreadable. A
+  same-origin skipped page whose tab read failed also left the previous
+  artifact mapped, since sampling moved the tab read ahead of the
+  artifact match; that path now ends the entry too. A lease that expired
+  while the tab and samples were read could still gain a sample; the worker
+  now rechecks the lease before retaining one.
+- 2026-10-27: Independent review reproduced an oversized same-origin
+  navigation leaving the previous artifact mapped for attention measurement.
+  The worker regression starts on a recognized artifact, navigates to a
+  search URL over the byte limit, and verifies that later focused time is
+  excluded and no pattern is retained. Oversized navigations now end the
+  previous mapping through the normal unrecognized-page path. No browser or
+  native dialog is involved.
 - 2026-10-27: Branch `feat/brauser-home-folder`. The one-time move of an
   older folder layout to the fixed home layout is tested natively against a
   checked-in copy of a real pre-home install (`host/tests/fixtures/pre-home-layout`:
@@ -280,6 +401,7 @@ This standard is meant to improve with use. When you change it:
   an Obsidian/VS Code preview or a macOS Chrome run. For the macOS smoke,
   the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 - 2026-10-27: Trail-transition validation uses a strict allowlist for new activity and the original bounded shape checks for historical markers. The regressions test terminal refusal through both native delivery paths, all browser values plus `forward_back`, and a pre-validation ingestion cache followed by reindexing an owned marker. They verify actual SQLite edge kinds, retained activity totals and exact payloads, unchanged source logs, and continued rejection of oversized or unpaired legacy trails. No browser or native dialog is involved.
+- 2026-10-27: Branch `fix/c2-index-full-rebuild-cap`. Two index regressions failed first on main: once the logs together passed the per-pass read bound, a deleted cache, `brauser reindex`, `reconcile_from_logs`, and a removed or truncated log each returned unavailable history on every call, and the reset after a removed log let a backdated duplicate in an earlier-dated log replace the conflict winner the cache had chosen. Review then found two more, also failing first: a bounded pass never checkpointed headerless Markdown, so non-log files that filled a pass were reread forever, and a restored winner kept the rejected body's log position, so a same-instant sibling event took over the latest title after any rebuild. A second review round found that an earlier-dated log arriving between the passes of a cacheless rebuild let the later-dated body win, unlike a one-pass rebuild; the regression compares both rebuilds of the same logs. The tests lower the bound with the test-only `SCAN_LIMIT` (sized from one fixture log, so two logs fit per pass) instead of writing 64 MiB of fixtures; `bounded_passes` checks every pass's `LOG_BYTES_READ` stays within the bound and reports unavailable history until the rebuild finishes, and that no partial cache is published meanwhile. No browser or native dialog is involved.
 - 2026-10-27: Branch `fix/lanec-index-robustness-2`. Index regressions failed first on main: a crafted log title over 2,048 bytes stopped every later `index.db` write, an ingestion cache already holding an oversize row did the same, a record payload between SQLite's local table-leaf limit (65,501 bytes at 64 KiB pages) and the old cell check was written inline and read back as "database disk image is malformed", and an M1 visit rendered `opens: 0` with an empty Timeline. The SQLite checks run Python's `sqlite3` `pragma integrity_check` on the written file rather than trusting the writer; size the fixture from the record header (a one-column text record of 65,497 bytes has a 4-byte header) so one row sits exactly at the limit and one just over. No browser or native dialog is involved.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.

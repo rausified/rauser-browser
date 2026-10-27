@@ -61,6 +61,16 @@ interface ChromeContextMenuClickInfo {
   menuItemId: string | number;
 }
 
+interface ChromeInjectionTarget {
+  tabId: number;
+  frameIds?: number[];
+}
+
+interface ChromeInjectionResult<T> {
+  frameId: number;
+  result?: T;
+}
+
 interface ChromeApi {
   runtime: {
     id: string;
@@ -87,6 +97,23 @@ interface ChromeApi {
     create(name: string, info: { delayInMinutes?: number; periodInMinutes?: number }): Promise<void>;
     get(name: string): Promise<{ name: string } | undefined>;
     onAlarm: { addListener(listener: (alarm: { name: string }) => void): void };
+  };
+  scripting: {
+    executeScript<T>(injection: {
+      target: { tabId: number; frameIds: [0] };
+      world: "ISOLATED";
+      func: (expectedUrl: string, readLinks: boolean) => T;
+      args: [string, boolean];
+    }): Promise<{ frameId: number; result?: T }[]>;
+    executeScript(injection: { target: ChromeInjectionTarget; files: string[] }): Promise<ChromeInjectionResult<unknown>[]>;
+    executeScript<Args extends unknown[], Result>(injection: {
+      target: ChromeInjectionTarget;
+      func: (...args: Args) => Result;
+      args: Args;
+    }): Promise<ChromeInjectionResult<Awaited<Result>>[]>;
+  };
+  commands: {
+    onCommand: { addListener(listener: (command: string, tab?: ChromeTab) => void): void };
   };
   sidePanel: {
     setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;

@@ -43,3 +43,6 @@ pub const SERVICE_SPAWN_ENV: &str = "BRAUSER_SERVICE_SPAWN";
 pub const SERVICE_IDLE_SECS_ENV: &str = "BRAUSER_SERVICE_IDLE_SECS";
 #[cfg(any(test, feature = "scripted-dialogs"))]
 pub const RUN_TIMEOUT_SECS_ENV: &str = "BRAUSER_RUN_TIMEOUT_SECS";
+/// The file the test-build opener appends to instead of opening anything.
+#[cfg(any(test, feature = "scripted-dialogs"))]
+pub const OPEN_LOG_ENV: &str = "BRAUSER_OPEN_LOG";

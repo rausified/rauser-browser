@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
+const { SETUP_WARNING } = await import("../dist/agent.js");
+const { storageKey } = await import("../dist/brand.js");
+const { EXTRACT_LIMITS } = await import("../dist/extract.js");
 
 // Run after build:extension. Each test loads a fresh copy of the side panel
 // against a fake DOM built from the shipped panel.html, a scripted native
@@ -88,8 +92,30 @@ const CONFIG = {
   capture_enabled: false,
   strip_params: [],
   agent: null,
+  summary_vocabulary: { document_types: ["report"], categories: ["news"] },
   adapters: { format: 1, artifacts: [] },
 };
+
+const NOT_SET_UP = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
+const READY = { state: "ready", harness_version: "1.0.0", message: null };
+
+function storageArea(entries) {
+  return {
+    async get(keys) {
+      const result = {};
+      for (const name of Array.isArray(keys) ? keys : [keys]) {
+        if (entries.has(name)) result[name] = structuredClone(entries.get(name));
+      }
+      return result;
+    },
+    async set(items) {
+      for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
+    },
+    async remove(keys) {
+      for (const name of Array.isArray(keys) ? keys : [keys]) entries.delete(name);
+    },
+  };
+}
 
 let loads = 0;
 let teardown = [];
@@ -116,6 +142,8 @@ function hostReply(request, config = CONFIG) {
       };
     case "get_artifact":
       return { type: "artifact_result", recognized: false, artifact: null };
+    case "list_runs":
+      return { type: "runs_listed", runs: [] };
     case "record_why":
       return {
         type: "why_recorded", event_id: request.event.event_id, outcome: "persisted", reason: null,
@@ -130,22 +158,39 @@ function hostReply(request, config = CONFIG) {
 // to hold it); a falsy result falls back to the default reply. `workerReply`
 // does the same for messages to the worker. With `state.hostDead`, a new host
 // process closes its port without answering, as one that cannot start does.
+// `executeScript(injection)` answers chrome.scripting.executeScript for
+// summary extraction and `script(injection, state)` for site-pattern review;
+// `local`
+// and `session` are Maps backing chrome.storage, so a test can share them
+// between panel loads.
 async function install({
   tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null,
-  intercept = () => null, workerReply = () => undefined,
+  intercept = () => null, workerReply = () => undefined, agentStatus = NOT_SET_UP,
+  executeScript = async () => { throw new Error("Cannot access contents of the page"); },
+  local = new Map(), session = new Map(),
+  script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
 }) {
   const elements = pageElements();
+  const listeners = () => {
+    const registered = [];
+    return { registered, addListener(listener) { registered.push(listener); } };
+  };
   const state = {
     tab: tab === undefined ? undefined : { incognito: false, ...tab },
     contains,
     config: structuredClone(config), revision: "1", configIssue, adapterIssue,
     workerStatus: { ...statusFor(), ...workerStatus }, requests: [], workerRequests: [],
-    created: [],
+    created: [], scripts: [],
     counts: new Map(),
     added: [],
     removed: [],
     ports: [],
     hostDead: false,
+    agentStatus,
+    injections: [],
+    local,
+    session,
+    runtimeMessages: listeners(),
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
@@ -160,13 +205,21 @@ async function install({
     addEventListener(type, listener) { if (type === "pagehide") teardown.push(listener); },
     confirm: () => false,
   };
-  const listeners = () => {
-    const registered = [];
-    return { registered, addListener(listener) { registered.push(listener); } };
-  };
   const tabActivated = listeners();
   const tabUpdated = listeners();
   globalThis.chrome = {
+    scripting: {
+      // Site-pattern review injections go to `script` and `state.scripts`;
+      // summary extraction goes to `executeScript` and `state.injections`.
+      async executeScript(injection) {
+        if (injection.args?.length === 2 && injection.args[1] === true) {
+          state.scripts.push(injection);
+          return [{ frameId: 0, result: await script(injection, state) }];
+        }
+        state.injections.push(injection);
+        return executeScript(injection);
+      },
+    },
     runtime: {
       id: "test-id",
       lastError: undefined,
@@ -191,7 +244,8 @@ async function install({
               let reply = await intercept(request, state);
               if (!reply && request.type === "get_config") {
                 reply = { ...hostReply(request), config: state.config, revision: state.revision,
-                  config_issue: state.configIssue, adapter_issue: state.adapterIssue };
+                  config_issue: state.configIssue, adapter_issue: state.adapterIssue,
+                  agent_status: state.agentStatus };
               }
               if (!reply && request.type === "update_config") {
                 if (request.expected_revision !== state.revision) {
@@ -218,15 +272,16 @@ async function install({
       },
       async sendMessage(request) {
         state.workerRequests.push(structuredClone(request));
+        if (request.kind === "get_site_patterns") {
+          return patternsError ? { ok: false, error: patternsError } : { ok: true, value: structuredClone(patterns) };
+        }
         return (await workerReply(request)) ?? { ok: true, value: structuredClone(state.workerStatus) };
       },
+      onMessage: state.runtimeMessages,
     },
     storage: {
-      local: {
-        async get() { return {}; },
-        async set() {},
-        async remove() {},
-      },
+      local: storageArea(local),
+      session: storageArea(session),
       onChanged: listeners(),
     },
     tabs: {
@@ -270,6 +325,9 @@ async function install({
       state.tab = { ...state.tab, url, id, incognito: false };
       for (const listener of tabActivated.registered) listener({ tabId: id, windowId: 1 });
     },
+    tabUpdated(changeInfo, id = state.tab?.id ?? 1) {
+      for (const listener of tabUpdated.registered) listener(id, changeInfo, { ...state.tab, id });
+    },
     policyChanged() {
       for (const listener of chrome.storage.onChanged.registered) {
         listener({ [POLICY_STORAGE_KEY]: { newValue: null } }, "local");
@@ -281,6 +339,12 @@ async function install({
       return found;
     },
     calls: (name) => state.counts.get(name) ?? 0,
+    // The worker broadcasts a notice to open extension pages.
+    notify(notice) {
+      for (const listener of state.runtimeMessages.registered) {
+        listener(notice, { id: "test-id", url: "chrome-extension://test-id/worker.js" }, () => undefined);
+      }
+    },
     sent: (type) => state.requests.filter((request) => request.type === type),
     // The followed tab moves to another address in place.
     followLink(url, title) {
@@ -393,6 +457,125 @@ test("the panel markup has no grant button or address-unavailable note", () => {
 
 const JIRA_URL = "https://acme.atlassian.net/browse/PROJ-42";
 const GITHUB_URL = "https://github.com/acme-corp/widget/pull/42/files";
+
+test("page-pattern review on an unknown site reads links only on click without changing capture", async () => {
+  const url = "https://unknown.example/items/123456";
+  const page = await install({ tab: { id: 1, url, title: "Private Customer Title" },
+    script: async () => ({ current: "/items/{num}", links: [{ shape: "/items/{num}/{slug}", count: 2 }] }),
+    patterns: [{ shape: "/documents/{uuid}", count: 3, last_seen: Date.now() }],
+  });
+  await until(() => !page.el("site-pattern-area").hidden && !page.el("site-pattern-review").disabled, "pattern review to be ready");
+  assert.equal(page.state.scripts.length, 0);
+  assert.equal(page.el("capture-site-area").hidden, true, "unknown-site capture is still unavailable");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  const [injection] = page.state.scripts;
+  assert.deepEqual(injection.target, { tabId: 1, frameIds: [0] });
+  assert.equal(injection.world, "ISOLATED");
+  assert.deepEqual(injection.args, [url, true]);
+  assert.equal(typeof injection.func, "function");
+  assert.match(page.el("site-pattern-message").textContent, /Review only/);
+  assert.match(page.el("site-pattern-rows").textContent, /Visited pattern \(3 navigations\)/);
+  assert.doesNotMatch(page.el("site-pattern-rows").textContent, /123456|Private Customer/);
+  assert.equal(page.state.requests.filter((request) => request.type === "update_config").length, 0);
+  assert.equal(page.calls("permissions.request"), 0);
+  page.el("site-pattern-close").click();
+  assert.equal(page.el("site-pattern-result").hidden, true);
+  assert.equal(page.el("site-pattern-rows").textContent, "");
+});
+
+test("reloading the reviewed page discards its link patterns, including a held read", async () => {
+  const url = "https://unknown.example/items/1";
+  const page = await install({ tab: { id: 1, url, title: "A" },
+    script: async () => ({ current: "/items/{num}", links: [{ shape: "/items/{num}/{slug}", count: 2 }] }) });
+  await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  page.tabUpdated({ status: "loading" });
+  assert.equal(page.el("site-pattern-result").hidden, true);
+  assert.equal(page.el("site-pattern-rows").textContent, "");
+
+  let finish;
+  const held = new Promise((resolve) => { finish = resolve; });
+  const second = await install({ tab: { id: 1, url, title: "A" }, script: () => held });
+  await until(() => !second.el("site-pattern-review").disabled, "pattern review ready");
+  second.el("site-pattern-review").click();
+  await until(() => second.state.scripts.length === 1, "the held script");
+  second.tabUpdated({ url: "https://unknown.example/items/2" });
+  second.tabUpdated({ url });
+  finish({ current: "/items/{num}", links: [{ shape: "/stale/{num}", count: 1 }] });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(second.el("site-pattern-result").hidden, true);
+  assert.equal(second.el("site-pattern-rows").textContent, "");
+});
+
+test("a failed visited-pattern read still shows the page's own patterns", async () => {
+  const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1", title: "A" },
+    script: async () => ({ current: "/items/{num}", links: [{ shape: "/items/{num}/{slug}", count: 2 }] }),
+    patternsError: "Pending site removals are unreadable",
+  });
+  await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  assert.match(page.el("site-pattern-message").textContent, /Review only/);
+  assert.match(page.el("site-pattern-rows").textContent, /Current page: \/items\/\{num\}/);
+  assert.match(page.el("site-pattern-rows").textContent, /Visited patterns unavailable: .*unreadable/);
+});
+
+test("navigating or canceling a held pattern read drops its result and allows a fresh review", async () => {
+  for (const cancel of [false, true]) {
+    let finish;
+    const held = new Promise((resolve) => { finish = resolve; });
+    const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1", title: "A" }, script: () => held });
+    await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+    page.el("site-pattern-review").click();
+    await until(() => page.state.scripts.length === 1, "the held script");
+    if (cancel) page.el("site-pattern-close").click();
+    else {
+      page.navigate("https://other.example/pages/2", 2);
+      await until(() => page.el("page-url").textContent.includes("other.example"), "page switch");
+    }
+    finish({ current: "/old/{num}", links: [{ shape: "/stale/{num}", count: 1 }] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(page.el("site-pattern-result").hidden, true);
+    assert.equal(page.el("site-pattern-rows").textContent, "");
+    assert.equal(page.state.workerRequests.filter((request) => request.kind === "get_site_patterns").length, 0);
+    assert.equal(page.state.requests.filter((request) => request.type === "update_config").length, 0);
+  }
+});
+
+test("stale script output and scripting failures show an honest error without enabling capture", async () => {
+  for (const script of [async () => ({ current: null, links: [] }), async () => { throw new Error("Site access withdrawn"); }]) {
+    const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1", title: "A" }, script });
+    await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+    page.el("site-pattern-review").click();
+    await until(() => page.el("site-pattern-message").textContent.startsWith("Could not review"), "inspection error");
+    assert.equal(page.el("site-pattern-rows").textContent, "");
+    assert.equal(page.state.config.capture_enabled, false);
+  }
+});
+
+test("collapsing page patterns clears the review's link shapes", async () => {
+  const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1" } });
+  await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+  page.el("site-pattern-area").open = true;
+  page.el("site-pattern-area").dispatch("toggle");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Current page"), "the pattern review");
+  page.el("site-pattern-area").open = false;
+  page.el("site-pattern-area").dispatch("toggle");
+  assert.equal(page.el("site-pattern-result").hidden, true);
+  assert.equal(page.el("site-pattern-rows").textContent, "");
+});
+
+test("private and nonweb tabs never offer page-pattern inspection", async () => {
+  for (const tab of [{ id: 1, url: "https://unknown.example/items/1", incognito: true }, { id: 1, url: "chrome://settings/" }, { id: 1, url: undefined }]) {
+    const page = await install({ tab });
+    await until(() => page.calls("tabs.query") >= 1 && page.el("status").textContent !== "Connecting", "page state");
+    assert.equal(page.el("site-pattern-area").hidden, true);
+    assert.equal(page.state.scripts.length, 0);
+  }
+});
 const updates = (page) => page.state.requests.filter((request) => request.type === "update_config");
 
 async function captureReview(url = JIRA_URL, options = {}) {
@@ -434,7 +617,8 @@ test("Capture Site previews Jira and installs the host-returned policy in one sa
   assert.deepEqual(installed.lease.adapters, update.config.adapters);
   assert.equal(page.calls("permissions.request"), 0);
   assert.equal(page.calls("permissions.remove"), 0);
-  assert.deepEqual([...new Set(page.state.requests.map((r) => r.type))].sort(),
+  // The panel's opening list_runs restores run cards; it is not part of the save.
+  assert.deepEqual([...new Set(page.state.requests.map((r) => r.type).filter((type) => type !== "list_runs"))].sort(),
     ["get_artifact", "get_config", "hello", "load_note", "update_config"]);
 });
 
@@ -909,4 +1093,382 @@ test("Save why stays disabled while a local pause waits for the host", async () 
   await settle();
   assert.equal(page.sent("record_why").length, 0);
   assert.match(page.el("status").textContent, /Use Pause capture to finish/);
+});
+
+// --- Summarize & log (plan Task 39) -----------------------------------------
+
+const ARTICLE_URL = "https://read.example/article";
+const RUN_VIEW = {
+  run_id: "00000000-0000-4000-8000-000000000039", state: "queued", harness: "codex",
+  record_key: { kind: "url", value: ARTICLE_URL }, written_record_key: null,
+  url: ARTICLE_URL, title: "Readable title", cwd: null,
+  created_at: "2026-10-27T09:00:00-07:00", started_at: null, finished_at: null,
+  error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+  stream_bytes: 0, can_retry_save: false, answer: null,
+};
+const WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
+const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
+
+// A page Readability can read: the bundled library loads, then the extractor
+// returns the page.
+async function readablePage(injection) {
+  if (injection.files) return [{ frameId: 0 }];
+  return [{
+    frameId: 0,
+    result: {
+      title: "Readable title", content: "Body text", selection: "picked", truncated: false, readable: true,
+      href: ARTICLE_URL,
+    },
+  }];
+}
+
+// The extractor read a document at `href`, not the page the run is for.
+function pageAt(href) {
+  return async (injection) => {
+    const [answer] = await readablePage(injection);
+    return [injection.files ? answer : { ...answer, result: { ...answer.result, href } }];
+  };
+}
+
+function startsRun(request) {
+  if (request.type === "start_run") return { type: "run_started", run: RUN_VIEW, existing: false };
+  if (request.type === "get_run") return { type: "run_fetched", run: RUN_VIEW, stream_text: "", next_offset: 0, more: false };
+  return null;
+}
+
+function buttonIn(root, text) {
+  for (const child of root.children) {
+    if (child.tagName === "BUTTON" && child.textContent === text) return child;
+    const found = buttonIn(child, text);
+    if (found) return found;
+  }
+  return null;
+}
+
+// A harness set up in settings, as config_result reports it.
+const SET_UP = {
+  ...CONFIG,
+  agent: { harness: "codex", binary: "/usr/local/bin/codex", version: "1.0.0", timeout_secs: 600, probed_at: "2026-10-27T09:00:00-07:00" },
+  storage: { ...CONFIG.storage, summaries_dir: "summaries" },
+};
+
+async function summarizePanel(options = {}) {
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP,
+    executeScript: readablePage, intercept: startsRun, ...options,
+  });
+  await until(() => page.el("note-editor").hidden === false, "the page to show");
+  return page;
+}
+
+test("Summarize & log shows on any HTTP(S) tab and needs a ready harness", async () => {
+  const unset = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" } });
+  await until(() => unset.el("summarize").hidden === false, "the Summarize button");
+  // The note loads only after the panel has read the host config.
+  await until(() => unset.el("note-body").disabled === false, "the note to load");
+  assert.equal(unset.el("summarize").disabled, true);
+  assert.equal(unset.el("summarize").title, "Set up a summary harness in settings first.");
+  teardown.splice(0).forEach((listener) => listener());
+
+  const ready = await summarizePanel();
+  await until(() => ready.el("summarize").disabled === false, "the button to enable");
+  assert.equal(ready.el("summarize").hidden, false);
+  assert.equal(ready.el("summarize").title, "");
+  teardown.splice(0).forEach((listener) => listener());
+
+  const other = await install({ tab: { id: 1, url: "chrome://extensions/", title: "Extensions" }, agentStatus: READY });
+  await until(() => other.el("page-unusable").hidden === false, "the not-a-web-page state");
+  assert.equal(other.el("summarize").hidden, true);
+});
+
+test("clicking Summarize extracts in the top frame then sends start_run with no record key and a local requested_at", async () => {
+  const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]) });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+
+  const [library, extract] = page.state.injections;
+  assert.deepEqual(library, { target: { tabId: 1, frameIds: [0] }, files: ["vendor/readability.js"] });
+  assert.deepEqual(extract.target, { tabId: 1, frameIds: [0] });
+  assert.equal(extract.func.name, "extractReadablePage");
+  assert.deepEqual(extract.args, [EXTRACT_LIMITS]);
+
+  const [request] = page.sent("start_run");
+  assert.equal(request.url, ARTICLE_URL);
+  assert.equal(request.title, "Readable title");
+  assert.equal(request.content, "Body text");
+  assert.equal(request.selection, "picked");
+  assert.equal(request.harness, null);
+  assert.equal(request.record_key, null);
+  assert.match(request.requested_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
+  await until(() => /Readable title.*Queued/.test(page.el("run-area").textContent), "the run card");
+});
+
+test("an executeScript failure shows \"can't read this page\"", async () => {
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async () => { throw new Error("Cannot access contents of the page"); },
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => /can't read this page/.test(page.el("run-area").textContent), "the unreadable message");
+  assert.equal(page.sent("start_run").length, 0);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // Readability and the body text both came back empty.
+  const empty = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
+      frameId: 0, result: { title: "", content: "", selection: null, truncated: false, readable: false, href: ARTICLE_URL },
+    }],
+  });
+  await until(() => empty.el("summarize").disabled === false, "the button to enable");
+  empty.el("summarize").click();
+  await until(() => /can't read this page/.test(empty.el("run-area").textContent), "the unreadable message");
+  assert.equal(empty.sent("start_run").length, 0);
+});
+
+test("Summarize refuses when the tab holds another document by extraction time", async () => {
+  // A navigation, or an SPA's pushState, between the click and the extractor.
+  for (const href of ["https://read.example/next", "https://read.example/article?page=2", undefined]) {
+    const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]), executeScript: pageAt(href) });
+    await until(() => page.el("summarize").disabled === false, "the button to enable");
+    page.el("summarize").click();
+    await until(() => /page changed/.test(page.el("run-area").textContent), "the page-changed message");
+    assert.equal(page.sent("start_run").length, 0);
+    teardown.splice(0).forEach((listener) => listener());
+  }
+
+  // The same address, spelled as Chrome canonicalizes it, is the same page.
+  const same = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]), executeScript: pageAt("HTTPS://READ.example:443/article"),
+  });
+  await until(() => same.el("summarize").disabled === false, "the button to enable");
+  same.el("summarize").click();
+  await until(() => same.sent("start_run").length === 1, "start_run");
+});
+
+test("start_run never carries a lone surrogate, whichever field it came from", async () => {
+  // Chrome's tab title stands in when Readability finds none.
+  const page = await summarizePanel({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab \uD800 title" },
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async (injection) => injection.files ? [{ frameId: 0 }] : [{
+      frameId: 0,
+      result: {
+        title: "", content: "Body \uDC00 text 😀", selection: "\uD83D", truncated: false, readable: true, href: ARTICLE_URL,
+      },
+    }],
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  const [request] = page.sent("start_run");
+  assert.equal(request.title, "Tab \uFFFD title");
+  assert.equal(request.content, "Body \uFFFD text 😀");
+  assert.equal(request.selection, "\uFFFD");
+  assert.doesNotMatch(JSON.stringify(request), /\\ud[89a-f][0-9a-f]{2}/i);
+});
+
+test("a slow summary's line stays with the tab it was for", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    intercept: (request) => request.type === "start_run" ? held : startsRun(request),
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  assert.match(page.el("run-area").textContent, /Reading this page/);
+
+  // The user moves to tab 2 while the service cold-starts.
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  assert.doesNotMatch(page.el("run-area").textContent, /Reading this page/);
+  release({ type: "error", code: "service_unavailable", message: "The service did not start." });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(page.el("run-area").textContent, /did not start/);
+});
+
+test("a summary that finishes after a tab switch leaves the new tab's line alone", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    intercept: (request) => request.type === "start_run" ? held : startsRun(request),
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  page.notify({ kind: "summarize_failed", message: "Tab two's own notice.", tab_id: 2, at: Date.now() });
+  await until(() => page.el("run-area").textContent.includes("Tab two's own notice."), "tab 2's notice");
+  release({ type: "run_started", run: RUN_VIEW, existing: false });
+  await until(() => /Queued/.test(page.el("run-area").textContent), "the run card");
+  assert.match(page.el("run-area").textContent, /Tab two's own notice\./);
+});
+
+test("a worker notice for a tab the panel has not followed yet shows once that tab is followed", async () => {
+  const session = new Map();
+  const page = await summarizePanel({ session, local: new Map([[WARNING_SEEN_KEY, true]]) });
+  // Startup reads (and clears) whatever was stored before the panel loaded.
+  await until(() => page.sent("list_runs").length === 1, "startup's list_runs");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // The shortcut fired on tab 2 just after it was activated, while the panel
+  // still followed tab 1: the live notice is not for the followed tab.
+  const notice = { kind: "summarize_failed", message: "Tab two failed early.", tab_id: 2, at: Date.now() };
+  session.set(PANEL_NOTICE_KEY, notice);
+  page.notify(notice);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(page.el("run-area").textContent, /Tab two failed early/);
+  assert.ok(session.has(PANEL_NOTICE_KEY), "a notice for another tab stays stored");
+
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("run-area").textContent.includes("Tab two failed early."), "tab 2's stored notice");
+  await until(() => !session.has(PANEL_NOTICE_KEY), "the notice to be consumed");
+});
+
+test("the setup warning shows once", async () => {
+  const local = new Map();
+  const first = await summarizePanel({ local });
+  await until(() => first.el("summarize").disabled === false, "the button to enable");
+  first.el("summarize").click();
+  await until(() => first.el("run-area").textContent.includes(SETUP_WARNING), "the setup warning");
+  // The warning does not hold the run back.
+  await until(() => first.sent("start_run").length === 1, "start_run");
+  assert.equal(local.get(WARNING_SEEN_KEY), true);
+  buttonIn(first.el("run-area"), "Got it").click();
+  assert.ok(!first.el("run-area").textContent.includes(SETUP_WARNING));
+  teardown.splice(0).forEach((listener) => listener());
+
+  const second = await summarizePanel({ local });
+  await until(() => second.el("summarize").disabled === false, "the button to enable");
+  second.el("summarize").click();
+  await until(() => second.sent("start_run").length === 1, "start_run");
+  await until(() => /Queued/.test(second.el("run-area").textContent), "the run card");
+  assert.ok(!second.el("run-area").textContent.includes(SETUP_WARNING));
+});
+
+test("the setup warning shows once for a summary the shortcut or menu started", async () => {
+  const listRuns = (request) => request.type === "list_runs" ? { type: "runs_listed", runs: [RUN_VIEW] } : startsRun(request);
+  // The worker opened the panel and stored its notice before the panel loaded.
+  const local = new Map();
+  const session = new Map([[PANEL_NOTICE_KEY, { kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() }]]);
+  const opened = await summarizePanel({ local, session, intercept: listRuns });
+  await until(() => opened.el("run-area").textContent.includes(SETUP_WARNING), "the setup warning");
+  await until(() => /Queued/.test(opened.el("run-area").textContent), "the run card");
+  assert.equal(local.get(WARNING_SEEN_KEY), true);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A panel already open hears the worker's notice; the warning is not shown twice.
+  const fresh = new Map();
+  const open = await summarizePanel({ local: fresh, intercept: listRuns });
+  open.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() });
+  await until(() => open.el("run-area").textContent.includes(SETUP_WARNING), "the live setup warning");
+  assert.equal(fresh.get(WARNING_SEEN_KEY), true);
+  teardown.splice(0).forEach((listener) => listener());
+
+  const again = await summarizePanel({ local: fresh, intercept: listRuns });
+  again.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() + 1 });
+  await until(() => /Queued/.test(again.el("run-area").textContent), "the run card");
+  assert.ok(!again.el("run-area").textContent.includes(SETUP_WARNING));
+});
+
+test("a summarize failure sent before the panel loads is shown when it opens", async () => {
+  const message = "The Brauser service is not running. Register it again.";
+  const session = new Map([[PANEL_NOTICE_KEY, { kind: "summarize_failed", message, tab_id: 1, at: Date.now() }]]);
+  const page = await summarizePanel({ session });
+  await until(() => page.el("run-area").textContent.includes(message), "the stored notice");
+  await until(() => !session.has(PANEL_NOTICE_KEY), "the notice to clear");
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A notice older than two minutes, or for another tab, is cleared unseen.
+  for (const stale of [
+    { kind: "summarize_failed", message, tab_id: 1, at: Date.now() - 3 * 60_000 },
+    { kind: "summarize_failed", message, tab_id: 2, at: Date.now() },
+  ]) {
+    const later = new Map([[PANEL_NOTICE_KEY, stale]]);
+    const other = await summarizePanel({ session: later });
+    await until(() => !later.has(PANEL_NOTICE_KEY), "the stale notice to clear");
+    assert.ok(!other.el("run-area").textContent.includes(message));
+    teardown.splice(0).forEach((listener) => listener());
+  }
+
+  // A notice the worker sends while the panel is open shows at once.
+  const open = await summarizePanel();
+  open.notify({ kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 1, at: Date.now() });
+  await until(() => open.el("run-area").textContent.includes("Summaries work on http(s) pages."), "the live notice");
+});
+
+test("with no summary harness set up, opening the panel does not wake the service", async () => {
+  // list_runs makes the host start the registered service (launchctl), which
+  // is on demand: only a set-up harness can have runs to restore.
+  const page = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" } });
+  await until(() => page.el("note-body").disabled === false, "the note to load");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.sent("list_runs").length, 0);
+  teardown.splice(0).forEach((listener) => listener());
+
+  const ready = await summarizePanel();
+  await until(() => ready.sent("list_runs").length === 1, "list_runs");
+});
+
+test("a run still in the service restores with Cancel after the harness is removed", async () => {
+  // The harness was set up, a run started, then the harness was removed:
+  // the service still runs it, so the panel must show it and let it stop.
+  const running = { ...RUN_VIEW, state: "running", started_at: "2026-10-27T09:00:01-07:00" };
+  const local = new Map([[RUNS_MAY_EXIST_KEY, Date.now() - 60_000]]);
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, local,
+    intercept: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs: [running] };
+      if (request.type === "get_run") return { type: "run_fetched", run: running, stream_text: "", next_offset: 0, more: false };
+      return null;
+    },
+  });
+  await until(() => /Running/.test(page.el("run-area").textContent), "the restored card");
+  assert.ok(buttonIn(page.el("run-area"), "Cancel"), "the restored card offers Cancel");
+  assert.equal(page.sent("list_runs").length, 1);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // Once list_runs finds nothing left to show, later opens stop asking.
+  const empty = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
+  await until(() => empty.sent("list_runs").length === 1, "list_runs");
+  await until(() => !local.has(RUNS_MAY_EXIST_KEY), "the record to clear");
+  teardown.splice(0).forEach((listener) => listener());
+  const later = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
+  await until(() => later.el("note-body").disabled === false, "the note to load");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(later.sent("list_runs").length, 0);
+});
+
+test("a started summary records that runs may exist", async () => {
+  const local = new Map([[WARNING_SEEN_KEY, true]]);
+  const page = await summarizePanel({ local });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  await until(() => typeof local.get(RUNS_MAY_EXIST_KEY) === "number", "the record");
+});
+
+test("the panel restores run cards on load and shows a run the shortcut started", async () => {
+  const restored = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000040", title: "Restored run", state: "running" };
+  const started = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000041", title: "Shortcut run" };
+  let runs = [restored];
+  const page = await summarizePanel({
+    intercept: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs };
+      if (request.type === "get_run") {
+        return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false };
+      }
+      return null;
+    },
+  });
+  await until(() => page.el("run-area").textContent.includes("Restored run"), "the restored card");
+  runs = [started, restored];
+  page.notify({ kind: "run_started", run_id: started.run_id, tab_id: 1, at: Date.now() });
+  await until(() => page.el("run-area").textContent.includes("Shortcut run"), "the shortcut's card");
+  assert.equal(page.el("run-area").textContent.split("Restored run").length, 2, "each run shows once");
 });

@@ -14,6 +14,15 @@
     "page": "options.html",
     "open_in_tab": true
   },
+  "commands": {
+    "summarize": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+9",
+        "mac": "Command+Shift+9"
+      },
+      "description": "Summarize this page with {{APP_NAME}}"
+    }
+  },
   "side_panel": {
     "default_path": "panel.html"
   },

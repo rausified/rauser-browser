@@ -3,14 +3,20 @@
 //! (`client::launchd_kickstart`) is macOS-only. Windows has no service.
 
 pub mod agent_env;
+pub mod child;
+pub mod claude;
 pub mod client;
+pub mod codex;
 pub mod command_runner;
 pub mod harness_api;
 pub mod maintenance;
+pub mod open;
 pub mod paths;
+pub mod prompt;
 pub mod queue;
 pub mod record;
 pub mod server;
+pub mod setup;
 pub mod supervisor;
 
 use std::time::Duration;
@@ -37,7 +43,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     }
     let config = ConfigStore::load()?;
     let paths = ServicePaths::for_config(&config)?;
-    let options = options(&paths);
+    let options = options(&paths, &config);
     let exit = server::serve(&paths, config, &options, || {
         let store = RunStore::open(paths.runs())?;
         let finisher = VaultCheckFinisher::new(ConfigStore::load()?);
@@ -54,13 +60,16 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     Ok(())
 }
 
-fn options(paths: &ServicePaths) -> ServiceOptions {
+fn options(paths: &ServicePaths, config: &ConfigStore) -> ServiceOptions {
     #[allow(unused_mut)]
     let mut options = ServiceOptions {
         run_timeout: DEFAULT_RUN_TIMEOUT,
+        forced_run_timeout: None,
         idle_exit: DEFAULT_IDLE_EXIT,
         service_pid: std::process::id(),
         run_env: server::env_source(paths),
+        run_cwd: server::cwd_check(config.reopen()),
+        opener: crate::open::default_opener(),
     };
     #[cfg(feature = "scripted-dialogs")]
     {
@@ -68,8 +77,10 @@ fn options(paths: &ServicePaths) -> ServiceOptions {
         if let Some(idle) = seconds_from_env(SERVICE_IDLE_SECS_ENV) {
             options.idle_exit = idle;
         }
+        // It also beats a run's own `timeout_secs`.
         if let Some(timeout) = seconds_from_env(RUN_TIMEOUT_SECS_ENV) {
             options.run_timeout = timeout;
+            options.forced_run_timeout = Some(timeout);
         }
     }
     options

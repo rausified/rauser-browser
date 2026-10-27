@@ -46,6 +46,16 @@
       </nav>
 
       <div id="page-view">
+      <details id="site-pattern-area" hidden>
+        <summary>Page patterns</summary>
+        <p>Review the page address and patterns from up to 500 links on this page. Only same-site links are included. This preview does not change capture.</p>
+        <button id="site-pattern-review" type="button" class="secondary">Review page patterns</button>
+        <div id="site-pattern-result" hidden>
+          <p id="site-pattern-message" role="status" aria-live="polite"></p>
+          <ul id="site-pattern-rows" class="plain-list"></ul>
+          <button id="site-pattern-close" type="button" class="secondary">Close review</button>
+        </div>
+      </details>
       <section id="capture-site-area" aria-label="Site capture" hidden>
         <p id="capture-site-hint"></p>
         <button id="capture-site" type="button">Capture Site</button>
@@ -92,6 +102,11 @@
           <p id="why-paused-hint" class="page-url" hidden>Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.</p>
         </div>
       </section>
+
+      <div class="summarize-area">
+        <button id="summarize" type="button" hidden disabled>Summarize &amp; log</button>
+        <div id="run-area" class="run-area" aria-live="polite"></div>
+      </div>
 
       <section aria-labelledby="note-heading">
         <div class="note-header">
