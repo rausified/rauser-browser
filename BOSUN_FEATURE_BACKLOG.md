@@ -353,14 +353,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
-- [ ] `brwr-rq5` **Make Unix-socket tests sandbox-aware (P2).** When binding a Unix
-  socket fails with EPERM/EACCES and `BRAUSER_REQUIRE_IPC_TESTS` is not `1`,
-  skip with a printed reason; with the flag set, fail. Applies to the host
-  service tests and `npm run test:scripts`. Cookie's codex workspace-write
-  sandbox denies local IPC, so its health gate saw 32 socket-test failures and
-  refused product work for 10 cycles. CI sets the flag, so CI never skips.
-  Open access PR 3 (#98, merged 2026-10-27) rewrote those tests; recheck which
-  still bind sockets before starting.
 - [ ] `brwr-2za` **Neutralize `$` math in daily-log titles and Why text.**
   `safe_markdown_line` (host/src/capture.rs) still allows `$` math there.
   Moving them to `markdown::inline` needs a second frozen renderer generation
@@ -513,27 +505,16 @@ were folded into `brwr-q7e` above rather than given their own item.
 ## In Progress / This Iteration
 
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
-  child can exit after printing its reply before the parent writes the framed
+  child could exit after printing its reply before the parent wrote the framed
   request, intermittently producing `EPIPE` even though production dialog
-  children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly. The repair is committed as `00dbc75` and
-  included in `728b200`;
-  the bead is blocked on full verification in a runner that permits local IPC.
-
-  Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
-  request, make the reply fixture consume exactly the framed byte count, and
-  stress repeated replies. Review the complete diff and rerun the required
-  checks. Keep this bead open until the driver can verify the full suite: this
-  sandbox refuses Unix sockets (EPERM), including a standalone bind probe.
-  Repair committed: the large-input reproduction failed with Broken pipe before
-  the fix; the child now reads the byte count and complete body before replying.
-  Sixty exchanges cover empty, short and 64 KiB UTF-8 requests without waiting
-  for EOF. No production dialog behavior changed. Full verification remains
-  pending outside the sandbox; no shipped claim or bead closure this cycle.
-
-  Latest verification: see the current health handoff below for clean
-  baseline `46f17b3`. The same IPC restriction remains; the existing repair
-  is retained and this item is not closed.
+  children read the request first. The repair (`00dbc75`, in `main` since
+  `728b200`) makes the child read the byte count and complete body before
+  replying; sixty exchanges cover empty, short and 64 KiB UTF-8 requests.
+  It was held open only because the sandbox's IPC denial kept the full gate
+  red, not for any problem with the repair. `brwr-rq5` makes the socket tests
+  skip in that sandbox, and the full gate, socket tests included, passed
+  outside it on the `brwr-rq5` PR. The next cycle should rerun the gate and
+  close this bead (its queue status still says `blocked`).
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
@@ -617,6 +598,8 @@ were folded into `brwr-q7e` above rather than given their own item.
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, PR_NUMBER).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
 
 - **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
 
@@ -835,89 +818,27 @@ were folded into `brwr-q7e` above rather than given their own item.
 - `brwr-vny` is a later product idea: help a person understand a skipped page
   using an actual policy reason, after the ordered Capture Site work.
 
-### Cycle observations (2026-10-27 — dialog fixture repair)
+### Cycle observations (2026-10-27 — dialog fixture repair and sandbox IPC)
 
-- Health started red solely at Unix-socket service tests: 32 host failures, all
-  explained by denied socket operations; a minimal independent bind also
-  returned EPERM. The workspace started clean and no commit-gate failure file
-  existed. Keep real socket coverage intact and have the driver rerun it.
+Corrected 2026-10-27. Cycles on baselines `728b200` through `5231f9e` (merged
+in #93, #94, #101 and #108) recorded the health gate as blocked and asked the
+driver for a different runner. That was a sandbox limitation, not a product
+blocker: Codex's `workspace-write` sandbox denies local Unix-socket IPC
+(bind/connect return EPERM, and Node's child pipes, which are socketpairs on
+Linux, fail the same way), so every socket test failed there while `main` was
+green in CI. `brwr-rq5` fixed it in the tests: socket tests now skip in such a
+sandbox with a printed reason and still run, and must pass, everywhere
+`BRAUSER_REQUIRE_IPC_TESTS=1` is set, which includes CI (TESTING.md "Local IPC
+in sandboxes"). A gate whose only failures are socket tests is no reason to
+stop product work, and no history reset or production IPC change is called for.
+
 - The successful-dialog fixture must read the framed request before answering,
   as production does. Large requests reliably exposed the old fixture's
   early-exit race; small requests alone passed by scheduling luck.
-- Node's synchronous child-process transport also returns EPERM here, even for
-  a child that only prints JSON. `test:scripts` consequently fails its win32
-  path simulation, while extension test files pass. This is an environment
-  limitation, not evidence that the registration logic needs replacement.
-- No history reset was attempted: the clean baseline itself fails the socket
-  probe, and none of the preceding five commits is verified green under this
-  restriction. Resetting history cannot restore a denied OS capability.
-- Once the external gate is green, finish the existing unknown-site Capture
-  Site assignment; the private pattern review already provides its inputs.
-  A useful later review would show how selected rules group example pages
-  into the same artifact before enabling them, within the existing review.
-
-### Current health handoff (2026-10-27 — baseline `21d06c3`)
-
-- Clean workspace; no quarantine failure file. The unfiltered opening gate
-  again passes 26 adapter-template tests and 447 host tests, then fails 32
-  service tests. Later Rust test binaries are not reached. All 13 extension
-  test files pass, as do protocol generation, build, fmt, both Clippy
-  configurations, npm install, typecheck, lint, extension build, current-state
-  validation and queue consistency. The repaired dialog fixture completes its
-  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
-- An independent workspace AF_UNIX bind returns errno 1 EPERM.
-  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
-  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
-  and 1 platform skip, with the win32 simulation unable to parse empty output.
-  TESTING.md documents that diagnostic and the restriction. Keep all tests
-  enabled and do not change production IPC to fit this runner.
-- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4` and `21d06c3`.
-  No commit among the last five is verified green in this runner, so no
-  history reset was attempted. Earlier quarantine recovery is retained; this
-  cycle introduces no product or test change and claims no shipped feature.
-- The driver needs to carry the baseline SHA and an unfiltered external
-  gate result into its next handoff, and provide a runner permitting local
-  IPC and synchronous child output. Another unchanged restricted cycle will
-  reproduce these failures rather than advance the assigned product work.
-- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
-  selectable rules and example artifact grouping using the existing private
-  pattern inputs. Resolve the Notion leading-literal contradiction
-  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
-  preview which example pages share an artifact still belongs in this review;
-  no additional diagnostic view or self-directed feature is needed first.
-
-- Baseline `bdbbbb4` was checked again without test exclusions. Raw Rust
-  output is retained locally at
-  `target/overnight-health/baseline-bdbbbb4/cargo-test.log` (gitignored).
-  The script gate and its diagnostic output are beside it as
-  `scripts-test.log` and `scripts-diagnostic.log`.
-  The first denied fixture bind is `host/src/service/client.rs:436`;
-  server fixtures subsequently time out waiting for the unavailable listener.
-  No product or test changes can grant the missing runner capability.
-  Keep the existing product proposals; adding more internal health work
-  would not unblock the assigned Capture Site implementation.
-
-- Rechecks on `21d06c3` and `5231f9e` reproduce those exact counts with no test
-  exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
-  and all 13 extension files passing. The script diagnostic still reports
-  8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
-  required build/quality checks pass. The repaired dialog fixture passes.
-  Independent socket and JSON-only child probes still return EPERM. No
-  quarantine file existed and no code repair or reset would restore these
-  denied operations. `brwr-1hj` stays in progress and `brwr-t40` stays open.
-  Before scheduling another unchanged cycle, the driver should establish
-  whether its own unfiltered gate passes and supply that result in the
-  handoff. Product priority remains selected-rule Capture Site review and
-  example artifact grouping, not another health surface.
-
-- Baseline `5231f9e` evidence is retained in
-  `target/overnight-health/baseline-5231f9e/` (gitignored), including the
-  unfiltered Cargo output and non-isolated script diagnostic. No quarantine
-  file or incomplete diff existed. No preceding commit in the last five has
-  a verified green gate in this restricted runner, so resetting history would
-  discard work without fixing the denied operations. The dialog repair is
-  retained under blocked `brwr-4vb`; no new feature or contract shipped.
-  The existing Capture Site proposals remain sufficient: resume the host
-  drafter and selected-rule preview once the driver supplies an unfiltered
-  green baseline, rather than scheduling repeated unchanged restricted runs.
+- Resume the assigned Capture Site work, `brwr-1hj` through `brwr-t40`: host
+  drafting, selectable rules and example artifact grouping using the existing
+  private pattern inputs. Resolve the Notion leading-literal contradiction
+  (`brwr-gf1`) before claiming its identity cases. A useful later review would
+  show which example pages selected rules group into one artifact before they
+  are enabled, within the existing review; no additional diagnostic view or
+  health surface is needed first.
