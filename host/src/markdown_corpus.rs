@@ -11,9 +11,10 @@ use crate::markdown::{neutralize_remote, yaml_string};
 const CORPUS: &str = include_str!("../tests/fixtures/markdown-neutralize-corpus.json");
 
 /// Set to a file path to have `the_corpus_comes_out_inert` write, for each
-/// input, `{input, output, frontmatter}` there as JSON, for the renderer
-/// check. `frontmatter` is the input as a YAML front matter value, which a
-/// viewer without front matter support renders as body text.
+/// input, `{input, output, frontmatter, joined0..}` there as JSON, for the
+/// renderer check. `frontmatter` is the input as a YAML front matter value,
+/// which a viewer without front matter support renders as body text, and
+/// each `joinedN` is the output followed by the neutralized `FOLLOWERS[N]`.
 const OUTPUT_ENV: &str = "BRAUSER_NEUTRALIZE_CORPUS_OUT";
 
 fn corpus() -> Vec<String> {
@@ -32,38 +33,71 @@ fn escaped(text: &str, at: usize) -> bool {
         == 1
 }
 
-/// `text` with the neutralizer's two changes undone, as far as they can be
-/// told apart from the input: `&lt;` read as `<`, and any backslashes
-/// directly before `![` dropped.
-fn undo(text: &str) -> String {
-    let text = text.replace("&lt;", "<");
-    let mut out = String::with_capacity(text.len());
-    for (index, piece) in text.split("![").enumerate() {
-        if index > 0 {
-            while out.ends_with('\\') {
-                out.pop();
+/// Whether `output` is `input` with exactly the neutralizer's changes and
+/// nothing else, read off the input one character at a time: each `<` as
+/// `&lt;`; each `!` before `[` or at the end, after an even run of
+/// backslashes, as `\!`; and one more backslash after a trailing odd run.
+/// Every other input character must appear unchanged, so a neutralizer that
+/// dropped, added or moved any other character, backslashes before `![`
+/// included, fails.
+fn only_the_escapes_changed(input: &str, output: &str) -> bool {
+    let mut rest = output;
+    let mut backslashes = 0usize;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let expected = match ch {
+            '<' => "&lt;".to_owned(),
+            '!' if matches!(chars.peek(), Some('[') | None) && backslashes.is_multiple_of(2) => {
+                "\\!".to_owned()
             }
-            out.push_str("![");
+            _ => ch.to_string(),
+        };
+        match rest.strip_prefix(expected.as_str()) {
+            Some(after) => rest = after,
+            None => return false,
         }
-        out.push_str(piece);
+        backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
     }
-    out
+    if !backslashes.is_multiple_of(2) {
+        rest = match rest.strip_prefix('\\') {
+            Some(after) => after,
+            None => return false,
+        };
+    }
+    rest.is_empty()
 }
+
+/// Fragments written after each neutralized corpus output, themselves
+/// neutralized, to check that joined fragments stay inert.
+const FOLLOWERS: [&str; 3] = [
+    "[j](https://e.example/j.png)",
+    "![j](https://e.example/j.png)",
+    "[[https://e.example/j.png]]",
+];
 
 struct Case {
     input: String,
     output: String,
     frontmatter: String,
+    /// The output followed by each neutralized `FOLLOWERS` fragment.
+    joined: Vec<String>,
 }
 
 #[test]
 fn the_corpus_comes_out_inert() {
     let cases: Vec<Case> = corpus()
         .into_iter()
-        .map(|input| Case {
-            output: neutralize_remote(&input),
-            frontmatter: format!("---\ntitle: {}\n---\n", yaml_string(&input)),
-            input,
+        .map(|input| {
+            let output = neutralize_remote(&input);
+            Case {
+                joined: FOLLOWERS
+                    .iter()
+                    .map(|follower| output.clone() + &neutralize_remote(follower))
+                    .collect(),
+                frontmatter: format!("---\ntitle: {}\n---\n", yaml_string(&input)),
+                output,
+                input,
+            }
         })
         .collect();
     // Written before any assertion, so the renderer check can also be run
@@ -72,11 +106,15 @@ fn the_corpus_comes_out_inert() {
         let json: Vec<_> = cases
             .iter()
             .map(|case| {
-                serde_json::json!({
+                let mut pair = serde_json::json!({
                     "input": case.input,
                     "output": case.output,
                     "frontmatter": case.frontmatter,
-                })
+                });
+                for (index, joined) in case.joined.iter().enumerate() {
+                    pair[format!("joined{index}")] = joined.clone().into();
+                }
+                pair
             })
             .collect();
         std::fs::write(path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
@@ -85,20 +123,23 @@ fn the_corpus_comes_out_inert() {
         input,
         output,
         frontmatter,
+        joined,
     } in &cases
     {
-        assert!(
-            !output.contains('<'),
-            "raw '<' in {output:?} from {input:?}"
-        );
-        for (at, _) in output.match_indices("![") {
-            assert!(
-                escaped(output, at),
-                "unescaped '![' in {output:?} from {input:?}"
-            );
+        for text in std::iter::once(output).chain(joined) {
+            assert!(!text.contains('<'), "raw '<' in {text:?} from {input:?}");
+            for (at, _) in text.match_indices("![") {
+                assert!(
+                    escaped(text, at),
+                    "unescaped '![' in {text:?} from {input:?}"
+                );
+            }
         }
-        // Nothing but those two characters changes.
-        assert_eq!(undo(output), undo(input), "{input:?}");
+        // Nothing but the escapes changes.
+        assert!(
+            only_the_escapes_changed(input, output),
+            "{input:?} gave {output:?}"
+        );
         // A front matter value holds neither, and still reads back as the
         // input.
         assert!(

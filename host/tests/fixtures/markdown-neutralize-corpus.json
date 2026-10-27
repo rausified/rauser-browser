@@ -136,5 +136,13 @@
  "see https://e.example/a`<img src=https://e.example/c.png>`",
  "www.e.example/a`<img src=https://e.example/c.png>`",
  "a@b.example`<img src=https://e.example/c.png>`",
- "https://e.example/a`![x](https://e.example/b.png)`"
+ "https://e.example/a`![x](https://e.example/b.png)`",
+ "x\\",
+ "x\\\\\\",
+ "x!",
+ "x\\!",
+ "!",
+ "x\\\\",
+ "|a|\n|-:|",
+ "| l | c | r |\n|:--|:-:|--:|\n| 1 | 2 | 3 |"
 ]

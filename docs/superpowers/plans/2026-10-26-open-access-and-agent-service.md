@@ -2005,7 +2005,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 - `pub(crate) enum LinkStyle { Relative, Wikilink }` and `pub(crate) fn link_style(profile: &str) -> LinkStyle`
 - `pub(crate) fn relative_link(from_dir: &Path, to: &Path) -> String`: percent-encodes each segment except unreserved characters. No new crate.
 - `pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String`: strips `[ ] | # ^` and control characters.
-- The neutralizer is a **context-free escape** (revised 2026-10-27; it replaced a scanner that turned each construct into a code span and had to mirror each viewer's parser, which three review rounds kept defeating). For every agent-sourced text written into a summary body: every `<` becomes `&lt;` (an entity never creates HTML structure in CommonMark or GFM, so no tag, autolink, comment, CDATA section, processing instruction or declaration can form in any context); every `!` directly before `[` becomes `\!` unless an odd run of backslashes already escapes it (no inline, reference, collapsed or shortcut image, and no `![[embed]]`); nothing else changes. Inside code the escapes show literally and autolinks show as text, which is accepted. No `regex` crate is added.
+- The neutralizer is a **context-free escape** (revised 2026-10-27; it replaced a scanner that turned each construct into a code span and had to mirror each viewer's parser, which three review rounds kept defeating). For every agent-sourced text written into a summary body: every `<` becomes `&lt;` (an entity never creates HTML structure in CommonMark or GFM, so no tag, autolink, comment, CDATA section, processing instruction or declaration can form in any context); every `!` directly before `[` becomes `\!` unless an odd run of backslashes already escapes it (no inline, reference, collapsed or shortcut image, and no `![[embed]]`); a `!` at the end of the input is escaped the same way and a trailing odd run of backslashes gets one more, so neutralized fragments can be joined with each other and with host text; nothing else changes. Inside code the escapes show literally and autolinks show as text, which is accepted. No `regex` crate is added.
 - `yaml_string` also writes `<` and an image `!` as JSON `\u` escapes, so the raw front matter holds neither while a YAML reader gets the same value. `wikilink` also strips `<` and `>`.
 - The daily-log line and the artifact file's `Summary:` line keep #59's bracketed `[..](<link>)` form. Only the destination changes: it is now encoded, so a `summaries_dir` with a space gives `%20`. `validate_page_summary` keeps rejecting `<`, `>`, `#`, `?` and control characters.
 
@@ -2041,7 +2041,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
   ```
 - [ ] Change the expectation of `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link` in `capture.rs` to `[summary](<../../../My%20Summaries/hn-item.summary.md>)`. Add `the_artifact_summary_link_is_percent_encoded` in `index.rs`, modeled on `summary_event_appends_once_on_a_page_no_adapter_covers`, with a `summary_path` of `My Summaries/hn-item.summary.md`.
 - [ ] Run `cargo test --locked -p brauser -- markdown:: summary_path_with_a_space artifact_summary_link`. Expect FAIL.
-- [ ] Implement `neutralize_remote` as one pass over chars: `<` becomes `&lt;`; `!` followed by `[` becomes `\!` when the run of backslashes before it is even; every other character is copied.
+- [ ] Implement `neutralize_remote` as one pass over chars: `<` becomes `&lt;`; `!` followed by `[`, or at the end of the input, becomes `\!` when the run of backslashes before it is even; a trailing odd run of backslashes gets one more; every other character is copied. The two end-of-input rules make outputs safe to join: neither a following fragment nor host text can re-form `![` or cancel a leading `\!`.
 
   Move `yaml_string` and `safe_markdown` (as `inline`) unchanged. Switch both #59 link sites to `relative_link`.
 - [ ] Run `cargo test --locked -p brauser markdown:: && cargo test --locked -p brauser index:: && cargo test --locked -p brauser capture::`. Expect PASS, including #59's `summary_event_appends_once_on_a_page_no_adapter_covers` unchanged (its path has no reserved characters).
@@ -2090,7 +2090,8 @@ impl Vault {
 ```
 - Rendering:
   - Frontmatter values go through `yaml_string`, and entity lists are flow sequences of JSON strings.
-  - Every agent-sourced string in the body goes through `neutralize_remote`: `description` and `assessment` as written, and single-line agent text (type, category, importance reason, entity names, related notes) after `presentation::plain_line(.., 200)` folds it to one line. In the `Wikilink` style, entities and related notes use `wikilink` instead.
+  - Single-line agent text (type, category, importance reason, entity names, related notes) goes through `inline(.., 200)`. It backslash-escapes `<`, `!`, `[`, `]` and `\` as well as Obsidian's `#` tags, `%%` comments, `==` highlights and `|`, so no tag, image, embed, Obsidian tag, comment or highlight can form, and its output never ends in an unescaped `!` or an odd run of backslashes. In the `Wikilink` style, entities and related notes use `wikilink` instead.
+  - `description` and `assessment` go through `neutralize_remote`.
   - Empty entity groups are omitted. The Entities line goes when all groups are empty, and Related goes when the list is empty.
 - `summary_relative_path` always yields a path that #59's `validate_page_summary` accepts: relative, ending `.summary.md`, and free of `..`, `<`, `>`, `#`, `?` and control characters.
 
@@ -2333,12 +2334,12 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 **Files:**
 - Modify `scripts/smoke-macos.mjs`:
-  - The fake harnesses gain a `summary` mode. It emits a §6.4 answer with `document_type: "specification"`, `category: "technical specification"` and `importance: {level: "high", reason: "Fixture reason"}`, an entity `<img src=https://evil.example/x.png>`, and a description containing `![t](https://evil.example/t.png)`.
+  - The fake harnesses gain a `summary` mode. It emits a §6.4 answer with `document_type: "specification"`, `category: "technical specification"` and `importance: {level: "high", reason: "Fixture reason"}`, an entity `<img src=https://evil.example/x.png>`, and a description containing `![t](https://evil.example/t.png)` and `<img src=https://evil.example/d.png>`.
   - `BRAUSER_OPEN_LOG` is already passed (Task 41).
 
 - [ ] Add the steps:
   1. Write a page note on an unrecognized fixture page, then summarize it. Expect `succeeded`, with the page note's bytes unchanged.
-  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. It contains `\![t](https://evil.example/t.png)` and the escaped `&lt;img` entity, and no raw `<img` anywhere (front matter values write `<` as a JSON `\u` escape).
+  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. From the description (`neutralize_remote`) it contains `\![t](https://evil.example/t.png)` and `&lt;img src=https://evil.example/d.png>`. The entity is written by `inline` as `\<img src=https://evil.example/x.png\>` in the neutral profile, or by `wikilink` as `[[img src=https://evil.example/x.png]]` in the obsidian profile. No raw `<img` appears anywhere (front matter values write `<` as a JSON `\u` escape).
   3. Today's daily log has exactly one ` kind=summary ` line, and its payload has `harness: "codex"` and a `url` record key.
   4. `list_artifacts` returns a `web.page` item with `summary.importance === "high"`.
   5. `worklog` contains `Summarized: <fixture title> — specification, high importance`.
@@ -2354,7 +2355,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 **Files:**
 - Modify `DESIGN.md`:
-  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's escape rule (done in Task 43's 2026-10-27 revision).
+  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's escape rule (done in Task 43's 2026-10-27 revision), and the date and result of the manual Obsidian (`\![[embed]]`) and VS Code preview check once it is performed.
   - §6.2: the `Summary` fields.
   - §6.6: the §7.1 layout and the two-key identity encoding.
   - §6.7: the Summary line and the date-ordered Timeline summary lines.

@@ -49,8 +49,10 @@ const ALLOWED = new Map([
   ["thead", []],
   ["tbody", []],
   ["tr", []],
-  ["th", ["align"]],
-  ["td", ["align"]],
+  // markdown-it writes a GFM column alignment as a style; only that exact
+  // style is allowed (see ALIGNMENT_STYLE).
+  ["th", ["align", "style"]],
+  ["td", ["align", "style"]],
   ["hr", []],
   ["br", []],
   ["del", []],
@@ -58,6 +60,9 @@ const ALLOWED = new Map([
   ["s", []],
   ["input", ["type", "checked", "disabled"]],
 ]);
+
+// The only `style` value allowed, and only on <th> and <td>.
+const ALIGNMENT_STYLE = /^text-align:(left|right|center)$/;
 
 const markdownIt = new MarkdownIt({ html: true, linkify: true });
 const RENDERERS = [
@@ -108,6 +113,9 @@ export function problems(html) {
         found.push(`attribute ${key} on <${name}>`);
       }
     }
+    if (attributes.has("style") && !ALIGNMENT_STYLE.test(attributes.get("style"))) {
+      found.push(`style ${JSON.stringify(attributes.get("style"))} on <${name}>`);
+    }
     if (name === "input" && (attributes.get("type") !== "checkbox" || !attributes.has("disabled"))) {
       found.push("an <input> that is not a disabled checkbox");
     }
@@ -149,7 +157,13 @@ function corpusPairs(outputs) {
 
 // Unneutralized inputs every renderer must be caught rendering live, so the
 // check cannot pass vacuously.
-const LIVE = ["a <img src=x> b", "![x](https://e.example/a.png)", "<p style=x>y</p>"];
+const LIVE = [
+  "a <img src=x> b",
+  "![x](https://e.example/a.png)",
+  "<p style=x>y</p>",
+  "<table><tr><td style=\"background:url(https://e.example/a.png)\">x</td></tr></table>",
+  "<table><tr><td style=\"text-align:left;background:url(https://e.example/a.png)\">x</td></tr></table>",
+];
 
 function selfCheck() {
   for (const text of LIVE) {
@@ -173,7 +187,8 @@ function main() {
   for (const { input, ...documents } of pairs) {
     // `output` is the neutralized body text; `frontmatter` (when present) is
     // the input as a front matter value, rendered as a viewer without front
-    // matter support would.
+    // matter support would; each `joinedN` is the output followed by another
+    // neutralized fragment.
     for (const [kind, document] of Object.entries(documents)) {
       for (const [renderer, render] of RENDERERS) {
         checked += 1;

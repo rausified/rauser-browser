@@ -1,8 +1,10 @@
 //! Markdown and YAML safety helpers shared by every host-written file
 //! (DESIGN.md §5.2 step 6, §6.3). Single-line fields are escaped with
 //! `inline`; multi-line agent text keeps its Markdown, with `<` and image
-//! `!`s escaped by `neutralize_remote` so no viewer fetches a remote
-//! resource. Links follow the profile's link style.
+//! `!`s escaped by `neutralize_remote` so no CommonMark, GFM or Obsidian
+//! embed construct fetches a remote resource (fenced blocks a viewer hands
+//! to another engine, such as Mermaid, are out of scope). Links follow the
+//! profile's link style.
 
 use std::path::{Component, Path};
 
@@ -129,6 +131,12 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 ///   of backslashes already escapes it. An escaped `!` cannot start an image,
 ///   so inline, full, collapsed and shortcut reference images and Obsidian
 ///   `![[embeds]]` cannot form;
+/// - a `!` at the very end is escaped as `\!`, and a trailing odd run of
+///   backslashes gets one more, so the output can be joined with another
+///   neutralized fragment or with host text without re-forming `![` or
+///   cancelling a following `\!`. Text written directly before the output
+///   must likewise not end in an unescaped `!` or an odd run of backslashes;
+///   both `neutralize_remote` and `inline` output satisfy that;
 /// - nothing else changes. Links, emphasis, lists, code, tables and fences
 ///   still render.
 ///
@@ -139,7 +147,9 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 /// kept finding inputs where a real renderer paired things differently and
 /// rendered a tag live. Inside code spans and blocks, where Markdown is not
 /// parsed, the escapes show literally (`&lt;`, `\!`), and an `<https://..>`
-/// autolink shows as text. Those cosmetic costs are accepted.
+/// autolink shows as text. Those cosmetic costs are accepted. Fenced blocks
+/// that a viewer renders with a separate engine (Mermaid, math, plugin
+/// blocks) are not covered (DESIGN.md §5.2 step 6).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn neutralize_remote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + text.len() / 8);
@@ -148,12 +158,20 @@ pub(crate) fn neutralize_remote(text: &str) -> String {
     while let Some(ch) = chars.next() {
         match ch {
             '<' => out.push_str("&lt;"),
-            '!' if chars.peek() == Some(&'[') && backslashes.is_multiple_of(2) => {
+            // A `!` at the end is escaped too, so a `[` written after the
+            // output cannot make an image of it.
+            '!' if matches!(chars.peek(), Some('[') | None) && backslashes.is_multiple_of(2) => {
                 out.push_str("\\!")
             }
             _ => out.push(ch),
         }
         backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
+    }
+    // A trailing odd run of backslashes would escape the first character
+    // written after the output, such as the `\` of a following `\![`, so it
+    // gets one more. A trailing backslash is literal either way.
+    if !backslashes.is_multiple_of(2) {
+        out.push('\\');
     }
     out
 }
@@ -268,6 +286,67 @@ mod tests {
             ("\\\\\\![x](u)", "\\\\\\![x](u)"),
         ] {
             assert_eq!(neutralize_remote(input), expected, "{input:?}");
+        }
+    }
+
+    /// Whether the character at byte `at` of `text` follows an odd run of
+    /// backslashes, so it is backslash-escaped.
+    fn escaped_at(text: &str, at: usize) -> bool {
+        text[..at]
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == b'\\')
+            .count()
+            % 2
+            == 1
+    }
+
+    #[test]
+    fn the_end_of_the_output_cannot_join_with_what_follows() {
+        for (input, expected) in [
+            // A trailing `!` is escaped, so a following `[` cannot make an
+            // image of it.
+            ("x!", "x\\!"),
+            ("!", "\\!"),
+            ("x\\\\!", "x\\\\\\!"),
+            ("x\\!", "x\\!"),
+            // A trailing odd run of backslashes gets one more, so it cannot
+            // escape a following `\`.
+            ("x\\", "x\\\\"),
+            ("\\", "\\\\"),
+            ("x\\\\\\", "x\\\\\\\\"),
+            ("x\\\\", "x\\\\"),
+        ] {
+            assert_eq!(neutralize_remote(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn neutralized_fragments_stay_inert_when_joined() {
+        let fragments = [
+            "x\\",
+            "x\\\\\\",
+            "x!",
+            "x\\!",
+            "!",
+            "\\",
+            "",
+            "![y](https://e.example/a.png)",
+            "[y](https://e.example/a.png)",
+            "[[https://e.example/x.png]]",
+            "\\![y](u)",
+            "plain",
+        ];
+        for left in fragments {
+            for right in fragments {
+                let joined = neutralize_remote(left) + &neutralize_remote(right);
+                for (at, _) in joined.match_indices("![") {
+                    assert!(
+                        escaped_at(&joined, at),
+                        "{left:?} + {right:?} gives {joined:?}"
+                    );
+                }
+            }
         }
     }
 
