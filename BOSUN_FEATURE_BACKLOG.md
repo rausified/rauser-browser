@@ -190,11 +190,6 @@ order. They supersede the denylist, harness-token, `activeTab`, and per-site
 grant parts of the items below wherever those conflict. PR 1 (open access
 and the protocol v6 removals) is done; see Shipped.
 
-- [ ] `brwr-sv2` **Open access PR 2: the Brauser service skeleton.** `brauser
-  service` on a 0700 Unix socket under launchd, run records, the queue,
-  timeout, cancel, recovery and retention, the host proxy with build-identity
-  check and `service_unavailable`, dev LaunchAgent registration, and `agent.env`,
-  all against a fake harness (spec §5; plan Tasks 12-27).
 - [ ] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
   card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
   with a validated structured answer, pinned Readability extraction, the
@@ -388,7 +383,13 @@ and the protocol v6 removals) is done; see Shipped.
 
 ## In Progress / This Iteration
 
-- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1`; the next plan item is open access PR 2 (`brwr-sv2`). `brwr-5yn` remains a human-only live-tool gate.
+- In progress in the open-access session (endurance-0b, PR #75), not Cookie. Cookie must not claim it:
+- [ ] `brwr-sv2` **Open access PR 2: the Brauser service skeleton.** `brauser
+  service` on a 0700 Unix socket under launchd, run records, the queue,
+  timeout, cancel, recovery and retention, the host proxy with build-identity
+  check and `service_unavailable`, dev LaunchAgent registration, and `agent.env`,
+  all against a fake harness (spec §5; plan Tasks 12-27).
+- `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
 
