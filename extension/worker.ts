@@ -1,4 +1,4 @@
-import type { ActivityEvent, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import type { ActivityEvent, ActivityTrail, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
 import {
   MAX_QUEUE_BYTES,
   MAX_QUEUED_VISITS,
@@ -154,6 +154,9 @@ async function narrowActivity(lease: PolicyLease | null): Promise<void> {
   settleActivity(activity, Date.now(), () => crypto.randomUUID());
   const allowed = (url: string): boolean => lease !== null && matchingArtifact(lease, url) !== null;
   activity.totals = activity.totals.filter((total) => allowed(total.url));
+  if (lease !== null) {
+    for (const total of activity.totals) total.trails = trailsUnder(lease, total.trails);
+  }
   for (const [tabId, tab] of Object.entries(activity.tabs)) {
     if (!allowed(tab.url)) delete activity.tabs[tabId];
   }
@@ -161,6 +164,27 @@ async function narrowActivity(lease: PolicyLease | null): Promise<void> {
     if (source.from_url === null || !allowed(source.from_url)) delete activity.pending_sources[tabId];
   }
   await writeActivity(activity);
+}
+
+/** The trails the host would accept under this lease. The host re-resolves
+ * every trail source and rejects the whole event when one no longer resolves
+ * to the same artifact (DESIGN.md §5.1 Trails), so a source on a removed or
+ * pending-removal origin is dropped here instead of costing the hour. */
+function trailsUnder(lease: PolicyLease, trails: ActivityTrail[]): ActivityTrail[] {
+  return trails.filter((trail) => trail.from_url === null
+    ? trail.from_artifact_id === null
+    : trail.from_artifact_id !== null &&
+      matchingArtifact(lease, trail.from_url)?.artifact_id === trail.from_artifact_id);
+}
+
+/** Apply trailsUnder to queued activity the panel has not yet received.
+ * A dispatched event stays frozen: the host may already hold its bytes. */
+function narrowQueuedTrails(items: QueuedVisit[], lease: PolicyLease): void {
+  for (const item of items) {
+    if (item.dispatched !== false || !isActivityEvent(item.event)) continue;
+    const trails = trailsUnder(lease, item.event.trails);
+    if (trails.length !== item.event.trails.length) item.event = { ...item.event, trails };
+  }
 }
 
 function activityContext(state: ActivityState): Omit<ActivityState, "totals"> {
@@ -722,6 +746,7 @@ async function installPolicy(
   const queue = await readQueue();
   queue.items = queue.items.filter((item) =>
     effectiveLease.capture_enabled && matchingArtifact(effectiveLease, item.event.url));
+  narrowQueuedTrails(queue.items, effectiveLease);
   await chrome.storage.local.set({
     [POLICY_KEY]: lease,
     [PAUSE_KEY]: false,
@@ -827,6 +852,8 @@ async function takeReady(): Promise<ReadyBatch | null> {
   // Freeze these events before they are sent to the host.
   if (batch.some((item) => item.dispatched !== true || item.batch_id !== batchId ||
       storedOverflow === undefined)) {
+    // Pending removals can narrow the lease without an install_policy.
+    narrowQueuedTrails(batch, lease);
     for (const item of batch) {
       item.dispatched = true;
       item.batch_id = batchId;

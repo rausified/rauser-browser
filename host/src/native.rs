@@ -6127,6 +6127,76 @@ id = "work:{host}/{id}"
         assert!(!root.join("logs").exists());
     }
 
+    #[test]
+    fn a_trail_from_a_removed_site_rejects_only_its_own_batch_hour() {
+        // The host never rewrites a delivered event: a trail whose source no
+        // adapter resolves is rejected, never logged, and costs only that hour.
+        // The worker strips such trails before dispatch (DESIGN.md §5.1 Trails).
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, root) = adapter_only_config(&folder);
+        let occurred_at = hour_timestamp();
+        let stale = work_item_activity(
+            &occurred_at,
+            vec![ActivityTrail {
+                from_artifact_id: Some("removed:removed.example/2".into()),
+                from_url: Some("https://removed.example/items/2".into()),
+                transition: "link".into(),
+            }],
+        );
+        let mut clean = work_item_activity(&occurred_at, Vec::new());
+        clean.artifact_id = "work:work.example/8".into();
+        clean.url = "https://work.example/items/8".into();
+        let item = |event: &ActivityEvent| CaptureBatchItem {
+            kind: CaptureEventKind::Activity,
+            visit: None,
+            activity: Some(event.clone()),
+        };
+        let response = record_batch(
+            RecordBatchRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "batch-stale-trail".into(),
+                batch_id: uuid::Uuid::new_v4().to_string(),
+                events: vec![item(&stale), item(&clean)],
+                overflow: None,
+            },
+            &mut config,
+        );
+        let Response::BatchRecorded(recorded) = response else {
+            panic!("expected batch results, got {response:?}");
+        };
+        let outcome = |id: &str| {
+            recorded
+                .results
+                .iter()
+                .find(|result| result.event_id == id)
+                .map(|result| (result.outcome, result.reason.clone()))
+                .unwrap()
+        };
+        assert_eq!(
+            outcome(&stale.event_id),
+            (
+                VisitOutcome::Rejected,
+                Some("trail_identity_mismatch".into())
+            )
+        );
+        assert_eq!(outcome(&clean.event_id).0, VisitOutcome::Persisted);
+        let mut logged = String::new();
+        let mut pending = vec![root.join(crate::layout::LOGS_DIR)];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    logged.push_str(&std::fs::read_to_string(path).unwrap());
+                }
+            }
+        }
+        assert!(logged.contains("https://work.example/items/8"));
+        assert!(!logged.contains("removed.example"));
+        assert!(!logged.contains(&stale.event_id));
+    }
+
     fn refused(response: &Response) -> (ErrorCode, &str) {
         match response {
             Response::Error(value) => (value.code, value.message.as_str()),
