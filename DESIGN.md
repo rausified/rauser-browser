@@ -106,6 +106,11 @@ The extension runs in a hostile environment (arbitrary web pages), and the host 
 - Messages are length-prefixed JSON. M0 caps extension-to-host bodies at 4 MiB and host-to-extension bodies at 900 KiB, below Chrome's 1 MiB outbound limit. A response that would exceed the outbound cap is replaced by a correlated `message_too_large` error; the host keeps serving. Page-note bodies are capped at 98304 characters (counted as UTF-16 units, as the panel's textarea counts them) and 384 KiB, and a save that could not be returned whole by a later load is refused, so a saved note always loads; a note grown past either limit outside the panel loads as `message_too_large`, never into a textarea that could not accept further typing. A new note's title is clamped to 2048 bytes, not refused.
 - Deserialized into typed structs with `deny_unknown_fields`. Unknown message types are rejected.
 - Every message carries a protocol version and request ID. Version mismatch returns a structured error.
+- Single and batched activity delivery share `check_activity_policy` under the
+  current configuration lock, before opening the notes folder. Both enforce
+  collection bounds, recognition and scope, artifact identity, mode evidence,
+  trail sources, and title references in the same order. Unavailable policy
+  remains retryable; intentionally paused capture remains suppressed.
 - Parser and path handling are fuzzed continuously (see §10).
 
 ### 4.4 Filesystem rules

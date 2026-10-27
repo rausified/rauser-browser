@@ -649,86 +649,8 @@ fn record_activity(
             None,
         );
     }
-    // Serde enforces types, not the JSON Schema's maxItems limits. Reject
-    // oversized collections before replaying adapter evaluation for each
-    // claimed mode or trail from this untrusted native message.
-    if !activity_shape_is_valid(&value.event) {
-        return answer(
-            VisitOutcome::Rejected,
-            Some("invalid_activity".into()),
-            None,
-        );
-    }
-    let matched = match config.adapter_match(&value.event.url, value.event.title.as_deref()) {
-        Ok(matched) => matched,
-        Err(_) => {
-            return answer(
-                VisitOutcome::Suppressed,
-                Some("not_an_artifact".into()),
-                None,
-            );
-        }
-    };
-    if matched.artifact_id != value.event.artifact_id
-        || matched.artifact_type != value.event.artifact_type
-    {
-        return answer(
-            VisitOutcome::Rejected,
-            Some("artifact_identity_mismatch".into()),
-            None,
-        );
-    }
-    for mode in &value.event.modes {
-        match config.adapter_match(&mode.url, None) {
-            Ok(evidence)
-                if evidence.artifact_id == value.event.artifact_id
-                    && evidence
-                        .mode
-                        .is_some_and(|found| found.as_str() == mode.mode) => {}
-            _ => {
-                return answer(
-                    VisitOutcome::Rejected,
-                    Some("activity_mode_mismatch".into()),
-                    None,
-                );
-            }
-        }
-    }
-    for trail in &value.event.trails {
-        match (&trail.from_artifact_id, &trail.from_url) {
-            (None, None) => {}
-            (Some(id), Some(url)) => match config.adapter_match(url, None) {
-                Ok(source) if &source.artifact_id == id => {}
-                _ => {
-                    return answer(
-                        VisitOutcome::Rejected,
-                        Some("trail_identity_mismatch".into()),
-                        None,
-                    );
-                }
-            },
-            _ => {
-                return answer(
-                    VisitOutcome::Rejected,
-                    Some("trail_identity_mismatch".into()),
-                    None,
-                );
-            }
-        }
-    }
-    let expected_refs = matched.title.as_ref().map(|title| &title.refs);
-    if value.event.refs.iter().any(|supplied| {
-        !expected_refs.is_some_and(|refs| {
-            refs.iter().any(|expected| {
-                expected.artifact_type == supplied.artifact_type && expected.value == supplied.value
-            })
-        })
-    }) {
-        return answer(
-            VisitOutcome::Rejected,
-            Some("activity_refs_mismatch".into()),
-            None,
-        );
+    if let Err((outcome, reason)) = check_activity_policy(config, &value.event) {
+        return answer(outcome, Some(reason.into()), None);
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
@@ -1050,6 +972,9 @@ fn check_activity_policy(
     if !config.snapshot().capture_enabled {
         return Err((VisitOutcome::Suppressed, "capture_disabled"));
     }
+    // Serde enforces types, not the JSON Schema's maxItems limits. Reject
+    // oversized collections before replaying adapter evaluation for each
+    // claimed mode or trail from this untrusted native message.
     if !activity_shape_is_valid(event) {
         return Err((VisitOutcome::Rejected, "invalid_activity"));
     }
@@ -3499,6 +3424,211 @@ id = "work:{host}/{id}"
         }
         assert!(!root.join("log").exists());
         assert!(!config.cache_dir().unwrap().join("index.db").exists());
+    }
+
+    #[test]
+    fn single_and_batch_activity_enforce_the_same_policy() {
+        use serde_json::json;
+
+        // Override one part of otherwise valid activity. Expected outcomes
+        // are explicit so two equally permissive paths cannot pass by agreeing.
+        let cases = [
+            ("accepted", json!({}), VisitOutcome::Persisted, None),
+            (
+                "accepted mode, trail, and title reference",
+                json!({"title": "Work PROJ-7", "modes": [{"mode": "view",
+                    "url": "https://work.example/teams/acme/items/1"}],
+                    "trails": [{"from_artifact_id": "work:work.example/acme/2",
+                        "from_url": "https://work.example/teams/acme/items/2",
+                        "transition": "link"}],
+                    "refs": [{"artifact_type": "jira.issue", "value": "PROJ-7"}]}),
+                VisitOutcome::Persisted,
+                None,
+            ),
+            (
+                "oversized modes before recognition",
+                json!({"url": "https://work.example/search", "modes": vec![json!({"mode": "view", "url": "https://work.example/issues/1"}); 4]}),
+                VisitOutcome::Rejected,
+                Some("invalid_activity"),
+            ),
+            (
+                "unknown transition",
+                json!({"trails": [{"from_artifact_id": null, "from_url": null,
+                    "transition": "mentions"}]}),
+                VisitOutcome::Rejected,
+                Some("invalid_activity"),
+            ),
+            (
+                "unpaired trail source",
+                json!({"trails": [{"from_artifact_id": "work:work.example/acme/2",
+                    "from_url": null, "transition": "link"}]}),
+                VisitOutcome::Rejected,
+                Some("invalid_activity"),
+            ),
+            (
+                "unrecognized route",
+                json!({"url": "https://work.example/search"}),
+                VisitOutcome::Suppressed,
+                Some("not_an_artifact"),
+            ),
+            (
+                "outside scope",
+                json!({"url": "https://work.example/teams/personal/items/1"}),
+                VisitOutcome::Suppressed,
+                Some("not_an_artifact"),
+            ),
+            (
+                "forged artifact ID",
+                json!({"artifact_id": "work:work.example/acme/2"}),
+                VisitOutcome::Rejected,
+                Some("artifact_identity_mismatch"),
+            ),
+            (
+                "forged artifact type",
+                json!({"artifact_type": "other.item"}),
+                VisitOutcome::Rejected,
+                Some("artifact_identity_mismatch"),
+            ),
+            (
+                "unsupported mode evidence",
+                json!({"modes": [{"mode": "edit",
+                    "url": "https://work.example/teams/acme/items/1"}]}),
+                VisitOutcome::Rejected,
+                Some("activity_mode_mismatch"),
+            ),
+            (
+                "forged trail identity",
+                json!({"trails": [{"from_artifact_id": "work:work.example/acme/99",
+                    "from_url": "https://work.example/teams/acme/items/2",
+                    "transition": "link"}]}),
+                VisitOutcome::Rejected,
+                Some("trail_identity_mismatch"),
+            ),
+            (
+                "ungranted trail origin",
+                json!({"trails": [{"from_artifact_id": "work:work.example/acme/2",
+                    "from_url": "https://private.example/teams/acme/items/2",
+                    "transition": "link"}]}),
+                VisitOutcome::Rejected,
+                Some("trail_identity_mismatch"),
+            ),
+            (
+                "invented title reference",
+                json!({"refs": [{"artifact_type": "jira.issue", "value": "SECRET-1"}]}),
+                VisitOutcome::Rejected,
+                Some("activity_refs_mismatch"),
+            ),
+        ];
+        for (label, patch, expected_outcome, expected_reason) in cases {
+            let mut event = activity_for_invalid_policy();
+            event.url = "https://work.example/teams/acme/items/1".into();
+            event.artifact_id = "work:work.example/acme/1".into();
+            event.occurred_at = time::OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            let mut payload = serde_json::to_value(event).unwrap();
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            let event: ActivityEvent = serde_json::from_value(payload).unwrap();
+            let mut outcomes = Vec::new();
+            // Separate stores let the same accepted event persist on both
+            // paths instead of hiding one behind duplicate-event suppression.
+            for batched in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("notes");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                config::fixtures::write(
+                    &path,
+                    &root,
+                    "",
+                    "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+                    r#"[adapters]
+format = 1
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/teams/{owner:name|lower}/items/{id:int}", mode = "view" }]
+id = "work:{host}/{owner}/{id}"
+scope = { owner = ["acme"] }
+title = "{title}"
+refs = [{ type = "jira.issue", find = "jira_key" }]
+"#,
+                );
+                let mut config = loaded(&path);
+                let (outcome, reason, relative_path) = if batched {
+                    let Response::BatchRecorded(mut reply) = record_batch(
+                        RecordBatchRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "batch-policy".into(),
+                            batch_id: uuid::Uuid::new_v4().to_string(),
+                            events: vec![CaptureBatchItem {
+                                kind: CaptureEventKind::Activity,
+                                visit: None,
+                                activity: Some(event.clone()),
+                            }],
+                            overflow: None,
+                        },
+                        &mut config,
+                    ) else {
+                        panic!("expected batch result for {label}");
+                    };
+                    assert_eq!(reply.request_id, "batch-policy");
+                    assert_eq!(reply.results.len(), 1);
+                    let result = reply.results.remove(0);
+                    assert_eq!(result.event_id, event.event_id);
+                    (result.outcome, result.reason, result.relative_path)
+                } else {
+                    let Response::ActivityRecorded(reply) = record_activity(
+                        RecordActivityRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "single-policy".into(),
+                            event: event.clone(),
+                        },
+                        &mut config,
+                    ) else {
+                        panic!("expected activity result for {label}");
+                    };
+                    assert_eq!(reply.request_id, "single-policy");
+                    assert_eq!(reply.event_id, event.event_id);
+                    (reply.outcome, reply.reason, reply.relative_path)
+                };
+                assert_eq!(outcome, expected_outcome, "{label}, batch={batched}");
+                assert_eq!(
+                    reason.as_deref(),
+                    expected_reason,
+                    "{label}, batch={batched}"
+                );
+                if expected_outcome == VisitOutcome::Persisted {
+                    let log = std::fs::read_to_string(root.join(relative_path.as_ref().unwrap()))
+                        .unwrap();
+                    let encoded = log
+                        .split(" data=")
+                        .nth(1)
+                        .unwrap()
+                        .split(' ')
+                        .next()
+                        .unwrap();
+                    let stored: ActivityEvent =
+                        serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+                    assert_eq!(stored, event, "{label}, batch={batched}");
+                } else {
+                    assert!(relative_path.is_none());
+                    assert!(!root.join("log").exists(), "{label}, batch={batched}");
+                    assert!(!config.cache_dir().unwrap().join("index.db").exists());
+                }
+                outcomes.push((outcome, reason, relative_path));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "{label}");
+        }
     }
 
     #[test]
