@@ -67,9 +67,8 @@ pub struct ConfigStore {
     adapter_warnings: Option<Vec<AdapterWarning>>,
     adapter_document: Option<AdapterTemplates>,
     retired_adapter_contracts: Vec<serde_json::Value>,
-    /// Compiled on first use from `retired_adapter_contracts` (and, while
-    /// `adapter_document` is unavailable, the current contracts that still
-    /// validate alone); cleared whenever either changes.
+    /// Compiled on first use from `retired_adapter_contracts`; cleared
+    /// whenever the adapter policy changes.
     retained_adapters: Option<Vec<AdapterTemplates>>,
 }
 
@@ -427,16 +426,15 @@ impl ConfigStore {
 
     /// The artifact a URL no live adapter recognizes was keyed to before:
     /// the one ID that a removed or reshaped adapter's retained contract
-    /// (or, while the adapter document is unavailable, a current contract
-    /// that validates alone) gives the original URL. Each contract is
-    /// evaluated separately; two different IDs are ambiguous and give none.
+    /// gives the original URL. Only the host-owned format-1 history is used:
+    /// while the adapter document is unavailable (a newer format or an
+    /// unknown key), its contracts may mean something this host does not
+    /// understand, so they never select a note. Each contract is evaluated
+    /// separately; two different IDs are ambiguous and give none.
     pub(crate) fn retained_artifact_id(&mut self, url: &str) -> Option<String> {
         let retained = self.retained_adapters.get_or_insert_with(|| {
-            let mut contracts = self.retired_adapter_contracts.clone();
-            if self.adapter_document.is_none() {
-                contracts.extend(individually_valid_adapter_contracts(&self.config));
-            }
-            contracts
+            self.retired_adapter_contracts
+                .clone()
                 .into_iter()
                 .filter_map(|contract| compile_adapters(&single_contract_config(contract)).ok())
                 .collect()

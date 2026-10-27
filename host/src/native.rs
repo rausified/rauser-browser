@@ -1279,13 +1279,17 @@ fn note_context(
         // over it onto one URL, and guessing from them would redirect a save
         // into an unrelated artifact's note. A retained ID without a note
         // keeps the URL key, so recognition alone never changes the key.
+        // Only a confirmed absence falls back: a retained note that exists
+        // but cannot be read keeps its key, so the load or save reports the
+        // read error instead of starting a second note under the URL key
+        // that the artifact note would hide again once it is readable.
         None => config
             .retained_artifact_id(url)
             .map(|artifact_id| RecordKey {
                 kind: RecordKeyKind::Artifact,
                 value: artifact_id,
             })
-            .filter(|retained| matches!(vault.read_note(retained, &canonical), Ok(Some(_))))
+            .filter(|retained| !matches!(vault.read_note(retained, &canonical), Ok(None)))
             .unwrap_or_else(|| {
                 crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
             }),
@@ -2982,6 +2986,61 @@ id = "jira:{host}/{key}"
                 "{page}"
             );
         }
+    }
+
+    #[test]
+    fn an_unsupported_adapter_document_never_selects_an_artifact_note() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = jira_board_with_stripped_identity(&folder);
+        save_loaded(&mut config, &jira_modal("ABC-123"), "ABC-123 private note");
+
+        // A newer adapter format may recognize pages differently, so its
+        // contracts must not be reinterpreted as format 1 to pick a note.
+        let path = folder.path().join("config.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("format = 1", "format = 2")).unwrap();
+        config.refresh().unwrap();
+
+        let loaded = note_load(&mut config, &jira_modal("ABC-123"));
+        assert_eq!(loaded.key.kind, RecordKeyKind::Url);
+        assert!(!loaded.exists);
+    }
+
+    #[test]
+    fn an_unreadable_retained_note_keeps_its_key_instead_of_splitting() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = jira_board_with_stripped_identity(&folder);
+        save_loaded(&mut config, &jira_modal("ABC-123"), "ABC-123 private note");
+        remove_adapters(&mut config);
+
+        let pages = folder.path().join("notes").join("pages");
+        let note = std::fs::read_dir(&pages)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("artifact-jira")
+            })
+            .expect("artifact note file");
+        std::fs::remove_file(&note).unwrap();
+        std::fs::create_dir(&note).unwrap();
+
+        let response = load_note(
+            brauser_protocol::LoadNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "load".into(),
+                url: jira_modal("ABC-123"),
+            },
+            &mut config,
+        );
+        assert!(matches!(response, Response::Error(_)), "{response:?}");
+        let names: Vec<_> = std::fs::read_dir(&pages)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 1, "no URL-keyed note was started: {names:?}");
     }
 
     #[test]
