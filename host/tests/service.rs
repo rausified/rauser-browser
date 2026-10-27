@@ -505,3 +505,56 @@ fn rebuilt_binary_restarts_the_running_service() {
     assert!(alive(new));
     wait_until("the old build exited", || !alive(old));
 }
+
+#[test]
+fn a_host_older_than_the_binary_never_restarts_the_newer_service() {
+    let mut world = World::new();
+    let copy = world.path("bin").join("brauser");
+    fs::copy(HOST, &copy).unwrap();
+    world.host = copy.clone();
+    world.idle_secs = "30";
+
+    // This host captures its build before the binary changes.
+    let mut old_host = world.serve();
+    let reply = old_host.call(json!({"type": "list_runs"}));
+    assert_eq!(reply["type"], "runs_listed", "{reply}");
+    let old_service = world.service_pid().expect("the service wrote its pid");
+
+    let touched = Command::new("/usr/bin/touch")
+        .args(["-A", "05"])
+        .arg(&copy)
+        .status()
+        .unwrap();
+    assert!(touched.success());
+
+    // A host started after the change restarts the service on the new build.
+    let mut new_host = world.serve();
+    let reply = new_host.call(json!({"type": "list_runs"}));
+    assert_eq!(reply["type"], "runs_listed", "{reply}");
+    let new_service = world
+        .service_pid()
+        .expect("the restarted service wrote its pid");
+    assert_ne!(new_service, old_service);
+    wait_until("the old build exited", || !alive(old_service));
+
+    // The outdated host is told to reload and leaves the current service
+    // and its runs alone.
+    world.set_mode("slow");
+    let run_id = new_host.start_run()["run_id"].as_str().unwrap().to_owned();
+    for _ in 0..3 {
+        let reply = old_host.call(json!({"type": "get_run", "run_id": run_id, "since_offset": 0}));
+        assert_eq!(reply["type"], "error", "{reply}");
+        assert_eq!(reply["code"], "service_unavailable", "{reply}");
+        assert!(
+            reply["message"].as_str().unwrap().contains("Reload"),
+            "{reply}"
+        );
+    }
+    assert_eq!(world.service_pid(), Some(new_service));
+    assert!(alive(new_service));
+    let fetched = new_host.finished(&run_id);
+    assert_eq!(fetched["run"]["state"], "succeeded", "{fetched}");
+    assert_eq!(world.service_pid(), Some(new_service));
+    old_host.close();
+    new_host.close();
+}

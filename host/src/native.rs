@@ -4187,6 +4187,7 @@ id = "work:{host}/{id}"
                 launch: Box::new(launch),
                 wait: Duration::from_secs(2),
                 build_id: BUILD.into(),
+                disk_build: || BUILD.to_owned(),
             }
         }
 

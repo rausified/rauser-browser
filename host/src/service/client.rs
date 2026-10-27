@@ -21,10 +21,17 @@ pub const NOT_INSTALLED: &str = "The Brauser service is not installed. Reinstall
 pub const WRONG_BUILD: &str = "The Brauser service is running a different build of Brauser. Reinstall Brauser, or for a development build run scripts/register-dev-host.mjs again.";
 const NOT_STARTED: &str = "The Brauser service did not start in time. Try again in a moment.";
 const NO_ANSWER: &str = "The Brauser service stopped before answering. Try again in a moment.";
+/// This host is older than the binary on disk, so the running service may
+/// well be the current build; restarting it would kill a newer host's runs.
+pub const HOST_OUTDATED: &str =
+    "Brauser was updated while this window was open. Reload the Brauser extension, then try again.";
 
 /// How long to wait for a started service to accept connections.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(5);
 const RETRY: Duration = Duration::from_millis(100);
+/// A service that is exiting when it is started can make launchd report the
+/// job as running; one more start after this long brings up a fresh one.
+const RELAUNCH_AFTER: Duration = Duration::from_secs(1);
 /// Run requests are answered from records on disk; anything slower than
 /// this means the service is stuck, and the panel can retry.
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -55,8 +62,13 @@ pub struct ServiceLink {
     pub socket: PathBuf,
     pub launch: LaunchFn,
     pub wait: Duration,
-    /// This host's build; a service reporting another one is restarted.
+    /// This host's build, fixed when the host started; a service reporting
+    /// another one is restarted, but only while this is still the build on
+    /// disk.
     pub build_id: String,
+    /// The build on disk now. A host whose `build_id` differs is the stale
+    /// party and never restarts the service.
+    pub disk_build: fn() -> String,
 }
 
 impl ServiceLink {
@@ -67,21 +79,37 @@ impl ServiceLink {
             launch: default_launch(&paths),
             wait: DEFAULT_WAIT,
             build_id: build_id(),
+            disk_build: build_id,
         })
     }
 
     /// Forward one request. The service is started when nothing listens,
-    /// and restarted once when it is another build or protocol version.
+    /// and restarted once when it is another build or protocol version and
+    /// this host is the build on disk. A `service_hello` that finds the
+    /// connection closed (a service exiting at its idle deadline) is tried
+    /// once more on a fresh connection; hello is idempotent.
     pub fn request(&self, request: &Request) -> Result<Response, ServiceError> {
         let mut launched = false;
         let mut restarted = false;
+        let mut reconnected = false;
         loop {
             let mut stream = self.connect(&mut launched)?;
-            if self.hello(&mut stream, request.request_id())? {
+            let current = match self.hello(&mut stream, request.request_id()) {
+                Err(ServiceError::Unavailable(message)) if message == NO_ANSWER && !reconnected => {
+                    reconnected = true;
+                    launched = false;
+                    continue;
+                }
+                result => result?,
+            };
+            if current {
                 return exchange(&mut stream, request);
             }
             if restarted {
                 return Err(ServiceError::Unavailable(WRONG_BUILD.into()));
+            }
+            if (self.disk_build)() != self.build_id {
+                return Err(ServiceError::Unavailable(HOST_OUTDATED.into()));
             }
             drop(stream);
             restarted = true;
@@ -103,9 +131,11 @@ impl ServiceLink {
     }
 
     /// Connect, starting the service once if nothing listens, then retrying
-    /// every 100 ms for `wait`.
+    /// every 100 ms for `wait`. A start this call made that still has nothing
+    /// listening after [`RELAUNCH_AFTER`] is repeated once.
     fn connect(&self, launched: &mut bool) -> Result<UnixStream, ServiceError> {
         let mut deadline = None;
+        let mut relaunch_at = None;
         loop {
             match UnixStream::connect(&self.socket) {
                 Ok(stream) => return Ok(stream),
@@ -117,6 +147,10 @@ impl ServiceLink {
                 {
                     if !*launched {
                         *launched = true;
+                        self.start(false)?;
+                        relaunch_at = Some(Instant::now() + RELAUNCH_AFTER);
+                    } else if relaunch_at.is_some_and(|at| Instant::now() >= at) {
+                        relaunch_at = None;
                         self.start(false)?;
                     }
                     let deadline = *deadline.get_or_insert_with(|| Instant::now() + self.wait);
@@ -473,6 +507,7 @@ mod tests {
             }),
             wait: Duration::from_secs(3),
             build_id: BUILD.into(),
+            disk_build: || BUILD.to_owned(),
         };
         (link, calls)
     }
@@ -586,6 +621,109 @@ mod tests {
                 .iter()
                 .all(|request| matches!(request, Request::ServiceHello(_)))
         );
+    }
+
+    #[test]
+    fn a_host_older_than_the_binary_on_disk_never_restarts_the_service() {
+        let dir = fake::short_dir();
+        let socket = fake::socket_in(&dir);
+        // The service runs the newer build on disk; this host predates it.
+        let service = FakeService::listen(&socket, fake::answering("newer"));
+        let (mut link, calls) = link(socket, |_| panic!("must not restart"));
+        link.disk_build = || "newer".to_owned();
+        assert_eq!(
+            link.request(&list_runs()),
+            Err(ServiceError::Unavailable(HOST_OUTDATED.into()))
+        );
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(
+            service
+                .requests()
+                .iter()
+                .all(|request| matches!(request, Request::ServiceHello(_)))
+        );
+    }
+
+    #[test]
+    fn a_hello_cut_off_by_an_exiting_service_is_retried_once() {
+        use crate::frame::{read_frame, write_frame};
+        use std::os::unix::net::UnixListener;
+
+        let dir = fake::short_dir();
+        let socket = fake::socket_in(&dir);
+        let listener = UnixListener::bind(&socket).unwrap();
+        thread::spawn(move || {
+            // The first connection is accepted and closed unanswered, as by
+            // a service that decided to exit just after accepting it.
+            let (mut first, _) = listener.accept().unwrap();
+            let _ = read_frame(&mut first);
+            drop(first);
+            let (mut stream, _) = listener.accept().unwrap();
+            while let Ok(Some(body)) = read_frame(&mut stream) {
+                let request: Request = serde_json::from_slice(&body).unwrap();
+                let response = match request {
+                    Request::ServiceHello(_) => fake::ready(&request, BUILD),
+                    _ => fake::runs_listed(&request),
+                };
+                write_frame(&mut stream, &response).unwrap();
+            }
+        });
+        let (link, calls) = link(socket, |_| panic!("must not launch"));
+        assert!(matches!(
+            link.request(&list_runs()).unwrap(),
+            Response::RunsListed(_)
+        ));
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_hello_that_never_answers_is_not_retried_forever() {
+        use crate::frame::read_frame;
+        use std::os::unix::net::UnixListener;
+
+        let dir = fake::short_dir();
+        let socket = fake::socket_in(&dir);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let accepted = Arc::new(Mutex::new(0usize));
+        let counter = Arc::clone(&accepted);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                *counter.lock().unwrap() += 1;
+                let _ = read_frame(&mut stream);
+            }
+        });
+        let (link, _) = link(socket, |_| panic!("must not launch"));
+        assert_eq!(
+            link.request(&list_runs()),
+            Err(ServiceError::Unavailable(NO_ANSWER.into()))
+        );
+        assert_eq!(*accepted.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_start_that_finds_the_old_service_still_exiting_is_repeated_once() {
+        let dir = fake::short_dir();
+        let socket = fake::socket_in(&dir);
+        let late = socket.clone();
+        let service = Arc::new(Mutex::new(None));
+        let started = Arc::clone(&service);
+        let (link, calls) = link(socket, move |_| {
+            // Only the second start brings a service up.
+            if started.lock().unwrap().is_none() {
+                *started.lock().unwrap() = Some(None);
+                return Launch::Started;
+            }
+            let late = late.clone();
+            *started.lock().unwrap() =
+                Some(Some(FakeService::listen(&late, fake::answering(BUILD))));
+            Launch::Started
+        });
+        assert!(matches!(
+            link.request(&list_runs()).unwrap(),
+            Response::RunsListed(_)
+        ));
+        assert_eq!(*calls.lock().unwrap(), vec![false, false]);
     }
 
     #[test]
