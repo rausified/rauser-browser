@@ -6,7 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use adapter_templates::{Document as AdapterTemplates, Value as AdapterValue};
+use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
@@ -25,6 +25,7 @@ thread_local! {
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
+use crate::index::ArtifactIndex;
 use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
@@ -66,6 +67,10 @@ pub struct ConfigStore {
     adapter_issue: Option<String>,
     adapter_warnings: Option<Vec<AdapterWarning>>,
     adapter_document: Option<AdapterTemplates>,
+    /// Superseded recognition contracts from `[[adapter_id_history]]`.
+    retired_adapter_contracts: Vec<serde_json::Value>,
+    /// Note-only identity rules; see `note_key_rule`.
+    note_key_rules: NoteKeyRules,
 }
 
 struct DiskState {
@@ -259,6 +264,8 @@ impl ConfigStore {
         self.adapter_issue = None;
         self.adapter_warnings = Some(Vec::new());
         self.adapter_document = None;
+        self.retired_adapter_contracts.clear();
+        self.note_key_rules = NoteKeyRules::default();
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -290,6 +297,13 @@ impl ConfigStore {
         {
             eprintln!("{NAMESPACE}: warning: could not sweep page-note temporaries: {error:#}");
         }
+        // A host killed during an artifact pass leaves its temporaries.
+        if let Err(error) = self.cache_dir().and_then(|cache_dir| {
+            ArtifactIndex::open_in(storage, self.root_identity(), &cache_dir)?
+                .sweep_stale_temporaries()
+        }) {
+            eprintln!("{NAMESPACE}: warning: could not sweep artifact temporaries: {error:#}");
+        }
     }
 
     fn for_path(path: PathBuf) -> Self {
@@ -305,6 +319,8 @@ impl ConfigStore {
             adapter_issue: None,
             adapter_warnings: Some(Vec::new()),
             adapter_document: Some(AdapterTemplates::default()),
+            retired_adapter_contracts: Vec::new(),
+            note_key_rules: NoteKeyRules::default(),
         }
     }
 
@@ -317,6 +333,7 @@ impl ConfigStore {
         self.knowledge_base_identity = state.knowledge_base_identity;
         self.agent = state.agent;
         self.adapter_extensions = state.adapter_extensions;
+        self.retired_adapter_contracts = state.retired_adapter_contracts;
         if revision_changed {
             self.set_adapter_policy(false);
         }
@@ -445,13 +462,61 @@ impl ConfigStore {
             .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
     }
 
-    fn adapter_document(&self) -> Result<&AdapterTemplates> {
+    /// Note identity for a URL the capture policy does not recognize. Record
+    /// keys outlive capture (DESIGN.md §6.2): removing a site or adapter,
+    /// narrowing its rules, or an adapter document this host cannot apply
+    /// stops capture but must not split a note across a document's routes.
+    /// The retired contracts in `[[adapter_id_history]]`, and the current
+    /// document while it is inert, therefore still name artifacts for note
+    /// keys only; they never authorize capture. Every recorded artifact URL
+    /// was matched by one of these contracts or by the current policy, so an
+    /// origin they cover is decided by them alone: a stripped canonical URL
+    /// that happens to equal another page's is never identity evidence.
+    pub(crate) fn note_key_rule(&self, url: &str) -> NoteKeyRule {
+        let mut covered = self.adapter_document.as_ref().is_some_and(|document| {
+            !matches!(document.evaluate(url, None), Err(NoMatch::NoAdapter))
+        });
+        let mut ids = std::collections::BTreeSet::new();
+        let origin = url::Url::parse(url)
+            .ok()
+            .map(|parsed| parsed.origin().ascii_serialization());
+        if origin.is_some_and(|origin| self.note_key_rules.unavailable_origins.contains(&origin)) {
+            return NoteKeyRule::Unavailable;
+        }
+        for document in &self.note_key_rules.documents {
+            match document.evaluate(url, None) {
+                Ok(found) => {
+                    covered = true;
+                    ids.insert(found.artifact_id);
+                }
+                Err(NoMatch::NoAdapter) => {}
+                Err(_) => covered = true,
+            }
+        }
+        match ids.len() {
+            0 if covered => NoteKeyRule::Unrecognized,
+            0 => NoteKeyRule::Uncovered,
+            1 => NoteKeyRule::Artifact(ids.into_iter().next().expect("checked len == 1")),
+            _ => NoteKeyRule::Ambiguous,
+        }
+    }
+
+    pub fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()
             .context("adapter policy is unavailable")
     }
 
     fn set_adapter_policy(&mut self, include_warnings: bool) {
+        self.set_capture_adapter_policy(include_warnings);
+        self.note_key_rules = note_key_rules(
+            &self.config,
+            self.adapter_document.is_none(),
+            &self.retired_adapter_contracts,
+        );
+    }
+
+    fn set_capture_adapter_policy(&mut self, include_warnings: bool) {
         if !self.adapter_extensions.is_empty() {
             let keys = self
                 .adapter_extensions
@@ -802,7 +867,7 @@ impl ConfigStore {
             next_identity.clone(),
             next_knowledge_base_identity.clone(),
             &agent,
-            retired_adapter_contracts,
+            retired_adapter_contracts.clone(),
             adapter_extensions.clone(),
         ))
         .context("serializing config TOML")?;
@@ -844,6 +909,7 @@ impl ConfigStore {
         self.knowledge_base_identity = next_knowledge_base_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
+        self.retired_adapter_contracts = retired_adapter_contracts;
         self.set_adapter_policy(true);
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
@@ -1444,6 +1510,92 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
 fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
     let document = compile_validated_adapters(config)?;
     Ok(adapter_warnings(&document))
+}
+
+/// See `ConfigStore::note_key_rule`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NoteKeyRule {
+    /// Exactly one note-only contract names this artifact.
+    Artifact(String),
+    /// Several contracts name different artifacts; use the URL key.
+    Ambiguous,
+    /// A current or retired contract covers this origin and none names the
+    /// URL, so it is not an artifact page.
+    Unrecognized,
+    /// No contract has ever covered this origin, as far as config.toml
+    /// still records.
+    Uncovered,
+    /// A recorded contract for this origin cannot be compiled here, so the
+    /// key cannot be established; loads and saves refuse.
+    Unavailable,
+}
+
+/// The note-only identity rules (see `ConfigStore::note_key_rule`).
+#[derive(Default)]
+struct NoteKeyRules {
+    documents: Vec<AdapterTemplates>,
+    /// Origins of recorded contracts this host cannot compile. Such a
+    /// contract may have named artifacts there, so identity on those origins
+    /// is unavailable rather than decided by the contracts that remain.
+    unavailable_origins: std::collections::BTreeSet<String>,
+}
+
+/// Compile the note-only identity rules. Retired contracts are compiled
+/// alone, as the history validator does, because their shapes may overlap
+/// one another. An inert current document is used whole when it compiles
+/// (only capture-specific checks failed), keeping first-match and scope
+/// semantics, and otherwise per contract. A contract without a valid origin
+/// never compiled on any host, so it cannot have produced a record key.
+fn note_key_rules(
+    config: &ConfigSnapshot,
+    current_inert: bool,
+    retired: &[serde_json::Value],
+) -> NoteKeyRules {
+    // History entries are stored in contract form; anything else is invalid.
+    fn add(rules: &mut NoteKeyRules, contract: &serde_json::Value, format: u32, exact: bool) {
+        let compiled = (format == 1)
+            .then(|| adapter_contract(contract))
+            .flatten()
+            .filter(|recognition| !exact || recognition == contract)
+            .and_then(|contract| {
+                compile_adapters(&ConfigSnapshot {
+                    adapters: AdapterDocument {
+                        format: 1,
+                        artifacts: vec![contract],
+                    },
+                    ..empty_config()
+                })
+                .ok()
+            });
+        match compiled {
+            Some(document) => rules.documents.push(document),
+            None => {
+                if let Some(origin) = contract
+                    .get("origin")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|origin| url::Url::parse(origin).ok())
+                    .map(|origin| origin.origin().ascii_serialization())
+                {
+                    rules.unavailable_origins.insert(origin);
+                }
+            }
+        }
+    }
+    let mut rules = NoteKeyRules::default();
+    if current_inert {
+        match compile_adapters(config) {
+            Ok(document) => rules.documents.push(document),
+            Err(_) => {
+                for contract in &config.adapters.artifacts {
+                    add(&mut rules, contract, config.adapters.format, false);
+                }
+            }
+        }
+    }
+    for contract in retired {
+        add(&mut rules, contract, 1, true);
+    }
+    rules
 }
 
 fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
@@ -2073,6 +2225,87 @@ mod tests {
         let mut store = ConfigStore::for_test(path.to_path_buf());
         store.refresh().unwrap();
         store
+    }
+
+    #[test]
+    fn an_uncompilable_recorded_contract_makes_its_origins_note_identity_unavailable() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "",
+            concat!(
+                "[[adapter_id_history]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n\n",
+                // Parseable, but no host can compile this shape.
+                "[[adapter_id_history]]\ntype = \"work.other\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{n:nope}\" }]\nid = \"other:{host}/{n}\"\n\n",
+                // Without a valid origin it never compiled anywhere.
+                "[[adapter_id_history]]\ntype = \"bad.origin\"\norigin = \"not an origin\"\nmatch = [{ path = \"/{n:int}\" }]\nid = \"bad:{host}/{n}\"\n\n",
+            ),
+        );
+        let store = loaded(&path);
+        assert!(store.config_issue().is_none());
+        assert_eq!(
+            store.note_key_rule("https://work.example/items/7"),
+            NoteKeyRule::Unavailable
+        );
+        assert_eq!(
+            store.note_key_rule("https://elsewhere.example/items/7"),
+            NoteKeyRule::Uncovered
+        );
+    }
+
+    #[test]
+    fn retired_contracts_name_note_keys_but_overlapping_ids_are_ambiguous() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        let history = |artifact_type: &str, path: &str, id: &str| {
+            format!(
+                "[[adapter_id_history]]\ntype = {artifact_type:?}\norigin = \"https://work.example\"\nmatch = [{{ path = {path:?} }}]\nid = {id:?}\n\n"
+            )
+        };
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "",
+            &format!(
+                "{}{}{}",
+                history("work.doc", "/docs/{id:int}", "doc:{host}/{id}"),
+                history("work.item", "/items/{id:int}", "work:{host}/{id}"),
+                // An overlapping shape with another ID, as two once-active
+                // overlapping adapters would leave behind.
+                history("work.other", "/items/{n:int}", "other:{host}/{n}"),
+            ),
+        );
+        let store = loaded(&path);
+        assert!(store.config_issue().is_none());
+        assert!(
+            store
+                .adapter_match("https://work.example/docs/8", None)
+                .is_err()
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/docs/8"),
+            NoteKeyRule::Artifact("doc:work.example/8".into())
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/items/7"),
+            NoteKeyRule::Ambiguous
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/boards/1"),
+            NoteKeyRule::Unrecognized
+        );
+        assert_eq!(
+            store.note_key_rule("https://elsewhere.example/items/8"),
+            NoteKeyRule::Uncovered
+        );
     }
 
     fn adapter(origin: &str, artifact_type: &str, path: &str, id: &str) -> serde_json::Value {

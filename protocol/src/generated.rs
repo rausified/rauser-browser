@@ -96,6 +96,7 @@ pub enum ErrorCode {
     MessageTooLarge,
     Internal,
     Cancelled,
+    ServiceUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -685,6 +686,166 @@ pub struct EnvName {
     pub present: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessId {
+    Codex,
+    Claude,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunErrorKind {
+    HarnessFailed,
+    TimedOut,
+    Canceled,
+    ServiceRestarted,
+    InvalidOutput,
+    SaveFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunView {
+    pub run_id: String,
+    pub state: RunState,
+    pub harness: HarnessId,
+    pub record_key: RecordKey,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub written_record_key: Option<RecordKey>,
+    pub url: String,
+    pub title: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub cwd: Option<String>,
+    pub created_at: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub started_at: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub finished_at: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub error: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub error_kind: Option<RunErrorKind>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub thread_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub session_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary_path: Option<String>,
+    pub stream_bytes: u32,
+    pub can_retry_save: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartRunRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub title: String,
+    pub content: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub selection: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub harness: Option<HarnessId>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub record_key: Option<RecordKey>,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunStarted {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run: RunView,
+    pub existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetRunRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run_id: String,
+    pub since_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunFetched {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run: RunView,
+    pub stream_text: String,
+    pub next_offset: u32,
+    pub more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListRunsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunsListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub runs: Vec<RunView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelRunRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetrySaveRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunUpdated {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run: RunView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceHelloRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceReady {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub build_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -707,6 +868,12 @@ pub enum Request {
     CheckAgent(CheckAgentRequest),
     DiscoverHarnesses(DiscoverHarnessesRequest),
     SetUpHarness(SetUpHarnessRequest),
+    StartRun(StartRunRequest),
+    GetRun(GetRunRequest),
+    ListRuns(ListRunsRequest),
+    CancelRun(CancelRunRequest),
+    RetrySave(RetrySaveRequest),
+    ServiceHello(ServiceHelloRequest),
 }
 
 impl Request {
@@ -731,6 +898,12 @@ impl Request {
             Self::CheckAgent(value) => value.protocol_version,
             Self::DiscoverHarnesses(value) => value.protocol_version,
             Self::SetUpHarness(value) => value.protocol_version,
+            Self::StartRun(value) => value.protocol_version,
+            Self::GetRun(value) => value.protocol_version,
+            Self::ListRuns(value) => value.protocol_version,
+            Self::CancelRun(value) => value.protocol_version,
+            Self::RetrySave(value) => value.protocol_version,
+            Self::ServiceHello(value) => value.protocol_version,
         }
     }
 
@@ -755,6 +928,12 @@ impl Request {
             Self::CheckAgent(value) => &value.request_id,
             Self::DiscoverHarnesses(value) => &value.request_id,
             Self::SetUpHarness(value) => &value.request_id,
+            Self::StartRun(value) => &value.request_id,
+            Self::GetRun(value) => &value.request_id,
+            Self::ListRuns(value) => &value.request_id,
+            Self::CancelRun(value) => &value.request_id,
+            Self::RetrySave(value) => &value.request_id,
+            Self::ServiceHello(value) => &value.request_id,
         }
     }
 }
@@ -779,6 +958,11 @@ pub enum Response {
     ArtifactsRefreshed(ArtifactsRefreshed),
     AgentChecked(AgentChecked),
     HarnessesDiscovered(HarnessesDiscovered),
+    RunStarted(RunStarted),
+    RunFetched(RunFetched),
+    RunsListed(RunsListed),
+    RunUpdated(RunUpdated),
+    ServiceReady(ServiceReady),
     Error(ErrorResponse),
 }
 
@@ -802,6 +986,11 @@ impl Response {
             Self::ArtifactsRefreshed(value) => value.protocol_version,
             Self::AgentChecked(value) => value.protocol_version,
             Self::HarnessesDiscovered(value) => value.protocol_version,
+            Self::RunStarted(value) => value.protocol_version,
+            Self::RunFetched(value) => value.protocol_version,
+            Self::RunsListed(value) => value.protocol_version,
+            Self::RunUpdated(value) => value.protocol_version,
+            Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
     }
@@ -825,6 +1014,11 @@ impl Response {
             Self::ArtifactsRefreshed(value) => &value.request_id,
             Self::AgentChecked(value) => &value.request_id,
             Self::HarnessesDiscovered(value) => &value.request_id,
+            Self::RunStarted(value) => &value.request_id,
+            Self::RunFetched(value) => &value.request_id,
+            Self::RunsListed(value) => &value.request_id,
+            Self::RunUpdated(value) => &value.request_id,
+            Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }
     }

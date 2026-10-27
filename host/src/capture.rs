@@ -174,6 +174,18 @@ pub(crate) fn activity_shape_is_bounded(event: &ActivityEvent) -> bool {
         })
 }
 
+/// The field bounds a logged activity must meet to be indexed: the shape
+/// caps plus the title limit capture enforces before writing
+/// (`title_too_long`), so an edited or crafted log line cannot carry more
+/// than a delivered event could.
+pub(crate) fn logged_activity_is_bounded(event: &ActivityEvent) -> bool {
+    activity_shape_is_bounded(event)
+        && event
+            .title
+            .as_ref()
+            .is_none_or(|title| title.len() <= MAX_TITLE_BYTES)
+}
+
 pub(crate) fn trail_transition_is_valid(transition: &str) -> bool {
     matches!(
         transition,
@@ -1403,7 +1415,7 @@ fn parse_event_id(value: &str) -> std::result::Result<String, String> {
 /// Accept `YYYY-MM-DDTHH:MM:SSZ` or the same with a `+HH:MM`/`-HH:MM`
 /// offset. The offset is the user's local time at the visit and chooses the
 /// daily log date, so evening visits stay in that day's log.
-fn parse_event_time(value: &str) -> std::result::Result<OffsetDateTime, String> {
+pub(crate) fn parse_event_time(value: &str) -> std::result::Result<OffsetDateTime, String> {
     let bytes = value.as_bytes();
     let offset_ok = match bytes.len() {
         20 => bytes[19] == b'Z',
@@ -1426,7 +1438,7 @@ fn parse_event_time(value: &str) -> std::result::Result<OffsetDateTime, String> 
     Ok(parsed)
 }
 
-fn check_event_window(value: OffsetDateTime) -> std::result::Result<(), String> {
+pub(crate) fn check_event_window(value: OffsetDateTime) -> std::result::Result<(), String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "host_clock_unavailable".to_owned())?

@@ -5,9 +5,13 @@ import {
 } from "./model.js";
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
+import {
+  ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
+} from "./artifact-refresh.js";
 import type {
   ArtifactListItem,
   ArtifactView,
@@ -56,6 +60,7 @@ const artifactLinks = element<HTMLParagraphElement>("artifact-links");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
+const whyPausedHint = element<HTMLParagraphElement>("why-paused-hint");
 const olderNotes = element<HTMLDivElement>("older-notes");
 const olderNoteList = element<HTMLUListElement>("older-note-list");
 const olderNoteView = element<HTMLDivElement>("older-note-view");
@@ -76,6 +81,11 @@ const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 
 const session = new ConfigSession(render);
+let captureSite: CaptureSitePanel | null = null;
+// Suppress note loads only while capture policy can change their identity.
+// Once the post-save reload starts, tab events must reach NoteEditor's token
+// handling so a slow response cannot bind the editor to a page we have left.
+let changingNoteIdentity = false;
 
 // The header names the host process that answered. Another one, possibly
 // from a rebuilt binary, starts on the next call after it exits.
@@ -92,6 +102,7 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 // polls to show the queue.
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
+const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
 // The site access the manifest grants at install (host_permissions).
 const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 
@@ -100,7 +111,9 @@ const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 // query was overtaken by a newer one be ignored; the note itself is owned by
 // `notes` (note-editor.ts), which serializes every load and save.
 let tabRefreshSeq = 0;
-let currentPage: { url: string; title: string } | null = null;
+// The tab the panel last resolved as active; only its updates matter.
+let followedTabId: number | null = null;
+let currentPage: { url: string; title: string; tabId: number | undefined } | null = null;
 let currentArtifact: ArtifactView | null = null;
 let olderNoteEntries: OlderNote[] = [];
 // Tracks the artifact the "Why I'm here" field was last rendered for, so an
@@ -108,6 +121,10 @@ let olderNoteEntries: OlderNote[] = [];
 // user has not saved yet; switching to a different artifact always resets it.
 let whyArtifactId: string | null = null;
 let whyEdited = false;
+// The page URL the card was looked up for. A failed or skipped lookup for
+// another page must not leave this card, and its artifact_id, in place.
+let artifactPageUrl: string | null = null;
+let savingWhy = false;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 let recentLoadSeq = 0;
 let worklogLoadSeq = 0;
@@ -131,13 +148,15 @@ function duration(seconds: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
-function renderArtifact(artifact: ArtifactView | null, recognized: boolean): void {
+function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null = null): void {
   currentArtifact = artifact;
+  artifactPageUrl = artifact ? pageUrl : null;
   artifactCard.hidden = artifact === null;
   artifactStatus.textContent = recognized ? "● Artifact recognized" : "○ Not an artifact";
   if (!artifact) {
     whyArtifactId = null;
     whyEdited = false;
+    updateControls();
     return;
   }
   artifactHeading.textContent = artifact.title;
@@ -163,31 +182,54 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean): voi
   if (!whyEdited) {
     artifactWhy.value = artifact.why ?? "";
   }
+  updateControls();
 }
 
-async function refreshArtifact(): Promise<void> {
+/** Reports that `page`'s artifact could not be read. The card and any
+ * unsaved "Why I'm here" draft stay when they belong to this page, so a
+ * transient failure or host outage loses nothing. Another page's card goes,
+ * since its artifact_id is not this page's; the draft stays in the field
+ * until a lookup shows a different artifact. */
+function showArtifactUnavailable(page: { url: string }, reason: string): void {
+  if (artifactPageUrl !== page.url) {
+    currentArtifact = null;
+    artifactPageUrl = null;
+    artifactCard.hidden = true;
+  }
+  artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
+  updateControls();
+}
+
+const artifactRefresher = new ArtifactRefresher(
+  (page) => session.host.call({
+    type: "get_artifact",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+    url: page.url,
+    title: page.title,
+  }, "artifact_result"),
+  () => currentPage,
+  (page, response) => renderArtifact(response.artifact, response.recognized, page.url),
+  (page, error) => showArtifactUnavailable(page, describe(error)),
+);
+
+/** Pass `force` when the page's history may have changed (context saved,
+ * capture delivered, settings changed); otherwise a page already shown is
+ * not asked about again. */
+function refreshArtifact(force = false): Promise<void> {
   const page = currentPage;
-  if (!page || !session.connected || !session.config?.storage) {
+  if (page && !session.connected) {
+    // Keep this page's card and any unsaved draft through a host outage.
+    artifactRefresher.clear();
+    showArtifactUnavailable(page, "the native host is not connected");
+    return Promise.resolve();
+  }
+  if (!page || !session.config?.storage) {
+    artifactRefresher.clear();
     renderArtifact(null, false);
-    return;
+    return Promise.resolve();
   }
-  try {
-    const response = await session.host.call({
-      type: "get_artifact",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      url: page.url,
-      title: page.title,
-    }, "artifact_result");
-    if (page !== currentPage) return;
-    renderArtifact(response.artifact, response.recognized);
-  } catch (error) {
-    if (page !== currentPage) return;
-    // A transient fetch failure must not discard an in-progress "Why I'm
-    // here" draft or the card's last-known state (renderArtifact(null, ...)
-    // would reset both); only report the error.
-    artifactStatus.textContent = `Artifact status unavailable: ${describe(error)}`;
-  }
+  return artifactRefresher.refresh(force);
 }
 
 // Local wall-clock time with its numeric UTC offset, matching the worker's
@@ -201,8 +243,14 @@ async function saveWhy(): Promise<void> {
   const page = currentPage;
   const artifact = currentArtifact;
   const text = artifactWhy.value.trim();
-  if (!page || !artifact || !text || changing()) return;
-  saveWhyButton.disabled = true;
+  if (savingWhy) return;
+  const blocked = whySaveBlocked();
+  if (blocked || !page || !artifact) {
+    show(blocked ?? WHY_WAIT_FOR_ARTIFACT, true);
+    return;
+  }
+  savingWhy = true;
+  updateControls();
   try {
     const response = await session.host.call({
       type: "record_why",
@@ -224,13 +272,41 @@ async function saveWhy(): Promise<void> {
     if (currentArtifact === artifact && artifactWhy.value.trim() === text) {
       whyEdited = false;
     }
-    await refreshArtifact();
+    await refreshArtifact(true);
     show("Artifact context saved.");
   } catch (error) {
     show(`Could not save artifact context: ${describe(error)}`, true);
   } finally {
-    saveWhyButton.disabled = false;
+    savingWhy = false;
+    updateControls();
   }
+}
+
+/** Why capture keeps "Why I'm here" from saving, or null. The host records
+ * nothing while paused. A local pause the host has not confirmed counts too:
+ * the user turned capture off, though the host would still record, and
+ * finishing it takes Pause capture rather than Resume. */
+function whyPausedReason(): string | null {
+  if (session.config?.capture_enabled === false) {
+    return "Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.";
+  }
+  if (session.status?.pause_pending === true) {
+    return "Capture is paused locally, so this can't be saved. Use Pause capture to finish saving this setting in the host.";
+  }
+  return null;
+}
+
+/** Why "Why I'm here" cannot be saved right now, or null when it can. An
+ * unreachable host does not block Save: the call itself restarts the host,
+ * so a draft kept through an outage can be saved once it returns, and a
+ * failure shows its reason. */
+function whySaveBlocked(): string | null {
+  if (!currentPage || !currentArtifact || artifactPageUrl !== currentPage.url) return WHY_WAIT_FOR_ARTIFACT;
+  const paused = whyPausedReason();
+  if (paused) return paused;
+  if (!artifactWhy.value.trim()) return "Type why you're here, then save.";
+  if (changing()) return "Wait for the panel to finish its current task, then save.";
+  return null;
 }
 
 function renderOlderNotes(entries: readonly OlderNote[]): void {
@@ -316,10 +392,11 @@ function copyOlderNoteView(): void {
 }
 
 function changing(): boolean {
-  return busy || replaying || tickRunning;
+  return busy || replaying || tickRunning || captureSite?.saving === true;
 }
 
 function updateControls(): void {
+  captureSite?.render(currentPage, changing());
   const connected = session.connected;
   const config = session.config;
   const state = session.status;
@@ -332,6 +409,10 @@ function updateControls(): void {
   discardButton.disabled = changing() || (state?.queued ?? 0) === 0;
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
+  saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
+  const paused = whyPausedReason();
+  whyPausedHint.hidden = paused === null;
+  if (paused !== null) whyPausedHint.textContent = paused;
 }
 
 function renderSetupWarning(): void {
@@ -424,7 +505,7 @@ function scheduleReload(): void {
         updateControls();
         // A note that could not load before (say, no folder yet) may load now.
         void notes.retry();
-        void refreshArtifact();
+        void refreshArtifact(true);
       });
   }, 250);
 }
@@ -436,6 +517,8 @@ async function replayVisits(): Promise<void> {
   updateControls();
   try {
     await worker<WorkerStatus>({ kind: "sync_now" });
+    // Delivered activity changes the current artifact's totals.
+    void refreshArtifact(true);
   } catch (error) {
     show(`Capture delivery stopped: ${describe(error)}`, true);
   } finally {
@@ -450,7 +533,10 @@ async function panelTick(): Promise<void> {
   tickRunning = true;
   updateControls();
   try {
-    await session.refreshStatus();
+    const previous = session.status?.delivered_batches ?? null;
+    const state = await session.refreshStatus();
+    // A background sync delivered activity; the card's totals may be stale.
+    if (deliveredSince(previous, state.delivered_batches)) void refreshArtifact(true);
   } catch (error) {
     show(`Panel refresh failed: ${describe(error)}`, true);
   } finally {
@@ -546,6 +632,22 @@ const notes = new NoteEditor({
     ...request,
   }, ["note_saved", "note_conflict"]),
 }, describe, NOTE_SAVE_DEBOUNCE_MS);
+
+captureSite = new CaptureSitePanel(session, {
+  isBusy: changing,
+  changed: updateControls,
+  show,
+  beforeSave: () => {
+    changingNoteIdentity = true;
+    return notes.showPage(null);
+  },
+  afterSave: async () => {
+    changingNoteIdentity = false;
+    await notes.showPage(currentPage);
+    // The new adapter changes whether this page is an artifact.
+    await refreshArtifact(true);
+  },
+});
 
 function copyUnsavedText(): void {
   void navigator.clipboard.writeText(noteUnsaved.value).catch((error: unknown) => {
@@ -705,6 +807,7 @@ async function refreshActiveTab(): Promise<void> {
     tab = undefined;
   }
   if (seq !== tabRefreshSeq) return; // A newer refresh has the current tab.
+  followedTabId = tab?.id ?? null;
   await refreshSiteAccess(tab);
 }
 
@@ -716,7 +819,8 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
 
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   currentPage = null;
-  renderArtifact(null, false);
+  updateControls();
+  void refreshArtifact();
   pageTitle.textContent = title;
   pageUrl.textContent = url;
   showPageArea(state);
@@ -762,8 +866,9 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
   showPageArea("note");
-  currentPage = { url: tab.url, title };
-  await notes.showPage({ url: tab.url, title });
+  currentPage = { url: tab.url, title, tabId: tab.id };
+  updateControls();
+  if (!changingNoteIdentity) await notes.showPage({ url: tab.url, title });
   void refreshArtifact();
 }
 
@@ -784,6 +889,7 @@ copyUnsavedButton.addEventListener("click", copyUnsavedText);
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
+  updateControls();
 });
 olderNoteList.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
@@ -808,10 +914,11 @@ chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 // Withdrawing or restoring site access in Chrome changes what this tab shows.
 chrome.permissions.onAdded.addListener(() => void refreshActiveTab());
 chrome.permissions.onRemoved.addListener(() => void refreshActiveTab());
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-  if (changeInfo.title !== undefined || changeInfo.url !== undefined || changeInfo.status === "complete") {
-    void refreshActiveTab();
-  }
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (followsTabUpdate(tabId, changeInfo, tab, followedTabId)) void refreshActiveTab();
+});
+chrome.tabs.onReplaced?.addListener((addedTabId, removedTabId) => {
+  if (followsTabReplacement(addedTabId, removedTabId, followedTabId)) void refreshActiveTab();
 });
 const pollTimer = setInterval(() => void panelTick(), STATUS_POLL_MS);
 window.addEventListener("pagehide", () => {

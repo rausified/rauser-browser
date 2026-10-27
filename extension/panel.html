@@ -46,6 +46,32 @@
       </nav>
 
       <div id="page-view">
+      <section id="capture-site-area" aria-label="Site capture" hidden>
+        <p id="capture-site-hint"></p>
+        <button id="capture-site" type="button">Capture Site</button>
+        <div id="capture-site-review" hidden>
+          <h2 id="capture-site-heading" tabindex="-1">Review site capture</h2>
+          <p class="page-url">Development starter draft · live-tool certification is still pending.</p>
+          <div id="capture-site-github" hidden>
+            <p>Choose the kinds of work to remember and the work organizations for each. Only repositories owned by the names you enter are included. Leave personal accounts out.</p>
+            <div class="field">
+              <label class="check-label"><input id="capture-site-prs" type="checkbox" checked /> Pull requests</label>
+              <label for="capture-site-pr-orgs">Work organizations for pull requests</label>
+              <input id="capture-site-pr-orgs" type="text" maxlength="1312" placeholder="acme-corp, partner" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field">
+              <label class="check-label"><input id="capture-site-issues" type="checkbox" checked /> Issues</label>
+              <label for="capture-site-issue-orgs">Work organizations for issues</label>
+              <input id="capture-site-issue-orgs" type="text" maxlength="1312" placeholder="acme-corp" autocomplete="off" spellcheck="false" />
+            </div>
+          </div>
+          <div id="capture-site-preview"></div>
+          <p id="capture-site-message" role="status" aria-live="polite"></p>
+          <button id="capture-site-save" type="button" disabled>Start capturing this site</button>
+          <button id="capture-site-cancel" type="button" class="secondary">Cancel</button>
+        </div>
+      </section>
+
       <section id="artifact-card" aria-labelledby="artifact-heading" hidden>
         <div class="artifact-card-heading">
           <div>
@@ -63,6 +89,7 @@
             <input id="artifact-why" type="text" maxlength="500" placeholder="Optional one-line context" />
             <button id="save-why" type="button" class="secondary">Save</button>
           </div>
+          <p id="why-paused-hint" class="page-url" hidden>Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.</p>
         </div>
       </section>
 

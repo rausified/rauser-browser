@@ -373,3 +373,139 @@ fn artifact_queries_and_note_keys_have_complete_shapes() {
         .is_err()
     );
 }
+
+const RUN_VIEW: &str = r#"{"run_id":"00000000-0000-4000-8000-000000000001","state":"running","harness":"codex","record_key":{"kind":"url","value":"https://a.example/x"},"written_record_key":null,"url":"https://a.example/x","title":"T","cwd":null,"created_at":"2026-10-26T14:00:00-07:00","started_at":null,"finished_at":null,"error":null,"error_kind":null,"thread_id":null,"session_id":null,"summary_path":null,"stream_bytes":0,"can_retry_save":false}"#;
+
+fn run_fetched(view: &str) -> String {
+    format!(
+        r#"{{"type":"run_fetched","protocol_version":6,"request_id":"r","run":{view},"stream_text":"x","next_offset":1,"more":false}}"#
+    )
+}
+
+#[test]
+fn start_run_requires_nullable_selection_harness_record_key_and_requested_at() {
+    let ok = r#"{"type":"start_run","protocol_version":6,"request_id":"r","url":"https://a.example/x","title":"T","content":"body","selection":null,"harness":null,"record_key":null,"requested_at":"2026-10-26T14:00:00-07:00"}"#;
+    assert!(serde_json::from_str::<Request>(ok).is_ok());
+    assert!(serde_json::from_str::<Request>(&ok.replace(r#","record_key":null"#, "")).is_err());
+    assert!(
+        serde_json::from_str::<Request>(
+            &ok.replace(r#","requested_at":"2026-10-26T14:00:00-07:00""#, "")
+        )
+        .is_err()
+    );
+    for key in [r#","selection":null"#, r#","harness":null"#] {
+        assert!(
+            serde_json::from_str::<Request>(&ok.replace(key, "")).is_err(),
+            "{key}"
+        );
+    }
+    let chosen = ok
+        .replace(r#""selection":null"#, r#""selection":"quote""#)
+        .replace(r#""harness":null"#, r#""harness":"claude""#)
+        .replace(
+            r#""record_key":null"#,
+            r#""record_key":{"kind":"artifact","value":"work:a/7"}"#,
+        );
+    assert!(serde_json::from_str::<Request>(&chosen).is_ok(), "{chosen}");
+    let unknown_harness = ok.replace(r#""harness":null"#, r#""harness":"claude_code""#);
+    assert!(serde_json::from_str::<Request>(&unknown_harness).is_err());
+}
+
+#[test]
+fn run_view_round_trips_every_state_and_error_kind() {
+    for state in ["queued", "running", "succeeded", "failed", "canceled"] {
+        let view = RUN_VIEW.replace(r#""state":"running""#, &format!(r#""state":"{state}""#));
+        let message = run_fetched(&view);
+        let parsed: Response = serde_json::from_str(&message).expect(state);
+        let encoded = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&encoded).unwrap(), parsed);
+        assert!(encoded.contains(&format!(r#""state":"{state}""#)));
+    }
+    for kind in [
+        "harness_failed",
+        "timed_out",
+        "canceled",
+        "service_restarted",
+        "invalid_output",
+        "save_failed",
+    ] {
+        let view = RUN_VIEW
+            .replace(r#""state":"running""#, r#""state":"failed""#)
+            .replace(r#""error":null"#, r#""error":"it failed""#)
+            .replace(r#""error_kind":null"#, &format!(r#""error_kind":"{kind}""#));
+        let parsed: Response = serde_json::from_str(&run_fetched(&view)).expect(kind);
+        let encoded = serde_json::to_string(&parsed).unwrap();
+        assert!(encoded.contains(&format!(r#""error_kind":"{kind}""#)));
+    }
+    assert!(
+        serde_json::from_str::<Response>(&run_fetched(
+            &RUN_VIEW.replace(r#""state":"running""#, r#""state":"paused""#)
+        ))
+        .is_err()
+    );
+    for key in [
+        r#","written_record_key":null"#,
+        r#","cwd":null"#,
+        r#","started_at":null"#,
+        r#","finished_at":null"#,
+        r#","error":null"#,
+        r#","error_kind":null"#,
+        r#","thread_id":null"#,
+        r#","session_id":null"#,
+        r#","summary_path":null"#,
+        r#","stream_bytes":0"#,
+        r#","can_retry_save":false"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Response>(&run_fetched(&RUN_VIEW.replace(key, ""))).is_err(),
+            "{key}"
+        );
+    }
+    let run = |kind: &str, extra: &str| {
+        format!(
+            r#"{{"type":"{kind}","protocol_version":6,"request_id":"r","run":{RUN_VIEW}{extra}}}"#
+        )
+    };
+    assert!(serde_json::from_str::<Response>(&run("run_started", r#","existing":false"#)).is_ok());
+    assert!(serde_json::from_str::<Response>(&run("run_started", "")).is_err());
+    assert!(serde_json::from_str::<Response>(&run("run_updated", "")).is_ok());
+    let listed = format!(
+        r#"{{"type":"runs_listed","protocol_version":6,"request_id":"r","runs":[{RUN_VIEW}]}}"#
+    );
+    assert!(serde_json::from_str::<Response>(&listed).is_ok());
+}
+
+#[test]
+fn get_run_requires_since_offset() {
+    let ok = r#"{"type":"get_run","protocol_version":6,"request_id":"r","run_id":"00000000-0000-4000-8000-000000000001","since_offset":0}"#;
+    assert!(serde_json::from_str::<Request>(ok).is_ok());
+    assert!(serde_json::from_str::<Request>(&ok.replace(r#","since_offset":0"#, "")).is_err());
+    for kind in ["cancel_run", "retry_save"] {
+        let request = format!(
+            r#"{{"type":"{kind}","protocol_version":6,"request_id":"r","run_id":"00000000-0000-4000-8000-000000000001"}}"#
+        );
+        assert!(serde_json::from_str::<Request>(&request).is_ok(), "{kind}");
+    }
+    let list = r#"{"type":"list_runs","protocol_version":6,"request_id":"r"}"#;
+    assert!(serde_json::from_str::<Request>(list).is_ok());
+}
+
+#[test]
+fn service_unavailable_error_code_round_trips() {
+    let message = r#"{"type":"error","protocol_version":6,"request_id":"r","code":"service_unavailable","message":"The Brauser service is not installed."}"#;
+    let parsed: Response = serde_json::from_str(message).unwrap();
+    let Response::Error(ref error) = parsed else {
+        panic!("not an error response");
+    };
+    assert_eq!(error.code, brauser_protocol::ErrorCode::ServiceUnavailable);
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), message);
+}
+
+#[test]
+fn service_ready_requires_build_id() {
+    let hello = r#"{"type":"service_hello","protocol_version":6,"request_id":"r"}"#;
+    assert!(serde_json::from_str::<Request>(hello).is_ok());
+    let ready = r#"{"type":"service_ready","protocol_version":6,"request_id":"r","build_id":"b1"}"#;
+    assert!(serde_json::from_str::<Response>(ready).is_ok());
+    assert!(serde_json::from_str::<Response>(&ready.replace(r#","build_id":"b1""#, "")).is_err());
+}

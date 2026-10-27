@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
+const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
 
 // Run after build:extension. Each test loads a fresh copy of the side panel
@@ -43,6 +44,7 @@ class FakeElement {
     if (!this.disabled) this.dispatch("click");
   }
   setAttribute() {}
+  focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   querySelector(selector) {
@@ -97,13 +99,13 @@ test.afterEach(() => {
   teardown = [];
 });
 
-function hostReply(request) {
+function hostReply(request, config = CONFIG) {
   switch (request.type) {
     case "hello":
       return { type: "hello_result", host_version: "0.0.0", configured: true, config_issue: null };
     case "get_config":
       return {
-        type: "config_result", revision: "1", config: CONFIG, config_issue: null,
+        type: "config_result", revision: "1", config, config_issue: null,
         agent_status: { state: "not_set_up", harness_version: null, message: "Set up an AI harness." },
         adapter_issue: null, adapter_warnings: [],
       };
@@ -114,20 +116,36 @@ function hostReply(request) {
       };
     case "get_artifact":
       return { type: "artifact_result", recognized: false, artifact: null };
+    case "record_why":
+      return {
+        type: "why_recorded", event_id: request.event.event_id, outcome: "persisted", reason: null,
+        relative_path: "log/2026-10-27.md",
+      };
     default:
       return { type: "error", code: "internal", message: `Unexpected host request ${request.type}` };
   }
 }
 
-async function install({ tab, contains }) {
+// `intercept(request, state)` may answer a host request (or return a Promise
+// to hold it); a falsy result falls back to the default reply. `workerReply`
+// does the same for messages to the worker. With `state.hostDead`, a new host
+// process closes its port without answering, as one that cannot start does.
+async function install({
+  tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null,
+  intercept = () => null, workerReply = () => undefined,
+}) {
   const elements = pageElements();
   const state = {
     tab: tab === undefined ? undefined : { incognito: false, ...tab },
     contains,
+    config: structuredClone(config), revision: "1", configIssue, adapterIssue,
+    workerStatus: { ...statusFor(), ...workerStatus }, requests: [], workerRequests: [],
     created: [],
     counts: new Map(),
     added: [],
     removed: [],
+    ports: [],
+    hostDead: false,
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
@@ -135,6 +153,9 @@ async function install({ tab, contains }) {
     getElementById: (id) => elements.get(id) ?? null,
     createElement: (tag) => new FakeElement(tag),
   };
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    locks: { request: async (_name, _options, action) => action() },
+  } });
   globalThis.window = {
     addEventListener(type, listener) { if (type === "pagehide") teardown.push(listener); },
     confirm: () => false,
@@ -153,12 +174,38 @@ async function install({ tab, contains }) {
       openOptionsPage: async () => undefined,
       connectNative() {
         const messageListeners = [];
-        return {
+        const disconnectListeners = [];
+        const port = {
           onMessage: { addListener(listener) { messageListeners.push(listener); } },
-          onDisconnect: { addListener() {} },
+          onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
+          fireDisconnect() {
+            for (const listener of disconnectListeners) listener();
+          },
           postMessage(request) {
-            setTimeout(() => {
-              const reply = hostReply(request);
+            state.requests.push(structuredClone(request));
+            if (state.hostDead) {
+              setTimeout(() => port.fireDisconnect(), 0);
+              return;
+            }
+            setTimeout(async () => {
+              let reply = await intercept(request, state);
+              if (!reply && request.type === "get_config") {
+                reply = { ...hostReply(request), config: state.config, revision: state.revision,
+                  config_issue: state.configIssue, adapter_issue: state.adapterIssue };
+              }
+              if (!reply && request.type === "update_config") {
+                if (request.expected_revision !== state.revision) {
+                  reply = { type: "error", code: "conflict", message: "Settings changed" };
+                } else {
+                  state.config = structuredClone(request.config);
+                  state.revision = String(Number(state.revision) + 1);
+                  reply = { type: "config_updated", config: state.config, revision: state.revision };
+                }
+              }
+              if (!reply && request.type === "save_note") {
+                reply = { type: "note_saved", revision: "saved", key: request.expected_key, outcome: "created", relative_path: "pages/note.md" };
+              }
+              reply ??= hostReply(request);
               for (const listener of messageListeners) {
                 listener({ ...reply, protocol_version: PROTOCOL_VERSION, request_id: request.request_id });
               }
@@ -166,9 +213,12 @@ async function install({ tab, contains }) {
           },
           disconnect() {},
         };
+        state.ports.push(port);
+        return port;
       },
-      async sendMessage() {
-        return { ok: true, value: statusFor() };
+      async sendMessage(request) {
+        state.workerRequests.push(structuredClone(request));
+        return (await workerReply(request)) ?? { ok: true, value: structuredClone(state.workerStatus) };
       },
     },
     storage: {
@@ -177,7 +227,7 @@ async function install({ tab, contains }) {
         async set() {},
         async remove() {},
       },
-      onChanged: { addListener() {} },
+      onChanged: listeners(),
     },
     tabs: {
       async query() {
@@ -216,12 +266,38 @@ async function install({ tab, contains }) {
   return {
     state,
     created: state.created,
+    navigate(url, id = state.tab?.id ?? 1) {
+      state.tab = { ...state.tab, url, id, incognito: false };
+      for (const listener of tabActivated.registered) listener({ tabId: id, windowId: 1 });
+    },
+    policyChanged() {
+      for (const listener of chrome.storage.onChanged.registered) {
+        listener({ [POLICY_STORAGE_KEY]: { newValue: null } }, "local");
+      }
+    },
     el(id) {
       const found = elements.get(id);
       if (!found) throw new Error(`No element ${id} in panel.html`);
       return found;
     },
     calls: (name) => state.counts.get(name) ?? 0,
+    sent: (type) => state.requests.filter((request) => request.type === type),
+    // The followed tab moves to another address in place.
+    followLink(url, title) {
+      state.tab.url = url;
+      state.tab.title = title;
+      for (const listener of tabUpdated.registered) listener(state.tab.id, { url, title }, state.tab);
+    },
+    titleChanged(title) {
+      state.tab.title = title;
+      for (const listener of tabUpdated.registered) listener(state.tab.id, { title }, state.tab);
+    },
+    // The running host process exits after having answered.
+    hostExits() {
+      chrome.runtime.lastError = { message: "Native host has exited." };
+      state.ports.at(-1).fireDisconnect();
+      chrome.runtime.lastError = undefined;
+    },
     // Chrome fires these after the user changes site access.
     grant() {
       state.contains = true;
@@ -313,4 +389,524 @@ test("the panel markup has no grant button or address-unavailable note", () => {
   assert.ok(!PANEL_HTML.includes('id="note-grant-origin"'));
   assert.ok(!PANEL_HTML.includes('id="note-unavailable"'));
   assert.ok(!PANEL_HTML.includes("can't see this tab's address"));
+});
+
+const JIRA_URL = "https://acme.atlassian.net/browse/PROJ-42";
+const GITHUB_URL = "https://github.com/acme-corp/widget/pull/42/files";
+const updates = (page) => page.state.requests.filter((request) => request.type === "update_config");
+
+async function captureReview(url = JIRA_URL, options = {}) {
+  const page = await install({ tab: { id: 1, url, title: "Work page" }, ...options });
+  await until(() => !page.el("capture-site").disabled && !page.el("capture-site-area").hidden, "Capture Site to be ready");
+  await until(() => !page.el("note-body").disabled, "the note to load");
+  // The panel sends pending visits once on startup.
+  await until(() => !page.el("capture-site").disabled, "startup delivery to finish");
+  page.el("capture-site").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  return page;
+}
+
+async function saveCapture(page) {
+  assert.equal(page.el("capture-site-save").disabled, false);
+  page.el("capture-site-save").click();
+  await until(() => page.el("capture-site-review").hidden, "site capture to save");
+  await until(() => !page.el("note-body").disabled, "the note to reload after enabling capture");
+}
+
+test("Capture Site previews Jira and installs the host-returned policy in one save", async () => {
+  const page = await captureReview();
+  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
+  assert.match(page.el("capture-site-preview").textContent, /Illustrative example/);
+  assert.match(page.el("capture-site-preview").textContent, /27.*examples skipped/);
+  assert.match(page.el("capture-site-preview").textContent, /Skipped: https:\/\/acme.atlassian.net\/share/);
+  assert.doesNotMatch(page.el("capture-site-preview").textContent, /"match"|"id"/);
+  assert.equal(page.el("capture-site-heading").focused, true);
+  await saveCapture(page);
+  assert.equal(updates(page).length, 1);
+  const update = updates(page)[0];
+  assert.equal(update.expected_revision, "1");
+  assert.equal(update.config.capture_enabled, true);
+  assert.equal(update.config.adapters.artifacts[0].type, "jira.issue");
+  assert.equal(update.picker_token, null);
+  assert.equal(update.knowledge_base_token, null);
+  const installed = page.state.workerRequests.filter((request) => request.kind === "install_policy").at(-1);
+  assert.equal(installed.lease.revision, "2");
+  assert.deepEqual(installed.lease.adapters, update.config.adapters);
+  assert.equal(page.calls("permissions.request"), 0);
+  assert.equal(page.calls("permissions.remove"), 0);
+  assert.deepEqual([...new Set(page.state.requests.map((r) => r.type))].sort(),
+    ["get_artifact", "get_config", "hello", "load_note", "update_config"]);
+});
+
+test("Capture Site recognizes OneDrive document routes without scope or JSON", async () => {
+  const url = "https://acme-my.sharepoint.com/personal/alex/_layouts/15/Doc.aspx?sourcedoc=%7B123e4567-e89b-12d3-a456-426614174000%7D";
+  const page = await captureReview(url);
+  assert.equal(page.el("capture-site-github").hidden, true);
+  assert.match(page.el("capture-site-preview").textContent, /OneDrive for work documents/);
+  assert.match(page.el("capture-site-preview").textContent, /will be captured/);
+  await saveCapture(page);
+  assert.equal(updates(page)[0].config.adapters.artifacts[0].id, "sharepoint:{host}/{doc}");
+});
+
+test("GitHub requires separate inline scopes and saves exactly the selected kinds", async () => {
+  const page = await captureReview(GITHUB_URL);
+  assert.equal(page.el("capture-site-github").hidden, false);
+  assert.equal(page.el("capture-site-save").disabled, true);
+  page.el("capture-site-pr-orgs").value = "Acme-Corp";
+  page.el("capture-site-pr-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true, "issue scope is a separate choice");
+  page.el("capture-site-issue-orgs").value = "other-org";
+  page.el("capture-site-issue-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  assert.match(page.el("capture-site-preview").textContent, /pull requests: acme-corp/);
+  assert.match(page.el("capture-site-preview").textContent, /issues: other-org/);
+  page.el("capture-site-issues").checked = false;
+  page.el("capture-site-issues").dispatch("input");
+  assert.equal(page.el("capture-site-issue-orgs").disabled, true);
+  await saveCapture(page);
+  assert.equal(updates(page)[0].config.adapters.artifacts.length, 1);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["acme-corp"] });
+});
+
+test("canceling and switching tabs clear a review without changing capture", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-pr-orgs").value = "sensitive-org";
+  page.el("capture-site-cancel").click();
+  assert.equal(page.el("capture-site-review").hidden, true);
+  assert.equal(page.el("capture-site-pr-orgs").value, "");
+  assert.equal(updates(page).length, 0);
+  page.el("capture-site").click();
+  page.navigate(JIRA_URL, 2);
+  await until(() => page.el("capture-site-review").hidden, "tab change to dismiss the review");
+  page.el("capture-site-save").click();
+  assert.equal(updates(page).length, 0);
+  page.navigate("chrome://extensions", 3);
+  await until(() => page.el("capture-site-area").hidden, "non-web tab to hide capture setup");
+});
+
+test("a same-URL tab switch and an SPA route change dismiss the review", async () => {
+  const page = await captureReview();
+  page.navigate(JIRA_URL, 2);
+  await until(() => page.el("capture-site-review").hidden, "same-URL tab switch to dismiss review");
+  page.el("capture-site").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  page.navigate("https://acme.atlassian.net/browse/PROJ-43", 2);
+  await until(() => page.el("capture-site-review").hidden, "SPA navigation to dismiss review");
+  assert.equal(updates(page).length, 0);
+});
+
+test("a concurrent configuration save refuses the old review rather than rebasing it", async () => {
+  const page = await captureReview();
+  page.state.config.strip_params = ["tracking"];
+  page.state.revision = "2";
+  page.el("capture-site-save").click();
+  await until(() => page.el("status").textContent.includes("Settings changed"), "stale config refusal");
+  await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "stale review marker");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(updates(page).length, 0);
+  assert.deepEqual(page.state.config.strip_params, ["tracking"]);
+});
+
+test("host revision conflicts keep the reviewed site unsaved", async () => {
+  const page = await captureReview(JIRA_URL, { intercept(request) {
+    if (request.type === "update_config") return { type: "error", code: "conflict", message: "Settings changed at commit" };
+  } });
+  page.el("capture-site-save").click();
+  await until(() => page.el("status").textContent.includes("Settings changed at commit"), "revision conflict to surface");
+  await until(() => !page.el("note-body").disabled, "old note to return after failed commit");
+  assert.equal(page.state.config.adapters.artifacts.length, 0);
+  assert.equal(updates(page).length, 1);
+  assert.equal(page.el("capture-site-review").hidden, false);
+});
+
+test("a pending local pause or removal blocks capture both at review and at save", async () => {
+  for (const workerStatus of [
+    { pause_pending: true, pause_token: "pause" },
+    { pending_removals: ["https://acme.atlassian.net"] },
+  ]) {
+    const page = await captureReview(JIRA_URL, { workerStatus });
+    assert.equal(page.el("capture-site-save").disabled, true);
+    assert.match(page.el("capture-site-message").textContent, /pause|removal/i);
+    assert.equal(updates(page).length, 0);
+  }
+  const page = await captureReview();
+  page.state.workerStatus.pause_pending = true;
+  page.el("capture-site-save").click();
+  await until(() => page.el("status").textContent.includes("pending"), "new local pause to refuse save");
+  assert.equal(updates(page).length, 0);
+});
+
+test("adding another site leaves global capture paused", async () => {
+  const config = structuredClone(CONFIG);
+  const { starterOffers } = await import("../dist/starter-adapters.js");
+  config.adapters.artifacts = starterOffers("https://first.atlassian.net", []).map((offer) => offer.adapter);
+  const page = await captureReview(JIRA_URL, { config });
+  assert.match(page.el("capture-site-save").textContent, /keep capture paused/);
+  await saveCapture(page);
+  assert.equal(updates(page)[0].config.capture_enabled, false);
+  assert.equal(updates(page)[0].config.adapters.artifacts.length, 2);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0], config.adapters.artifacts[0]);
+});
+
+test("configured sites, missing folders, and invalid policies cannot use Capture Site", async () => {
+  const { starterOffers } = await import("../dist/starter-adapters.js");
+  for (const options of [
+    { config: { ...CONFIG, storage: null } },
+    { adapterIssue: "Future policy format" },
+    { configIssue: "Folder moved" },
+    { config: { ...CONFIG, adapters: { format: 1, artifacts: starterOffers("https://acme.atlassian.net", []).map((offer) => offer.adapter) } } },
+  ]) {
+    const page = await install({ tab: { id: 1, url: JIRA_URL }, ...options });
+    await until(() => !page.el("capture-site-area").hidden, "capture area to settle");
+    assert.ok(page.el("capture-site").disabled || page.el("capture-site").hidden);
+    page.el("capture-site").click();
+    assert.equal(updates(page).length, 0);
+    assert.equal(page.el("capture-site-review").hidden, true);
+  }
+});
+
+test("unknown origins and private tabs do not offer the starter flow", async () => {
+  for (const tab of [
+    { id: 1, url: "https://unknown.example/items/1" },
+    { id: 1, url: JIRA_URL, incognito: true },
+  ]) {
+    const page = await install({ tab });
+    await until(() => page.calls("tabs.query") > 0, "tab query");
+    assert.equal(page.el("capture-site-area").hidden, true);
+  }
+});
+
+test("pending note edits save before capture changes identity, then load the new identity", async () => {
+  const page = await captureReview();
+  page.el("note-body").value = "Keep this text";
+  page.el("note-body").dispatch("input");
+  await saveCapture(page);
+  const requests = page.state.requests;
+  const saved = requests.findIndex((request) => request.type === "save_note");
+  const updated = requests.findIndex((request) => request.type === "update_config");
+  assert.ok(saved >= 0 && saved < updated);
+  assert.equal(requests[saved].body, "Keep this text");
+  assert.ok(requests.slice(updated + 1).some((request) => request.type === "load_note"));
+});
+
+test("the save rechecks the active tab even before Chrome delivers a tab event", async () => {
+  const page = await captureReview();
+  page.state.tab.url = "https://other.atlassian.net/browse/OTHER-1";
+  page.el("capture-site-save").click();
+  await until(() => page.el("status").textContent.includes("active page changed"), "fresh-tab refusal");
+  assert.equal(updates(page).length, 0);
+});
+
+test("note loads stay suspended through title updates during a capture save", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const page = await captureReview(JIRA_URL, { async intercept(request) {
+    if (request.type === "update_config") await gate;
+  } });
+  page.el("capture-site-save").click();
+  page.el("capture-site-save").click();
+  await until(() => updates(page).length === 1, "in-flight config save");
+  const initialLoads = page.state.requests.filter((request) => request.type === "load_note").length;
+  const initialQueries = page.calls("tabs.query");
+  page.navigate(JIRA_URL);
+  await until(() => page.calls("tabs.query") > initialQueries, "title/tab refresh during save");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(page.el("note-body").disabled, true);
+  assert.equal(page.state.requests.filter((request) => request.type === "load_note").length, initialLoads);
+  release();
+  await until(() => page.el("capture-site-review").hidden, "capture save to complete");
+  await until(() => !page.el("note-body").disabled, "new note identity to load");
+  assert.equal(updates(page).length, 1);
+});
+
+test("a failed old-note save keeps a copy-out through capture setup", async () => {
+  const page = await captureReview(JIRA_URL, { intercept(request) {
+    if (request.type === "save_note") return { type: "error", code: "internal", message: "Notes volume unavailable" };
+  } });
+  page.el("note-body").value = "Never lose my edit";
+  page.el("note-body").dispatch("input");
+  await saveCapture(page);
+  assert.equal(page.el("note-conflict").hidden, false);
+  assert.equal(page.el("note-unsaved").value, "Never lose my edit");
+  assert.equal(updates(page).length, 1);
+});
+
+test("switching pages during the post-capture note reload follows the new note", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let reloading = false;
+  const nextUrl = "https://acme.atlassian.net/browse/PROJ-43";
+  const page = await captureReview(JIRA_URL, { async intercept(request, state) {
+    if (request.type === "load_note" && state.revision === "2") {
+      if (request.url === JIRA_URL) {
+        reloading = true;
+        await gate;
+      }
+      return { ...hostReply(request), body: request.url };
+    }
+  } });
+  page.el("capture-site-save").click();
+  await until(() => reloading, "post-save note reload");
+  try {
+    page.navigate(nextUrl, 2);
+    await until(() => page.el("page-url").textContent === nextUrl, "new page header");
+  } finally {
+    release();
+  }
+  await until(() => !page.el("note-body").disabled && page.el("note-body").value === nextUrl,
+    "the new page's note after capture setup");
+  page.el("note-body").value = "Edit for the new page";
+  page.el("note-body").dispatch("input");
+  // A tab change flushes the edit without waiting for the autosave timer.
+  page.navigate("https://other.example/", 3);
+  await until(() => page.state.requests.some((request) => request.type === "save_note"), "note save");
+  const saved = page.state.requests.find((request) => request.type === "save_note");
+  assert.equal(saved.url, nextUrl);
+  assert.equal(saved.body, "Edit for the new page");
+});
+
+test("a verification failure after commit says the site was saved and never resubmits", async () => {
+  const page = await captureReview(JIRA_URL, { intercept(request, state) {
+    if (request.type === "get_config" && state.revision === "2") {
+      return { type: "error", code: "internal", message: "Status temporarily unavailable" };
+    }
+  } });
+  page.el("capture-site-save").click();
+  await until(() => page.el("status").textContent.includes("Site saved, but"), "post-commit failure message");
+  assert.equal(updates(page).length, 1);
+  assert.equal(page.state.config.adapters.artifacts[0].type, "jira.issue");
+  assert.ok(page.state.workerRequests.some((request) => request.kind === "suspend_policy"));
+  assert.equal(page.el("capture-site-review").hidden, true);
+});
+
+test("a policy update makes an open review stale before it can be saved", async () => {
+  const page = await captureReview();
+  page.state.revision = "2";
+  page.policyChanged();
+  await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "policy revision refresh");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(updates(page).length, 0);
+});
+
+// --- Artifact card: "Why I'm here" -------------------------------------------
+
+const CAPTURING = { ...CONFIG, capture_enabled: true };
+
+function artifact(id, title, why = null) {
+  return {
+    artifact_id: id, artifact_type: "doc", title, url: `https://docs.example/${id}`,
+    first_seen: "2026-10-01", last_seen: "2026-10-27", focused_seconds: 60,
+    background_seconds: 0, opens: 1, days_opened: 1, last_mode: null, why, linked_count: 0,
+  };
+}
+
+const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value });
+const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function typeWhy(page, text) {
+  page.el("artifact-why").value = text;
+  page.el("artifact-why").dispatch("input");
+}
+
+async function noteLoaded(page) {
+  await until(() => page.sent("load_note").length > 0 && page.el("note-body").disabled === false,
+    "the note to load");
+}
+
+test("Save why waits for the opening capture replay, then records", async () => {
+  let finishReplay;
+  const replay = new Promise((resolve) => { finishReplay = resolve; });
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+    workerReply: async (request) => {
+      if (request.kind === "sync_now") await replay;
+      return undefined;
+    },
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "reviewing for launch");
+  // The replay is still running, so the click would be ignored: Save says so
+  // by being disabled rather than doing nothing.
+  assert.equal(page.el("save-why").disabled, true);
+
+  finishReplay();
+  await until(() => page.el("save-why").disabled === false, "Save to enable after the replay");
+  page.el("save-why").click();
+  await until(() => page.sent("record_why").length === 1, "record_why");
+  const [request] = page.sent("record_why");
+  assert.equal(request.event.artifact_id, "doc:a");
+  assert.equal(request.event.url, "https://docs.example/a");
+  assert.equal(request.event.text, "reviewing for launch");
+  await settle(200);
+  assert.equal(page.el("status").textContent, "Artifact context saved.");
+});
+
+test("Save why is disabled until there is text to save", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  assert.equal(page.el("save-why").disabled, true);
+  typeWhy(page, "  ");
+  assert.equal(page.el("save-why").disabled, true);
+  typeWhy(page, "context");
+  assert.equal(page.el("save-why").disabled, false);
+  typeWhy(page, "");
+  assert.equal(page.el("save-why").disabled, true);
+});
+
+test("a failed artifact lookup for a new page clears the previous page's card", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => {
+      if (request.type !== "get_artifact") return undefined;
+      return request.url.endsWith("/a")
+        ? recognized(artifact("doc:a", "Doc A"))
+        : { type: "error", code: "internal", message: "index busy" };
+    },
+  });
+  await until(() => page.el("artifact-heading").textContent === "Doc A", "page A's card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "context for A");
+
+  page.followLink("https://other.example/b", "B");
+  await until(() => page.sent("get_artifact").some((request) => request.url.endsWith("/b")), "B's lookup");
+  await until(() => /unavailable: index busy/.test(page.el("artifact-status").textContent), "the lookup error");
+  assert.equal(page.el("artifact-card").hidden, true, "page B still shows page A's card");
+  assert.equal(page.el("save-why").disabled, true);
+  // Nothing can attach page B's URL to page A's artifact.
+  page.el("save-why").dispatch("click");
+  await settle();
+  assert.equal(page.sent("record_why").length, 0);
+  assert.notEqual(page.el("status").textContent, "Artifact context saved.");
+});
+
+test("a failed artifact lookup for the same page keeps its card and draft", async () => {
+  let fail = false;
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => {
+      if (request.type !== "get_artifact") return undefined;
+      return fail
+        ? { type: "error", code: "internal", message: "index busy" }
+        : recognized(artifact("doc:a", "Doc A", "old reason"));
+    },
+  });
+  await until(() => page.el("artifact-why").value === "old reason", "the stored why");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "my draft");
+  fail = true;
+  page.titleChanged("A (1)");
+  await until(() => /unavailable: index busy/.test(page.el("artifact-status").textContent), "the lookup error");
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-why").value, "my draft");
+  assert.equal(page.el("save-why").disabled, false);
+});
+
+async function outageWithDraft(page) {
+  await until(() => page.el("artifact-why").value === "old reason", "the stored why");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "my unsaved draft");
+  // The host process exits, and the next start fails.
+  page.hostExits();
+  page.state.hostDead = true;
+  page.titleChanged("A (1)"); // get_artifact cannot start the host
+  await settle();
+  page.titleChanged("A (2)"); // the panel now knows the host is unreachable
+  await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
+}
+
+const withStoredWhy = (request) => request.type === "get_artifact"
+  ? recognized(artifact("doc:a", "Doc A", "old reason"))
+  : undefined;
+
+test("an unsaved Why draft survives a host outage", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING, intercept: withStoredWhy,
+  });
+  await outageWithDraft(page);
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-why").value, "my unsaved draft");
+
+  // The host is back; the user follows a link to another URL of the same artifact.
+  page.state.hostDead = false;
+  page.followLink("https://docs.example/a?view=1", "A");
+  await until(() => page.el("artifact-status").textContent === "● Artifact recognized", "the lookup to succeed");
+  await settle();
+  assert.equal(page.el("artifact-card").hidden, false);
+  assert.equal(page.el("artifact-why").value, "my unsaved draft",
+    "the unsaved Why draft was replaced after the host outage");
+});
+
+test("Save why reports a host outage and records once the host is back", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING, intercept: withStoredWhy,
+  });
+  await outageWithDraft(page);
+  // The click itself restarts the host, so Save stays available.
+  assert.equal(page.el("save-why").disabled, false);
+  page.el("save-why").click();
+  await until(() => /Could not save artifact context/.test(page.el("status").textContent), "the save failure");
+  assert.equal(page.el("artifact-why").value, "my unsaved draft");
+
+  page.state.hostDead = false;
+  await until(() => page.el("save-why").disabled === false, "Save to enable again");
+  page.el("save-why").click();
+  await until(() => page.el("status").textContent === "Artifact context saved.", "the saved status");
+  const recorded = page.sent("record_why");
+  assert.equal(recorded.at(-1).event.text, "my unsaved draft");
+  assert.equal(recorded.at(-1).event.url, "https://docs.example/a");
+});
+
+test("Save why is disabled while capture is paused, keeps the draft, and points to Resume capture", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: { ...CONFIG, capture_enabled: false },
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "a draft while paused");
+  assert.equal(page.el("save-why").disabled, true);
+  assert.equal(page.el("artifact-why").value, "a draft while paused");
+  const hint = page.el("why-paused-hint");
+  assert.equal(hint.hidden, false);
+  assert.match(hint.textContent, /Use Resume capture in settings to turn it back on\./);
+  assert.equal(page.sent("record_why").length, 0);
+});
+
+test("Save why stays disabled while a local pause waits for the host", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+    // The worker paused, but the host still has capture on.
+    workerReply: () => ({ ok: true, value: { ...statusFor(), pause_pending: true } }),
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "a draft while paused");
+  assert.equal(page.el("save-why").disabled, true);
+  assert.equal(page.el("why-paused-hint").hidden, false);
+  // Resume capture is not offered until the host confirms the pause.
+  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture to finish saving this setting in the host\./);
+  page.el("save-why").dispatch("click");
+  await settle();
+  assert.equal(page.sent("record_why").length, 0);
+  assert.match(page.el("status").textContent, /Use Pause capture to finish/);
 });

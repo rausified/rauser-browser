@@ -80,6 +80,9 @@ export interface WorkerStatus {
   // Why the worker's last background exchange with the host failed, or null
   // once one succeeds.
   host_error: string | null;
+  // Acknowledged delivery batches so far; changes whenever the host's
+  // artifact history may have.
+  delivered_batches: number;
 }
 
 export type WorkerRequest =
