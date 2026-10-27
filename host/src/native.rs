@@ -244,8 +244,9 @@ fn dispatch(
             }
             let previous = config.snapshot().clone();
             let previous_revision = config.revision().to_owned();
+            let artifacts_dir_proposed = config.artifacts_dir_proposed();
             let authorized = match consent.authorize_update(
-                Current::new(&previous, config.artifacts_dir_proposed()),
+                Current::new(&previous, artifacts_dir_proposed),
                 &previous_revision,
                 &value.config,
                 value.picker_token.as_deref(),
@@ -276,6 +277,9 @@ fn dispatch(
                         value.consent_token.as_deref(),
                         value.harness_token.as_deref(),
                     );
+                    if artifacts_dir_proposed {
+                        mark_all_artifacts_dirty(config);
+                    }
                     Response::ConfigUpdated(ConfigUpdated {
                         protocol_version: PROTOCOL_VERSION,
                         request_id: value.request_id,
@@ -1134,6 +1138,26 @@ fn reconcile_index_from_logs(config: &ConfigStore) {
         && let Err(error) = index.reconcile_from_logs()
     {
         eprintln!("{NAMESPACE}: warning: could not reconcile artifact index: {error:#}");
+    }
+}
+
+/// The artifact folder was just confirmed. A cache left clean by an earlier
+/// host that wrote into the then-implicit folder must not hide artifacts
+/// whose files are missing, so the next regeneration rewrites them all.
+fn mark_all_artifacts_dirty(config: &mut ConfigStore) {
+    let Ok(_lock) = config.lock_current() else {
+        return;
+    };
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return;
+    };
+    if let Ok(cache_dir) = config.cache_dir()
+        && let Err(error) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+            .and_then(|index| index.rebuild())
+    {
+        eprintln!(
+            "{NAMESPACE}: warning: could not queue artifact files; run `brauser reindex`: {error:#}"
+        );
     }
 }
 
@@ -4800,10 +4824,56 @@ id = "work:{host}/{id}"
         assert!(reindex(&mut config).unwrap().is_none());
         assert!(!root.join("artifacts").exists());
 
-        // Saving settings confirms the folder; the deferred files follow.
+        // An earlier host regenerated into the unconfirmed folder and left a
+        // clean cache; the user then removed the folder it should not have
+        // written.
+        let storage = config.snapshot().storage.clone().unwrap();
+        let index = ArtifactIndex::open_in(
+            &storage,
+            config.root_identity(),
+            &config.cache_dir().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        std::fs::remove_dir_all(root.join("artifacts")).unwrap();
+
+        // Saving settings confirms the folder; every deferred file follows.
         let next = config.snapshot().clone();
-        let revision = config.revision().to_owned();
-        assert!(config.update(next, &revision).unwrap().is_some());
+        let mut consent = ConsentAuthority::new();
+        let confirmed = consent
+            .confirm_config_with(
+                Current::new(config.snapshot(), true),
+                config.revision(),
+                &next,
+                None,
+                |_| Ok(true),
+            )
+            .unwrap()
+            .unwrap();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext {
+            env: &env,
+            confirm: no_dialog,
+        };
+        let response = dispatch(
+            Request::UpdateConfig(UpdateConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "update-1".into(),
+                expected_revision: config.revision().to_owned(),
+                config: next,
+                picker_token: None,
+                consent_token: Some(confirmed.consent_token),
+                harness_token: None,
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        assert!(
+            matches!(response, Response::ConfigUpdated(_)),
+            "{response:?}"
+        );
+        assert!(!config.artifacts_dir_proposed());
         regenerate_artifacts(&mut config);
         assert!(root.join("artifacts").is_dir());
     }

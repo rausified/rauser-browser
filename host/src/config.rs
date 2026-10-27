@@ -27,7 +27,9 @@ thread_local! {
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{self, BinaryIdentity};
 use crate::privacy;
-use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
+use crate::vault::{
+    STALE_TEMPORARY_AGE, Vault, is_generated_temporary, open_selected_root, selected_root_identity,
+};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_ROOT_PATH_BYTES: usize = 4 * 1024;
@@ -905,79 +907,77 @@ impl From<StorageConfig> for StoredStorage {
 
 impl From<StoredStorage> for StorageConfig {
     fn from(value: StoredStorage) -> Self {
-        let mut occupied = vec![
-            Path::new(&value.log_dir),
-            Path::new(&value.pages_dir),
-            Path::new(&value.later_dir),
-        ];
-        if let Some(summaries_dir) = &value.summaries_dir {
-            occupied.push(Path::new(summaries_dir));
-        }
-        let artifacts_dir = value
-            .artifacts_dir
-            .unwrap_or_else(|| unused_artifacts_dir(Path::new(&value.root), &occupied));
-        Self {
+        let mut storage = Self {
             root: value.root,
             profile: value.profile,
             log_dir: value.log_dir,
             pages_dir: value.pages_dir,
             later_dir: value.later_dir,
-            artifacts_dir,
+            artifacts_dir: value.artifacts_dir.unwrap_or_default(),
             summaries_dir: value.summaries_dir,
+        };
+        // The notes folder is not verified yet, so this first proposal looks
+        // only at the config; read_disk_state refines it once it is.
+        if storage.artifacts_dir.is_empty() {
+            storage.artifacts_dir = unused_artifacts_dir(&storage, |_| Ok(false))
+                .expect("a config-only check never fails");
         }
+        storage
     }
 }
 
-/// Generated names tried, beyond those other locations can block, before the
-/// proposal stops avoiding folders that already exist in the notes root.
-const EXISTING_FOLDER_PROBES: usize = 8;
+/// Generated names tried before the proposal gives up on avoiding entries
+/// that already exist in the notes root. Existing entries are finite, so
+/// this bound matters only for a folder that refuses every probe.
+const MAX_ARTIFACT_NAME_PROBES: usize = 1024;
 
 /// Older configs did not name an artifact directory, so the host proposes
 /// one for the user to confirm (`ConfigStore::artifacts_dir_proposed`).
 /// Preserve their existing layout even when one of its configurable
 /// locations already uses the usual `artifacts` name; adopting a colliding
 /// default would make the whole config unreadable before the user had any
-/// way to choose a different location. Skip names already present in the
-/// notes root too: such a folder is the user's own, and on a
-/// case-insensitive volume `Artifacts` is the same folder as `artifacts`.
-fn unused_artifacts_dir(root: &Path, occupied: &[&Path]) -> String {
+/// way to choose a different location. `exists` reports an entry already in
+/// the notes root: such a folder is the user's own, and on a case-insensitive
+/// volume `Artifacts` is the same folder as `artifacts`. `None` means no
+/// name could be shown to be free.
+fn unused_artifacts_dir(
+    storage: &StorageConfig,
+    exists: impl Fn(&str) -> std::io::Result<bool>,
+) -> Option<String> {
     // An empty location has no components and would block every name;
     // validation rejects it later. Every other location blocks at most the
-    // one single-component name matching its first component, so one of
-    // the first `occupied.len() + 1` candidates is always free.
-    let occupied: Vec<Vec<String>> = occupied
-        .iter()
-        .map(|path| lower_components(path))
-        .filter(|parts| !parts.is_empty())
-        .collect();
-    let candidate = |suffix: usize| match suffix {
-        0 => "artifacts".to_owned(),
-        1 => "brauser-artifacts".to_owned(),
-        value => format!("brauser-artifacts-{value}"),
-    };
-    let free_of_locations = |candidate: &str| {
-        let candidate_parts = lower_components(Path::new(candidate));
-        occupied.iter().all(|parts| {
+    // one single-component name matching its first component.
+    let occupied: Vec<Vec<String>> = [
+        Some(storage.log_dir.as_str()),
+        Some(storage.pages_dir.as_str()),
+        Some(storage.later_dir.as_str()),
+        storage.summaries_dir.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|path| lower_components(Path::new(path)))
+    .filter(|parts| !parts.is_empty())
+    .collect();
+    for suffix in 0..MAX_ARTIFACT_NAME_PROBES {
+        let candidate = match suffix {
+            0 => "artifacts".to_owned(),
+            1 => "brauser-artifacts".to_owned(),
+            value => format!("brauser-artifacts-{value}"),
+        };
+        let candidate_parts = lower_components(Path::new(&candidate));
+        if !occupied.iter().all(|parts| {
             !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(parts)
-        })
-    };
-    // Any error other than NotFound counts as present: the proposal must
-    // never guess that an unreadable entry is free. A relative root fails
-    // validation later; never probe the host's working directory for it.
-    let absent = |candidate: &str| {
-        !root.is_absolute()
-            || fs::symlink_metadata(root.join(candidate))
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-    };
-    (0..=occupied.len() + EXISTING_FOLDER_PROBES)
-        .map(candidate)
-        .find(|name| free_of_locations(name) && absent(name))
-        .or_else(|| {
-            (0..=occupied.len())
-                .map(candidate)
-                .find(|name| free_of_locations(name))
-        })
-        .expect("a finite set of content paths cannot occupy every generated name")
+        }) {
+            continue;
+        }
+        // An entry that cannot be checked is never guessed to be free.
+        match exists(&candidate) {
+            Ok(false) => return Some(candidate),
+            Ok(true) => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// `[agent]` as §7.1 shows it: the chosen harness and its entry.
@@ -1191,12 +1191,29 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             // reselection, but it must not discard the allowlist: keep every
             // setting for the repair, which rewrites the file with a fresh
             // identity, so there is nothing to back up.
-            let folder_changed = config.storage.as_ref().is_some_and(|storage| {
-                match selected_root_identity(Path::new(&storage.root)) {
-                    Ok(actual) => Some(actual.as_str()) != root_identity.as_deref(),
-                    Err(_) => true,
+            let mut folder_changed = false;
+            if let Some(storage) = config.storage.as_mut() {
+                match open_selected_root(Path::new(&storage.root), root_identity.as_deref()) {
+                    // Probe for existing folders only through the verified
+                    // root. If no name is provably free, keep the config-only
+                    // proposal: it is still only written once confirmed.
+                    Ok((root, _)) if artifacts_dir_proposed => {
+                        if let Some(name) = unused_artifacts_dir(storage, |name| {
+                            match root.symlink_metadata(name) {
+                                Ok(_) => Ok(true),
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                    Ok(false)
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }) {
+                            storage.artifacts_dir = name;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => folder_changed = true,
                 }
-            });
+            }
             Ok(DiskState {
                 config,
                 revision,
@@ -2257,6 +2274,20 @@ mod tests {
                 .artifacts_dir,
             "brauser-artifacts-2"
         );
+        // However many generated names are taken, the proposal never falls
+        // back to one that exists.
+        for suffix in 2..=11 {
+            fs::create_dir(folder.path().join(format!("brauser-artifacts-{suffix}"))).unwrap();
+        }
+        assert_eq!(
+            loaded(&path)
+                .snapshot()
+                .storage
+                .as_ref()
+                .unwrap()
+                .artifacts_dir,
+            "brauser-artifacts-12"
+        );
         // A chosen folder is kept even when it already exists.
         fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
         assert_eq!(
@@ -2266,6 +2297,26 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .artifacts_dir,
+            "artifacts"
+        );
+    }
+
+    #[test]
+    fn old_config_proposal_never_probes_an_unverified_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::write_legacy(&path, folder.path(), "", "capture_enabled = false", "");
+        let identity = selected_root_identity(folder.path()).unwrap();
+        let body = fs::read_to_string(&path)
+            .unwrap()
+            .replace(&identity, "not-the-chosen-folder");
+        fs::write(&path, body).unwrap();
+        fs::create_dir(folder.path().join("artifacts")).unwrap();
+
+        let store = loaded(&path);
+        assert!(store.config_issue().is_some());
+        assert_eq!(
+            store.snapshot().storage.as_ref().unwrap().artifacts_dir,
             "artifacts"
         );
     }
