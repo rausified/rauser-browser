@@ -576,9 +576,10 @@ async function captureNavigation(
   try {
     tab = await chrome.tabs.get(details.tabId);
   } catch {
-    return false;
+    // The navigation still committed, so the previous page stops gaining time.
+    return navigatedAway();
   }
-  if (tab.incognito !== false) return false;
+  if (tab.incognito !== false) return navigatedAway();
 
   // Sample only a live public top-frame navigation on an enabled origin.
   // Shape before storing; neither the URL nor its title enters this table.

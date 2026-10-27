@@ -1002,6 +1002,24 @@ test("unreadable removal state on a same-origin skipped page still stops measuri
   }
 });
 
+test("an unreadable tab on a same-origin skipped page still stops measuring the previous artifact", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://unreadable-tab.example";
+  tabs.set(57, { id: 57, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, incognito: false });
+  await send({ kind: "install_policy", lease: lease(origin), resume_after_confirmation: false, resume_after_pause_token: null });
+  assert.ok(sessionValues.get(storageKey("activity_session_v1")).tabs[57], "the artifact tab is tracked first");
+  // The tab read fails (for example, the tab closed mid-commit), so the
+  // committed navigation cannot be sampled or captured.
+  tabs.delete(57);
+  onCommitted({ tabId: 57, frameId: 0, documentLifecycle: "active", url: `${origin}/search`, timeStamp: Date.now() });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[57], undefined,
+    "a failed tab read must not leave the previous artifact mapped");
+  assert.equal(values.get(storageKey("site_patterns_v1"))?.[origin], undefined);
+});
+
 test("a failed sample purge during pause is reported, not hidden", async () => {
   values.clear();
   sessionValues.clear();
