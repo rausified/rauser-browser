@@ -38,8 +38,10 @@ use crate::vault::{
 // recovery fix. v3 adds `CachedEvent::Summary` on top of it; bumping again
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
 // already durable in the log. v4 records log positions and the adapter
-// document fingerprint.
-const STATE_VERSION: u8 = 4;
+// document fingerprint. v5 counts M1 visits as opens and bounds logged
+// titles; the rescan marks every artifact dirty so owned files are
+// regenerated and a cached over-limit event is dropped.
+const STATE_VERSION: u8 = 5;
 // How often a long regeneration pass publishes its progress. Chrome ends a
 // host soon after its port closes; without checkpoints a pass killed that
 // way would restart at the same sorted prefix every time.
@@ -4391,8 +4393,9 @@ print(json.dumps([tables,row]))"#;
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
-        // An ingestion cache written before log titles were bounded can
-        // still hold an event whose rows exceed one SQLite page.
+        // Log parsing bounds titles, so only a hand-edited or otherwise
+        // unexpected cache can hold an event whose rows exceed one SQLite
+        // page. Publication must still survive it.
         let oversize = activity(
             "00000000-0000-4000-8000-0000000000b1",
             "OVERSIZE",
@@ -4501,6 +4504,43 @@ print(json.dumps([tables,row]))"#;
             sqlite_check(&index.database_path(), "select opens from visits"),
             "ok\n1\n"
         );
+    }
+
+    #[test]
+    fn a_version_4_cache_is_rescanned_so_existing_m1_artifact_files_gain_their_opens() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://example.org/legacy-page";
+        let url_hash = sha256_hex(url.as_bytes());
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!(
+                "{LOG_HEADER}\n\n- 2026-10-20T10:00:00Z — Legacy page — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+                sha256_hex("legacy-marker-upgrade".as_bytes()),
+            ),
+        )
+        .unwrap();
+        index.reindex().unwrap();
+        // Simulate the file and clean cache a version 4 build left: legacy
+        // visits rendered no open and no Timeline line.
+        let path = artifact_files(root.path()).pop().unwrap();
+        let current = fs::read_to_string(&path).unwrap();
+        let old = current
+            .replace("  opens: 1\n", "  opens: 0\n")
+            .replace("- 2026-10-20 · opened 1×\n", "");
+        assert_ne!(old, current);
+        fs::write(&path, &old).unwrap();
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        state["version"] = 4.into();
+        state["dirty"] = serde_json::json!([]);
+        fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        assert_eq!(fs::read_to_string(&path).unwrap(), current);
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {
