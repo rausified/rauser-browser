@@ -606,6 +606,75 @@ test("a tracked tab that navigates to a pending-removal origin stops gaining tim
     "the previous page's entry ends even though the stored lease still holds the origin");
 });
 
+test("removing a site strips its trails from other sites' live and undispatched hours", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://trail-source.example";
+  const keptOrigin = "https://trail-target.example";
+  const both = {
+    ...lease(keptOrigin), revision: "both-sites", expires_at: Date.now() + 2 * 60 * 60_000,
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  };
+  values.set(storageKey("policy_v1"), both);
+  const follow = (tabId, from, to, timeStamp) => {
+    tabs.set(tabId, { id: tabId, windowId: 1, url: `${removedOrigin}/items/${from}`, title: from, incognito: false });
+    onCommitted({
+      tabId, frameId: 0, documentId: `${tabId}-from`, documentLifecycle: "active",
+      url: `${removedOrigin}/items/${from}`, transitionType: "typed", timeStamp,
+    });
+    tabs.set(tabId, { id: tabId, windowId: 1, url: `${keptOrigin}/items/${to}`, title: to, incognito: false });
+    onCommitted({
+      tabId, frameId: 0, documentId: `${tabId}-to`, documentLifecycle: "active",
+      url: `${keptOrigin}/items/${to}`, transitionType: "link", timeStamp: timeStamp + 1000,
+    });
+  };
+  // A completed hour freezes into the queue; the current hour stays live.
+  follow(60, "src", "pr7", Date.now() - 2 * 60 * 60_000);
+  follow(61, "src2", "pr8", Date.now());
+  await flush();
+  await send({ kind: "get_status" });
+  const fromRemoved = (trail) => trail.from_url?.startsWith(removedOrigin) ||
+    trail.from_artifact_id?.startsWith("test:trail-source.example/");
+  const queuedTarget = () => values.get(storageKey("queue_v1")).items
+    .filter((item) => item.event.url === `${keptOrigin}/items/pr7`);
+  const liveTarget = () => values.get(storageKey("activity_totals_v1")).totals
+    .filter((total) => total.url === `${keptOrigin}/items/pr8`);
+  assert.ok(queuedTarget()[0].event.trails.some(fromRemoved), "precondition: queued hour has the trail");
+  assert.ok(liveTarget()[0].trails.some(fromRemoved), "precondition: live hour has the trail");
+  // An event already handed to the host is frozen for interrupted-write recovery.
+  const queue = values.get(storageKey("queue_v1"));
+  const frozenTrail = {
+    from_artifact_id: "test:trail-source.example/old",
+    from_url: `${removedOrigin}/items/old`, transition: "link",
+  };
+  queue.items.push({
+    ...activityVisit("frozen-target", `${keptOrigin}/items/pr6`, {
+      artifact_id: "test:trail-target.example/pr6", trails: [frozenTrail],
+    }),
+    dispatched: true, batch_id: "c5d9a1d2-0f7b-4b8a-9a9e-6f3c2a1b0d4e",
+  });
+  values.set(storageKey("queue_v1"), queue);
+
+  // Remove Site: the host's next lease no longer has the source origin's adapter.
+  await send({
+    kind: "install_policy",
+    lease: { ...lease(keptOrigin), revision: "target-only", expires_at: Date.now() + 2 * 60 * 60_000 },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+
+  const [queued] = queuedTarget();
+  assert.ok(queued, "the other site's completed hour is kept");
+  assert.equal(queued.event.trails.some(fromRemoved), false);
+  assert.ok(queued.event.opens >= 1, "its measures are kept");
+  const [live] = liveTarget();
+  assert.ok(live, "the other site's live hour is kept");
+  assert.equal(live.trails.some(fromRemoved), false);
+  const frozen = values.get(storageKey("queue_v1")).items
+    .find((item) => item.event.event_id === "frozen-target");
+  assert.deepEqual(frozen.event.trails, [frozenTrail], "a dispatched event is never edited");
+});
+
 test("a pending local pause does not keep pending removals from clearing", async () => {
   values.clear();
   sessionValues.clear();
@@ -1814,6 +1883,43 @@ test("with no extension page open, the worker freezes and delivers a completed a
   // The panel refreshes its artifact card when this generation moves, since
   // the queue length alone can be empty both before and after a delivery.
   assert.equal(after.delivered_batches, before + 1);
+});
+
+test("a trail from a pending-removal origin is stripped before delivery", async () => {
+  const removedOrigin = "https://pending-source.example";
+  const keptOrigin = "https://pending-target.example";
+  resetSync(keptOrigin, 2 * HOUR_MS);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin), expires_at: Date.now() + 2 * HOUR_MS,
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  const past = Date.now() - 2 * HOUR_MS;
+  tabs.set(12, { id: 12, windowId: 1, url: `${removedOrigin}/items/src`, title: "Source", incognito: false });
+  onCommitted({
+    tabId: 12, frameId: 0, documentId: "pending-src", documentLifecycle: "active",
+    url: `${removedOrigin}/items/src`, transitionType: "typed", timeStamp: past,
+  });
+  tabs.set(12, { id: 12, windowId: 1, url: `${keptOrigin}/items/pr`, title: "Target", incognito: false });
+  onCommitted({
+    tabId: 12, frameId: 0, documentId: "pending-dst", documentLifecycle: "active",
+    url: `${keptOrigin}/items/pr`, transitionType: "link", timeStamp: past + 1000,
+  });
+  await flush();
+  await send({ kind: "get_status" });
+  // An upgrade carries the source origin into the pending-removal list while
+  // the host, and the stored lease, still hold its adapter.
+  values.set(storageKey("pending_site_removals_v1"), [removedOrigin]);
+
+  onAlarm({ name: DELIVER_ALARM });
+  const port = await until(() => ports[0], "the worker to start the host");
+  const request = await sentOn(port, 1);
+  assert.equal(request.type, "record_batch");
+  const events = request.events.map((item) => item.activity);
+  assert.deepEqual(events.map((event) => event.url), [`${keptOrigin}/items/pr`]);
+  assert.deepEqual(events[0].trails, [], "the pending-removal source never reaches the host");
+  port.reply(batchRecorded(request));
+  await until(() => values.get(storageKey("queue_v1")).items
+    .every((item) => item.event.url !== `${keptOrigin}/items/pr`), "the delivered hour to clear");
 });
 
 test("a status wake hands off completed hours before reporting live activity", async () => {
