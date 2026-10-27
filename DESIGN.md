@@ -509,6 +509,28 @@ Because `artifact_id` is the record key below, an `id` template is durable. The 
 - **Older URL-keyed records stay findable.** Notes from M1, and notes made before an adapter existed, are left where they are. At reindex, the host maps each URL-keyed record's `canonical_url` through the current adapters, so the panel lists every older note on any URL of the artifact as "older note on this URL". It is still editable in place. When the artifact has no note yet, **Use as artifact note** rekeys one: the host writes it under the artifact key with a no-clobber create, then removes the URL-keyed file after checking its identity. If an adapter is later removed, an artifact-keyed record is still listed on the URLs it recorded.
 
 As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. When no current adapter recognizes a URL, historical key recovery requires both the note scan and the history lookup to succeed before deciding whether their combined candidates are unique. A lookup or catch-up failure returns an unavailable-note-identity error on load and save; it must never count as an empty candidate set or redirect a save into a different artifact note. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
+
+**Policy removal acceptance (2026-10-27).** Removing an adapter or its site,
+or narrowing its recognition rules, preserves the existing shared note on
+its recorded URLs without authorizing further capture. Historical URL
+evidence includes activity, its mode URLs, and explicit `why` context even
+before any measured activity. Both lookup directions use that same evidence;
+recovered artifact notes retain the older URL-note list and its read-only
+viewing action. A separate URL note remains separate, and an occupied artifact
+note still blocks explicit migration. With several historical artifact IDs
+for one canonical URL the host uses the URL key, preserving any existing URL
+note; a stale artifact key is refused. Neither cache deletion nor reindex
+changes these decisions. With no delivered history, the note's original
+creation URL still recovers its identity; other routes need recorded evidence.
+Historical key selection requires a complete bounded note scan (4,096 Markdown
+entries, 4 MiB per regular file, 16 MiB total). Hitting a bound or encountering
+an unreadable regular candidate returns unavailable identity, never a partial
+choice; symlinks are skipped. Optional older-note discovery on a currently
+recognized page remains best effort, so a broken optional note does not hide
+the primary note. The panel does not yet list the preserved artifact-note
+candidates when history is ambiguous; explicit read-only candidate viewing
+is a separate follow-up and must not change the primary autosave key.
+
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
 
 ### 6.3 Profiles
