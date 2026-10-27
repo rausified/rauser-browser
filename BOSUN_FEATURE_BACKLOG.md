@@ -363,6 +363,56 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
+### Confirmed low-severity defects (lane C review, 2026-10-27)
+
+A 2026-10-27 review of main at 1c32114 confirmed each of these with a probe
+test that fails on that commit. None blocks deploy, so they are P3 bugs here
+rather than Known Issues, and they wait behind the plan work above. Line
+numbers are on 1c32114; re-check them against current main. For each one,
+write the regression test described in its bead first, show it fails, then
+fix, and keep each fix to one cycle. If the test does not fail on current
+main, check the item off as "not reproduced" and say why. The last item,
+`brwr-f4s`, is a decided P2 note-identity follow-up rather than a defect fix.
+
+- [ ] `brwr-q7e` **Non-canonical event IDs are captured, then dropped on
+  rescan.** The marker's `id_hash` hashes `parse_event_id()`'s lowercase
+  hyphenated UUID, but the hex payload keeps the raw `event_id`, so
+  `parse_marker_event` (host/src/index.rs ~1403/1422) rejects the line.
+  Canonicalize `event_id` in the payload at capture for single and batch
+  activity and for why (host/src/capture.rs).
+- [ ] `brwr-u8n` **URLs that grow past 8192 bytes when normalized are
+  captured, then dropped on rescan.** Capture bounds the raw URL
+  (host/src/capture.rs ~627/~802, `activity_shape_is_valid` ~154/166) but
+  stores the normalized one, and the index's `safe_page_url` (index.rs ~1483)
+  bounds the stored value. Apply the bound after normalization to the page,
+  mode, and trail URLs and reject with `url_too_long`.
+- [ ] `brwr-d3m` **Under a minute of activity renders as "0 min".** `measures`
+  (host/src/index.rs ~1875) uses `whole_minutes`, so 1-59 seconds shows
+  "focused 0 min" or "0 min in background" in the worklog and the artifact
+  Timeline. Show "<1 min" when 0 < seconds < 60.
+- [ ] `brwr-w4k` **Use as artifact note records the migration route as the
+  note's URL.** `use_as_artifact_note` (host/src/note.rs ~622) renders the new
+  note with `destination_url`, while `save_keyed_note` keeps the note's
+  original URL. Keep the older note's URL. Re-check against #70 (note identity,
+  merged at 7a929ce), which changed which older notes are offered.
+- [ ] `brwr-p9r` **Recent opened before the host answers never loads.**
+  `loadRecent` and `loadWorklog` (extension/panel.ts ~605/~632) return early
+  while not connected, and the startup path (~815-840) never reloads them.
+  Reload when connected if Recent is visible, and show "Waiting for the
+  host…" meanwhile.
+- [ ] `brwr-v5t` **Use as artifact note is offered when it must fail.** The
+  panel adds the Use button for every older note (extension/panel.ts ~222-246)
+  even when the artifact note already exists, where `use_as_artifact_note`
+  (host/src/note.rs ~597) always refuses. Show only View in that case.
+- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
+  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
+  stripping a query key that an adapter rule matches on (Jira's
+  `selectedIssue`) is accepted and collapses artifact identity. Decided
+  2026-10-27: a save that adds or changes such an entry is refused with a clear
+  message; an existing config with the conflict still loads and saves, shows a
+  warning, and offers a one-click "Stop stripping <param>" fix. Also record
+  which params were stripped. P2; depends on `brwr-hrc` (rebase onto it first,
+  both edit config.rs).
 
 ### Cookie's own proposals (only after the plan work above)
 
