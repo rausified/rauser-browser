@@ -16,6 +16,7 @@ import {
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
+import { AdoptedStateControls } from "./adopted-state-settings.js";
 import { hostBuildText } from "./build-info.js";
 import {
   SETUP_WARNING,
@@ -114,6 +115,9 @@ let githubScopeText = "";
 const session = new ConfigSession(renderConfig, () => {
   picker = null;
 });
+// Assigned once the session exists; the session's first change can come first.
+let adoptedState: AdoptedStateControls | null = null;
+adoptedState = new AdoptedStateControls(session, show);
 
 // The header names the host process that answered. Another one, possibly
 // from a rebuilt binary, starts on the next call after it exits.
@@ -817,6 +821,7 @@ function renderConfig(): void {
   }
   renderStarterGallery();
   renderAdapters();
+  adoptedState?.render();
   renderAgent();
   if (adapterEdit === null) updateControls();
   else refreshAdapterEditor();

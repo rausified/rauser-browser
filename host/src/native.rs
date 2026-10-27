@@ -225,6 +225,21 @@ pub(crate) fn parse_envelope(body: &[u8]) -> std::result::Result<(String, Reques
     }
 }
 
+fn config_result(config: &mut ConfigStore, request_id: String) -> Response {
+    let adapter_warnings = config.adapter_warnings().to_vec();
+    Response::ConfigResult(ConfigResult {
+        protocol_version: PROTOCOL_VERSION,
+        request_id,
+        config: config.snapshot().clone(),
+        revision: config.revision().to_owned(),
+        config_issue: config.config_issue().map(str::to_owned),
+        agent_status: config.agent_status(),
+        adapter_issue: config.adapter_issue().map(str::to_owned),
+        adapter_warnings,
+        adopted_state: config.adopted_state(),
+    })
+}
+
 fn valid_request_id(id: &str) -> bool {
     !id.is_empty()
         && id.chars().count() <= MAX_REQUEST_ID_CHARS
@@ -288,17 +303,36 @@ fn dispatch(
             // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
             config.migrate_layout_or_warn();
-            let adapter_warnings = config.adapter_warnings().to_vec();
-            Response::ConfigResult(ConfigResult {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: value.request_id,
-                config: config.snapshot().clone(),
-                revision: config.revision().to_owned(),
-                config_issue: config.config_issue().map(str::to_owned),
-                agent_status: config.agent_status(),
-                adapter_issue: config.adapter_issue().map(str::to_owned),
-                adapter_warnings,
-            })
+            // Under the lock, the refresh also records the current adapter
+            // contracts, so `adopted_state` reports this host's own attempt.
+            match config.lock_current() {
+                Ok(_config_lock) => {
+                    let _ = config.refresh();
+                }
+                Err(lock_error) => {
+                    let _ = config.refresh();
+                    config.warn_adopted_unrecorded(&lock_error);
+                }
+            }
+            config_result(config, value.request_id)
+        }
+        Request::ForgetAdoptedContracts(value) => {
+            match config.forget_adopted_contracts(&value.expected_revision) {
+                Ok(true) => config_result(config, value.request_id),
+                Ok(false) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "the record of adopted adapters changed; read the settings again before forgetting it",
+                ),
+                Err(forget_error) => {
+                    eprintln!("{NAMESPACE}: could not forget adopted adapters: {forget_error:#}");
+                    error(
+                        &value.request_id,
+                        ErrorCode::Internal,
+                        "could not back up and replace the record of adopted adapters",
+                    )
+                }
+            }
         }
         Request::UpdateConfig(value) => {
             if config.refresh().is_err() {
@@ -3567,7 +3601,7 @@ id = "jira.board:{host}/{id}"
             let named = |message: &str| {
                 message.starts_with("Notes on this page are paused to protect note identity")
                     && message.contains(&state.display().to_string())
-                    && message.contains("Move adopted-contracts.json aside")
+                    && message.contains("Forget recorded adapters")
             };
             let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal && named(&reply.message));
             let loaded_board = load_note(
@@ -3594,10 +3628,48 @@ id = "jira.board:{host}/{id}"
                 RecordKeyKind::Artifact
             );
 
-            // Moving the file aside, as the message says, forgets the board
-            // contract: the board gets its URL note again, and the artifact
-            // note stays untouched on disk.
-            std::fs::rename(&state, folder.path().join("adopted-contracts.json.bak")).unwrap();
+            // Settings is shown the same problem, and its Forget recorded
+            // adapters repair forgets the board contract: the board gets its
+            // URL note again, and the artifact note stays untouched on disk.
+            let call = |config: &mut ConfigStore, request| {
+                dispatch(
+                    request,
+                    config,
+                    &mut ConsentAuthority::new(),
+                    &SetupContext::new(),
+                )
+            };
+            let get = |config: &mut ConfigStore| match call(
+                config,
+                Request::GetConfig(brauser_protocol::GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "read".into(),
+                }),
+            ) {
+                Response::ConfigResult(result) => result,
+                other => panic!("expected config_result, got {other:?}"),
+            };
+            let forget = |revision: &str| {
+                Request::ForgetAdoptedContracts(brauser_protocol::ForgetAdoptedContractsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "forget".into(),
+                    expected_revision: revision.into(),
+                })
+            };
+            let shown = get(&mut config).adopted_state;
+            let issue = shown.issue.expect("settings names the damaged record");
+            assert!(issue.contains(&state.display().to_string()), "{issue}");
+            assert!(
+                matches!(call(&mut config, forget("sha256:stale")), Response::Error(reply) if reply.code == ErrorCode::Conflict)
+            );
+            assert_eq!(std::fs::read(&state).unwrap(), b"{");
+            match call(&mut config, forget(&shown.revision)) {
+                Response::ConfigResult(result) => {
+                    assert_eq!(result.request_id, "forget");
+                    assert_eq!(result.adopted_state.issue, None);
+                }
+                other => panic!("expected config_result, got {other:?}"),
+            }
             let reloaded = note_load(&mut config, BOARD);
             assert_eq!(reloaded.key, crate::vault::url_record_key(BOARD).unwrap());
             assert!(!reloaded.exists);
@@ -3606,6 +3678,38 @@ id = "jira.board:{host}/{id}"
                 board_bytes
             );
         }
+    }
+
+    /// get_config records adopted contracts under the config lock; when it
+    /// cannot take the lock, settings is told protection is degraded rather
+    /// than shown a healthy record.
+    #[test]
+    fn get_config_warns_when_it_cannot_lock_to_record_adopted_contracts() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(&path, &root, "");
+        std::fs::create_dir(folder.path().join(".config.lock")).unwrap();
+        let mut config = loaded(&path);
+        let response = dispatch(
+            Request::GetConfig(GetConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "read".into(),
+            }),
+            &mut config,
+            &mut ConsentAuthority::new(),
+            &SetupContext::new(),
+        );
+        let Response::ConfigResult(result) = response else {
+            panic!("expected config_result, got {response:?}");
+        };
+        assert_eq!(result.adopted_state.warnings.len(), 1);
+        assert!(
+            result.adopted_state.warnings[0].contains("configuration lock"),
+            "{:?}",
+            result.adopted_state.warnings
+        );
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the
