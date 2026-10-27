@@ -340,6 +340,23 @@ fn dispatch(
             offers: harness_setup::offers(context.env),
         }),
         Request::SetUpHarness(value) => set_up_harness(value, config, context),
+        // The service proxy lands with the service itself; until then every
+        // run message answers the specific code the panel keys off.
+        Request::StartRun(_)
+        | Request::GetRun(_)
+        | Request::ListRuns(_)
+        | Request::CancelRun(_)
+        | Request::RetrySave(_) => error(
+            id,
+            ErrorCode::ServiceUnavailable,
+            "The Brauser service is not installed.",
+        ),
+        // service_hello is host-to-service only.
+        Request::ServiceHello(_) => error(
+            id,
+            ErrorCode::InvalidRequest,
+            "service_hello is not accepted from the extension",
+        ),
     }
 }
 
