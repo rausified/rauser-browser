@@ -4,6 +4,9 @@
 //! host cache used to avoid reparsing old logs after every delivery, while
 //! `index.db` is a standards-compliant SQLite snapshot for current and future
 //! readers. Either file may be deleted; `brauser reindex` recreates both.
+//! A catch-up that needs more than one pass's read bound (a rebuild of a
+//! long history) saves its progress in `index-catch-up.json`, which is never
+//! served, and the next pass resumes from it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions as StdOpenOptions};
@@ -59,6 +62,16 @@ const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 thread_local! {
     static LOG_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PUBLICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SCAN_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_SCAN_BYTES) };
+}
+
+/// The changed-file read bound for one catch-up pass. Tests lower it so a
+/// history larger than one pass needs only a few small logs.
+fn scan_byte_limit() -> u64 {
+    #[cfg(test)]
+    return SCAN_LIMIT.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    MAX_SCAN_BYTES
 }
 
 #[derive(Clone)]
@@ -151,10 +164,60 @@ impl IndexState {
     }
 }
 
+/// A catch-up pass that reached the per-pass read bound before reading every
+/// changed log. It is saved apart from the published cache and never served,
+/// so no partial checkpoint is published; the next pass resumes from it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingCatchUp {
+    /// The pass started from no state (a missing cache, a removed or shrunk
+    /// log, or a rescan), so completion keeps the conflict winners the
+    /// published cache chose.
+    rebuild: bool,
+    /// Started by `reconcile_from_logs`: on completion, only artifacts whose
+    /// generated file changes become dirty.
+    reconcile: bool,
+    state: IndexState,
+    /// `IndexState::conflicts`, which the published cache does not keep.
+    conflicts: BTreeMap<String, Vec<CachedEvent>>,
+}
+
+#[derive(Serialize)]
+struct PendingCatchUpRef<'a> {
+    rebuild: bool,
+    reconcile: bool,
+    state: &'a IndexState,
+    conflicts: &'a BTreeMap<String, Vec<CachedEvent>>,
+}
+
+/// What one `catch_up_logs` pass did.
+struct LogPass {
+    /// Logs changed since `state`'s checkpoints.
+    changed: bool,
+    /// A removed or shrunk log reset `state` to empty.
+    reset: bool,
+    /// Every changed log was read; otherwise the read bound stopped the pass.
+    complete: bool,
+}
+
+/// A bounded catch-up pass, after saving or completing it.
+enum CatchUp {
+    /// The pass reached its read bound; its progress is saved.
+    Incomplete,
+    /// Every log is read. `previous` is the published cache a rebuild kept
+    /// its conflict winners from.
+    Complete {
+        changed: bool,
+        previous: Option<Box<IndexState>>,
+    },
+}
+
+const INCOMPLETE_CATCH_UP: &str = "artifact history is unavailable: catch-up reached its 64 MiB per-pass limit; the next pass resumes after the logs already read";
+
 /// Metadata is only an ingestion checkpoint, never capture authorization.
 /// Reparse a changed file in full so partial trailing markers and legacy
 /// markers (which use the preceding prose line) are handled identically.
-#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LogCheckpoint {
     bytes: u64,
@@ -399,33 +462,50 @@ impl ArtifactIndex {
     /// Only artifacts whose generated file would change become dirty, so a
     /// duplicate retry neither forces a full regeneration pass nor replaces
     /// external edits to files that had no new activity.
+    ///
+    /// A history larger than one pass's read bound is rescanned over several
+    /// calls (or queries); until then this reports unavailable history.
     pub fn reconcile_from_logs(&self) -> Result<()> {
-        let (mut state, previous) = self.rescan_logs()?;
+        let Some((mut state, previous)) = self.rescan_logs(true)? else {
+            bail!(INCOMPLETE_CATCH_UP);
+        };
         if let Some(previous) = previous {
-            let rendered = |state: &IndexState| {
-                self.derive(state)
-                    .artifacts
-                    .into_iter()
-                    .map(|(id, row)| (id, render_artifact(&self.storage.artifacts_dir, &row)))
-                    .collect::<BTreeMap<_, _>>()
-            };
-            let (before, after) = (rendered(&previous), rendered(&state));
-            let mut dirty = previous.dirty;
-            for id in before.keys().chain(after.keys()) {
-                if before.get(id) != after.get(id) {
-                    dirty.insert(id.clone());
-                }
-            }
-            state.dirty = dirty;
+            self.keep_unchanged_files_clean(&mut state, previous);
         }
         self.publish_state_and_database(&state)
+    }
+
+    /// Mark dirty only the artifacts whose generated file differs from the
+    /// one `previous` derives, plus those `previous` already had dirty.
+    fn keep_unchanged_files_clean(&self, state: &mut IndexState, previous: IndexState) {
+        let rendered = |state: &IndexState| {
+            self.derive(state)
+                .artifacts
+                .into_iter()
+                .map(|(id, row)| (id, render_artifact(&self.storage.artifacts_dir, &row)))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let (before, after) = (rendered(&previous), rendered(state));
+        let mut dirty = previous.dirty;
+        for id in before.keys().chain(after.keys()) {
+            if before.get(id) != after.get(id) {
+                dirty.insert(id.clone());
+            }
+        }
+        state.dirty = dirty;
     }
 
     /// Rebuild both cache files from owned log markers, then regenerate every
     /// artifact file. This is the explicit repair path for a deleted or
     /// corrupt cache and intentionally replaces user edits to owned files.
+    /// A history larger than one pass's read bound is read in several
+    /// bounded passes, each saving its progress, within this one call.
     pub fn reindex(&self) -> Result<RegenerationReport> {
-        let (mut state, _) = self.rescan_logs()?;
+        let (mut state, _) = loop {
+            if let Some(rescanned) = self.rescan_logs(false)? {
+                break rescanned;
+            }
+        };
         let derived = self.derive(&state);
         state.dirty = derived.artifacts.keys().cloned().collect();
         self.publish_state_and_database(&state)?;
@@ -608,19 +688,105 @@ impl ArtifactIndex {
         Ok(state)
     }
 
+    /// The published cache caught up with the logs, resuming a saved
+    /// partial pass first. A pass that reaches the read bound saves its
+    /// progress and reports unavailable history.
     fn load_current_state(&self) -> Result<(IndexState, bool)> {
-        let (mut state, rebuild) = match self.read_current_state() {
-            Some((state, migrated)) => (state, migrated),
-            None => (self.empty_state(), true),
+        let (mut state, mut rebuild, reconcile, republish) = match self.read_pending() {
+            Some(pending) => (pending.state, pending.rebuild, pending.reconcile, true),
+            None => match self.read_current_state() {
+                Some((state, migrated)) => (state, false, false, migrated),
+                None => (self.empty_state(), true, false, true),
+            },
         };
-        let changed = self.catch_up_logs(&mut state)?;
+        let CatchUp::Complete { changed, previous } =
+            self.catch_up_pass(&mut state, &mut rebuild, reconcile)?
+        else {
+            bail!(INCOMPLETE_CATCH_UP);
+        };
+        if reconcile && let Some(previous) = previous {
+            self.keep_unchanged_files_clean(&mut state, *previous);
+        }
         // Ref resolution follows the current adapters, so a policy change
         // republishes index.db's edges even when no log changed.
         let adapters = self.adapters_fingerprint();
         let resolution_changed = state.adapters != adapters;
         state.adapters = adapters;
-        let publish = rebuild || changed || resolution_changed || !self.database_path().is_file();
+        let publish = republish || changed || resolution_changed || !self.database_path().is_file();
         Ok((state, publish))
+    }
+
+    /// Run one bounded `catch_up_logs` pass over `state`. An incomplete pass
+    /// saves its progress (never served) for the next pass to resume. A
+    /// complete rebuild (`rebuild`, also set when the pass reset `state`)
+    /// keeps, for a reused event ID, the body the published cache chose when
+    /// that body is still in the logs. Log position is not arrival order
+    /// (capture can append a backdated duplicate to an earlier-dated log), so
+    /// only a rebuild with no usable cache falls back to the earliest
+    /// position.
+    fn catch_up_pass(
+        &self,
+        state: &mut IndexState,
+        rebuild: &mut bool,
+        reconcile: bool,
+    ) -> Result<CatchUp> {
+        let pass = self.catch_up_logs(state)?;
+        *rebuild |= pass.reset;
+        if !pass.complete {
+            self.save_pending(state, *rebuild, reconcile)?;
+            return Ok(CatchUp::Incomplete);
+        }
+        let previous = if *rebuild {
+            self.read_current_state()
+                .map(|(previous, _)| Box::new(previous))
+        } else {
+            None
+        };
+        if let Some(previous) = &previous {
+            for (id, seen) in std::mem::take(&mut state.conflicts) {
+                if let Some(winner) = previous.events.get(&id)
+                    && seen.contains(winner)
+                    && let Some(chosen) = state.events.insert(id, winner.clone())
+                {
+                    state.dirty.insert(chosen.artifact_id().to_owned());
+                    state.dirty.insert(winner.artifact_id().to_owned());
+                }
+            }
+        }
+        Ok(CatchUp::Complete {
+            changed: pass.changed,
+            previous,
+        })
+    }
+
+    fn pending_path(&self) -> PathBuf {
+        self.cache_dir.join("index-catch-up.json")
+    }
+
+    /// A saved partial pass for this root, layout, and cache format, if any.
+    /// An unreadable one is ignored like an unreadable cache.
+    fn read_pending(&self) -> Option<PendingCatchUp> {
+        let mut pending: PendingCatchUp = read_bounded_json(&self.pending_path()).ok()??;
+        if pending.state.version != STATE_VERSION || !self.state_location_matches(&pending.state) {
+            return None;
+        }
+        pending.state.conflicts = std::mem::take(&mut pending.conflicts);
+        Some(pending)
+    }
+
+    fn save_pending(&self, state: &IndexState, rebuild: bool, reconcile: bool) -> Result<()> {
+        let bytes = serde_json::to_vec(&PendingCatchUpRef {
+            rebuild,
+            reconcile,
+            state,
+            conflicts: &state.conflicts,
+        })
+        .context("serializing artifact index catch-up progress")?;
+        if bytes.len() as u64 > MAX_STATE_BYTES {
+            bail!("artifact index state exceeds its 64 MiB limit");
+        }
+        fs::create_dir_all(&self.cache_dir).context("creating artifact index cache directory")?;
+        atomic_write(&self.pending_path(), &bytes)
     }
 
     /// The cache for this root and layout, if any. A version 4 cache is
@@ -665,45 +831,40 @@ impl ArtifactIndex {
         }
     }
 
-    fn scan_logs(&self) -> Result<IndexState> {
-        let mut state = self.empty_state();
-        self.catch_up_logs(&mut state)?;
-        Ok(state)
-    }
-
-    /// A full scan that keeps, for a reused event ID, the body a valid cache
-    /// already chose when that body is still in the logs. Log position is
-    /// not arrival order (capture can append a backdated duplicate to an
-    /// earlier-dated log), so only a scan with no usable cache falls back to
-    /// the earliest position. Also returns that cache.
-    fn rescan_logs(&self) -> Result<(IndexState, Option<IndexState>)> {
-        let mut state = self.scan_logs()?;
-        let previous = self.read_current_state().map(|(previous, _)| previous);
-        if let Some(previous) = &previous {
-            for (id, seen) in std::mem::take(&mut state.conflicts) {
-                if let Some(winner) = previous.events.get(&id)
-                    && seen.contains(winner)
-                    && let Some(chosen) = state.events.insert(id, winner.clone())
-                {
-                    state.dirty.insert(chosen.artifact_id().to_owned());
-                    state.dirty.insert(winner.artifact_id().to_owned());
-                }
-            }
+    /// One bounded pass of a full rebuild from the logs, resuming a saved
+    /// partial rebuild. Keeps the published cache's conflict winners
+    /// (`catch_up_pass`) and also returns that cache. `None` means the pass
+    /// reached its read bound and saved its progress.
+    fn rescan_logs(&self, reconcile: bool) -> Result<Option<(IndexState, Option<IndexState>)>> {
+        let mut state = match self.read_pending() {
+            Some(pending) if pending.rebuild => pending.state,
+            _ => self.empty_state(),
+        };
+        state.adapters = self.adapters_fingerprint();
+        match self.catch_up_pass(&mut state, &mut true, reconcile)? {
+            CatchUp::Incomplete => Ok(None),
+            CatchUp::Complete { previous, .. } => Ok(Some((state, previous.map(|state| *state)))),
         }
-        Ok((state, previous))
     }
 
     /// Called under the native host's configuration/write lock. Limit the
     /// total bytes read in one pass as well as individual files and file count.
-    /// No checkpoint is published unless the entire pass succeeds.
-    fn catch_up_logs(&self, state: &mut IndexState) -> Result<bool> {
+    /// A pass that reaches the byte bound stops before the next changed log,
+    /// in sorted order, so a rebuild split over several passes ingests the
+    /// logs in the same order as one pass; `state` then checkpoints only the
+    /// logs it read. Callers never publish an incomplete pass.
+    fn catch_up_logs(&self, state: &mut IndexState) -> Result<LogPass> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let log_dir = checked_relative_dir(&self.storage.log_dir)?;
         let logs = match root.open_dir(&log_dir) {
             Ok(logs) => logs,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && state.logs.is_empty() => {
-                return Ok(false);
+                return Ok(LogPass {
+                    changed: false,
+                    reset: false,
+                    complete: true,
+                });
             }
             Err(error) => {
                 return Err(error).context("artifact history is unavailable: opening logs");
@@ -737,7 +898,9 @@ impl ArtifactIndex {
             *state = self.empty_state();
         }
         let changed = reset || state.logs != checkpoints;
+        let limit = scan_byte_limit();
         let mut scanned = 0;
+        let mut complete = true;
         for (relative, checkpoint) in &checkpoints {
             if state.logs.get(relative) == Some(checkpoint) {
                 continue;
@@ -748,10 +911,13 @@ impl ArtifactIndex {
                     shown(relative)
                 );
             }
-            scanned += checkpoint.bytes;
-            if scanned > MAX_SCAN_BYTES {
-                bail!("artifact history is unavailable: catch-up exceeds its 64 MiB limit");
+            // One log always fits (the per-file bound is below the pass
+            // bound), so every pass makes progress.
+            if scanned > 0 && scanned + checkpoint.bytes > limit {
+                complete = false;
+                break;
             }
+            scanned += checkpoint.bytes;
             let mut file = logs
                 .open(relative)
                 .with_context(|| format!("opening artifact log file {}", shown(relative)))?;
@@ -779,9 +945,16 @@ impl ArtifactIndex {
             for (line, event) in parse_log_lines(&text) {
                 state.ingest(event, Some((relative.clone(), line)));
             }
+            state.logs.insert(relative.clone(), checkpoint.clone());
         }
-        state.logs = checkpoints;
-        Ok(changed)
+        if complete {
+            state.logs = checkpoints;
+        }
+        Ok(LogPass {
+            changed,
+            reset,
+            complete,
+        })
     }
 
     fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
@@ -804,7 +977,14 @@ impl ArtifactIndex {
         atomic_write(&self.database_path(), &database.bytes)?;
         // Publish the checkpoint last. If either write fails, a subsequent
         // read still sees the older checkpoint and retries the catch-up.
-        atomic_write(&self.state_path(), &bytes)
+        atomic_write(&self.state_path(), &bytes)?;
+        // The published cache now covers any saved partial pass.
+        match fs::remove_file(self.pending_path()) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(error).context("removing artifact index catch-up progress")
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Return the current derived record for one recognized artifact. The
@@ -1679,6 +1859,10 @@ fn unescape_markdown(value: &str) -> String {
 }
 
 fn read_state(path: &Path) -> Result<Option<IndexState>> {
+    read_bounded_json(path)
+}
+
+fn read_bounded_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -3538,12 +3722,174 @@ print(json.dumps([tables,row]))"#;
         LOG_BYTES_READ.with(|count| count.set(0));
         let error = index.recent(None, None, 32).unwrap_err().to_string();
         assert!(
-            error.contains("catch-up exceeds its 64 MiB limit"),
+            error.contains("catch-up reached its 64 MiB per-pass limit"),
             "{error}"
         );
         assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 48 * 1024 * 1024);
         assert_eq!(fs::read(index.state_path()).unwrap(), old_state);
         assert_eq!(fs::read(index.database_path()).unwrap(), old_db);
+        // The next pass resumes after the logs already read.
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 1);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 24 * 1024 * 1024);
+        assert!(!index.pending_path().exists());
+    }
+
+    /// Run `pass` until it succeeds. Every pass must stay within the
+    /// per-pass read bound and report history unavailable until it is whole.
+    fn bounded_passes<T>(limit: u64, mut pass: impl FnMut() -> Result<T>) -> (T, usize) {
+        for passes in 1..=16 {
+            LOG_BYTES_READ.with(|count| count.set(0));
+            let result = pass();
+            let read = LOG_BYTES_READ.with(|count| count.get());
+            assert!(read <= limit, "pass {passes} read {read} of {limit} bytes");
+            match result {
+                Ok(value) => return (value, passes),
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    assert!(error.contains("history is unavailable"), "{error}");
+                }
+            }
+        }
+        panic!("catch-up never finished");
+    }
+
+    #[test]
+    fn full_rebuilds_finish_in_bounded_passes_once_history_exceeds_one_pass() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = (1..=6)
+            .map(|day| {
+                activity(
+                    &format!("00000000-0000-4000-8000-{day:012}"),
+                    &format!("N{day}"),
+                    &format!("Item {day}"),
+                    &format!("2026-10-1{day}T12:00:00Z"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let log = |day: usize| format!("2026-10-1{day}.md");
+        // Two logs fit in one pass; the whole history needs three.
+        let size = fs::metadata(write_log(root.path(), &log(1), &[&events[0]]))
+            .unwrap()
+            .len();
+        let limit = size * 5 / 2;
+        SCAN_LIMIT.with(|value| value.set(limit));
+        // History grows one day at a time, so each catch-up reads one log.
+        for (day, event) in events.iter().enumerate().map(|(n, event)| (n + 1, event)) {
+            write_log(root.path(), &log(day), &[event]);
+            let (recent, passes) = bounded_passes(limit, || index.recent(None, None, 32));
+            assert_eq!((recent.0.len(), passes), (day, 1));
+        }
+
+        // A deleted cache rebuilds in bounded passes and never publishes a
+        // partial checkpoint on the way.
+        fs::remove_file(index.state_path()).unwrap();
+        let old_db = fs::read(index.database_path()).unwrap();
+        let mut partial = Vec::new();
+        let (recent, passes) = bounded_passes(limit, || {
+            let result = index.recent(None, None, 32);
+            if result.is_err() {
+                partial.push((
+                    index.state_path().exists(),
+                    fs::read(index.database_path()).unwrap() == old_db,
+                ));
+            }
+            result
+        });
+        assert_eq!((recent.0.len(), passes), (6, 3));
+        assert_eq!(partial, [(false, true); 2]);
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+
+        // The documented repair command finishes in one invocation.
+        let report = index.reindex().unwrap();
+        assert_eq!(report.written, 6);
+        assert_eq!(artifact_files(root.path()).len(), 6);
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+
+        // Duplicate reconciliation resumes its own rebuild.
+        let (_, passes) = bounded_passes(limit, || index.reconcile_from_logs());
+        assert_eq!(passes, 3);
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);
+
+        // A deleted log resets and rebuilds the remaining five.
+        fs::remove_file(root.path().join("log").join(log(1))).unwrap();
+        let (recent, passes) = bounded_passes(limit, || index.recent(None, None, 32));
+        assert_eq!((recent.0.len(), passes), (5, 3));
+        // A truncated log does the same with the remaining four.
+        fs::write(
+            root.path().join("log").join(log(2)),
+            format!("{LOG_HEADER}\n"),
+        )
+        .unwrap();
+        let (report, _) = bounded_passes(limit, || index.regenerate_dirty());
+        assert_eq!(report.failed, 0);
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 4);
+        assert!(index.artifact(&events[1].artifact_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_reset_catch_up_keeps_the_conflict_winner_the_cache_chose() {
+        let original = activity(
+            "00000000-0000-4000-8000-000000000010",
+            "REUSED",
+            "Original",
+            "2026-10-20T12:00:00Z",
+        );
+        let mut backdated = original.clone();
+        backdated.title = Some("Backdated".into());
+        let unrelated = activity(
+            "00000000-0000-4000-8000-000000000011",
+            "OTHER",
+            "Other",
+            "2026-09-01T12:00:00Z",
+        );
+        // Whether the rebuild after the reset takes one pass or several.
+        for bounded in [false, true] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let index = index(&root, &cache);
+            let title = || {
+                index
+                    .artifact(&original.artifact_id)
+                    .unwrap()
+                    .unwrap()
+                    .title
+            };
+            write_log(root.path(), "2026-09-01.md", &[&unrelated]);
+            write_log(root.path(), "2026-10-20.md", &[&original]);
+            index.regenerate_dirty().unwrap();
+            assert_eq!(title(), "Original");
+            // A later delivery backdated into an earlier-dated log.
+            let backdated_log = write_log(root.path(), "2026-10-15.md", &[&backdated]);
+            index.regenerate_dirty().unwrap();
+            assert_eq!(title(), "Original", "bounded={bounded}");
+            index.reindex().unwrap();
+            assert_eq!(title(), "Original", "bounded={bounded}");
+            // One log per pass, so the two bodies meet in different passes.
+            let limit = fs::metadata(&backdated_log).unwrap().len() + 1;
+            if bounded {
+                SCAN_LIMIT.with(|value| value.set(limit));
+            }
+            // Removing an unrelated log must not swap in the backdated body.
+            fs::remove_file(root.path().join("log/2026-09-01.md")).unwrap();
+            let (report, passes) = bounded_passes(MAX_SCAN_BYTES, || index.regenerate_dirty());
+            assert_eq!(report.failed, 0);
+            assert_eq!(passes, if bounded { 2 } else { 1 });
+            assert_eq!(title(), "Original", "bounded={bounded}");
+            let owned = artifact_files(root.path())
+                .into_iter()
+                .map(|path| fs::read_to_string(path).unwrap())
+                .collect::<String>();
+            assert!(owned.contains("Original"), "bounded={bounded}: {owned}");
+            assert!(!owned.contains("Backdated"), "bounded={bounded}: {owned}");
+            SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
+        }
     }
 
     #[test]
