@@ -3,6 +3,7 @@
 pub mod agent_env;
 pub mod command_runner;
 pub mod harness_api;
+pub mod maintenance;
 pub mod paths;
 pub mod queue;
 pub mod record;

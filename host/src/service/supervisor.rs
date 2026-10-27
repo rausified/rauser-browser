@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
@@ -31,6 +32,7 @@ use uuid::Uuid;
 use super::harness_api::{
     HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome, draft_prompt,
 };
+use super::maintenance;
 use super::queue::{Scheduler, Submit};
 use super::record::{RunStatusFile, RunStore, StreamError, StreamPage, page_markdown};
 use crate::config::ConfigStore;
@@ -121,13 +123,30 @@ impl RunFinisher for VaultCheckFinisher {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServiceOptions {
     pub run_timeout: Duration,
     /// How long the service stays up with nothing queued or running.
     pub idle_exit: Duration,
-    /// Recorded in each run's `status.json` for recovery (Task 20).
+    /// Recorded in each run's `status.json` for recovery.
     pub service_pid: u32,
+    /// The child environment for runs that were still queued when the last
+    /// service process ended and are re-submitted by [`Supervisor::new`]. The
+    /// server builds it the same way as a `start_run` environment.
+    pub resume_env: Vec<(OsString, OsString)>,
+}
+
+impl fmt::Debug for ServiceOptions {
+    /// Names only: `resume_env` may carry `agent.env` secrets.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<_> = self.resume_env.iter().map(|(name, _)| name).collect();
+        f.debug_struct("ServiceOptions")
+            .field("run_timeout", &self.run_timeout)
+            .field("idle_exit", &self.idle_exit)
+            .field("service_pid", &self.service_pid)
+            .field("resume_env", &names)
+            .finish()
+    }
 }
 
 /// A request to start a run. The server resolves the record key, the working
@@ -228,6 +247,8 @@ struct Inner {
     finisher: Box<dyn RunFinisher>,
     options: ServiceOptions,
     last_activity: Mutex<Instant>,
+    /// Serializes [`maintenance::prune`] between worker threads.
+    prune_lock: Mutex<()>,
 }
 
 /// Owns every run of this service process. Cheap to clone.
@@ -237,13 +258,20 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
+    /// Recover the runs a previous service process left behind (interrupted
+    /// `running` records fail with "service restarted"), prune old records,
+    /// then re-submit the runs that were still queued, oldest first.
     pub fn new(
         store: RunStore,
         registry: HarnessRegistry,
         finisher: Box<dyn RunFinisher>,
         options: ServiceOptions,
     ) -> Self {
-        Self {
+        let now = OffsetDateTime::now_utc();
+        let queued =
+            maintenance::recover(&store, now, options.service_pid, &group_alive, &kill_group);
+        maintenance::prune(&store, now);
+        let supervisor = Self {
             inner: Arc::new(Inner {
                 store,
                 scheduler: Mutex::new(Scheduler::default()),
@@ -253,8 +281,42 @@ impl Supervisor {
                 finisher,
                 options,
                 last_activity: Mutex::new(Instant::now()),
+                prune_lock: Mutex::new(()),
             }),
+        };
+        supervisor.resume(queued);
+        supervisor
+    }
+
+    /// Re-submit recovered queued runs. A run without a recorded working
+    /// directory, or a second queued run for the same record key, cannot be
+    /// resumed and fails with "service restarted".
+    fn resume(&self, queued: Vec<Uuid>) {
+        let inner = &self.inner;
+        for id in queued {
+            let Ok(status) = inner.store.status(id) else {
+                continue;
+            };
+            let resumable = status.cwd.as_ref().map(|cwd| {
+                let mut scheduler = lock(&inner.scheduler);
+                (scheduler.submit(&status.start_key, id), PathBuf::from(cwd))
+            });
+            match resumable {
+                Some((Submit::New, cwd)) => {
+                    let control = RunControl::new(Launch {
+                        cwd,
+                        env: inner.options.resume_env.clone(),
+                    });
+                    lock(&inner.runs).insert(id, Arc::new(control));
+                }
+                Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
+                    status.state = RunState::Failed;
+                    status.error_kind = Some(RunErrorKind::ServiceRestarted);
+                    status.error = Some(maintenance::SERVICE_RESTARTED.to_string());
+                }),
+            }
         }
+        Inner::pump(inner);
     }
 
     /// Queue a run, or return the queued-or-running run for the same record
@@ -398,6 +460,7 @@ impl Supervisor {
             if let Some(control) = control {
                 control.mark_done();
             }
+            inner.prune();
             Inner::pump(inner);
         } else if let Some(control) = control {
             drop(scheduler);
@@ -738,6 +801,26 @@ impl Inner {
         drop(scheduler);
         lock(&self.runs).remove(&id);
         self.touch();
+        self.prune();
+    }
+
+    /// Apply retention after a run finishes.
+    fn prune(&self) {
+        let _guard = lock(&self.prune_lock);
+        maintenance::prune(&self.store, OffsetDateTime::now_utc());
+    }
+}
+
+/// Whether process group `group` still exists.
+fn group_alive(group: i32) -> bool {
+    rustix::process::Pid::from_raw(group)
+        .is_some_and(|pid| rustix::process::test_kill_process_group(pid).is_ok())
+}
+
+/// SIGKILL process group `group`, ignoring failure.
+fn kill_group(group: i32) {
+    if let Some(pid) = rustix::process::Pid::from_raw(group) {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
 }
 
@@ -793,7 +876,12 @@ pub fn timeout_message(timeout: Duration) -> String {
 /// RFC 3339 UTC with exactly nine fraction digits, so timestamps sort as
 /// strings (`RunStore::list` orders by `created_at`).
 fn now_timestamp() -> String {
-    let now = OffsetDateTime::now_utc();
+    timestamp(OffsetDateTime::now_utc())
+}
+
+/// `now` in the record timestamp format of [`now_timestamp`].
+pub(crate) fn timestamp(now: OffsetDateTime) -> String {
+    let now = now.to_offset(time::UtcOffset::UTC);
     let whole = now
         .replace_nanosecond(0)
         .ok()
@@ -874,7 +962,17 @@ mod tests {
         }
 
         fn with_timeout(body: &str, run_timeout: Duration) -> Self {
+            Self::seeded(body, run_timeout, |_, _| {})
+        }
+
+        /// Seed `runs/` before the supervisor starts, as a previous service
+        /// process would have left it.
+        fn seeded(body: &str, run_timeout: Duration, seed: impl FnOnce(&RunStore, &Path)) -> Self {
             let dir = tempfile::tempdir().unwrap();
+            seed(
+                &RunStore::open(dir.path().join("runs")).unwrap(),
+                dir.path(),
+            );
             let program = dir.path().join("fake-harness");
             std::fs::write(&program, format!("#!/bin/sh\n{body}")).unwrap();
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -908,6 +1006,7 @@ mod tests {
                     run_timeout,
                     idle_exit: Duration::from_secs(600),
                     service_pid: std::process::id(),
+                    resume_env: Vec::new(),
                 },
             );
             Self {
@@ -1373,5 +1472,112 @@ mod tests {
             .map(|id| id.to_string())
             .collect();
         assert_eq!(listed, expected);
+    }
+
+    fn seed_record(store: &RunStore, cwd: &Path, state: RunState, created_at: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        let finished = !matches!(state, RunState::Queued | RunState::Running);
+        let status = RunStatusFile {
+            version: 1,
+            run_id: id.to_string(),
+            state,
+            harness: HarnessId::Codex,
+            service_pid: Some(1_000_000),
+            process_group: None,
+            heartbeat_at: None,
+            thread_id: None,
+            session_id: None,
+            cwd: Some(cwd.display().to_string()),
+            start_key: RecordKey {
+                kind: RecordKeyKind::Url,
+                value: format!("https://example.com/{id}"),
+            },
+            written_key: None,
+            url: format!("https://example.com/{id}"),
+            title: "Seeded".into(),
+            requested_at: created_at.into(),
+            created_at: created_at.into(),
+            started_at: None,
+            finished_at: finished.then(|| created_at.to_string()),
+            error: None,
+            error_kind: None,
+            summary_path: None,
+            stream_truncated: false,
+        };
+        store.create(&status, "# Seeded\n").unwrap();
+        id
+    }
+
+    #[test]
+    fn new_fails_interrupted_runs_and_resumes_queued_ones() {
+        let mut interrupted = None;
+        let mut queued = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            interrupted = Some(seed_record(
+                store,
+                cwd,
+                RunState::Running,
+                "2026-10-26T09:00:00.000000000Z",
+            ));
+            queued = Some(seed_record(
+                store,
+                cwd,
+                RunState::Queued,
+                "2026-10-26T09:00:01.000000000Z",
+            ));
+        });
+        let view = fixture.view(interrupted.unwrap());
+        assert_eq!(view.state, RunState::Failed);
+        assert_eq!(view.error_kind, Some(RunErrorKind::ServiceRestarted));
+        assert_eq!(view.error.as_deref(), Some("service restarted"));
+
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+        assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn finished_run_prunes_old_records() {
+        let mut old = Vec::new();
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            for _ in 0..maintenance::KEEP_NEWEST {
+                old.push(seed_record(
+                    store,
+                    cwd,
+                    RunState::Succeeded,
+                    "2020-01-01T00:00:00.000000000Z",
+                ));
+            }
+        });
+        // Exactly 200 old runs: start-up pruning keeps all of them.
+        assert!(old.iter().all(|id| run_dir(&fixture, *id).exists()));
+        let id = fixture.start("a");
+        fixture.wait_finished(id);
+        // The new run pushes one old run outside the newest 200.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while old.iter().all(|id| run_dir(&fixture, *id).exists()) {
+            assert!(Instant::now() < deadline, "no old run was pruned");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let kept = old
+            .iter()
+            .filter(|id| run_dir(&fixture, **id).exists())
+            .count();
+        assert_eq!(kept, maintenance::KEEP_NEWEST - 1);
+        assert!(run_dir(&fixture, id).exists());
+    }
+
+    #[test]
+    fn service_options_debug_hides_resume_env_values() {
+        let options = ServiceOptions {
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            idle_exit: Duration::from_secs(600),
+            service_pid: 1,
+            resume_env: vec![("API_KEY".into(), "secret-value".into())],
+        };
+        let debug = format!("{options:?}");
+        assert!(debug.contains("API_KEY"), "{debug}");
+        assert!(!debug.contains("secret-value"), "{debug}");
     }
 }
