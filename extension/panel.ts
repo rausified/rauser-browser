@@ -158,6 +158,8 @@ let runLine: { tabId: number; element: HTMLElement } | null = null;
 // The last worker notice shown, since one can arrive both live and stored.
 let shownNotice: string | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
+// The shown Recent rows' Open summary buttons, disabled with the host.
+let recentOpenButtons: HTMLButtonElement[] = [];
 let recentLoadSeq = 0;
 let worklogLoadSeq = 0;
 
@@ -487,6 +489,8 @@ function updateControls(): void {
   summarizeButton.hidden = currentPage === null;
   summarizeButton.disabled = !harnessReady || summarizing || currentPage?.tabId === undefined;
   summarizeButton.title = harnessReady ? "" : SUMMARIZE_NEEDS_HARNESS;
+  pageSummaryOpen.disabled = !connected;
+  for (const open of recentOpenButtons) open.disabled = !connected;
   const paused = whyPausedReason();
   whyPausedHint.hidden = paused === null;
   if (paused !== null) whyPausedHint.textContent = paused;
@@ -910,6 +914,9 @@ function recentRow(item: ArtifactListItem): HTMLElement {
     open.type = "button";
     open.className = "secondary compact";
     open.textContent = "Open summary";
+    open.setAttribute("aria-label", `Open summary: ${item.title}`);
+    open.disabled = !session.connected;
+    recentOpenButtons.push(open);
     const url = item.url;
     open.addEventListener("click", () => void openRecentSummary(url));
     row.append(open);
@@ -919,6 +926,7 @@ function recentRow(item: ArtifactListItem): HTMLElement {
 
 function renderRecent(items: readonly ArtifactListItem[]): void {
   recentList.replaceChildren();
+  recentOpenButtons = [];
   let day = "";
   for (const item of items) {
     if (item.local_date !== day) {

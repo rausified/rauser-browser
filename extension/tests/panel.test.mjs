@@ -47,7 +47,11 @@ class FakeElement {
   click() {
     if (!this.disabled) this.dispatch("click");
   }
-  setAttribute() {}
+  setAttribute(name, value) {
+    this.attributes ??= {};
+    this.attributes[name] = String(value);
+  }
+  getAttribute(name) { return this.attributes?.[name] ?? null; }
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   add(child) { this.children.push(child); }
@@ -1629,6 +1633,9 @@ test("a summarized Recent row says so and renders agent text as text", async () 
   // Every piece of agent text is a text node, never markup.
   assert.ok(descendants(summarized).every((node) => !/^(IMG|B)$/.test(node.tagName)));
 
+  // The button's accessible name says which row it opens.
+  assert.equal(buttonIn(summarized, "Open summary").getAttribute("aria-label"), "Open summary: <b>Spec</b>");
+
   buttonIn(summarized, "Open summary").click();
   await until(() => page.sent("open_summary").length === 1, "open_summary");
   assert.equal(page.sent("open_summary")[0].url, "https://read.example/spec");
@@ -1659,4 +1666,42 @@ test("following a new tab clears the previous page's summary before its lookup r
   release();
   await settle();
   assert.equal(page.el("page-summary").hidden, true);
+});
+
+test("Open summary buttons are disabled while the host is disconnected", async () => {
+  const items = [{
+    local_date: "2026-10-27", artifact_id: "web:spec", artifact_type: "web.page", title: "Spec",
+    url: "https://read.example/spec", focused_seconds: 0, background_seconds: 0, opens: 0, why: null,
+    summary: SUMMARY,
+  }];
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+    intercept: (request) => {
+      if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SUMMARY };
+      if (request.type === "list_artifacts") return { type: "artifact_list_result", items, artifact_types: ["web.page"], truncated: false };
+      return opensSummary(request);
+    },
+  });
+  await until(() => page.el("page-summary").hidden === false, "the page's summary line");
+  await noteLoaded(page);
+  page.el("tab-recent").click();
+  await until(() => page.el("recent-list").textContent.includes("Spec"), "the Recent row");
+  const recentOpen = () => buttonIn(page.el("recent-list"), "Open summary");
+  assert.equal(page.el("page-summary-open").disabled, false);
+  assert.equal(recentOpen().disabled, false);
+
+  page.hostExits();
+  page.state.hostDead = true;
+  page.titleChanged("Article (1)");
+  await settle();
+  page.titleChanged("Article (2)");
+  await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
+  assert.equal(page.el("page-summary-open").disabled, true);
+  assert.equal(recentOpen().disabled, true);
+
+  // The host is back; the next page's calls reach it.
+  page.state.hostDead = false;
+  page.followLink("https://read.example/next", "Next");
+  await until(() => page.el("page-summary-open").disabled === false, "Open summary to enable again");
+  assert.equal(recentOpen().disabled, false);
 });
