@@ -79,7 +79,7 @@ function inject({ href = "https://work.example/pages/42", origin = "https://work
   const anchors = links.map((link) => ({ get href() { reads += 1; afterRead?.(location); return link; } }));
   const context = {
     URL, location, window, expected,
-    document: { querySelectorAll(selector) { assert.equal(selector, "a[href]"); return anchors; } },
+    document: { links: new Proxy(anchors, { get(target, key) { assert.notEqual(key, "length", "reading length walks every link"); return target[key]; } }) },
   };
   // Chrome serializes the function in isolation: this catches accidental
   // dependencies on imports or module-scope helpers.

@@ -62,7 +62,15 @@ export class SitePatternPanel {
       });
       if (this.target !== target) return;
       const patterns = readPatternResult(results.find((result) => result.frameId === 0)?.result);
-      const samples = await worker<SampledShape[]>({ kind: "get_site_patterns", origin: httpOrigin(target.url)! });
+      // Stored samples are optional here; a failure to read them must not
+      // discard the page's own shapes.
+      let samples: SampledShape[] = [];
+      let samplesError: unknown = null;
+      try {
+        samples = await worker<SampledShape[]>({ kind: "get_site_patterns", origin: httpOrigin(target.url)! });
+      } catch (error) {
+        samplesError = error;
+      }
       const [current] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (this.target !== target) return;
       if (!this.samePage(this.page, target) || current?.incognito !== false || current.id !== target.tabId || current.url !== target.url) {
@@ -76,6 +84,7 @@ export class SitePatternPanel {
         this.rows.append(row);
       };
       add(`Current page: ${patterns.current}`);
+      if (samplesError !== null) add(`Visited patterns unavailable: ${describe(samplesError)}`);
       for (const row of samples) add(`Visited pattern (${row.count} navigation${row.count === 1 ? "" : "s"}): ${row.shape}`);
       for (const row of patterns.links) add(`Link pattern (${row.count} link${row.count === 1 ? "" : "s"}; not evidence of a visit): ${row.shape}`);
       if (!patterns.links.length) add("No same-origin link patterns found.");

@@ -560,7 +560,15 @@ async function captureNavigation(
   if (!cached || !url || !leaseCoversOrigin(cached, url)) return navigatedAway();
   // The stored lease is the host's as sent, so it can still hold adapters on
   // pending-removal origins that activeLease() filters out.
-  const lease = await activeLease();
+  let lease: PolicyLease | null;
+  try {
+    lease = await activeLease();
+  } catch (error) {
+    // Unreadable pause or removal state must still stop the previous page
+    // from gaining focused time before the failure propagates.
+    await navigatedAway();
+    throw error;
+  }
   if (!lease || !leaseActive(lease) || !leaseCoversOrigin(lease, url)) return navigatedAway();
   if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return navigatedAway();
 
@@ -1072,7 +1080,9 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
         [POLICY_KEY]: null, [QUEUE_KEY]: queue,
       });
       await narrowActivity(null);
-      await pruneSitePatterns(null).catch(patternFailure);
+      // Pausing promises to clear these samples. Report a failed purge so the
+      // user can retry it instead of resuming with the old rows intact.
+      await pruneSitePatterns(null);
       return currentStatus(null, queue);
     }
     case "get_pending_ids":

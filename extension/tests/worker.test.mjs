@@ -977,6 +977,48 @@ test("an oversized skipped navigation stops measuring the previous artifact", as
   }
 });
 
+test("unreadable removal state on a same-origin skipped page still stops measuring the previous artifact", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://unreadable-navigation.example";
+  const realNow = Date.now;
+  let now = new Date("2026-10-16T10:15:00Z").getTime();
+  Date.now = () => now;
+  try {
+    tabs.set(56, { id: 56, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, incognito: false });
+    await send({ kind: "install_policy", lease: lease(origin), resume_after_confirmation: false, resume_after_pause_token: null });
+    assert.ok(sessionValues.get(storageKey("activity_session_v1")).tabs[56], "the artifact tab is tracked first");
+    now += 10_000;
+    values.set(storageKey("pending_site_removals_v1"), "unreadable");
+    const url = `${origin}/search`;
+    tabs.get(56).url = url;
+    onCommitted({ tabId: 56, frameId: 0, documentLifecycle: "active", url, timeStamp: now });
+    await flush();
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[56], undefined,
+      "a policy read failure must not leave the previous artifact mapped");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a failed sample purge during pause is reported, not hidden", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://pause-purge.example";
+  const key = storageKey("site_patterns_v1");
+  values.set(storageKey("policy_v1"), lease(origin));
+  values.set(key, { [origin]: [{ shape: "/items/{num}", count: 1, last_seen: Date.now() }] });
+  rejectLocalSet = (items) => Object.hasOwn(items, key);
+  try {
+    await assert.rejects(send({ kind: "pause_capture" }), /quota exceeded/);
+  } finally { rejectLocalSet = null; }
+  assert.equal(values.get(storageKey("pause_pending_v1")), true, "the pause itself still took effect");
+  await send({ kind: "pause_capture" });
+  assert.deepEqual(values.get(key), {}, "retrying the pause clears the samples");
+});
+
 test("private pattern samples include skipped pages but never enter delivery or native messages", async () => {
   values.clear();
   sessionValues.clear();

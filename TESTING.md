@@ -171,6 +171,14 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Salvage review of Cookie cycle 2 reproduced three page-pattern
+  gaps with failing-first tests: unreadable pending-removal state on a
+  same-origin skipped page left the previous artifact mapped for attention
+  time; a failed sample purge during pause was hidden, so resuming could keep
+  the old rows; and a failed visited-sample read discarded the page's own
+  shapes in the panel. The link reader now walks the lazy `document.links`
+  collection and never reads its length, so the 500-link cap also bounds work
+  on a hostile page; the site-pattern test's mock fails if length is read.
 - 2026-10-27: Independent review reproduced an oversized same-origin
   navigation leaving the previous artifact mapped for attention measurement.
   The worker regression starts on a recognized artifact, navigates to a

@@ -66,11 +66,16 @@ export function inspectSitePatterns(expectedUrl: string, readLinks = false): Sit
   // (including an SPA or hash change) still invalidates that observation.
   if (window.top !== window || location.href !== expectedUrl || location.origin !== url.origin) return empty();
   const counts = new Map<string, number>();
-  const anchors = document.querySelectorAll<HTMLAnchorElement>("a[href]");
-  // Count every inspected anchor, including off-origin ones, to bound work
-  // on pages that plant a very large number of unrelated links.
-  for (let index = 0; index < Math.min(500, anchors.length); index += 1) {
-    const linked = parse(anchors[index]!.href);
+  // document.links is a live collection the browser walks lazily, so reading
+  // its first 500 entries does not materialize every link on a huge page the
+  // way a static querySelectorAll result would. Count every inspected link,
+  // including off-origin ones, to bound work on pages that plant a very large
+  // number of unrelated links. Never read its length: that walks it all.
+  const anchors = document.links;
+  for (let index = 0; index < 500; index += 1) {
+    const anchor = anchors[index];
+    if (!anchor) break;
+    const linked = parse(anchor.href);
     if (!linked || linked.origin !== url.origin) continue;
     const value = shape(linked);
     if (value) counts.set(value, (counts.get(value) ?? 0) + 1);

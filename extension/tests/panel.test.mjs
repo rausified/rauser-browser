@@ -122,7 +122,7 @@ function hostReply(request) {
 }
 
 async function install({ tab, contains = true, config = CONFIG, workerStatus = {}, configIssue = null, adapterIssue = null, intercept = () => null,
-  script = async () => ({ current: "/items/{num}", links: [] }), patterns = [],
+  script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
 }) {
   const elements = pageElements();
   const state = {
@@ -202,7 +202,9 @@ async function install({ tab, contains = true, config = CONFIG, workerStatus = {
       },
       async sendMessage(request) {
         state.workerRequests.push(structuredClone(request));
-        if (request.kind === "get_site_patterns") return { ok: true, value: structuredClone(patterns) };
+        if (request.kind === "get_site_patterns") {
+          return patternsError ? { ok: false, error: patternsError } : { ok: true, value: structuredClone(patterns) };
+        }
         return { ok: true, value: structuredClone(state.workerStatus) };
       },
     },
@@ -386,6 +388,19 @@ test("page-pattern review on an unknown site reads links only on click without c
   page.el("site-pattern-close").click();
   assert.equal(page.el("site-pattern-result").hidden, true);
   assert.equal(page.el("site-pattern-rows").textContent, "");
+});
+
+test("a failed visited-pattern read still shows the page's own patterns", async () => {
+  const page = await install({ tab: { id: 1, url: "https://unknown.example/items/1", title: "A" },
+    script: async () => ({ current: "/items/{num}", links: [{ shape: "/items/{num}/{slug}", count: 2 }] }),
+    patternsError: "Pending site removals are unreadable",
+  });
+  await until(() => !page.el("site-pattern-review").disabled, "pattern review ready");
+  page.el("site-pattern-review").click();
+  await until(() => page.el("site-pattern-rows").textContent.includes("Link pattern"), "pattern results");
+  assert.match(page.el("site-pattern-message").textContent, /Review only/);
+  assert.match(page.el("site-pattern-rows").textContent, /Current page: \/items\/\{num\}/);
+  assert.match(page.el("site-pattern-rows").textContent, /Visited patterns unavailable: .*unreadable/);
 });
 
 test("navigating or canceling a held pattern read drops its result and allows a fresh review", async () => {
