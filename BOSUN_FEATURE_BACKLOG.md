@@ -240,16 +240,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-t40` **Capture Site for unknown sites.** Complete the URL shaper,
-  bounded worker sample, top-frame link shapes, host structural drafter and
-  per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
-  panel review; all named planted-link, shared-origin and identity tests remain
-  required. This is the remaining portion of Capture Site after known sites.
-  **Cycle split (2026-10-27):** the private input layer and an inspectable,
-  review-only panel/settings surface shipped first (see Shipped). The parent remains
-  open for the host structural drafter, per-rule checks, shared-origin scope,
-  selected-rule capture and all named identity/flow cases. A pattern preview
-  must never imply that unknown-site capture is enabled.
 - [ ] `brwr-gf1` **Resolve the bare-Notion draft-rule contradiction.** The
   named Notion identity success case has no route literal before its first
   identifier, while the draft checker requires one. Document and test a
@@ -265,13 +255,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   versions, native registration, the folder picker, standing HTTP(S) access,
   background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
-- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
-  Structural first, agent second: for unknown sites, "Improve with AI"
-  refines the structural draft by launching an agent job through the Brauser
-  service (the open access PR 2 service, shipped in #75, and PR 3 runners, shipped in #98;
-  spec above), not the old M2 step 8.2 harness path. Agent drafts are
-  untrusted and get the same per-rule host checks and plain-language review.
-  Capture Site must keep working with no agent configured.
 - [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel, now open access PR
   4.** A tracking pointer: the summary file, log event, and index/panel
   integration are built in `brwr-so4` (spec §7); there is no denylist check.
@@ -297,12 +280,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 
 ### Focused quality follow-up
 
-- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
-  durable.** From the PR #75 Codex review: a failed terminal status write
-  still frees the run's slot and key, so the record says running and a second
-  run for the same key can start. Use bounded retries and an in-memory end
-  state, keeping the key reserved, rather than holding the queue on a failing
-  disk.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -449,19 +426,10 @@ were folded into `brwr-q7e` above rather than given their own item.
 - [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
   sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
   see show "○ Not an artifact" (~155 via `showNoPage` ~820).
-- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
-  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
-  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
-  whole-second forms. Make them agree.
 - [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
   the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
   rejects format 0 or more than 64 adapters, which the host returns with
   `adapter_issue` set, so the repair prompt is unreachable.
-- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
-  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
-  the cap that `write_request` (host/src/frame.rs ~64) enforces after
-  connecting; refuse it as too large before contacting the service.
-  Re-check against open access PR 3 (#98), which reworked the service run path.
 - [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
   host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
 - [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
@@ -511,6 +479,40 @@ were folded into `brwr-q7e` above rather than given their own item.
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- In progress in the Lane A session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-t40` **Capture Site for unknown sites.** Complete the URL shaper,
+  bounded worker sample, top-frame link shapes, host structural drafter and
+  per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
+  panel review; all named planted-link, shared-origin and identity tests remain
+  required. This is the remaining portion of Capture Site after known sites.
+  **Cycle split (2026-10-27):** the private input layer and an inspectable,
+  review-only panel/settings surface shipped first (see Shipped). The parent remains
+  open for the host structural drafter, per-rule checks, shared-origin scope,
+  selected-rule capture and all named identity/flow cases. A pattern preview
+  must never imply that unknown-site capture is enabled.
+- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
+  Structural first, agent second: for unknown sites, "Improve with AI"
+  refines the structural draft by launching an agent job through the Brauser
+  service (the open access PR 2 service, shipped in #75, and PR 3 runners, shipped in #98;
+  spec above), not the old M2 step 8.2 harness path. Agent drafts are
+  untrusted and get the same per-rule host checks and plain-language review.
+  Capture Site must keep working with no agent configured.
+- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
+  durable.** From the PR #75 Codex review: a failed terminal status write
+  still frees the run's slot and key, so the record says running and a second
+  run for the same key can start. Use bounded retries and an in-memory end
+  state, keeping the key reserved, rather than holding the queue on a failing
+  disk.
+- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
+  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
+  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
+  whole-second forms. Make them agree.
+- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
+  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
+  the cap that `write_request` (host/src/frame.rs ~64) enforces after
+  connecting; refuse it as too large before contacting the service.
+  Re-check against open access PR 3 (#98), which reworked the service run path.
 
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
   child can exit after printing its reply before the parent writes the framed
