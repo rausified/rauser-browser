@@ -7,10 +7,11 @@ import {
 } from "./starter-adapters.js";
 
 export interface CaptureChoice {
-  pullRequests: string | null;
-  issues: string | null;
-  /** Organizations for repositories. Optional until Capture Site offers it. */
-  repositories?: string | null;
+  /** One shared, comma-separated organization list, used for every checked GitHub type. */
+  organizations: string;
+  repositories: boolean;
+  pullRequests: boolean;
+  issues: boolean;
 }
 
 export interface CapturePlan {
@@ -52,20 +53,24 @@ export function planCaptureSite(
   if (siteConfigured(config, origin)) return { ok: false, message: "This site already has capture rules. Manage them in settings." };
   const offers: StarterOffer[] = [];
   if (starterKind(origin) === "github") {
-    for (const [type, value, label] of [
-      ["github.pr", choice.pullRequests, "pull requests"],
-      ["github.issue", choice.issues, "issues"],
-      ["github.repo", choice.repositories ?? null, "repositories"],
-    ] as const) {
-      if (value === null) continue;
-      const organizations = parseGitHubOrganizations(value);
-      if (!organizations) return { ok: false, message: `Enter 1–32 comma-separated GitHub organizations for ${label}, or uncheck that kind of page.` };
-      offers.push(starterOffers(origin, organizations).find((offer) => offer.artifact_type === type)!);
+    const checkedTypes = [
+      ["github.pr", choice.pullRequests],
+      ["github.issue", choice.issues],
+      ["github.repo", choice.repositories],
+    ] as const;
+    if (!checkedTypes.some(([, checked]) => checked)) {
+      return { ok: false, message: "Choose repositories, pull requests, issues, or some combination." };
+    }
+    const organizations = parseGitHubOrganizations(choice.organizations);
+    if (!organizations) return { ok: false, message: "Enter 1–32 comma-separated GitHub organizations, or uncheck every GitHub page type." };
+    const allOffers = starterOffers(origin, organizations);
+    for (const [type, checked] of checkedTypes) {
+      if (!checked) continue;
+      offers.push(allOffers.find((offer) => offer.artifact_type === type)!);
     }
   } else {
     offers.push(...starterOffers(origin, []));
   }
-  if (!offers.length) return { ok: false, message: "Choose pull requests, issues, or both." };
   const artifacts = offers.map((offer) => offer.adapter!);
   const additions: AdapterDocument = { format: 1, artifacts: orderContainedFirst(artifacts) };
   const document: AdapterDocument = {

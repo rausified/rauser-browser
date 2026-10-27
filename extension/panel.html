@@ -63,16 +63,15 @@
           <h2 id="capture-site-heading" tabindex="-1">Review site capture</h2>
           <p class="page-url">Development starter draft · live-tool certification is still pending.</p>
           <div id="capture-site-github" hidden>
-            <p>Choose the kinds of work to remember and the work organizations for each. Only repositories owned by the names you enter are included. Leave personal accounts out.</p>
+            <p>Choose the kinds of work to remember and the work organizations that own them. Only repositories, pull requests and issues owned by the names you enter are included. Leave personal accounts out.</p>
             <div class="field">
+              <label class="check-label"><input id="capture-site-repos" type="checkbox" checked /> Repositories</label>
               <label class="check-label"><input id="capture-site-prs" type="checkbox" checked /> Pull requests</label>
-              <label for="capture-site-pr-orgs">Work organizations for pull requests</label>
-              <input id="capture-site-pr-orgs" type="text" maxlength="1312" placeholder="acme-corp, partner" autocomplete="off" spellcheck="false" />
+              <label class="check-label"><input id="capture-site-issues" type="checkbox" checked /> Issues</label>
             </div>
             <div class="field">
-              <label class="check-label"><input id="capture-site-issues" type="checkbox" checked /> Issues</label>
-              <label for="capture-site-issue-orgs">Work organizations for issues</label>
-              <input id="capture-site-issue-orgs" type="text" maxlength="1312" placeholder="acme-corp" autocomplete="off" spellcheck="false" />
+              <label for="capture-site-orgs">Work organizations</label>
+              <input id="capture-site-orgs" type="text" maxlength="1312" placeholder="acme-corp, partner" autocomplete="off" spellcheck="false" />
             </div>
           </div>
           <div id="capture-site-preview"></div>

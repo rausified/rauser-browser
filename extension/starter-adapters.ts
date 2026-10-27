@@ -48,6 +48,36 @@ export function parseGitHubOrganizations(value: string): string[] | null {
     : null;
 }
 
+// Routes that are never an organization, even though they sit where one
+// would in the URL (github.com/<route>…). "orgs" with no further segment is
+// covered separately below, since /orgs/<org>/… is where an org route lives.
+const GITHUB_RESERVED_ROUTES = new Set([
+  "settings", "notifications", "search", "orgs", "explore", "marketplace", "topics",
+  "trending", "collections", "sponsors", "login", "logout", "signup", "new", "pulls",
+  "issues", "codespaces", "dashboard", "features", "enterprise", "pricing", "about",
+  "apps", "users", "account", "stars", "watching",
+]);
+
+/** The owner Brauser can read off a GitHub URL, to pre-fill (never apply
+ * unseen) the Capture Site organization field. Returns `null` for anything
+ * that is not confidently an organization: a non-GitHub origin, the root,
+ * a reserved route, or a value `parseGitHubOrganizations` would reject. */
+export function githubOwnerFromUrl(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== GITHUB_ORIGIN) return null;
+  const segments = parsed.pathname.split("/").filter(Boolean).map((segment) => segment.toLowerCase());
+  const first = segments[0];
+  if (!first) return null;
+  const owner = first === "orgs" ? (segments[1] ?? null) : first;
+  if (!owner || GITHUB_RESERVED_ROUTES.has(owner)) return null;
+  return parseGitHubOrganizations(owner) ? owner : null;
+}
+
 function jira(origin: string): AdapterObject {
   return {
     type: "jira.issue",

@@ -581,32 +581,62 @@ test("Capture Site recognizes OneDrive document routes without scope or JSON", a
   assert.equal(updates(page)[0].config.adapters.artifacts[0].id, "sharepoint:{host}/{doc}");
 });
 
-test("GitHub requires separate inline scopes and saves exactly the selected kinds", async () => {
+test("Capture Site pre-fills the organization from the current GitHub page", async () => {
   const page = await captureReview(GITHUB_URL);
   assert.equal(page.el("capture-site-github").hidden, false);
-  assert.equal(page.el("capture-site-save").disabled, true);
-  page.el("capture-site-pr-orgs").value = "Acme-Corp";
-  page.el("capture-site-pr-orgs").dispatch("input");
-  assert.equal(page.el("capture-site-save").disabled, true, "issue scope is a separate choice");
-  page.el("capture-site-issue-orgs").value = "other-org";
-  page.el("capture-site-issue-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-orgs").value, "acme-corp");
+  assert.equal(page.el("capture-site-repos").checked, true);
+  assert.equal(page.el("capture-site-prs").checked, true);
+  assert.equal(page.el("capture-site-issues").checked, true);
   assert.equal(page.el("capture-site-save").disabled, false);
-  assert.match(page.el("capture-site-preview").textContent, /pull requests: acme-corp/);
-  assert.match(page.el("capture-site-preview").textContent, /issues: other-org/);
-  page.el("capture-site-issues").checked = false;
-  page.el("capture-site-issues").dispatch("input");
-  assert.equal(page.el("capture-site-issue-orgs").disabled, true);
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
   await saveCapture(page);
-  assert.equal(updates(page)[0].config.adapters.artifacts.length, 1);
-  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["acme-corp"] });
+  assert.equal(updates(page)[0].config.adapters.artifacts.length, 3);
+  for (const artifact of updates(page)[0].config.adapters.artifacts) {
+    assert.deepEqual(artifact.scope, { owner: ["acme-corp"] });
+  }
+});
+
+test("editing the pre-filled organization keeps the user's edit, not the page's owner", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-orgs").value = "other-org";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /owned by: other-org\./);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["other-org"] });
+});
+
+test("unchecking repositories omits the repo adapter", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type),
+    ["github.pr", "github.issue"]);
+});
+
+test("unchecking every GitHub kind disables save, and clearing the organization blocks it", async () => {
+  const page = await captureReview(GITHUB_URL);
+  for (const id of ["capture-site-repos", "capture-site-prs", "capture-site-issues"]) {
+    page.el(id).checked = false;
+    page.el(id).dispatch("input");
+  }
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(page.el("capture-site-orgs").disabled, true);
+  page.el("capture-site-repos").checked = true;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-orgs").value = "";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
 });
 
 test("canceling and switching tabs clear a review without changing capture", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-pr-orgs").value = "sensitive-org";
+  page.el("capture-site-orgs").value = "sensitive-org";
   page.el("capture-site-cancel").click();
   assert.equal(page.el("capture-site-review").hidden, true);
-  assert.equal(page.el("capture-site-pr-orgs").value, "");
+  assert.equal(page.el("capture-site-orgs").value, "");
   assert.equal(updates(page).length, 0);
   page.el("capture-site").click();
   page.navigate(JIRA_URL, 2);

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 const {
+  githubOwnerFromUrl,
   hasAdapter,
   orderContainedFirst,
   parseGitHubOrganizations,
@@ -110,6 +111,24 @@ test("GitHub organization scopes normalize, deduplicate, and reject unsafe forms
   assert.equal(parseGitHubOrganizations("-leading"), null);
   assert.equal(parseGitHubOrganizations("trailing-"), null);
   assert.equal(parseGitHubOrganizations("name with space"), null);
+});
+
+test("githubOwnerFromUrl pre-fills a confident owner and nothing else", () => {
+  assert.equal(githubOwnerFromUrl("https://github.com/Cisco-SBG/x/blob/main/a.md"), "cisco-sbg");
+  assert.equal(githubOwnerFromUrl("https://github.com/orgs/cisco-sbg/repositories"), "cisco-sbg");
+  assert.equal(githubOwnerFromUrl("https://github.com/rausified/dotfiles"), "rausified");
+  assert.equal(githubOwnerFromUrl("https://github.com/settings/profile"), null);
+  assert.equal(githubOwnerFromUrl("https://github.com/"), null);
+  assert.equal(githubOwnerFromUrl("https://github.com/orgs"), null);
+  assert.equal(githubOwnerFromUrl("https://example.com/cisco-sbg"), null);
+  assert.equal(githubOwnerFromUrl("not a URL"), null);
+  for (const route of [
+    "notifications", "search", "explore", "marketplace", "topics", "trending", "collections",
+    "sponsors", "login", "logout", "signup", "new", "pulls", "issues", "codespaces", "dashboard",
+    "features", "enterprise", "pricing", "about", "apps", "users", "account", "stars", "watching",
+  ]) assert.equal(githubOwnerFromUrl(`https://github.com/${route}`), null, route);
+  assert.equal(githubOwnerFromUrl("https://github.com/-leading"), null);
+  assert.equal(githubOwnerFromUrl("https://github.com/trailing-"), null);
 });
 
 test("an installed GitHub starter is recognized before scope is typed", () => {
