@@ -6,6 +6,7 @@ import {
 import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
+import { hostBuildText } from "./build-info.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import type {
   ArtifactListItem,
@@ -15,6 +16,8 @@ import type {
 } from "../protocol/ts/generated.js";
 
 const status = element<HTMLDivElement>("status");
+const buildId = element<HTMLSpanElement>("build-id");
+const hostBuild = element<HTMLSpanElement>("host-build");
 const settingsButton = element<HTMLButtonElement>("open-settings");
 const setupWarning = element<HTMLDivElement>("setup-warning");
 const setupReason = element<HTMLSpanElement>("setup-reason");
@@ -818,6 +821,7 @@ void (async () => {
   try {
     const hello = await session.hello();
     reachedHost = true;
+    hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hello.host_version);
     await reloadConfig();
     if (hello.config_issue) show(hello.config_issue, true);
     initialized = true;

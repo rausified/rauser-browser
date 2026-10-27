@@ -108,12 +108,13 @@ function install({
     ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
     ["summaries-dir", "input"], ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
-    ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"],
+    ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"], ["build-id", "span"], ["host-build", "span"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
   elements.get("adapter-editor").hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
+  elements.get("build-id").textContent = "abc1234def56";
 
   function hostReply(request) {
     state.requests.push(request);
@@ -267,6 +268,15 @@ async function saveOpenAdapter(what) {
   env.elements.get("save-adapter").click();
   await until(() => env.revision > before && idle(), what);
 }
+
+test("the header names the host build and flags one from another commit", async () => {
+  install({ host: { hello: () => ({
+    type: "hello_result", host_version: "0.1.0+0123456789ab", configured: true, config_issue: null,
+  }) } });
+  await openSettings();
+  assert.equal(env.elements.get("host-build").textContent,
+    " · host 0123456789ab (not the extension's commit; rebuild both)");
+});
 
 test("the site list is the distinct adapter origins", async () => {
   install({ adapters: [

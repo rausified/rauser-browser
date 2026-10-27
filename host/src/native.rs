@@ -194,7 +194,8 @@ fn dispatch(
             Response::HelloResult(HelloResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
-                host_version: env!("CARGO_PKG_VERSION").to_owned(),
+                host_version: concat!(env!("CARGO_PKG_VERSION"), "+", env!("BRAUSER_BUILD_ID"))
+                    .to_owned(),
                 configured: config.configured(),
                 config_issue: config.config_issue().map(str::to_owned),
             })
@@ -1817,6 +1818,10 @@ mod tests {
             Response::HelloResult(value) => {
                 assert!(!value.configured);
                 assert!(value.config_issue.is_some());
+                // The build commit rides as semver build metadata.
+                let (version, build) = value.host_version.split_once('+').unwrap();
+                assert_eq!(version, env!("CARGO_PKG_VERSION"));
+                assert!(build == "unknown" || build.len() >= crate::build_id::COMMIT_LENGTH);
             }
             other => panic!("expected hello_result, got {other:?}"),
         }

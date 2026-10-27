@@ -14,6 +14,7 @@ import {
   worker,
 } from "./settings.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { hostBuildText } from "./build-info.js";
 import {
   SETUP_WARNING,
   agentStateText,
@@ -39,6 +40,8 @@ import {
 } from "./starter-adapters.js";
 
 const status = element<HTMLDivElement>("status");
+const buildId = element<HTMLSpanElement>("build-id");
+const hostBuild = element<HTMLSpanElement>("host-build");
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
 const siteOrigin = element<HTMLInputElement>("site-origin");
@@ -1059,6 +1062,7 @@ void (async () => {
       show(`Native host unavailable: ${describe(error)}. Install or register the development host, then reload this page.`, true);
       return;
     }
+    hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hello.host_version);
     try {
       await reloadConfig();
       if (hello.config_issue) show(hello.config_issue, true);
