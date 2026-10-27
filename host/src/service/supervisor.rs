@@ -520,7 +520,9 @@ impl Supervisor {
     pub fn retry_save(&self, id: Uuid) -> Result<RunView, (ErrorCode, String)> {
         let inner = &self.inner;
         inner.touch();
-        let record_lock = inner.record_lock(id);
+        let Some(record_lock) = inner.record_lock(id) else {
+            return Err(no_such_run());
+        };
         let _guard = lock(&record_lock);
         let mut status = inner.status(id)?;
         let result = inner.store.read_result(id).ok().flatten();
@@ -569,16 +571,24 @@ impl Inner {
         *lock(&self.last_activity) = Instant::now();
     }
 
-    fn record_lock(&self, id: Uuid) -> Arc<Mutex<()>> {
-        lock(&self.record_locks).entry(id).or_default().clone()
+    /// The run's mutex, or `None` when it has no record. Ids come from
+    /// extension messages, so a lock is only made for a run that exists;
+    /// [`Inner::prune`] drops it once the record is gone. Both check the
+    /// record under the map lock, so a live run only ever has one mutex.
+    fn record_lock(&self, id: Uuid) -> Option<Arc<Mutex<()>>> {
+        let mut locks = lock(&self.record_locks);
+        if let Some(record_lock) = locks.get(&id) {
+            return Some(record_lock.clone());
+        }
+        self.store
+            .run_dir(id)
+            .exists()
+            .then(|| locks.entry(id).or_default().clone())
     }
 
     fn status(&self, id: Uuid) -> Result<RunStatusFile, (ErrorCode, String)> {
         if !self.store.run_dir(id).exists() {
-            return Err((
-                ErrorCode::InvalidRequest,
-                "There is no such run.".to_string(),
-            ));
+            return Err(no_such_run());
         }
         self.store.status(id).map_err(|error| {
             eprintln!("brauser service: reading run {id}: {error:#}");
@@ -608,7 +618,9 @@ impl Inner {
         id: Uuid,
         change: impl FnOnce(&mut RunStatusFile),
     ) -> anyhow::Result<RunStatusFile> {
-        let record_lock = self.record_lock(id);
+        let Some(record_lock) = self.record_lock(id) else {
+            anyhow::bail!("run {id} has no record");
+        };
         let _guard = lock(&record_lock);
         let mut status = self.store.status(id)?;
         change(&mut status);
@@ -904,11 +916,20 @@ impl Inner {
         self.prune();
     }
 
-    /// Apply retention after a run finishes.
+    /// Apply retention after a run finishes, then drop the locks of runs
+    /// whose records are gone.
     fn prune(&self) {
         let _guard = lock(&self.prune_lock);
         maintenance::prune(&self.store, OffsetDateTime::now_utc());
+        lock(&self.record_locks).retain(|id, _| self.store.run_dir(*id).exists());
     }
+}
+
+fn no_such_run() -> (ErrorCode, String) {
+    (
+        ErrorCode::InvalidRequest,
+        "There is no such run.".to_string(),
+    )
 }
 
 /// Whether process group `group` still exists.
@@ -1595,6 +1616,52 @@ mod tests {
             Err((ErrorCode::InvalidRequest, _))
         ));
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retry_save_on_unknown_runs_allocates_no_lock() {
+        let fixture = Fixture::new(ANSWER);
+        for _ in 0..100 {
+            assert!(matches!(
+                fixture.supervisor.retry_save(Uuid::new_v4()),
+                Err((ErrorCode::InvalidRequest, _))
+            ));
+        }
+        assert!(lock(&fixture.supervisor.inner.record_locks).is_empty());
+    }
+
+    #[test]
+    fn pruning_a_run_drops_its_lock() {
+        let mut old = Vec::new();
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            for _ in 0..maintenance::KEEP_NEWEST {
+                old.push(seed_record(
+                    store,
+                    cwd,
+                    RunState::Succeeded,
+                    "2020-01-01T00:00:00.000000000Z",
+                ));
+            }
+        });
+        // Equal `created_at`, so the smallest id is the first pruned.
+        let oldest = *old.iter().min_by_key(|id| id.to_string()).unwrap();
+        assert!(matches!(
+            fixture.supervisor.retry_save(oldest),
+            Err((ErrorCode::Conflict, _))
+        ));
+        let locks = || lock(&fixture.supervisor.inner.record_locks).contains_key(&oldest);
+        assert!(locks());
+
+        let id = fixture.start("a");
+        fixture.wait_finished(id);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while run_dir(&fixture, oldest).exists() || locks() {
+            assert!(
+                Instant::now() < deadline,
+                "the pruned run kept its lock or record"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
