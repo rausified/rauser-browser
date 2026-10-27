@@ -18,7 +18,7 @@
 //! page and are untrusted: they never change how visited shapes group, and
 //! what only links support always forms a rule of its own.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 
 use crate::document::Document;
@@ -553,9 +553,37 @@ fn resolve_classes(
     (path, query)
 }
 
-/// A rule of a kind: its ending, then either whether its words are
-/// link-only (an alternation) or its single word (a split).
+/// A rule of a kind: its ending, whether it is link-only (its alternation
+/// words, or a tail form, have no visited support), and its single word
+/// when the kind splits per word.
 type RuleBucket<'k> = (&'k [Part], bool, Option<String>);
+
+/// A position holding `{tailhex32}`: a path index or a query name.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Tail {
+    Path(usize),
+    Query(String),
+}
+
+type Tails = BTreeSet<Tail>;
+
+/// The positions where a shape has the tail form.
+fn tails(m: &Split<'_>) -> Tails {
+    let tail = Part::Class(ShapeClass::TailHex32);
+    let path = m
+        .key
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| **part == tail)
+        .map(|(at, _)| Tail::Path(at));
+    let query = m
+        .tagged
+        .query
+        .iter()
+        .filter(|(_, class)| *class == ShapeClass::TailHex32)
+        .map(|(name, _)| Tail::Query(name.clone()));
+    path.chain(query).collect()
+}
 
 /// Turns a finished kind into rules: one per ending, and per route word at
 /// the varying position unless a literal comes before it, in which case the
@@ -590,18 +618,43 @@ fn build_kind(builder: Builder<'_>) -> Kind {
     }
 
     // One bucket per rule.
-    let mut buckets: BTreeMap<RuleBucket<'_>, Vec<&Split<'_>>> = BTreeMap::new();
-    for m in &members {
-        let bucket = match word(m) {
+    // The rule's link-only flag and single word, before any tail check.
+    let flag_and_word = |m: &Split<'_>| -> (bool, Option<String>) {
+        match word(m) {
             Some(w) if alternation => {
                 let backed = visited_words
                     .get(m.ending.as_slice())
                     .is_some_and(|ws| ws.contains(&w));
-                (m.ending.as_slice(), !backed, None)
+                (!backed, None)
             }
-            w => (m.ending.as_slice(), false, w),
-        };
-        buckets.entry(bucket).or_default().push(m);
+            w => (false, w),
+        }
+    };
+    // Where each visited-backed bucket's visited shapes have the tail form.
+    let mut visited_tails: BTreeMap<RuleBucket<'_>, Tails> = BTreeMap::new();
+    for m in &members {
+        if m.tagged.source == Source::Visited {
+            let (link_only, single) = flag_and_word(m);
+            visited_tails
+                .entry((m.ending.as_slice(), link_only, single))
+                .or_default()
+                .extend(tails(m));
+        }
+    }
+    let mut buckets: BTreeMap<RuleBucket<'_>, Vec<&Split<'_>>> = BTreeMap::new();
+    for m in &members {
+        let ending = m.ending.as_slice();
+        let (link_only, single) = flag_and_word(m);
+        // A link with the tail form where the bucket's visited shapes have
+        // none would widen their rule, so it goes into a link-only one.
+        let widens = m.tagged.source == Source::Link
+            && visited_tails
+                .get(&(ending, link_only, single.clone()))
+                .is_some_and(|visited| !tails(m).is_subset(visited));
+        buckets
+            .entry((ending, link_only || widens, single))
+            .or_default()
+            .push(m);
     }
 
     let mut rules: Vec<KindRule> = buckets
@@ -1013,6 +1066,62 @@ mod tests {
         );
         assert_eq!(texts(&kinds), [["/a/x/{num}"], ["/b/(x|y)/{num}"]]);
         assert!(kinds[0].rules[0].link_only());
+    }
+
+    #[test]
+    fn link_only_tail_hex_never_widens_visited_hex_rule() {
+        // A planted link with the tail form keeps the visited rule at
+        // `{hex32}` and goes into a link-only rule of its own.
+        let (kinds, _) = run(
+            TOOLS,
+            &Document::default(),
+            &input(&["/p/{hex32}"], &["/p/{tailhex32}"]),
+        );
+        assert_eq!(texts(&kinds), [["/p/{hex32}", "/p/{tailhex32}"]]);
+        let rules = &kinds[0].rules;
+        assert_eq!((rules[0].visited, rules[0].links), (1, 0));
+        assert!(!rules[0].link_only());
+        assert_eq!((rules[1].visited, rules[1].links), (0, 1));
+        assert!(rules[1].link_only());
+
+        // The same holds in the query, after a route-word alternation, and
+        // per route word.
+        let (kinds, _) = run(
+            TOOLS,
+            &Document::default(),
+            &input(
+                &[
+                    "/doc?id={hex32}",
+                    "/w/a/{hex32}",
+                    "/w/b/{hex32}",
+                    "/a/{hex32}",
+                    "/b/{hex32}",
+                ],
+                &["/doc?id={tailhex32}", "/w/a/{tailhex32}", "/a/{tailhex32}"],
+            ),
+        );
+        assert_eq!(
+            texts(&kinds),
+            [
+                vec!["/a/{hex32}", "/b/{hex32}", "/a/{tailhex32}"],
+                vec!["/doc?id={hex32}", "/doc?id={tailhex32}"],
+                vec!["/w/(a|b)/{hex32}", "/w/a/{tailhex32}"],
+            ]
+        );
+        for kind in &kinds {
+            for rule in &kind.rules {
+                assert_eq!(rule.link_only(), rule.text().contains("tailhex32"));
+            }
+        }
+
+        // A link with the narrower form still backs a visited tail rule.
+        let (kinds, _) = run(
+            TOOLS,
+            &Document::default(),
+            &input(&["/p/{tailhex32}"], &["/p/{hex32}"]),
+        );
+        assert_eq!(texts(&kinds), [["/p/{tailhex32}"]]);
+        assert_eq!((kinds[0].rules[0].visited, kinds[0].rules[0].links), (1, 1));
     }
 
     #[test]
