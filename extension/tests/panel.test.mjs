@@ -51,6 +51,7 @@ class FakeElement {
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
+  add(child) { this.append(child); }
   querySelector(selector) {
     return this.children.find((child) => child.tagName === selector.toUpperCase()) ?? new FakeElement(selector);
   }
@@ -412,6 +413,67 @@ async function until(condition, what) {
 
 // The panel has settled once its first tab refresh rendered the page area.
 const shownTitle = (page) => page.el("page-title").textContent;
+
+for (const phase of ["before hello", "during policy install", "after startup"]) {
+  test(`Recent loads once when opened ${phase}`, async () => {
+    let releaseHello;
+    const hello = new Promise((resolve) => { releaseHello = resolve; });
+    let releasePolicy;
+    const policy = new Promise((resolve) => { releasePolicy = resolve; });
+    globalThis.Option = class extends FakeElement {
+      constructor(text, value) {
+        super("option");
+        this.textContent = text;
+        this.value = value;
+      }
+    };
+    const page = await install({
+      tab: { id: 1, url: "https://new.example/a", title: "A" },
+      intercept(request) {
+        if (request.type === "hello" && phase === "before hello") return hello;
+        if (request.type === "list_artifacts") return {
+          type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+          items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
+            url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+            background_seconds: 20, opens: 1, why: null }],
+        };
+        if (request.type === "worklog") return {
+          type: "worklog_result", text: "Reviewed the release", artifact_count: 1,
+          start_date: request.start_date, end_date: request.end_date,
+        };
+        return null;
+      },
+      workerReply(request) {
+        if (request.kind === "install_policy" && phase === "during policy install") return policy;
+      },
+    });
+    if (phase === "during policy install") {
+      await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy"), "policy installation");
+    } else if (phase === "after startup") {
+      await until(() => page.sent("load_note").length > 0 && page.el("note-body").disabled === false, "connected note");
+    }
+    page.el("tab-recent").click();
+    try {
+      if (phase === "before hello") {
+        assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+        assert.equal(page.el("worklog-text").textContent, "Waiting for the host…");
+        assert.equal(page.el("copy-worklog").disabled, true);
+        assert.equal(page.sent("list_artifacts").length, 0);
+        assert.equal(page.sent("worklog").length, 0);
+      }
+    } finally {
+      releaseHello(hostReply({ type: "hello" }));
+      releasePolicy({ ok: true, value: statusFor() });
+      // Drain startup even if the waiting-state assertions fail.
+      await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+    }
+    await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog result");
+    await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent result");
+    assert.equal(page.sent("list_artifacts").length, 1);
+    assert.equal(page.sent("worklog").length, 1);
+    assert.equal(page.el("copy-worklog").disabled, false);
+  });
+}
 
 test("an HTTP(S) tab shows the note editor and no grant or address warning", async () => {
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: true });

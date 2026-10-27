@@ -154,6 +154,8 @@ let runLine: { tabId: number; element: HTMLElement } | null = null;
 let shownNotice: string | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 let recentLoadSeq = 0;
+let recentWaitingForHost = false;
+let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
 
 function show(message: string, warning = false): void {
@@ -877,8 +879,14 @@ function renderRecent(items: readonly ArtifactListItem[]): void {
 }
 
 async function loadRecent(): Promise<void> {
-  if (!session.connected || !session.config?.storage) return;
   const seq = ++recentLoadSeq;
+  if (!session.connected) {
+    recentWaitingForHost = true;
+    recentStatus.textContent = "Waiting for the host…";
+    return;
+  }
+  recentWaitingForHost = false;
+  if (!session.config?.storage) return;
   recentStatus.textContent = "Loading…";
   try {
     const response = await session.host.call({
@@ -904,8 +912,15 @@ async function loadRecent(): Promise<void> {
 }
 
 async function loadWorklog(): Promise<void> {
-  if (!session.connected || !session.config?.storage) return;
   const seq = ++worklogLoadSeq;
+  if (!session.connected) {
+    worklogWaitingForHost = true;
+    worklogText.textContent = "Waiting for the host…";
+    copyWorklogButton.disabled = true;
+    return;
+  }
+  worklogWaitingForHost = false;
+  if (!session.config?.storage) return;
   const range = worklogRange();
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
@@ -1112,6 +1127,10 @@ void (async () => {
     reachedHost = true;
     showHostBuild(hello.host_version);
     await reloadConfig();
+    if (!recentView.hidden) {
+      if (recentWaitingForHost) void loadRecent();
+      if (worklogWaitingForHost) void loadWorklog();
+    }
     if (hello.config_issue) show(hello.config_issue, true);
     initialized = true;
   } catch (error) {
