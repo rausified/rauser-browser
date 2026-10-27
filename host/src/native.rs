@@ -6,8 +6,8 @@ use std::io::{self, Read, Write};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityRecorded, AgentChecked, ArtifactListResult, ArtifactResult, ArtifactView,
-    ArtifactsRefreshed, BatchEventResult, BatchRecorded, CaptureEventKind, ConfigConfirmed,
-    ConfigResult, ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen, HarnessSetupConfirmed,
+    ArtifactsRefreshed, BatchEventResult, BatchRecorded, CaptureEventKind, ConfigResult,
+    ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen, HarnessSetupConfirmed,
     HarnessesDiscovered, HelloResult, NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION,
     RecordKey, RecordKeyKind, Request, Response, VisitOutcome, VisitRecorded, WhyRecorded,
     WorklogResult,
@@ -248,7 +248,6 @@ fn dispatch(
                 &previous_revision,
                 &value.config,
                 value.picker_token.as_deref(),
-                value.consent_token.as_deref(),
                 value.harness_token.as_deref(),
             ) {
                 Ok(authorized) => authorized,
@@ -272,7 +271,6 @@ fn dispatch(
                         &previous_revision,
                         &value.config,
                         value.picker_token.as_deref(),
-                        value.consent_token.as_deref(),
                         value.harness_token.as_deref(),
                     );
                     Response::ConfigUpdated(ConfigUpdated {
@@ -325,53 +323,6 @@ fn dispatch(
                         "could not open the folder picker or use the selected folder",
                     )
                 }
-            }
-        }
-        Request::ConfirmConfig(value) => {
-            if config.refresh().is_err() {
-                return error(
-                    &value.request_id,
-                    ErrorCode::InvalidConfig,
-                    "configuration file is unavailable",
-                );
-            }
-            if value.expected_revision != config.revision() {
-                return error(
-                    &value.request_id,
-                    ErrorCode::Conflict,
-                    "configuration changed; read it again before confirming",
-                );
-            }
-            if let Err(validation_error) = validate_config_update(config.snapshot(), &value.config)
-            {
-                return error(
-                    &value.request_id,
-                    ErrorCode::InvalidConfig,
-                    &validation_error.to_string(),
-                );
-            }
-            match consent.confirm_config(
-                config.snapshot(),
-                config.revision(),
-                &value.config,
-                value.picker_token.as_deref(),
-            ) {
-                Ok(Some(confirmed)) => Response::ConfigConfirmed(ConfigConfirmed {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: value.request_id,
-                    consent_token: confirmed.consent_token,
-                    summary: confirmed.summary,
-                }),
-                Ok(None) => error(
-                    &value.request_id,
-                    ErrorCode::Cancelled,
-                    "configuration confirmation was canceled",
-                ),
-                Err(authority_error) => error(
-                    &value.request_id,
-                    ErrorCode::Unauthorized,
-                    &authority_error.to_string(),
-                ),
             }
         }
         Request::RecordVisit(value) => record_visit(value, config),
@@ -1904,8 +1855,8 @@ mod tests {
     use super::*;
     use brauser_protocol::{
         ActivityEvent, ActivityMode, ActivityTrail, CaptureBatchItem, ConfigSnapshot,
-        ConfirmConfigRequest, GetConfigRequest, HelloRequest, RecordActivityRequest,
-        RecordBatchRequest, RecordVisitRequest, UpdateConfigRequest, VisitEvent,
+        GetConfigRequest, HelloRequest, RecordActivityRequest, RecordBatchRequest,
+        RecordVisitRequest, UpdateConfigRequest, VisitEvent,
     };
     use std::io::Cursor;
 
@@ -1956,7 +1907,6 @@ mod tests {
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
-                consent_token: None,
                 harness_token: None,
             }),
         ];
@@ -2011,7 +1961,6 @@ mod tests {
                 expected_revision: "missing".into(),
                 config: snapshot.clone(),
                 picker_token: None,
-                consent_token: None,
                 harness_token: None,
             }),
             Request::GetConfig(GetConfigRequest {
@@ -2024,7 +1973,6 @@ mod tests {
                 expected_revision: "missing".into(),
                 config: snapshot,
                 picker_token: None,
-                consent_token: None,
                 harness_token: None,
             }),
         ];
@@ -2083,22 +2031,6 @@ mod tests {
             confirm: no_dialog,
         };
 
-        let confirmed = dispatch(
-            Request::ConfirmConfig(ConfirmConfigRequest {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: "confirm".into(),
-                expected_revision: revision.clone(),
-                config: next.clone(),
-                picker_token: None,
-            }),
-            &mut config,
-            &mut consent,
-            &context,
-        );
-        let consent_token = match confirmed {
-            Response::ConfigConfirmed(value) => value.consent_token,
-            other => panic!("expected config confirmation, got {other:?}"),
-        };
         let updated = dispatch(
             Request::UpdateConfig(UpdateConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -2106,7 +2038,6 @@ mod tests {
                 expected_revision: revision,
                 config: next,
                 picker_token: None,
-                consent_token: Some(consent_token),
                 harness_token: None,
             }),
             &mut config,
@@ -2216,40 +2147,112 @@ mod tests {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "probe-update".into(),
                     expected_revision: "missing".into(),
-                    config: snapshot.clone(),
+                    config: snapshot,
                     picker_token: None,
-                    consent_token: None,
                     harness_token: None,
                 }),
                 &mut config,
                 &mut consent,
                 &context,
             );
-            let confirm = dispatch(
-                Request::ConfirmConfig(brauser_protocol::ConfirmConfigRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "probe-confirm".into(),
-                    expected_revision: "missing".into(),
-                    config: snapshot,
-                    picker_token: None,
-                }),
-                &mut config,
-                &mut consent,
-                &context,
-            );
-            for response in [update, confirm] {
-                match response {
-                    Response::Error(value) => assert_eq!(
-                        value.code,
-                        ErrorCode::Unauthorized,
-                        "{} for {}",
-                        value.message,
-                        root.display()
-                    ),
-                    other => panic!("expected an authorization error, got {other:?}"),
-                }
+            match update {
+                Response::Error(value) => assert_eq!(
+                    value.code,
+                    ErrorCode::Unauthorized,
+                    "{} for {}",
+                    value.message,
+                    root.display()
+                ),
+                other => panic!("expected an authorization error, got {other:?}"),
             }
         }
+    }
+
+    fn update_request(revision: &str, config: ConfigSnapshot) -> Request {
+        Request::UpdateConfig(UpdateConfigRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "update".into(),
+            expected_revision: revision.into(),
+            config,
+            picker_token: None,
+            harness_token: None,
+        })
+    }
+
+    #[test]
+    fn update_config_turning_capture_on_with_a_new_adapter_needs_no_confirmation() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let mut consent = ConsentAuthority::new();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext {
+            env: &env,
+            confirm: no_dialog,
+        };
+        let read = dispatch(
+            Request::GetConfig(GetConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "read".into(),
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        let (current, revision) = match &read {
+            Response::ConfigResult(value) => (value.config.clone(), value.revision.clone()),
+            other => panic!("expected config_result, got {other:?}"),
+        };
+        let mut next = current;
+        next.capture_enabled = true;
+        next.sites = vec![brauser_protocol::SiteConfig {
+            origin: "https://work.example".into(),
+            path_prefix: "/".into(),
+        }];
+        next.adapters.artifacts.push(serde_json::json!({
+            "type": "work.issue",
+            "origin": "https://work.example",
+            "match": [{"path": "/issues/{id:int}"}],
+            "id": "work.issue:{host}/{id}",
+        }));
+        let updated = dispatch(
+            update_request(&revision, next),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        let responses = [read, updated];
+        assert!(
+            matches!(responses[1], Response::ConfigUpdated(_)),
+            "{:?}",
+            responses[1]
+        );
+        assert!(config.snapshot().capture_enabled);
+        assert_eq!(config.snapshot().adapters.artifacts.len(), 1);
+    }
+
+    #[test]
+    fn update_config_still_refuses_a_stale_revision() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let revision = config.revision().to_owned();
+        let mut next = config.snapshot().clone();
+        next.strip_params.push("campaign".into());
+        let mut consent = ConsentAuthority::new();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext {
+            env: &env,
+            confirm: no_dialog,
+        };
+        match dispatch(
+            update_request("stale", next),
+            &mut config,
+            &mut consent,
+            &context,
+        ) {
+            Response::Error(value) => assert_eq!(value.code, ErrorCode::Conflict),
+            other => panic!("expected a conflict, got {other:?}"),
+        }
+        assert_eq!(config.revision(), revision);
     }
 
     fn configured_store(root: &std::path::Path) -> ConfigStore {
@@ -3757,7 +3760,6 @@ id = "work:{host}/{id}"
                         expected_revision: revision,
                         config: next,
                         picker_token: None,
-                        consent_token: None,
                         harness_token: harness_token.map(str::to_owned),
                     }),
                     no_dialog,

@@ -219,12 +219,6 @@ async function choosePickerFolder(folder) {
   }
 }
 
-async function answerAlert(button) {
-  await waitFor(() => osascript(`tell application "System Events"
-    click button ${JSON.stringify(button)} of (first window of process "UserNotificationCenter" whose subrole is "AXSystemDialog")
-  end tell`), { timeout: 20_000 });
-}
-
 // Chrome's permission prompt is a sheet on the settings window.
 async function allowInChrome(press, pid) {
   await waitFor(() => commandOutput(press, [String(pid), "Allow"]).catch((error) => {
@@ -955,28 +949,6 @@ async function run() {
   const dismissPicker = () => options.headless ? scriptedDialog("pick-folder", "canceled") : cancelPicker();
   const pickFolder = (folder) => options.headless
     ? scriptedDialog("pick-folder", `picked:${folder}`) : choosePickerFolder(folder);
-  async function answerConfirmation(button, site) {
-    if (!options.headless) return answerAlert(button);
-    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
-    // The host writes this text from the policy change itself.
-    requireCondition(text.includes(`Allow visit logging for ${JSON.stringify(site)}`) &&
-      text.includes("Turn on automatic visit logging."),
-    `The confirmation does not describe the change: ${JSON.stringify(text)}`);
-  }
-  // The confirmation for saving a newly chosen folder on its own.
-  async function answerFolderConfirmation(button) {
-    if (!options.headless) return answerAlert(button);
-    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
-    requireCondition(text.includes('Set visit log folder to "log".') &&
-      !text.includes("Allow visit logging") && !text.includes("Turn on automatic visit logging."),
-    `The folder confirmation does not describe only the folder: ${JSON.stringify(text)}`);
-  }
-  async function answerAdapterConfirmation(button) {
-    if (!options.headless) return answerAlert(button);
-    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
-    requireCondition(text.includes('Enable or change the "smoke.page" artifact adapter'),
-      `The adapter confirmation does not name the fixture adapter: ${JSON.stringify(text)}`);
-  }
 
   // --headless: Chrome's permission prompt is browser UI that no command-line
   // switch or DevTools method can answer, so grant the access ahead of time
@@ -1152,7 +1124,7 @@ async function run() {
         if (await onSettings((page) => page.text("#folder-path")) !== "None selected") {
           throw Object.assign(new Error("A folder was chosen, but this step needs Cancel. Rerun the smoke test."), { fatal: true });
         }
-        requireCondition(status?.startsWith("Canceled"), `Settings page says: ${status}`);
+        requireCondition(status === "Folder selection was canceled. No settings were changed.", `Settings page says: ${status}`);
         await onSettings(async (page) => {
           requireCondition(await page.text("#folder-path") === "None selected", "A folder is shown as selected");
           requireCondition(await page.enabled("#choose-folder"), "Picker is still open");
@@ -1164,73 +1136,27 @@ async function run() {
       requireCondition(!(await maybeLstat(configPath)), "A config file appeared after picker cancellation");
     });
 
-    await step("Canceled native consent", async () => {
+    await step("Choosing a folder saves it before any site", async () => {
       // The clipboard is the user's; only a person choosing by hand needs it.
       if (!options.headless) await commandOutput("/bin/sh", ["-c", `printf %s ${shellQuote(notes)} | pbcopy`]);
       await inSettings((page) => page.click("#choose-folder"));
-      await userAction(`In the folder picker, choose any empty folder. The suggested one's path is on the clipboard: press Cmd+Shift+G, clear the box, paste, press Return, then click Open. Then click No in ${APP_NAME}'s confirmation dialog.\n  Path: ${notes}`,
-        () => onSettings(async (page) => {
-          const shown = await page.text("#folder-path");
-          requireCondition(shown && shown !== "None selected", "No folder is selected yet");
-          const chosen = await realpath(shown);
-          const entries = (await readdir(chosen)).filter((name) => name !== ".DS_Store");
-          if (entries.length) {
-            throw Object.assign(new Error(`${chosen} is not empty; rerun and choose an empty folder`), { fatal: true });
-          }
-          const status = await page.text("#status");
-          requireCondition(status?.startsWith("Canceled.") && status.includes("was not saved"),
-            `Settings page says: ${status}`);
-          notesRoot = chosen;
-        }), async () => {
-          await pickFolder(notes);
-          await answerFolderConfirmation("No");
-        });
-      console.log(`  Using notes folder ${notesRoot}`);
-      const declined = await hostConfig(wrapper);
-      requireCondition(declined.config.storage === null && !(await maybeLstat(configPath)),
-        "The folder was saved even though its confirmation was declined");
-      await onSettings(async (page) => {
-        await page.fill("#site-url", siteInput);
-      });
-      await waitFor(() => onSettings(async (page) =>
-        requireCondition(await page.enabled("#enable-site"), "Enable this site is disabled")));
-      await inSettings((page) => page.click("#enable-site"));
-      await userAction(`In Chrome's prompt, click Allow. Then click No in ${APP_NAME}'s confirmation dialog.`, async () => {
-        const status = await settingsStatus();
-        if (status?.includes("Chrome access was declined")) {
-          throw Object.assign(new Error(`Chrome access was declined; this step needs Allow in Chrome and No in ${APP_NAME}`), { fatal: true });
-        }
-        requireCondition(status?.includes("Canceled"), `Settings page says: ${status}`);
-        await onSettings(async (page) => requireCondition(await page.enabled("#enable-site"), "Setup is still running"));
-      }, async () => {
-        await chromePrompt();
-        await answerConfirmation("No", `${origin}/`);
-      });
-      const reply = await hostConfig(wrapper);
-      requireCondition(reply.config.storage === null && !reply.config.capture_enabled && reply.config.sites.length === 0,
-        "Capture was saved even though native consent was declined");
-      const grants = await chromeGrants(pattern);
-      // Headless Chrome already held webNavigation, so the declined change
-      // correctly keeps it; site removal later must revoke it.
-      requireCondition(!grants.origin && grants.api === options.headless,
-        "Chrome access granted for the declined change was not removed");
-    });
-
-    await step("Choosing a folder saves it before any site", async () => {
-      await inSettings((page) => page.click("#choose-folder"));
-      await userAction(`In the folder picker, choose ${notesRoot} again, then click Yes in ${APP_NAME}'s confirmation dialog.`,
+      await userAction(`In the folder picker, choose any empty folder. The suggested one's path is on the clipboard: press Cmd+Shift+G, clear the box, paste, press Return, then click Open.\n  Path: ${notes}`,
         async () => {
           const reply = await hostConfig(wrapper);
-          requireCondition(await sameFolder(reply.config.storage?.root),
-            `Expected ${notesRoot}; host has ${reply.config.storage?.root ?? "none"}`);
+          const saved = reply.config.storage?.root;
+          requireCondition(saved, "The host has no notes folder yet");
+          const chosen = await realpath(saved);
+          const entries = (await readdir(chosen)).filter((name) => name !== ".DS_Store");
+          if (notesRoot === null && entries.length) {
+            throw Object.assign(new Error(`${chosen} is not empty; rerun and choose an empty folder`), { fatal: true });
+          }
+          notesRoot = chosen;
           requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,
             "Saving the folder changed sites or the capture switch");
           const status = await settingsStatus();
           requireCondition(status?.startsWith("No sites are enabled for capture."), `Settings page says: ${status}`);
-        }, async () => {
-          await pickFolder(notesRoot);
-          await answerFolderConfirmation("Yes");
-        });
+        }, () => pickFolder(notes));
+      console.log(`  Using notes folder ${notesRoot}`);
       await waitFor(() => onPanel(async (page) => {
         const reason = await page.text("#setup-reason");
         requireCondition(reason === "No sites are enabled for capture.", `Setup warning says: ${reason}`);
@@ -1238,12 +1164,17 @@ async function run() {
     });
 
     await step("Confirmed setup", async () => {
+      await onSettings(async (page) => {
+        await page.fill("#site-url", siteInput);
+      });
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.enabled("#enable-site"), "Enable this site is disabled")));
       await inSettings(async (page) => {
         // Clear the previous step's result so only a new failure stops the run.
         await page.evaluate('document.getElementById("status").textContent = ""');
         await page.click("#enable-site");
       });
-      await userAction(`If Chrome prompts, click Allow; it may re-grant the access it just removed without asking. Then click Yes in ${APP_NAME}'s confirmation dialog.`, async () => {
+      await userAction("If Chrome prompts, click Allow.", async () => {
         const status = await settingsStatus().catch(() => null);
         if (status?.startsWith("Setup failed")) {
           throw Object.assign(new Error(`${status} Rerun the smoke test; a folder selection expires after five minutes.`), { fatal: true });
@@ -1256,10 +1187,7 @@ async function run() {
         requireCondition(reply.config.sites.length === 1 &&
           reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/",
         "Host site rule does not match the fixture origin");
-      }, async () => {
-        await chromePrompt();
-        await answerConfirmation("Yes", `${origin}/`);
-      });
+      }, () => chromePrompt());
       // A first navigation grant makes the settings page restart the extension,
       // which closes every extension page.
       const outcome = await waitFor(async () => {
@@ -1298,44 +1226,34 @@ async function run() {
           id: "smoke:{host}/{page}",
         }],
       };
-      // The product editor is a later step, so the smoke runner drives the
-      // existing native confirmation/update protocol directly from the
-      // extension page. The same page then reloads and publishes the new
-      // revision into the worker's lease.
+      // The smoke runner sends the revision-checked update_config directly
+      // from the extension page. The same page then reloads and publishes
+      // the new revision into the worker's lease.
       const saving = inSettings((page) => page.evaluate(`(() => new Promise((resolve, reject) => {
         const port = chrome.runtime.connectNative(${JSON.stringify(NATIVE_HOST_NAME)});
         const expectedRevision = ${JSON.stringify(current.revision)};
         const config = ${JSON.stringify(next)};
-        const confirmId = crypto.randomUUID();
         const updateId = crypto.randomUUID();
         port.onDisconnect.addListener(() => reject(new Error(chrome.runtime.lastError?.message ?? "Native host disconnected")));
         port.onMessage.addListener((message) => {
           if (message.type === "error") {
             reject(new Error(message.message));
             port.disconnect();
-          } else if (message.type === "config_confirmed" && message.request_id === confirmId) {
-            port.postMessage({
-              type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
-              expected_revision: expectedRevision, config, picker_token: null,
-              consent_token: message.consent_token, harness_token: null,
-            });
           } else if (message.type === "config_updated" && message.request_id === updateId) {
             resolve(message.revision);
             port.disconnect();
           }
         });
         port.postMessage({
-          type: "confirm_config", protocol_version: ${PROTOCOL_VERSION}, request_id: confirmId,
-          expected_revision: expectedRevision, config, picker_token: null,
+          type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
+          expected_revision: expectedRevision, config, picker_token: null, harness_token: null,
         });
       }))()`));
-      await userAction(`In ${APP_NAME}'s confirmation dialog, review and enable the smoke.page fixture adapter, then click Yes.`, async () => {
-        const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.adapters.artifacts.length === 1 &&
-          reply.config.adapters.artifacts[0].type === "smoke.page",
-        "The fixture adapter was not saved");
-      }, async () => answerAdapterConfirmation("Yes"));
       await saving;
+      const reply = await hostConfig(wrapper);
+      requireCondition(reply.config.adapters.artifacts.length === 1 &&
+        reply.config.adapters.artifacts[0].type === "smoke.page",
+      "The fixture adapter was not saved");
       await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
       await settingsConnected();
     });

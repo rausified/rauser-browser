@@ -252,7 +252,7 @@ fn harness_confirmation_text_round_trips() {
         refusal: None,
     };
     let (title, body) =
-        brauser_host::consent::harness_confirmation_text(&candidate, &after, &current).unwrap();
+        brauser_host::consent::harness_confirmation_text(&candidate, &after).unwrap();
     assert!(
         body.contains("Summaries folder: \"summaries\" in "),
         "{body}"

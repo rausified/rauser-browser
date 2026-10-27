@@ -20,7 +20,6 @@ export interface UpdateConfigRequest {
   expected_revision: string;
   config: ConfigSnapshot;
   picker_token: string | null;
-  consent_token: string | null;
   harness_token: string | null;
 }
 
@@ -117,15 +116,6 @@ export interface ChooseFolderRequest {
   type: "choose_folder";
   protocol_version: 6;
   request_id: string;
-}
-
-export interface ConfirmConfigRequest {
-  type: "confirm_config";
-  protocol_version: 6;
-  request_id: string;
-  expected_revision: string;
-  config: ConfigSnapshot;
-  picker_token: string | null;
 }
 
 export interface RecordVisitRequest {
@@ -236,14 +226,6 @@ export interface FolderChosen {
   request_id: string;
   path: string;
   picker_token: string;
-}
-
-export interface ConfigConfirmed {
-  type: "config_confirmed";
-  protocol_version: 6;
-  request_id: string;
-  consent_token: string;
-  summary: string;
 }
 
 export interface VisitRecorded {
@@ -536,6 +518,6 @@ export interface EnvName {
   present: boolean;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | ConfirmConfigRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | CheckAgentRequest | DiscoverHarnessesRequest | ConfirmHarnessSetupRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | ConfigConfirmed | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | AgentChecked | HarnessesDiscovered | HarnessSetupConfirmed | ErrorResponse;

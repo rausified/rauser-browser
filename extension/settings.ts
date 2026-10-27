@@ -28,7 +28,7 @@ export function element<T extends HTMLElement>(id: string): T {
 
 export function describe(error: unknown): string {
   if (error instanceof HostError && error.code === "cancelled") {
-    return "Canceled. No settings were changed.";
+    return "Folder selection was canceled. No settings were changed.";
   }
   return error instanceof Error ? error.message : String(error);
 }
@@ -212,24 +212,14 @@ export class ConfigSession {
     resumeAfterPauseToken: string | null = null,
   ): Promise<void> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
-    const expectedRevision = this.revision;
-    // The host shows the exact expansion. Its token binds this snapshot and revision.
-    const confirmed = await this.host.call({
-      type: "confirm_config",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      expected_revision: expectedRevision,
-      config: next,
-      picker_token: pickerToken,
-    }, "config_confirmed", 5 * 60_000);
+    // The revision check is the only gate on an ordinary settings change.
     const updated = await this.host.call({
       type: "update_config",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
-      expected_revision: expectedRevision,
+      expected_revision: this.revision,
       config: next,
       picker_token: pickerToken,
-      consent_token: confirmed.consent_token,
       // Only native harness setup mints a harness grant (§7.3).
       harness_token: null,
     }, "config_updated");
@@ -283,7 +273,7 @@ export class ConfigSession {
       env_names: envNames,
       summaries_dir: summariesDir,
     }, "harness_setup_confirmed", 6 * 60_000);
-    // The harness dialog was this change's consent, so no confirm_config.
+    // The harness token authorizes exactly the confirmed harness config.
     const updated = await this.host.call({
       type: "update_config",
       protocol_version: PROTOCOL_VERSION,
@@ -291,7 +281,6 @@ export class ConfigSession {
       expected_revision: expectedRevision,
       config: confirmed.config,
       picker_token: null,
-      consent_token: null,
       harness_token: confirmed.harness_token,
     }, "config_updated");
     this.config = updated.config;

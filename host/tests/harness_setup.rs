@@ -272,11 +272,14 @@ fn harness_setup_confirms_and_commits_harness() {
     assert_eq!(shown.len(), 1);
     assert_eq!(shown[0]["dialog"], "confirm");
     let text = shown[0]["text"].as_str().unwrap();
-    // The fixture has no summaries folder yet, so setting it is listed first.
     assert!(
         text.starts_with(
-            "Set up Claude Code for Brauser AI commands\nThis setup also makes these changes:\n• Set summaries folder to \"summaries\".\n\nHarness: Claude Code 2.1.284\n"
+            "Set up Claude Code for Brauser AI commands\nHarness: Claude Code 2.1.284\n"
         ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Summaries folder: \"summaries\" in "),
         "{text}"
     );
     assert!(text.contains(&format!(
@@ -307,7 +310,6 @@ fn harness_setup_confirms_and_commits_harness() {
         "expected_revision": revision,
         "config": confirmed["config"],
         "picker_token": null,
-        "consent_token": null,
         "harness_token": confirmed["harness_token"],
     }));
     assert_eq!(updated["type"], "config_updated", "{updated}");

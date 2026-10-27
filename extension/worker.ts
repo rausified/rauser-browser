@@ -645,7 +645,7 @@ async function installPolicy(
   }
   if (await pausePending()) {
     if (!resumeAfterConfirmation) return currentStatus();
-    // A pause requested during native confirmation must win over an older
+    // A pause requested while a save was in flight must win over an older
     // enable operation, even if that enable later commits its host config.
     if (lease.capture_enabled && resumeAfterPauseToken !== await readPauseToken()) {
       return currentStatus();

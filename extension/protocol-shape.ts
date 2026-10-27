@@ -155,8 +155,6 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.revision === "string" && isConfig(value.config);
     case "folder_chosen":
       return typeof value.path === "string" && typeof value.picker_token === "string";
-    case "config_confirmed":
-      return typeof value.consent_token === "string" && typeof value.summary === "string";
     case "visit_recorded":
     case "activity_recorded":
     case "why_recorded":

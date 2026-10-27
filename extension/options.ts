@@ -777,13 +777,11 @@ function storageFor(root: string, current: StorageConfig | null): StorageConfig 
 async function chooseFolder(): Promise<void> {
   busy = true;
   updateControls();
-  let selection: typeof picker = null;
   try {
     const response = await session.host.call({
       type: "choose_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
     }, "folder_chosen", 5 * 60_000);
-    selection = { path: response.path, token: response.picker_token };
-    picker = selection;
+    picker = { path: response.path, token: response.picker_token };
     folderPath.textContent = response.path;
     updateControls();
     // Save the folder now, so setup is not lost with this page and the side
@@ -794,16 +792,12 @@ async function chooseFolder(): Promise<void> {
     picker = null;
     showConfigState();
   } catch (error) {
-    if (selection && picker === selection && error instanceof HostError && error.code === "cancelled") {
-      // A declined confirmation leaves the selection usable: the first site
-      // enabled on this page saves it, behind that site's own confirmation.
-      show(`Canceled. ${selection.path} was not saved; enabling a site saves it too.`);
-    } else {
-      show(describe(error), true);
-      if (error instanceof HostError && error.code === "conflict") {
-        picker = null;
-        await reloadConfig().catch(() => undefined);
-      }
+    // A canceled picker changed nothing. A failed save keeps the selection
+    // usable: the first site enabled on this page saves it too.
+    show(describe(error), true);
+    if (error instanceof HostError && error.code === "conflict") {
+      picker = null;
+      await reloadConfig().catch(() => undefined);
     }
   } finally {
     busy = false;
@@ -1145,7 +1139,10 @@ async function setupHarness(): Promise<void> {
     summariesEdited = false;
     show(`${harnessName(offer.adapter)} is set up. ${agentStateText(session.agentStatus)}`);
   } catch (error) {
-    show(`Harness setup did not finish: ${describe(error)}`, true);
+    // Until harness setup loses its dialog, a cancel here is the dialog's.
+    const reason = error instanceof HostError && error.code === "cancelled"
+      ? "Canceled. No settings were changed." : describe(error);
+    show(`Harness setup did not finish: ${reason}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
     // The host spends an offer on every attempt, including a cancel.

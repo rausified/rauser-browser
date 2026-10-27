@@ -1,7 +1,7 @@
-//! Short-lived, process-local grants for folder selection, capture consent,
-//! and AI harness setup. Only the native host can mint these grants; the
-//! extension cannot authorize a path, redirect writes, broaden capture, or
-//! name a program to run by sending an arbitrary config.
+//! Short-lived, process-local grants for folder selection and AI harness
+//! setup. Only the native host can mint these grants; the extension cannot
+//! authorize a path, redirect writes, or name a program to run by sending an
+//! arbitrary config. Other config changes need only the revision check.
 
 use std::collections::HashMap;
 use std::fs;
@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    AgentConfig, ConfigSnapshot, ConfirmHarnessSetupRequest, ErrorCode, HarnessOffer, SiteConfig,
-    StorageConfig,
+    AgentConfig, ConfigSnapshot, ConfirmHarnessSetupRequest, ErrorCode, HarnessOffer, StorageConfig,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -25,11 +24,9 @@ use crate::vault::selected_root_identity;
 
 const TOKEN_LIFETIME: Duration = Duration::from_secs(5 * 60);
 const MAX_PENDING_GRANTS: usize = 32;
-const MAX_CONSENT_SUMMARY_BYTES: usize = 8192;
 /// The harness dialog lists every argument and exclusion. The alert does not
-/// scroll, so it has the consent dialog's bound and is refused, never
-/// truncated, over it.
-pub const MAX_HARNESS_SUMMARY_BYTES: usize = MAX_CONSENT_SUMMARY_BYTES;
+/// scroll, so it is bounded and refused, never truncated, over it.
+pub const MAX_HARNESS_SUMMARY_BYTES: usize = 8192;
 const MAX_OFFERS: usize = 8;
 const MAX_REFUSAL_BYTES: usize = 512;
 const MAX_OFFER_PATH_BYTES: usize = 4096;
@@ -41,21 +38,9 @@ pub struct FolderSelection {
     pub picker_token: String,
 }
 
-pub struct ConfigConfirmation {
-    pub consent_token: String,
-    pub summary: String,
-}
-
 struct PickerGrant {
     root: String,
     identity: String,
-    revision: String,
-    expires_at: Instant,
-}
-
-struct ConsentGrant {
-    before: ConfigSnapshot,
-    after: ConfigSnapshot,
     revision: String,
     expires_at: Instant,
 }
@@ -114,7 +99,6 @@ impl SetupError {
 #[derive(Default)]
 pub struct ConsentAuthority {
     picker_grants: HashMap<String, PickerGrant>,
-    consent_grants: HashMap<String, ConsentGrant>,
     offer_grants: HashMap<String, HarnessOfferGrant>,
     harness_grants: HashMap<String, HarnessGrant>,
 }
@@ -145,44 +129,6 @@ impl ConsentAuthority {
         Ok(Some(FolderSelection {
             path: root,
             picker_token,
-        }))
-    }
-
-    /// The dialog text is derived only from the actual policy delta. A caller
-    /// supplied string never appears in the native confirmation as a claim.
-    pub fn confirm_config(
-        &mut self,
-        current: &ConfigSnapshot,
-        revision: &str,
-        next: &ConfigSnapshot,
-        picker_token: Option<&str>,
-    ) -> Result<Option<ConfigConfirmation>> {
-        config::validate_update(current, next)?;
-        self.check_picker(current, revision, next, picker_token)?;
-        check_agent_fields(current, next)?;
-        let changes = approval_lines(current, next);
-        let summary = if changes.is_empty() {
-            "No additional capture access is requested.".to_owned()
-        } else {
-            changes.join("\n")
-        };
-        if summary.len() > MAX_CONSENT_SUMMARY_BYTES {
-            bail!("too many privacy changes for one confirmation; add fewer sites at once");
-        }
-        if !changes.is_empty() {
-            let description =
-                format!("{APP_NAME} will make these changes:\n\n{summary}\n\nAllow these changes?");
-            if !dialog::confirm(DialogText {
-                title: &format!("Confirm {APP_NAME} settings"),
-                description: &description,
-            })? {
-                return Ok(None);
-            }
-        }
-        let consent_token = self.mint_consent(current.clone(), next.clone(), revision);
-        Ok(Some(ConfigConfirmation {
-            consent_token,
-            summary,
         }))
     }
 
@@ -333,7 +279,7 @@ impl ConsentAuthority {
         };
         config::validate_update(current, &after)
             .map_err(|error| SetupError::new(ErrorCode::InvalidConfig, error.to_string()))?;
-        let (title, summary) = harness_confirmation_text(&candidate, &after, current)
+        let (title, summary) = harness_confirmation_text(&candidate, &after)
             .map_err(|error| SetupError::new(ErrorCode::InvalidConfig, error.to_string()))?;
         let confirmed = confirm(DialogText {
             title: &title,
@@ -394,40 +340,25 @@ impl ConsentAuthority {
         revision: &str,
         next: &ConfigSnapshot,
         picker_token: Option<&str>,
-        consent_token: Option<&str>,
         harness_token: Option<&str>,
     ) -> Result<Authorized> {
         config::validate_update(current, next)?;
         if let Some(token) = harness_token {
-            if picker_token.is_some() || consent_token.is_some() {
+            if picker_token.is_some() {
                 bail!("a harness setup token cannot be combined with other tokens");
             }
             return self.check_harness(current, revision, next, token);
         }
         let selected_identity = self.check_picker(current, revision, next, picker_token)?;
         check_agent_fields(current, next)?;
-        if !approval_lines(current, next).is_empty() {
-            let token =
-                consent_token.context("native confirmation is required for this config change")?;
-            let Some(grant) = self.consent_grants.get(token) else {
-                bail!("native confirmation token is unknown or already used");
-            };
-            if grant.expires_at <= Instant::now()
-                || grant.revision != revision
-                || grant.before != *current
-                || grant.after != *next
-            {
-                bail!("native confirmation is stale or does not match this change");
-            }
-        }
         Ok(Authorized {
             selected_identity,
             harness_commit: None,
         })
     }
 
-    /// The harness dialog showed every approval line for this change, so a
-    /// valid grant is also its consent. The notes folder cannot change here.
+    /// A valid grant authorizes exactly the confirmed harness change. The
+    /// notes folder cannot change here.
     fn check_harness(
         &self,
         current: &ConfigSnapshot,
@@ -464,14 +395,10 @@ impl ConsentAuthority {
         _revision: &str,
         _next: &ConfigSnapshot,
         picker_token: Option<&str>,
-        consent_token: Option<&str>,
         harness_token: Option<&str>,
     ) {
         if let Some(token) = picker_token {
             self.picker_grants.remove(token);
-        }
-        if let Some(token) = consent_token {
-            self.consent_grants.remove(token);
         }
         if let Some(token) = harness_token {
             self.harness_grants.remove(token);
@@ -522,26 +449,6 @@ impl ConsentAuthority {
         token
     }
 
-    fn mint_consent(
-        &mut self,
-        before: ConfigSnapshot,
-        after: ConfigSnapshot,
-        revision: &str,
-    ) -> String {
-        self.prune();
-        let token = Uuid::new_v4().to_string();
-        self.consent_grants.insert(
-            token.clone(),
-            ConsentGrant {
-                before,
-                after,
-                revision: revision.to_owned(),
-                expires_at: Instant::now() + TOKEN_LIFETIME,
-            },
-        );
-        token
-    }
-
     fn mint_offer(&mut self, revision: &str, candidate: Candidate) -> String {
         self.prune();
         let token = Uuid::new_v4().to_string();
@@ -581,16 +488,11 @@ impl ConsentAuthority {
     fn prune(&mut self) {
         let now = Instant::now();
         self.picker_grants.retain(|_, grant| grant.expires_at > now);
-        self.consent_grants
-            .retain(|_, grant| grant.expires_at > now);
         self.offer_grants.retain(|_, grant| grant.expires_at > now);
         self.harness_grants
             .retain(|_, grant| grant.expires_at > now);
         if self.picker_grants.len() >= MAX_PENDING_GRANTS {
             self.picker_grants.clear();
-        }
-        if self.consent_grants.len() >= MAX_PENDING_GRANTS {
-            self.consent_grants.clear();
         }
         if self.offer_grants.len() >= MAX_PENDING_GRANTS {
             self.offer_grants.clear();
@@ -662,7 +564,6 @@ pub const CODEX_DISCLOSURE: &str = "Codex runs with your normal Codex home and l
 pub fn harness_confirmation_text(
     candidate: &Candidate,
     after: &ConfigSnapshot,
-    current: &ConfigSnapshot,
 ) -> Result<(String, String)> {
     let name = candidate.adapter.display_name();
     let agent = after
@@ -686,7 +587,6 @@ pub fn harness_confirmation_text(
         .as_ref()
         .context("the harness was not checked")?
         .real_path;
-    let changes = approval_lines(current, after);
     let values = [
         version,
         agent.binary.as_str(),
@@ -696,8 +596,7 @@ pub fn harness_confirmation_text(
     ]
     .into_iter()
     .chain(agent.args.iter().map(String::as_str))
-    .chain(agent.env_allow.iter().map(String::as_str))
-    .chain(changes.iter().map(String::as_str));
+    .chain(agent.env_allow.iter().map(String::as_str));
     for value in values {
         if config::has_unsafe_display_chars(value) {
             bail!("the harness confirmation contains text that cannot be shown safely");
@@ -706,13 +605,6 @@ pub fn harness_confirmation_text(
 
     let title = format!("Set up {name} for {APP_NAME} AI commands");
     let mut lines = Vec::new();
-    // Policy changes come first, so the harness details below cannot push
-    // them out of sight.
-    if !changes.is_empty() {
-        lines.push("This setup also makes these changes:".to_owned());
-        lines.extend(changes.iter().map(|change| format!("• {change}")));
-        lines.push(String::new());
-    }
     lines.extend([
         format!("Harness: {name} {version}"),
         format!("Program: {:?}", agent.binary),
@@ -783,173 +675,10 @@ fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result
     Ok(())
 }
 
-fn approval_lines(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
-    // A hand-edited but unusable config is not a trusted prior grant. Repair
-    // must ask again before it makes any of those rules effective.
-    let trusted_current = config::validate_base(current).is_ok();
-    // Adapter validity is deliberately separate from base config validity so
-    // notes and AI settings remain usable during adapter repair. An invalid
-    // adapter document is not, however, a prior capture grant: a later edit
-    // such as enabling its missing origin must confirm every adapter that the
-    // repair makes effective.
-    let trusted_adapters = config::validate(current).is_ok();
-    let preserving_inert_adapters = current.adapters == next.adapters
-        && !config::adapter_policy_valid(current)
-        && !config::adapter_policy_valid(next);
-    if !(trusted_current && current.capture_enabled) && next.capture_enabled {
-        lines.push("Turn on automatic visit logging.".to_owned());
-    }
-    let mut last_prior_adapter = None;
-    for adapter in &next.adapters.artifacts {
-        if preserving_inert_adapters {
-            continue;
-        }
-        // Removing an earlier adapter shifts every following array index but
-        // does not widen any survivor. Match the stable adapter identity
-        // instead. The matched prior indexes must still increase: config
-        // order decides which overlapping rule wins, so a real reorder is a
-        // policy change even when the adapter bytes are otherwise unchanged.
-        let prior_index = trusted_adapters
-            .then(|| unique_adapter_index(&current.adapters.artifacts, adapter))
-            .flatten();
-        let unchanged = prior_index.is_some_and(|index| {
-            current.adapters.artifacts.get(index) == Some(adapter)
-                && last_prior_adapter.is_none_or(|last| index > last)
-        });
-        if let Some(index) = prior_index {
-            last_prior_adapter = Some(index);
-        }
-        if unchanged {
-            continue;
-        }
-        let artifact_type = adapter
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown");
-        let origin = adapter
-            .get("origin")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown origin");
-        lines.push(format!(
-            "Enable or change the {artifact_type:?} artifact adapter on {origin:?}."
-        ));
-        if adapter.get("unscoped").and_then(serde_json::Value::as_str) == Some("acknowledged") {
-            lines.push(format!(
-                "Record every matching artifact from every account on {origin:?} in this Chrome profile. Use a separate Chrome profile for work when personal accounts share this site."
-            ));
-        }
-    }
-    for site in &next.sites {
-        if !trusted_current || !current.sites.iter().any(|prior| site_covers(prior, site)) {
-            lines.push(format!(
-                "Allow visit logging for {:?}",
-                format!("{}{}", site.origin, site.path_prefix)
-            ));
-        }
-    }
-    let old_strip = if trusted_current {
-        current.strip_params.clone()
-    } else {
-        config::default_strip_params()
-    };
-    for param in &old_strip {
-        if !next.strip_params.iter().any(|value| value == param) {
-            lines.push(format!(
-                "Keep the query parameter {param:?} in logged URLs."
-            ));
-        }
-    }
-    if let Some(next_storage) = &next.storage {
-        let old_storage = if trusted_current {
-            current.storage.as_ref()
-        } else {
-            None
-        };
-        for (name, old, new) in [
-            (
-                "profile",
-                old_storage.map(|value| value.profile.as_str()),
-                Some(next_storage.profile.as_str()),
-            ),
-            (
-                "visit log folder",
-                old_storage.map(|value| value.log_dir.as_str()),
-                Some(next_storage.log_dir.as_str()),
-            ),
-            (
-                "page notes folder",
-                old_storage.map(|value| value.pages_dir.as_str()),
-                Some(next_storage.pages_dir.as_str()),
-            ),
-            (
-                "read-later folder",
-                old_storage.map(|value| value.later_dir.as_str()),
-                Some(next_storage.later_dir.as_str()),
-            ),
-            (
-                "artifact files folder",
-                old_storage.map(|value| value.artifacts_dir.as_str()),
-                Some(next_storage.artifacts_dir.as_str()),
-            ),
-            // Clearing the summaries folder only turns summaries off.
-            (
-                "summaries folder",
-                old_storage.and_then(|value| value.summaries_dir.as_deref()),
-                next_storage.summaries_dir.as_deref(),
-            ),
-        ] {
-            if let Some(new) = new
-                && old != Some(new)
-            {
-                if let Some(old) = old {
-                    lines.push(format!("Change {name} from {old:?} to {new:?}."));
-                } else {
-                    lines.push(format!("Set {name} to {new:?}."));
-                }
-            }
-        }
-    }
-    lines
-}
-
-fn unique_adapter_index(
-    adapters: &[serde_json::Value],
-    candidate: &serde_json::Value,
-) -> Option<usize> {
-    let identity = adapter_approval_identity(candidate)?;
-    let mut matches = adapters
-        .iter()
-        .enumerate()
-        .filter(|(_, adapter)| adapter_approval_identity(adapter) == Some(identity));
-    let (index, _) = matches.next()?;
-    matches.next().is_none().then_some(index)
-}
-
-fn adapter_approval_identity(value: &serde_json::Value) -> Option<(&str, &str, &str)> {
-    Some((
-        value.get("origin")?.as_str()?,
-        value.get("type")?.as_str()?,
-        value.get("id")?.as_str()?,
-    ))
-}
-
-fn site_covers(prior: &SiteConfig, next: &SiteConfig) -> bool {
-    if prior.origin != next.origin {
-        return false;
-    }
-    prior.path_prefix == "/"
-        || prior.path_prefix == next.path_prefix
-        || (next.path_prefix.starts_with(&prior.path_prefix)
-            && (prior.path_prefix.ends_with('/')
-                || next.path_prefix.as_bytes().get(prior.path_prefix.len()) == Some(&b'/')))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use brauser_protocol::{AdapterDocument, StorageConfig};
-    use serde_json::json;
 
     #[test]
     fn fresh_picker_token_can_reconfirm_the_same_path() {
@@ -1003,18 +732,10 @@ mod tests {
     fn authorize(
         current: &ConfigSnapshot,
         next: &ConfigSnapshot,
-        consent_token: Option<&str>,
         harness_token: Option<&str>,
     ) -> Result<Option<String>> {
         ConsentAuthority::new()
-            .authorize_update(
-                current,
-                "revision",
-                next,
-                None,
-                consent_token,
-                harness_token,
-            )
+            .authorize_update(current, "revision", next, None, harness_token)
             .map(|authorized| authorized.selected_identity)
     }
 
@@ -1022,17 +743,16 @@ mod tests {
     fn update_rejects_forged_harness_token() {
         let current = crate::config::empty_config();
         // No harness grant exists in this build, so any token is refused.
-        assert!(authorize(&current, &current, None, Some("forged")).is_err());
+        assert!(authorize(&current, &current, Some("forged")).is_err());
         let current = set_up();
-        assert!(authorize(&current, &current, None, Some("forged")).is_err());
+        assert!(authorize(&current, &current, Some("forged")).is_err());
     }
 
     #[test]
     fn update_accepts_unchanged_agent_echo() {
         let current = set_up();
         let next = current.clone();
-        assert!(approval_lines(&current, &next).is_empty());
-        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
+        assert_eq!(authorize(&current, &next, None).unwrap(), None);
     }
 
     #[test]
@@ -1049,8 +769,7 @@ mod tests {
             ..current.clone()
         };
         check_agent_fields(&current, &next).unwrap();
-        assert!(approval_lines(&current, &next).is_empty());
-        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
+        assert_eq!(authorize(&current, &next, None).unwrap(), None);
     }
 
     #[test]
@@ -1061,8 +780,7 @@ mod tests {
         next.strip_params.push("campaign".into());
 
         assert!(crate::config::validate(&next).is_err());
-        assert!(approval_lines(&current, &next).is_empty());
-        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
+        assert_eq!(authorize(&current, &next, None).unwrap(), None);
     }
 
     #[test]
@@ -1075,7 +793,7 @@ mod tests {
             agent: Some(agent()),
             ..current.clone()
         };
-        assert!(authorize(&current, &next, None, None).is_err());
+        assert!(authorize(&current, &next, None).is_err());
 
         let current = set_up();
         let next = ConfigSnapshot {
@@ -1085,7 +803,7 @@ mod tests {
             }),
             ..current.clone()
         };
-        assert!(authorize(&current, &next, None, None).is_err());
+        assert!(authorize(&current, &next, None).is_err());
     }
 
     #[test]
@@ -1095,173 +813,7 @@ mod tests {
             agent: None,
             ..current.clone()
         };
-        assert!(approval_lines(&current, &next).is_empty());
-        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
-    }
-
-    #[test]
-    fn summaries_dir_change_needs_consent() {
-        let folder = tempfile::tempdir().unwrap();
-        let storage = |summaries: Option<&str>| StorageConfig {
-            root: folder.path().to_string_lossy().into_owned(),
-            profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
-            later_dir: "later".into(),
-            artifacts_dir: "artifacts".into(),
-            summaries_dir: summaries.map(str::to_owned),
-        };
-        let with = |summaries| ConfigSnapshot {
-            storage: Some(storage(summaries)),
-            ..crate::config::empty_config()
-        };
-        assert_eq!(
-            approval_lines(&with(None), &with(Some("summaries"))),
-            vec!["Set summaries folder to \"summaries\".".to_owned()]
-        );
-        assert_eq!(
-            approval_lines(&with(Some("summaries")), &with(Some("ai"))),
-            vec!["Change summaries folder from \"summaries\" to \"ai\".".to_owned()]
-        );
-        assert!(approval_lines(&with(Some("summaries")), &with(None)).is_empty());
-        assert!(authorize(&with(None), &with(Some("summaries")), None, None).is_err());
-    }
-
-    #[test]
-    fn unscoped_shared_origin_adapter_confirmation_names_every_account() {
-        let current = ConfigSnapshot {
-            sites: vec![SiteConfig {
-                origin: "https://docs.google.com".into(),
-                path_prefix: "/".into(),
-            }],
-            ..crate::config::empty_config()
-        };
-        let next = ConfigSnapshot {
-            adapters: AdapterDocument {
-                format: 1,
-                artifacts: vec![json!({
-                    "type": "gdoc",
-                    "origin": "https://docs.google.com",
-                    "unscoped": "acknowledged",
-                    "match": [{"path": "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}"}],
-                    "modes": {"edit": "edit", "view": "view", "preview": "view"},
-                    "id": "gdoc:{host}/{id}",
-                })],
-            },
-            ..current.clone()
-        };
-        crate::config::validate(&next).unwrap();
-        let lines = approval_lines(&current, &next);
-        assert!(lines.iter().any(|line| line.contains("gdoc")));
-        assert!(lines.iter().any(|line| {
-            line.contains("every account") && line.contains("separate Chrome profile")
-        }));
-        assert!(authorize(&current, &next, None, None).is_err());
-    }
-
-    fn unscoped_adapter(index: usize) -> serde_json::Value {
-        json!({
-            "type": "gdoc",
-            "origin": "https://docs.google.com",
-            "unscoped": "acknowledged",
-            "match": [{
-                "path": format!("/kind-{index}/{{id:int}}"),
-            }],
-            "id": format!("gdoc:{{host}}/kind-{index}/{{id}}"),
-        })
-    }
-
-    #[test]
-    fn removing_an_adapter_does_not_reconfirm_shifted_survivors() {
-        let adapters = (0..31).map(unscoped_adapter).collect::<Vec<_>>();
-        let current = ConfigSnapshot {
-            sites: vec![SiteConfig {
-                origin: "https://docs.google.com".into(),
-                path_prefix: "/".into(),
-            }],
-            adapters: AdapterDocument {
-                format: 1,
-                artifacts: adapters.clone(),
-            },
-            ..crate::config::empty_config()
-        };
-        let next = ConfigSnapshot {
-            adapters: AdapterDocument {
-                format: 1,
-                artifacts: adapters.into_iter().skip(1).collect(),
-            },
-            ..current.clone()
-        };
-        crate::config::validate(&current).unwrap();
-        crate::config::validate(&next).unwrap();
-
-        assert!(approval_lines(&current, &next).is_empty());
-        assert_eq!(authorize(&current, &next, None, None).unwrap(), None);
-    }
-
-    #[test]
-    fn reordering_adapters_still_needs_confirmation() {
-        let current = ConfigSnapshot {
-            sites: vec![SiteConfig {
-                origin: "https://docs.google.com".into(),
-                path_prefix: "/".into(),
-            }],
-            adapters: AdapterDocument {
-                format: 1,
-                artifacts: vec![unscoped_adapter(0), unscoped_adapter(1)],
-            },
-            ..crate::config::empty_config()
-        };
-        let mut next = current.clone();
-        next.adapters.artifacts.swap(0, 1);
-
-        crate::config::validate(&current).unwrap();
-        crate::config::validate(&next).unwrap();
-        assert!(
-            approval_lines(&current, &next)
-                .iter()
-                .any(|line| line.contains("Enable or change"))
-        );
-        assert!(authorize(&current, &next, None, None).is_err());
-    }
-
-    #[test]
-    fn activating_an_invalid_existing_adapter_requires_adapter_confirmation() {
-        let adapter = json!({
-            "type": "gdoc",
-            "origin": "https://docs.google.com",
-            "unscoped": "acknowledged",
-            "match": [{"path": "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}"}],
-            "modes": {"edit": "edit", "view": "view", "preview": "view"},
-            "id": "gdoc:{host}/{id}",
-        });
-        let current = ConfigSnapshot {
-            adapters: AdapterDocument {
-                format: 1,
-                artifacts: vec![adapter],
-            },
-            ..crate::config::empty_config()
-        };
-        assert!(crate::config::validate_base(&current).is_ok());
-        assert!(crate::config::validate(&current).is_err());
-
-        // Adding the missing origin makes the already-present adapter active.
-        // It must not be mistaken for a previously confirmed adapter merely
-        // because its bytes and array position are unchanged.
-        let next = ConfigSnapshot {
-            sites: vec![SiteConfig {
-                origin: "https://docs.google.com".into(),
-                path_prefix: "/".into(),
-            }],
-            ..current.clone()
-        };
-        crate::config::validate(&next).unwrap();
-        let lines = approval_lines(&current, &next);
-        assert!(lines.iter().any(|line| line.contains("artifact adapter")));
-        assert!(lines.iter().any(|line| {
-            line.contains("every account") && line.contains("separate Chrome profile")
-        }));
-        assert!(authorize(&current, &next, None, None).is_err());
+        assert_eq!(authorize(&current, &next, None).unwrap(), None);
     }
 
     fn storage_at(root: &Path, summaries: Option<&str>) -> StorageConfig {
@@ -1278,6 +830,23 @@ mod tests {
 
     fn names(entries: &[&str]) -> Vec<String> {
         entries.iter().map(|entry| (*entry).to_owned()).collect()
+    }
+
+    #[test]
+    fn summaries_dir_change_needs_no_token() {
+        let folder = tempfile::tempdir().unwrap();
+        let with = |summaries: Option<&str>| ConfigSnapshot {
+            storage: Some(storage_at(folder.path(), summaries)),
+            ..crate::config::empty_config()
+        };
+        assert_eq!(
+            authorize(&with(None), &with(Some("summaries")), None).unwrap(),
+            None
+        );
+        assert_eq!(
+            authorize(&with(Some("summaries")), &with(Some("ai")), None).unwrap(),
+            None
+        );
     }
 
     /// A minted harness grant for `current -> after`. The binary is a plain
@@ -1347,7 +916,6 @@ mod tests {
                 "revision",
                 next,
                 None,
-                None,
                 Some(&self.token),
             )
         }
@@ -1376,7 +944,7 @@ mod tests {
         );
         granted
             .authority
-            .consume_update(&current, "revision", &after, None, None, Some(&token));
+            .consume_update(&current, "revision", &after, None, Some(&token));
         let error = granted.check(&granted.after).unwrap_err();
         assert!(error.to_string().contains("unknown or already used"));
     }
@@ -1391,7 +959,6 @@ mod tests {
                     &granted.current,
                     "other-revision",
                     &granted.after,
-                    None,
                     None,
                     Some(&granted.token),
                 )
@@ -1409,7 +976,6 @@ mod tests {
                     &moved,
                     "revision",
                     &granted.after,
-                    None,
                     None,
                     Some(&granted.token)
                 )
@@ -1477,50 +1043,19 @@ mod tests {
     }
 
     #[test]
-    fn harness_token_cannot_be_mixed_with_other_tokens() {
-        let mut granted = granted();
-        let consent = granted.authority.mint_consent(
-            granted.current.clone(),
-            granted.after.clone(),
-            "revision",
-        );
-        for (picker, consent) in [(Some("picker"), None), (None, Some(consent.as_str()))] {
-            let error = granted
-                .authority
-                .authorize_update(
-                    &granted.current,
-                    "revision",
-                    &granted.after,
-                    picker,
-                    consent,
-                    Some(&granted.token),
-                )
-                .unwrap_err();
-            assert!(error.to_string().contains("cannot be combined"), "{error}");
-        }
-    }
-
-    #[test]
-    fn consent_grant_without_harness_cannot_set_agent() {
-        let mut granted = granted();
-        let consent = granted.authority.mint_consent(
-            granted.current.clone(),
-            granted.after.clone(),
-            "revision",
-        );
-        assert!(
-            granted
-                .authority
-                .authorize_update(
-                    &granted.current,
-                    "revision",
-                    &granted.after,
-                    None,
-                    Some(&consent),
-                    None,
-                )
-                .is_err()
-        );
+    fn harness_token_cannot_be_mixed_with_a_picker_token() {
+        let granted = granted();
+        let error = granted
+            .authority
+            .authorize_update(
+                &granted.current,
+                "revision",
+                &granted.after,
+                Some("picker"),
+                Some(&granted.token),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot be combined"), "{error}");
     }
 
     fn hand_candidate() -> Candidate {
@@ -1543,41 +1078,29 @@ mod tests {
         }
     }
 
-    /// `current -> after` for the text tests, with a real notes folder so
-    /// `current` is trusted and only real changes are listed.
-    fn text_configs(notes: &Path) -> (ConfigSnapshot, ConfigSnapshot) {
-        let current = ConfigSnapshot {
-            storage: Some(storage_at(notes, None)),
-            ..crate::config::empty_config()
-        };
-        let next = ConfigSnapshot {
+    /// The config a harness setup proposes, for the text tests.
+    fn text_config(notes: &Path) -> ConfigSnapshot {
+        ConfigSnapshot {
             storage: Some(storage_at(notes, Some("summaries"))),
             agent: Some(brauser_protocol::AgentConfig {
                 env_allow: names(&["HOME", "PATH", "ANTHROPIC_API_KEY"]),
                 ..agent()
             }),
-            ..current.clone()
-        };
-        (current, next)
+            ..crate::config::empty_config()
+        }
     }
 
     #[test]
     fn harness_confirmation_text_lists_binary_args_env_names_summaries_dir() {
         let folder = tempfile::tempdir().unwrap();
-        let (current, after) = text_configs(folder.path());
-        let (title, body) = harness_confirmation_text(&hand_candidate(), &after, &current).unwrap();
+        let after = text_config(folder.path());
+        let (title, body) = harness_confirmation_text(&hand_candidate(), &after).unwrap();
         assert_eq!(
             title,
             format!("Set up Claude Code for {APP_NAME} AI commands")
         );
         assert!(!title.contains('\n'));
-        let all: Vec<&str> = body.lines().collect();
-        // Choosing the first summaries folder is the one change, shown first.
-        assert_eq!(all[0], "This setup also makes these changes:");
-        assert!(all[1].starts_with("• "), "{body}");
-        assert!(all[1].contains("summaries folder"), "{body}");
-        assert_eq!(all[2], "");
-        let lines = &all[3..];
+        let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines[0], "Harness: Claude Code 2.1.284");
         assert_eq!(
             lines[1],
@@ -1629,20 +1152,20 @@ mod tests {
     }
 
     #[test]
-    fn harness_confirmation_is_bounded_like_consent() {
+    fn harness_confirmation_is_bounded() {
         let folder = tempfile::tempdir().unwrap();
-        // 64 long site additions, over the consent dialog's 8 KiB.
-        let site = |index: usize| SiteConfig {
-            origin: format!("https://s{index:02}.example"),
-            path_prefix: format!("/{}", "p".repeat(200)),
+        let mut next = text_config(folder.path());
+        // 64 long environment variable names, over the dialog's 8 KiB.
+        let long_names = |count: usize| {
+            (0..count)
+                .map(|index| format!("LONG_{index:02}_{}", "N".repeat(200)))
+                .collect::<Vec<_>>()
         };
-        let (current, mut next) = text_configs(folder.path());
-        next.sites = (0..64).map(site).collect();
-        crate::config::validate(&next).unwrap();
-        let error = harness_confirmation_text(&hand_candidate(), &next, &current).unwrap_err();
+        next.agent.as_mut().unwrap().env_allow = long_names(64);
+        let error = harness_confirmation_text(&hand_candidate(), &next).unwrap_err();
         assert!(error.to_string().contains("too long"), "{error}");
-        next.sites.truncate(16);
-        let (title, body) = harness_confirmation_text(&hand_candidate(), &next, &current).unwrap();
+        next.agent.as_mut().unwrap().env_allow = long_names(16);
+        let (title, body) = harness_confirmation_text(&hand_candidate(), &next).unwrap();
         assert!(title.len() + 1 + body.len() <= MAX_HARNESS_SUMMARY_BYTES);
     }
 
@@ -1662,13 +1185,13 @@ mod tests {
     #[test]
     fn confirmation_with_unsafe_text_is_refused() {
         let folder = tempfile::tempdir().unwrap();
-        let (current, after) = text_configs(folder.path());
+        let after = text_config(folder.path());
         let mut candidate = hand_candidate();
         candidate.version = Some("2.1.284\u{202e}".into());
-        assert!(harness_confirmation_text(&candidate, &after, &current).is_err());
+        assert!(harness_confirmation_text(&candidate, &after).is_err());
         let mut candidate = hand_candidate();
         candidate.identity.as_mut().unwrap().real_path = "/opt/\u{2066}claude".into();
-        assert!(harness_confirmation_text(&candidate, &after, &current).is_err());
+        assert!(harness_confirmation_text(&candidate, &after).is_err());
     }
 }
 
@@ -1943,7 +1466,6 @@ mod setup_tests {
                 "revision",
                 &confirmed.config,
                 None,
-                None,
                 Some(&confirmed.harness_token),
             )
             .unwrap();
@@ -1970,7 +1492,6 @@ mod setup_tests {
                 &setup.current,
                 "revision",
                 &confirmed.config,
-                None,
                 None,
                 Some(&confirmed.harness_token),
             )

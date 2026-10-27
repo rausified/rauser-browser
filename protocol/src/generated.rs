@@ -37,8 +37,6 @@ pub struct UpdateConfigRequest {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub picker_token: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub consent_token: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub harness_token: Option<String>,
 }
 
@@ -187,17 +185,6 @@ pub struct ChooseFolderRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConfirmConfigRequest {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub expected_revision: String,
-    pub config: ConfigSnapshot,
-    #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub picker_token: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RecordVisitRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -322,15 +309,6 @@ pub struct FolderChosen {
     pub request_id: String,
     pub path: String,
     pub picker_token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigConfirmed {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub consent_token: String,
-    pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -725,7 +703,6 @@ pub enum Request {
     GetConfig(GetConfigRequest),
     UpdateConfig(UpdateConfigRequest),
     ChooseFolder(ChooseFolderRequest),
-    ConfirmConfig(ConfirmConfigRequest),
     RecordVisit(RecordVisitRequest),
     RecordActivity(RecordActivityRequest),
     RecordBatch(RecordBatchRequest),
@@ -750,7 +727,6 @@ impl Request {
             Self::GetConfig(value) => value.protocol_version,
             Self::UpdateConfig(value) => value.protocol_version,
             Self::ChooseFolder(value) => value.protocol_version,
-            Self::ConfirmConfig(value) => value.protocol_version,
             Self::RecordVisit(value) => value.protocol_version,
             Self::RecordActivity(value) => value.protocol_version,
             Self::RecordBatch(value) => value.protocol_version,
@@ -775,7 +751,6 @@ impl Request {
             Self::GetConfig(value) => &value.request_id,
             Self::UpdateConfig(value) => &value.request_id,
             Self::ChooseFolder(value) => &value.request_id,
-            Self::ConfirmConfig(value) => &value.request_id,
             Self::RecordVisit(value) => &value.request_id,
             Self::RecordActivity(value) => &value.request_id,
             Self::RecordBatch(value) => &value.request_id,
@@ -802,7 +777,6 @@ pub enum Response {
     ConfigResult(ConfigResult),
     ConfigUpdated(ConfigUpdated),
     FolderChosen(FolderChosen),
-    ConfigConfirmed(ConfigConfirmed),
     VisitRecorded(VisitRecorded),
     ActivityRecorded(ActivityRecorded),
     BatchRecorded(BatchRecorded),
@@ -827,7 +801,6 @@ impl Response {
             Self::ConfigResult(value) => value.protocol_version,
             Self::ConfigUpdated(value) => value.protocol_version,
             Self::FolderChosen(value) => value.protocol_version,
-            Self::ConfigConfirmed(value) => value.protocol_version,
             Self::VisitRecorded(value) => value.protocol_version,
             Self::ActivityRecorded(value) => value.protocol_version,
             Self::BatchRecorded(value) => value.protocol_version,
@@ -852,7 +825,6 @@ impl Response {
             Self::ConfigResult(value) => &value.request_id,
             Self::ConfigUpdated(value) => &value.request_id,
             Self::FolderChosen(value) => &value.request_id,
-            Self::ConfigConfirmed(value) => &value.request_id,
             Self::VisitRecorded(value) => &value.request_id,
             Self::ActivityRecorded(value) => &value.request_id,
             Self::BatchRecorded(value) => &value.request_id,

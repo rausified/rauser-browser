@@ -11,7 +11,7 @@ fn config(storage: &str) -> String {
 
 fn update(config: &str) -> String {
     format!(
-        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"consent_token":null,"harness_token":null,"config":{config}}}"#
+        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"harness_token":null,"config":{config}}}"#
     )
 }
 
@@ -33,10 +33,24 @@ fn omitted_storage_is_not_interpreted_as_explicit_null() {
 #[test]
 fn config_updates_require_a_revision_precondition() {
     let missing_revision = format!(
-        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","picker_token":null,"consent_token":null,"harness_token":null,"config":{}}}"#,
+        r#"{{"type":"update_config","protocol_version":6,"request_id":"r1","picker_token":null,"harness_token":null,"config":{}}}"#,
         config(r#""storage":null,"#)
     );
     assert!(serde_json::from_str::<Request>(&missing_revision).is_err());
+}
+
+#[test]
+fn v6_retires_config_confirmation() {
+    let with_consent = update(&config(r#""storage":null,"#)).replace(
+        r#""harness_token":null"#,
+        r#""consent_token":null,"harness_token":null"#,
+    );
+    assert!(serde_json::from_str::<Request>(&with_consent).is_err());
+    let confirm = format!(
+        r#"{{"type":"confirm_config","protocol_version":6,"request_id":"r1","expected_revision":"missing","picker_token":null,"config":{}}}"#,
+        config(r#""storage":null,"#)
+    );
+    assert!(serde_json::from_str::<Request>(&confirm).is_err());
 }
 
 #[test]

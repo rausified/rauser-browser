@@ -138,8 +138,6 @@ function install({
         };
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
-      case "confirm_config":
-        return { type: "config_confirmed", consent_token: "consent", summary: "summary" };
       case "update_config":
         state.config = request.config;
         state.configIssue = null;
@@ -266,12 +264,12 @@ async function removeListedSite() {
   await until(() => statusText().startsWith("Removed ") && idle(), "the removal to finish");
 }
 
-test("a canceled re-enable after removing a site rolls back Chrome grants", async () => {
+test("a failed re-enable after removing a site rolls back Chrome grants", async () => {
   const state = install({
     grants: ["webNavigation", PATTERN],
     host: {
-      confirm_config: (_request, current) => current.cancelNext
-        ? { type: "error", code: "cancelled", message: "The user canceled" }
+      update_config: (_request, current) => current.failNext
+        ? { type: "error", code: "internal", message: "could not save configuration" }
         : null,
     },
   });
@@ -284,9 +282,9 @@ test("a canceled re-enable after removing a site rolls back Chrome grants", asyn
 
   // The preflight taken before removal said both grants were already held.
   await until(() => !env.elements.get("enable-site").disabled, "Enable after removal");
-  state.cancelNext = true;
+  state.failNext = true;
   env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Setup failed") && idle(), "the canceled setup");
+  await until(() => statusText().startsWith("Setup failed") && idle(), "the failed setup");
   await until(() => !state.grants.has(PATTERN) && !state.grants.has("webNavigation"),
     "the new Chrome grants to be rolled back");
 });
@@ -483,7 +481,7 @@ test("an unsupported adapter document can be removed without blocking unrelated 
   assert.match(statusText(), /adapter rules removed/);
 });
 
-test("adapter workspace previews and saves a new adapter through native confirmation", async () => {
+test("adapter workspace previews and saves a new adapter with one update", async () => {
   const saves = [];
   const state = install({
     host: { update_config: (request) => { saves.push(request); return null; } },
@@ -501,7 +499,7 @@ test("adapter workspace previews and saves a new adapter through native confirma
   env.elements.get("save-adapter").click();
   await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the adapter save");
   assert.equal(saves.length, 1);
-  assert.equal(saves[0].consent_token, "consent");
+  assert.equal("consent_token" in saves[0], false);
   assert.equal(state.config.adapters.artifacts[0].type, "work.item");
   assert.match(statusText(), /adapter added/);
 });
@@ -731,6 +729,22 @@ test("a kept config with a folder issue needs a new folder pick, which repairs i
   await until(() => !env.elements.get("enable-site").disabled, "Enable after the repair");
 });
 
+test("saving settings sends one update_config and never confirm_config", async () => {
+  const state = install({ sites: [] });
+  state.config = { ...state.config, storage: null };
+  await openSettings();
+  state.requests.length = 0;
+  // The host has no confirm_config handler, so any call throws "Unexpected host request".
+  env.elements.get("choose-folder").click();
+  await until(() => state.config.storage?.root === "/vault" && idle(), "the folder to be saved");
+  const hostTypes = () => state.requests.map((request) => request.type)
+    .filter((type) => type !== "choose_folder" && type !== "hello");
+  assert.deepEqual([...new Set(hostTypes())].sort(), ["get_config", "update_config"]);
+  assert.equal(hostTypes().filter((type) => type === "update_config").length, 1);
+  const lastUpdate = state.requests.findLast((request) => request.type === "update_config");
+  assert.equal("consent_token" in lastUpdate, false);
+});
+
 test("choosing a folder saves it at once, leaving sites and capture as they were", async () => {
   const saves = [];
   const state = install({
@@ -743,28 +757,28 @@ test("choosing a folder saves it at once, leaving sites and capture as they were
   await until(() => state.config.storage?.root === "/vault" && idle(), "the folder to be saved");
   assert.equal(saves.length, 1);
   assert.equal(saves[0].picker_token, "picker-1");
-  assert.equal(saves[0].consent_token, "consent");
+  assert.equal("consent_token" in saves[0], false);
   assert.equal(state.config.capture_enabled, false);
   assert.deepEqual(state.config.sites, []);
   assert.equal(env.elements.get("folder-path").textContent, "/vault");
   assert.match(statusText(), /^No sites are enabled for capture\. Enable a site to begin\./);
 });
 
-test("a canceled repair still rolls back the Chrome grants it added", async () => {
+test("a failed repair still rolls back the Chrome grants it added", async () => {
   const state = install({
     grants: ["webNavigation", PATTERN],
     host: {
-      confirm_config: () => ({ type: "error", code: "cancelled", message: "The user canceled" }),
+      update_config: () => ({ type: "error", code: "internal", message: "could not save configuration" }),
     },
   });
   state.configIssue = FOLDER_ISSUE;
   await openSettings();
   env.elements.get("choose-folder").click();
-  // The declined repair keeps the selection for the site's own confirmation.
-  await until(() => statusText().startsWith("Canceled. /vault was not saved") && idle(), "the folder pick");
+  // The failed repair keeps the selection, so enabling a site can save it.
+  await until(() => statusText() === "could not save configuration" && idle(), "the folder pick");
   await typeSite("https://b.com");
   env.elements.get("enable-site").click();
-  await until(() => statusText().startsWith("Setup failed") && idle(), "the canceled setup");
+  await until(() => statusText().startsWith("Setup failed") && idle(), "the failed setup");
   await until(() => !state.grants.has("https://b.com:443/*"), "the new origin grant to be rolled back");
   assert.equal(state.grants.has("webNavigation"), true);
   assert.equal(state.grants.has(PATTERN), true);
@@ -774,20 +788,19 @@ test("a host restart drops a folder selection only the old host knew", async () 
   const state = install({
     sites: [],
     host: {
-      // The first folder save is declined, so the selection stays on the page.
-      confirm_config: (_request, current) => current.connects === 1
-        ? { type: "error", code: "cancelled", message: "The user canceled" }
-        : null,
-      update_config: (request, current) =>
-        request.picker_token !== null && request.picker_token !== `picker-${current.connects}`
-        ? { type: "error", code: "unauthorized", message: "folder selection token is unknown" }
-        : null,
+      // The first folder save fails, so the selection stays on the page.
+      update_config: (request, current) => {
+        if (current.connects === 1) return { type: "error", code: "internal", message: "could not save configuration" };
+        return request.picker_token !== null && request.picker_token !== `picker-${current.connects}`
+          ? { type: "error", code: "unauthorized", message: "folder selection token is unknown" }
+          : null;
+      },
     },
   });
   state.config = { ...state.config, storage: null };
   await openSettings();
   env.elements.get("choose-folder").click();
-  await until(() => statusText().startsWith("Canceled. /vault was not saved") && idle(), "the folder pick");
+  await until(() => statusText() === "could not save configuration" && idle(), "the folder pick");
   await typeSite("https://a.com");
 
   state.exitHost();

@@ -1036,18 +1036,13 @@ test("a post-save folder issue suspends policy instead of installing a lease", a
     const saving = session.saveConfig(structuredClone(saved), null);
     const port = ports[0];
     let request = await sentOn(port, 1);
-    assert.equal(request.type, "confirm_config");
-    port.reply({
-      type: "config_confirmed", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
-      consent_token: "consent", summary: "No additional capture access is requested.",
-    });
-    request = await sentOn(port, 2);
     assert.equal(request.type, "update_config");
+    assert.equal("consent_token" in request, false);
     port.reply({
       type: "config_updated", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
       revision: "r2", config: saved,
     });
-    request = await sentOn(port, 3);
+    request = await sentOn(port, 2);
     assert.equal(request.type, "get_config");
     port.reply(configResult(request, origin, {
       revision: "r2",
