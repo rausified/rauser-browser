@@ -176,6 +176,9 @@ def render_rust(definitions: dict, version: int) -> str:
             [
                 "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]",
                 '#[serde(tag = "type", rename_all = "snake_case")]',
+                # One message is decoded, handled, and dropped at a time, so
+                # boxing the config-carrying variants would buy nothing.
+                "#[allow(clippy::large_enum_variant)]",
                 f"pub enum {name} {{",
             ]
         )

@@ -9,7 +9,9 @@
 //!    session, and streams its events into the record. A watchdog thread
 //!    refreshes `heartbeat_at` every [`HEARTBEAT`] and kills the process group
 //!    at the deadline.
-//! 3. The outcome is mapped to a terminal state; a validated answer is kept in
+//! 3. The answer is validated (spec §6.4); an invalid one gets one repair
+//!    turn in the same session.
+//! 4. The outcome is mapped to a terminal state; a validated answer is kept in
 //!    `result.json` before `save`, so a save failure can be retried without
 //!    running the harness again.
 //!
@@ -20,34 +22,37 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use brauser_protocol::{ErrorCode, HarnessId, RecordKey, RunErrorKind, RunState, RunView};
+use brauser_protocol::{
+    ErrorCode, HarnessId, RecordKey, RunErrorKind, RunState, RunView, SummaryVocabulary,
+};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::harness_api::{
-    HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome, draft_prompt,
+    HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
+use super::prompt::{repair_prompt, summary_prompt};
 use super::queue::{Scheduler, Submit};
 use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, fit_session_id,
     page_markdown,
 };
-use crate::config::ConfigStore;
+use crate::answer::parse_answer;
+use crate::config::{ConfigStore, default_summary_vocabulary, valid_summary_vocabulary};
+use crate::open::Opener;
 use crate::vault::Vault;
 
 /// How long a run may take before its process group is killed.
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
 /// How often a running record's `heartbeat_at` is refreshed.
 pub const HEARTBEAT: Duration = Duration::from_secs(5);
-/// The largest final answer `accept` takes (PR 2).
-pub const MAX_ANSWER_BYTES: usize = 256 * 1024;
 /// The most runs `list_runs` returns.
 pub const LIST_LIMIT: usize = 20;
 /// How long `cancel_run` waits for a running run to reach its end state.
@@ -63,30 +68,30 @@ pub struct SavedRun {
 /// Validates a harness's final answer and saves it. Errors are user-facing
 /// reasons stored in the run's `error`.
 pub trait RunFinisher: Send + Sync {
-    /// PR 2: `final_text` must be a JSON object of at most 256 KiB. PR 3
-    /// (Task 33) replaces this with §6.4 validation.
-    fn accept(&self, final_text: &str) -> Result<serde_json::Value, String>;
+    /// The normalized answer to keep in `result.json`, or what is wrong with
+    /// `final_text`; the error goes back to the agent in the repair turn.
+    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String>;
     /// PR 2: re-reads config under `lock_current` + `refresh` and requires a
     /// configured, openable vault. PR 4 writes the summary here.
     fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String>;
 }
 
-/// PR 2's [`accept`](RunFinisher::accept): one JSON object, at most
-/// [`MAX_ANSWER_BYTES`].
-pub fn accept_json_object(final_text: &str) -> Result<serde_json::Value, String> {
-    if final_text.len() > MAX_ANSWER_BYTES {
-        return Err("The agent's answer is too large.".to_string());
-    }
-    match serde_json::from_str::<serde_json::Value>(final_text.trim()) {
-        Ok(value @ serde_json::Value::Object(_)) => Ok(value),
-        Ok(_) => Err("The agent's answer is not a JSON object.".to_string()),
-        Err(_) => Err("The agent's answer is not valid JSON.".to_string()),
-    }
+/// Validate `final_text` as a §6.4 answer against the run's knowledge base
+/// folder (its working directory) and re-serialize it normalized.
+pub fn accept_summary_answer(
+    run: &RunStatusFile,
+    final_text: &str,
+) -> Result<serde_json::Value, String> {
+    let Some(cwd) = run.cwd.as_deref() else {
+        return Err("run has no working directory".into());
+    };
+    let answer = parse_answer(final_text, Path::new(cwd))?;
+    serde_json::to_value(answer).map_err(|_| "the answer could not be encoded".to_string())
 }
 
-/// PR 2's finisher: accepts any JSON object and checks, under the config
-/// lock, that a configured notes folder can still be opened. It writes
-/// nothing; PR 4 adds the summary file and log event.
+/// The service's finisher: accepts a §6.4 answer and checks, under the
+/// config lock, that a configured notes folder can still be opened. It
+/// writes nothing; PR 4 adds the summary file and log event.
 pub struct VaultCheckFinisher {
     config: Mutex<ConfigStore>,
 }
@@ -100,8 +105,8 @@ impl VaultCheckFinisher {
 }
 
 impl RunFinisher for VaultCheckFinisher {
-    fn accept(&self, final_text: &str) -> Result<serde_json::Value, String> {
-        accept_json_object(final_text)
+    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
+        accept_summary_answer(run, final_text)
     }
 
     fn save(&self, run: &RunStatusFile, _result: &serde_json::Value) -> Result<SavedRun, String> {
@@ -132,9 +137,20 @@ impl RunFinisher for VaultCheckFinisher {
 /// run's error, so it must never carry a value from the file.
 pub type EnvSource = Arc<dyn Fn() -> Result<Vec<(OsString, OsString)>, String> + Send + Sync>;
 
+/// Checks, when a run leaves the queue (including a queued run resumed after
+/// a restart), that the folder it was queued to run in is still the
+/// knowledge base folder the user picked, so a folder replaced or remounted
+/// at the same path while the run waited is never handed to a harness. The
+/// error is shown as the run's error.
+pub type CwdCheck = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ServiceOptions {
+    /// The limit for a run that brings none of its own.
     pub run_timeout: Duration,
+    /// Set only by the scripted `RUN_TIMEOUT_SECS_ENV` seam: this limit
+    /// beats every run's own, so a smoke can time out a configured harness.
+    pub forced_run_timeout: Option<Duration>,
     /// How long the service stays up with nothing queued or running.
     pub idle_exit: Duration,
     /// Recorded in each run's `status.json` for recovery.
@@ -143,12 +159,26 @@ pub struct ServiceOptions {
     /// restart; a run whose environment cannot be built fails before its
     /// harness starts.
     pub run_env: EnvSource,
+    /// Run at the start of every run, right after `run_env`; a run whose
+    /// folder fails it ends before its harness starts.
+    pub run_cwd: CwdCheck,
+    /// Opens a run's Codex thread and reveals `agent.env`.
+    pub opener: Opener,
+}
+
+impl ServiceOptions {
+    /// The limit for a run whose harness entry asks for `requested`.
+    fn timeout_for(&self, requested: Option<Duration>) -> Duration {
+        self.forced_run_timeout
+            .unwrap_or_else(|| requested.unwrap_or(self.run_timeout))
+    }
 }
 
 impl fmt::Debug for ServiceOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceOptions")
             .field("run_timeout", &self.run_timeout)
+            .field("forced_run_timeout", &self.forced_run_timeout)
             .field("idle_exit", &self.idle_exit)
             .field("service_pid", &self.service_pid)
             .finish_non_exhaustive()
@@ -169,6 +199,11 @@ pub struct StartRun {
     pub record_key: RecordKey,
     pub requested_at: String,
     pub cwd: PathBuf,
+    /// The harness entry's `timeout_secs`; `None` uses
+    /// [`ServiceOptions::run_timeout`].
+    pub timeout: Option<Duration>,
+    /// The document types and categories the prompt offers.
+    pub vocabulary: SummaryVocabulary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,18 +215,22 @@ enum Stop {
 #[derive(Debug, Default)]
 struct StopState {
     reason: Option<Stop>,
-    /// Set once the harness turn has returned; later stops kill nothing.
+    /// Set once the answer is accepted or the harness turn has returned;
+    /// later stops kill nothing and do not change how the run ends.
     turn_done: bool,
 }
 
 /// What the worker needs that is not in `status.json`.
 struct Launch {
     cwd: PathBuf,
+    vocabulary: SummaryVocabulary,
 }
 
 /// The in-memory side of one queued or running run.
 struct RunControl {
     slot: ProcessSlot,
+    /// How long the run may take once it is running.
+    timeout: Duration,
     stop: Mutex<StopState>,
     launch: Mutex<Option<Launch>>,
     done: Mutex<bool>,
@@ -199,9 +238,10 @@ struct RunControl {
 }
 
 impl RunControl {
-    fn new(launch: Launch) -> Self {
+    fn new(launch: Launch, timeout: Duration) -> Self {
         Self {
             slot: ProcessSlot::default(),
+            timeout,
             stop: Mutex::new(StopState::default()),
             launch: Mutex::new(Some(launch)),
             done: Mutex::new(false),
@@ -220,7 +260,13 @@ impl RunControl {
         self.slot.kill();
     }
 
-    /// Mark the turn over and return why it was stopped, if it was.
+    /// Whether a cancel or timeout has been requested.
+    fn stop_requested(&self) -> bool {
+        lock(&self.stop).reason.is_some()
+    }
+
+    /// Mark the turn over and return why it was stopped, if it was. Later
+    /// stops change nothing; calling this again returns the same reason.
     fn end_turn(&self) -> Option<Stop> {
         let mut stop = lock(&self.stop);
         stop.turn_done = true;
@@ -344,7 +390,21 @@ impl Supervisor {
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
-                    let control = RunControl::new(Launch { cwd });
+                    // The run's own limit and vocabulary, as recorded when
+                    // it was queued; a record without them (or with a
+                    // vocabulary no configuration could hold) gets the
+                    // service's limit and the default lists.
+                    let requested = status
+                        .run_timeout_secs
+                        .filter(|secs| *secs > 0)
+                        .map(Duration::from_secs);
+                    let timeout = inner.options.timeout_for(requested);
+                    let vocabulary = status
+                        .vocabulary
+                        .filter(valid_summary_vocabulary)
+                        .unwrap_or_else(default_summary_vocabulary);
+                    let launch = Launch { cwd, vocabulary };
+                    let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
                 Some((Submit::Existing(_), _)) | None => inner.finish(id, |status| {
@@ -355,6 +415,17 @@ impl Supervisor {
             }
         }
         Inner::pump(inner);
+    }
+
+    /// The runners this service starts runs with; harness setup probes
+    /// through them too.
+    pub fn registry(&self) -> &HarnessRegistry {
+        &self.inner.registry
+    }
+
+    /// The run records, for reading a run's thread without touching it.
+    pub fn store(&self) -> &RunStore {
+        &self.inner.store
     }
 
     /// Queue a run, or return the queued-or-running run for the same record
@@ -400,6 +471,8 @@ impl Supervisor {
                 error_kind: None,
                 summary_path: None,
                 stream_truncated: false,
+                run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
+                vocabulary: Some(req.vocabulary.clone()),
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
@@ -410,7 +483,12 @@ impl Supervisor {
                     "The run could not be recorded.".to_string(),
                 ));
             }
-            let control = RunControl::new(Launch { cwd: req.cwd });
+            let timeout = inner.options.timeout_for(req.timeout);
+            let launch = Launch {
+                cwd: req.cwd,
+                vocabulary: req.vocabulary,
+            };
+            let control = RunControl::new(launch, timeout);
             lock(&inner.runs).insert(id, Arc::new(control));
         }
         Inner::pump(inner);
@@ -526,8 +604,8 @@ impl Supervisor {
         let _guard = lock(&record_lock);
         let mut status = inner.status(id)?;
         let result = inner.store.read_result(id).ok().flatten();
-        let has_result = result.is_some();
-        let Some(result) = result.filter(|_| status.view(0, has_result).can_retry_save) else {
+        let retryable = status.view(0, result.as_ref()).can_retry_save;
+        let Some(result) = result.filter(|_| retryable) else {
             return Err((
                 ErrorCode::Conflict,
                 "This run has no failed save to retry.".to_string(),
@@ -606,10 +684,11 @@ impl Inner {
 
     fn view_of(&self, id: Uuid, status: &RunStatusFile) -> RunView {
         let stream_bytes = self.store.stream_bytes(id).unwrap_or(0);
-        let has_result = status.state == RunState::Failed
-            && status.error_kind == Some(RunErrorKind::SaveFailed)
-            && self.store.read_result(id).ok().flatten().is_some();
-        status.view(stream_bytes, has_result)
+        // Only a run past validation has a result to read.
+        let result = matches!(status.state, RunState::Succeeded | RunState::Failed)
+            .then(|| self.store.read_result(id).ok().flatten())
+            .flatten();
+        status.view(stream_bytes, result.as_ref())
     }
 
     /// Read-modify-write `status.json` under the run's mutex.
@@ -679,6 +758,19 @@ impl Inner {
                 return;
             }
         };
+        // The folder as it is now, not as it was when the run was queued.
+        if let Some(Err(reason)) = launch
+            .as_ref()
+            .map(|launch| (this.options.run_cwd)(&launch.cwd))
+        {
+            control.end_turn();
+            this.finish_with(&control, id, |status| {
+                status.state = RunState::Failed;
+                status.error_kind = Some(RunErrorKind::HarnessFailed);
+                status.error = Some(reason);
+            });
+            return;
+        }
         let started = now_timestamp();
         let status = this.update(id, |status| {
             status.state = RunState::Running;
@@ -731,17 +823,23 @@ impl Inner {
             (Some(Stop::Cancel), _) => Finish::fail(RunErrorKind::Canceled, None),
             (Some(Stop::Timeout), _) => Finish::fail(
                 RunErrorKind::TimedOut,
-                Some(timeout_message(this.options.run_timeout)),
+                Some(timeout_message(control.timeout)),
             ),
-            (None, Err(reason)) => Finish::fail(RunErrorKind::HarnessFailed, Some(reason)),
-            (None, Ok(final_text)) => this.conclude(id, &status, &final_text),
+            (None, Driven::Failed(reason)) => {
+                Finish::fail(RunErrorKind::HarnessFailed, Some(reason))
+            }
+            (None, Driven::Invalid(reason)) => {
+                Finish::fail(RunErrorKind::InvalidOutput, Some(reason))
+            }
+            (None, Driven::Accepted(result)) => this.conclude(id, &status, &result),
         };
         this.finish_with(&control, id, |status| finished.apply(status));
         let _ = watchdog.join();
     }
 
     /// Start the harness session and run its turn, streaming events into the
-    /// record. `Ok` is the final answer text; `Err` is the failure reason.
+    /// record, then validate the answer. An invalid answer gets one repair
+    /// turn in the same session; both turns stream into `stream.txt`.
     fn drive(
         self: &Arc<Self>,
         id: Uuid,
@@ -749,17 +847,17 @@ impl Inner {
         status: &RunStatusFile,
         launch: Launch,
         env: Vec<(OsString, OsString)>,
-    ) -> Result<String, String> {
+    ) -> Driven {
         let Some(runner) = self.registry.get(Some(status.harness)) else {
-            return Err("The AI harness is no longer set up.".to_string());
+            return Driven::Failed("The AI harness is no longer set up.".to_string());
         };
         let page_path = self.store.page_path(id);
         let spec = RunSpec {
             run_id: id,
             harness: status.harness,
             title: status.title.clone(),
+            prompt: summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
             cwd: launch.cwd,
-            prompt: draft_prompt(&page_path),
             page_path,
             env,
         };
@@ -771,11 +869,12 @@ impl Inner {
                 worker.note(id, |status| status.process_group = Some(group));
             }
         })));
-        let mut session = runner
-            .start(&spec, &control.slot)
-            .map_err(|error| format!("starting the harness: {error:#}"))?;
+        let mut session = match runner.start(&spec, &control.slot) {
+            Ok(session) => session,
+            Err(error) => return Driven::Failed(format!("starting the harness: {error:#}")),
+        };
         let mut truncated = false;
-        let outcome = session.turn(&spec.prompt, &mut |event| match event {
+        let mut sink = |event| match event {
             HarnessEvent::Text(text) => match self.store.append_stream(id, &text) {
                 Ok(true) => {}
                 Ok(false) if !truncated => {
@@ -808,28 +907,51 @@ impl Inner {
                     }
                 }
             }
-        });
-        session.close();
-        match outcome {
-            TurnOutcome::Answered { final_text } => Ok(final_text),
-            TurnOutcome::Failed { reason } => Err(reason),
+        };
+        let driven = match session.turn(&spec.prompt, &mut sink) {
+            TurnOutcome::Failed { reason } => Driven::Failed(reason),
+            TurnOutcome::Answered { final_text } => match self.finisher.accept(status, &final_text)
+            {
+                Ok(result) => Driven::Accepted(result),
+                // A cancel or timeout between the turns starts no repair
+                // turn; the stop decides how the run ends.
+                Err(_) if control.stop_requested() => {
+                    Driven::Failed("The run was stopped.".to_string())
+                }
+                Err(problem) => match session.turn(&repair_prompt(&problem), &mut sink) {
+                    TurnOutcome::Failed { reason } => Driven::Failed(reason),
+                    TurnOutcome::Answered { final_text } => {
+                        match self.finisher.accept(status, &final_text) {
+                            Ok(result) => Driven::Accepted(result),
+                            Err(problem) => Driven::Invalid(format!(
+                                "The agent's answer was not valid after one correction: {problem}"
+                            )),
+                        }
+                    }
+                },
+            },
+        };
+        // An accepted answer stands: a cancel or timeout from here on (while
+        // the session closes, which can take a while for Codex, or while the
+        // answer is saved) cannot overturn it. A stop already requested
+        // still wins.
+        if matches!(driven, Driven::Accepted(_)) {
+            control.end_turn();
         }
+        session.close();
+        driven
     }
 
-    /// Validate, keep, and save an answer.
-    fn conclude(&self, id: Uuid, status: &RunStatusFile, final_text: &str) -> Finish {
-        let result = match self.finisher.accept(final_text) {
-            Ok(result) => result,
-            Err(reason) => return Finish::fail(RunErrorKind::InvalidOutput, Some(reason)),
-        };
-        if let Err(error) = self.store.write_result(id, &result) {
+    /// Keep and save a validated answer.
+    fn conclude(&self, id: Uuid, status: &RunStatusFile, result: &serde_json::Value) -> Finish {
+        if let Err(error) = self.store.write_result(id, result) {
             eprintln!("brauser service: keeping run {id} result: {error:#}");
             return Finish::fail(
                 RunErrorKind::SaveFailed,
                 Some("The answer could not be kept for saving.".to_string()),
             );
         }
-        match self.finisher.save(status, &result) {
+        match self.finisher.save(status, result) {
             Ok(saved) => Finish::Succeeded(saved),
             Err(reason) => Finish::fail(RunErrorKind::SaveFailed, Some(reason)),
         }
@@ -837,7 +959,7 @@ impl Inner {
 
     /// Refresh the heartbeat until the run is done; kill it at the deadline.
     fn watch(&self, id: Uuid, control: &RunControl) {
-        let deadline = Instant::now() + self.options.run_timeout;
+        let deadline = Instant::now() + control.timeout;
         let mut next_beat = Instant::now() + HEARTBEAT;
         let mut timed_out = false;
         loop {
@@ -953,6 +1075,16 @@ fn kill_group(group: i32) {
     }
 }
 
+/// How a run's conversation with its harness ended.
+enum Driven {
+    /// A validated answer, normalized for `result.json`.
+    Accepted(serde_json::Value),
+    /// The answer was still invalid after the repair turn.
+    Invalid(String),
+    /// The harness could not start, or a turn failed.
+    Failed(String),
+}
+
 /// A run's end state.
 enum Finish {
     Succeeded(SavedRun),
@@ -1044,8 +1176,9 @@ mod tests {
 
     use crate::service::record::MAX_SESSION_ID_BYTES;
 
+    use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
-    use crate::service::harness_api::HarnessRegistry;
+    use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::record::{RunStatusFile, RunStore};
 
     struct TestFinisher {
@@ -1054,8 +1187,12 @@ mod tests {
     }
 
     impl RunFinisher for TestFinisher {
-        fn accept(&self, final_text: &str) -> Result<serde_json::Value, String> {
-            accept_json_object(final_text)
+        fn accept(
+            &self,
+            run: &RunStatusFile,
+            final_text: &str,
+        ) -> Result<serde_json::Value, String> {
+            accept_summary_answer(run, final_text)
         }
 
         fn save(
@@ -1082,6 +1219,11 @@ mod tests {
 
     type SharedEnv = Arc<Mutex<Result<Vec<(OsString, OsString)>, String>>>;
 
+    /// A file in a fixture run's folder that makes the fixture's folder
+    /// check fail, as if the knowledge base folder had been replaced.
+    const FOLDER_CHANGED: &str = "folder-changed";
+    const FOLDER_CHANGED_ERROR: &str = "The knowledge base folder changed.";
+
     struct Fixture {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
@@ -1097,6 +1239,7 @@ mod tests {
             ("PATH".into(), "/bin:/usr/bin".into()),
             ("RELEASE".into(), dir.join("release").into_os_string()),
             ("COUNT".into(), dir.join("count").into_os_string()),
+            ("VALID_ANSWER".into(), TEST_ANSWER.into()),
         ]
     }
 
@@ -1188,9 +1331,18 @@ mod tests {
             let source = env.clone();
             let options = ServiceOptions {
                 run_timeout,
+                forced_run_timeout: None,
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
+                run_cwd: Arc::new(|cwd: &Path| {
+                    if cwd.join(FOLDER_CHANGED).exists() {
+                        Err(FOLDER_CHANGED_ERROR.to_string())
+                    } else {
+                        Ok(())
+                    }
+                }),
+                opener: crate::open::default_opener(),
             };
             let finisher = Box::new(finisher);
             let supervisor = match spawn_fault {
@@ -1229,6 +1381,8 @@ mod tests {
                 },
                 requested_at: "2026-10-26T10:00:00Z".to_string(),
                 cwd: self.dir.path().to_path_buf(),
+                timeout: None,
+                vocabulary: default_summary_vocabulary(),
             }
         }
 
@@ -1279,9 +1433,151 @@ mod tests {
         }
     }
 
-    const ANSWER: &str = "echo 'session: sess-1'\necho working >&2\necho '{\"summary\": \"ok\"}'\n";
+    /// Where a [`ScriptedRunner`] session calls its hook: before answering
+    /// turn `n`, or in `close`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum At {
+        Turn(usize),
+        Close,
+    }
+
+    type ScriptHook = Arc<dyn Fn(At) + Send + Sync>;
+
+    /// An in-process harness that starts no process: turn `n` answers
+    /// `answers[n - 1]`, after calling `hook`.
+    struct ScriptedRunner {
+        answers: Vec<String>,
+        turns: Arc<AtomicUsize>,
+        hook: ScriptHook,
+    }
+
+    struct ScriptedSession {
+        answers: Vec<String>,
+        turns: Arc<AtomicUsize>,
+        hook: ScriptHook,
+    }
+
+    impl HarnessRunner for ScriptedRunner {
+        fn harness(&self) -> HarnessId {
+            HarnessId::Codex
+        }
+
+        fn start(
+            &self,
+            _spec: &RunSpec,
+            _slot: &ProcessSlot,
+        ) -> anyhow::Result<Box<dyn HarnessSession>> {
+            Ok(Box::new(ScriptedSession {
+                answers: self.answers.clone(),
+                turns: self.turns.clone(),
+                hook: self.hook.clone(),
+            }))
+        }
+    }
+
+    impl HarnessSession for ScriptedSession {
+        fn turn(&mut self, _prompt: &str, _sink: &mut dyn FnMut(HarnessEvent)) -> TurnOutcome {
+            let n = self.turns.fetch_add(1, Ordering::SeqCst) + 1;
+            (self.hook)(At::Turn(n));
+            match self.answers.get(n - 1) {
+                Some(answer) => TurnOutcome::Answered {
+                    final_text: answer.clone(),
+                },
+                None => TurnOutcome::Failed {
+                    reason: "no more turns".to_string(),
+                },
+            }
+        }
+
+        fn close(self: Box<Self>) {
+            (self.hook)(At::Close);
+        }
+    }
+
+    /// A supervisor whose only harness is a [`ScriptedRunner`]. `hook` gets
+    /// the supervisor, so it can stop the run from inside the session.
+    fn scripted(
+        answers: &[&str],
+        hook: impl Fn(&Supervisor, At) + Send + Sync + 'static,
+    ) -> (Fixture, Arc<AtomicUsize>) {
+        let turns = Arc::new(AtomicUsize::new(0));
+        let supervisor = Arc::new(std::sync::OnceLock::<Supervisor>::new());
+        let runner = ScriptedRunner {
+            answers: answers.iter().map(|answer| answer.to_string()).collect(),
+            turns: turns.clone(),
+            hook: {
+                let supervisor = supervisor.clone();
+                Arc::new(move |at| hook(supervisor.get().expect("the fixture is built"), at))
+            },
+        };
+        let fixture = Fixture::build(
+            tempfile::tempdir().unwrap(),
+            HarnessRegistry::of(vec![Box::new(runner)]),
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+        );
+        let _ = supervisor.set(fixture.supervisor.clone());
+        (fixture, turns)
+    }
+
+    /// Stop every run as `reason`, as cancel or the watchdog would, without
+    /// waiting for it to end.
+    fn stop_all(supervisor: &Supervisor, reason: Stop) {
+        let controls: Vec<_> = lock(&supervisor.inner.runs).values().cloned().collect();
+        for control in controls {
+            control.request_stop(reason);
+        }
+    }
+
+    /// A cancel that lands after the first answer is refused but before the
+    /// repair turn starts ends the run canceled, with no repair turn.
+    #[test]
+    fn a_cancel_before_the_repair_turn_starts_no_repair_turn() {
+        let (fixture, turns) = scripted(&["not json", TEST_ANSWER], |supervisor, at| {
+            if at == At::Turn(1) {
+                stop_all(supervisor, Stop::Cancel);
+            }
+        });
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Canceled, "{view:?}");
+        assert_eq!(turns.load(Ordering::SeqCst), 1, "a repair turn ran");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// Once the answer is accepted, a cancel or timeout that lands while the
+    /// session closes does not overturn it.
+    #[test]
+    fn a_stop_after_the_answer_is_accepted_does_not_overturn_it() {
+        for reason in [Stop::Cancel, Stop::Timeout] {
+            let (fixture, turns) = scripted(&[TEST_ANSWER], move |supervisor, at| {
+                if at == At::Close {
+                    stop_all(supervisor, reason);
+                }
+            });
+            let id = fixture.start("a");
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Succeeded, "{reason:?}: {view:?}");
+            assert_eq!(turns.load(Ordering::SeqCst), 1);
+            assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    // The fake harness prints `$VALID_ANSWER`, a valid §6.4 answer.
+    const ANSWER: &str = "echo 'session: sess-1'\necho working >&2\necho \"$VALID_ANSWER\"\n";
     const BLOCK_THEN_ANSWER: &str =
-        "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho '{\"summary\": \"ok\"}'\n";
+        "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho \"$VALID_ANSWER\"\n";
+    /// A fake harness that saves each turn's prompt as `prompt-<n>` and
+    /// answers turn 1 with `first` and turn 2 with `second` (shell code).
+    fn two_turns(first: &str, second: &str) -> String {
+        format!(
+            "n=$(( $(/bin/cat \"$COUNT\" 2>/dev/null || echo 0) + 1 ))\n\
+             echo $n > \"$COUNT\"\n\
+             /bin/cat > \"$COUNT.prompt-$n\"\n\
+             if [ $n = 1 ]; then\n{first}\nelse\n{second}\nfi\n"
+        )
+    }
 
     fn run_dir(fixture: &Fixture, id: Uuid) -> PathBuf {
         fixture.path("runs").join(id.to_string())
@@ -1304,8 +1600,14 @@ mod tests {
         assert_eq!(view.harness, HarnessId::Codex);
         assert!(view.started_at.is_some() && view.finished_at.is_some());
         assert!(!view.can_retry_save);
-        assert_eq!(fixture.stream(id), "{\"summary\": \"ok\"}\n");
-        assert_eq!(view.stream_bytes as usize, "{\"summary\": \"ok\"}\n".len());
+        assert_eq!(fixture.stream(id), format!("{TEST_ANSWER}\n"));
+        assert_eq!(view.stream_bytes as usize, TEST_ANSWER.len() + 1);
+        let answer = view
+            .answer
+            .as_ref()
+            .expect("a succeeded run shows its answer");
+        assert_eq!(answer.document_type, "report");
+        assert_eq!(answer.importance, brauser_protocol::ImportanceLevel::High);
 
         let dir = run_dir(&fixture, id);
         let page = read(&dir.join("page.md"));
@@ -1319,7 +1621,10 @@ mod tests {
         );
         let result: serde_json::Value =
             serde_json::from_str(&read(&dir.join("result.json"))).unwrap();
-        assert_eq!(result, serde_json::json!({"summary": "ok"}));
+        assert_eq!(
+            result,
+            serde_json::from_str::<serde_json::Value>(TEST_ANSWER).unwrap()
+        );
         assert_eq!(read(&dir.join("run.log")), "working\n");
         let status: serde_json::Value =
             serde_json::from_str(&read(&dir.join("status.json"))).unwrap();
@@ -1534,6 +1839,25 @@ mod tests {
     }
 
     #[test]
+    fn a_runs_own_timeout_wins_unless_the_seam_forces_one() {
+        let mut options = ServiceOptions {
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
+            idle_exit: Duration::from_secs(600),
+            service_pid: std::process::id(),
+            run_env: Arc::new(|| Ok(Vec::new())),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
+            opener: crate::open::default_opener(),
+        };
+        let own = Duration::from_secs(5);
+        assert_eq!(options.timeout_for(None), DEFAULT_RUN_TIMEOUT);
+        assert_eq!(options.timeout_for(Some(own)), own);
+        options.forced_run_timeout = Some(Duration::from_secs(2));
+        assert_eq!(options.timeout_for(Some(own)), Duration::from_secs(2));
+        assert_eq!(options.timeout_for(None), Duration::from_secs(2));
+    }
+
+    #[test]
     fn timeout_message_names_minutes() {
         assert_eq!(
             timeout_message(Duration::from_secs(600)),
@@ -1554,16 +1878,99 @@ mod tests {
     }
 
     #[test]
-    fn non_json_answer_is_invalid_output_and_keeps_stream() {
-        let fixture = Fixture::new("echo 'not json at all'\n");
+    fn invalid_answer_gets_one_repair_turn_and_succeeds() {
+        let fixture = Fixture::new(&two_turns("echo 'not json'", "echo \"$VALID_ANSWER\""));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(read(&fixture.path("count")), "2\n");
+        let repair = read(&fixture.path("count.prompt-2"));
+        assert!(
+            repair.starts_with("Your previous answer was not valid: the answer is not valid JSON"),
+            "{repair}"
+        );
+        assert!(repair.contains("Reply with only the corrected JSON object"));
+        assert!(read(&fixture.path("count.prompt-1")).contains("page.md"));
+        assert_eq!(fixture.stream(id), format!("not json\n{TEST_ANSWER}\n"));
+        assert!(run_dir(&fixture, id).join("result.json").is_file());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn second_invalid_answer_fails_invalid_output_and_keeps_stream() {
+        let fixture = Fixture::new(&two_turns(
+            "echo 'not json at all'",
+            "echo '{\"document_type\": \"report\"}'",
+        ));
         let id = fixture.start("a");
         let view = fixture.wait_finished(id);
         assert_eq!(view.state, RunState::Failed);
         assert_eq!(view.error_kind, Some(RunErrorKind::InvalidOutput));
+        let error = view.error.as_deref().unwrap();
+        assert!(
+            error.starts_with("The agent's answer was not valid after one correction: "),
+            "{error}"
+        );
+        assert!(error.contains("category"), "{error}");
         assert!(!view.can_retry_save);
-        assert_eq!(fixture.stream(id), "not json at all\n");
+        assert_eq!(view.answer, None);
+        assert_eq!(
+            read(&fixture.path("count")),
+            "2\n",
+            "exactly one repair turn"
+        );
+        assert_eq!(
+            fixture.stream(id),
+            "not json at all\n{\"document_type\": \"report\"}\n"
+        );
         assert!(!run_dir(&fixture, id).join("result.json").exists());
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn empty_final_text_gets_a_repair_turn() {
+        let fixture = Fixture::new(&two_turns("true", "echo \"$VALID_ANSWER\""));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let repair = read(&fixture.path("count.prompt-2"));
+        assert!(repair.contains("the answer is empty"), "{repair}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn repair_turn_after_harness_exit_fails_as_harness_failed() {
+        let fixture = Fixture::new(&two_turns(
+            "echo 'not json'",
+            "echo 'harness went away' >&2\nexit 4",
+        ));
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed);
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(
+            view.error.as_deref(),
+            Some("harness exited with status 4: harness went away")
+        );
+        assert_eq!(fixture.stream(id), "not json\n");
+        assert!(!run_dir(&fixture, id).join("result.json").exists());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn accept_without_cwd_fails_invalid_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
+        let finisher = VaultCheckFinisher::new(config);
+        let mut run = sample_status(Uuid::new_v4());
+        assert_eq!(
+            finisher.accept(&run, TEST_ANSWER).unwrap_err(),
+            "run has no working directory"
+        );
+        run.cwd = Some(dir.path().display().to_string());
+        let accepted = finisher.accept(&run, TEST_ANSWER).unwrap();
+        assert_eq!(accepted["importance"]["level"], "high");
+        assert!(finisher.accept(&run, "{}").is_err());
     }
 
     #[test]
@@ -1581,7 +1988,7 @@ mod tests {
 
     #[test]
     fn save_failure_offers_retry_save_and_retry_succeeds() {
-        let fixture = Fixture::new("echo ran >> \"$COUNT\"\necho '{\"summary\": \"ok\"}'\n");
+        let fixture = Fixture::new("echo ran >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n");
         fixture.fail_saves.store(1, Ordering::SeqCst);
         let id = fixture.start("a");
         let view = fixture.wait_finished(id);
@@ -1712,7 +2119,8 @@ mod tests {
     #[test]
     fn run_env_is_read_when_the_run_starts() {
         let fixture = Fixture::new(
-            "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\necho \"{\\\"foo\\\": \\\"$FOO\\\"}\"\n",
+            "while [ ! -e \"$RELEASE\" ]; do sleep 0.05; done\n\
+             echo \"$VALID_ANSWER\" | /usr/bin/sed \"s/A page./$FOO/\"\n",
         );
         let with_foo = |value: &str| {
             let mut env = default_env(fixture.dir.path());
@@ -1757,7 +2165,7 @@ mod tests {
     fn over_long_or_control_character_session_ids_are_dropped_whole() {
         // A later unfit id neither replaces nor truncates the good one.
         let fixture = Fixture::new(&format!(
-            "echo 'session: sess-1'\necho 'session: {}'\nprintf 'session: sess\\0012\\n'\necho '{{}}'\n",
+            "echo 'session: sess-1'\necho 'session: {}'\nprintf 'session: sess\\0012\\n'\necho \"$VALID_ANSWER\"\n",
             "s".repeat(MAX_SESSION_ID_BYTES + 1)
         ));
         let id = fixture.start("a");
@@ -1767,7 +2175,7 @@ mod tests {
 
         // With only an unfit id, none is recorded.
         let fixture = Fixture::new(&format!(
-            "echo 'session: {}'\necho '{{}}'\n",
+            "echo 'session: {}'\necho \"$VALID_ANSWER\"\n",
             "s".repeat(MAX_SESSION_ID_BYTES + 1)
         ));
         let id = fixture.start("a");
@@ -1781,8 +2189,9 @@ mod tests {
         let fixture = Fixture::new("printf 'h\\303\\251llo\\n'\necho '{}'\n");
         let id = fixture.start("a");
         fixture.wait_finished(id);
+        // The answer is invalid, so the repair turn repeats the output.
         let (_, page) = fixture.supervisor.get_run(id, 3).unwrap();
-        assert_eq!(page.text, "llo\n{}\n");
+        assert_eq!(page.text, "llo\n{}\nh\u{e9}llo\n{}\n");
         assert!(matches!(
             fixture.supervisor.get_run(id, 2),
             Err((ErrorCode::InvalidRequest, _))
@@ -1797,25 +2206,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn accept_requires_a_json_object_within_the_size_limit() {
-        assert_eq!(
-            accept_json_object("  {\"a\": 1}\n").unwrap(),
-            serde_json::json!({"a": 1})
-        );
-        assert!(accept_json_object("[1]").is_err());
-        assert!(accept_json_object("not json").is_err());
-        let big = format!("{{\"a\": \"{}\"}}", "x".repeat(MAX_ANSWER_BYTES));
-        assert!(accept_json_object(&big).is_err());
-    }
-
-    #[test]
-    fn vault_check_finisher_refuses_without_a_configured_vault() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
-        let finisher = VaultCheckFinisher::new(config);
-        let id = Uuid::new_v4();
-        let run = RunStatusFile {
+    /// A running record with no working directory.
+    fn sample_status(id: Uuid) -> RunStatusFile {
+        RunStatusFile {
             version: 1,
             run_id: id.to_string(),
             state: RunState::Running,
@@ -1841,7 +2234,17 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
-        };
+            run_timeout_secs: None,
+            vocabulary: None,
+        }
+    }
+
+    #[test]
+    fn vault_check_finisher_refuses_without_a_configured_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
+        let finisher = VaultCheckFinisher::new(config);
+        let run = sample_status(Uuid::new_v4());
         let error = finisher.save(&run, &serde_json::json!({})).unwrap_err();
         assert!(error.contains("notes folder"), "{error}");
     }
@@ -1899,6 +2302,8 @@ mod tests {
             error_kind: None,
             summary_path: None,
             stream_truncated: false,
+            run_timeout_secs: None,
+            vocabulary: None,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
@@ -1931,6 +2336,56 @@ mod tests {
         assert_eq!(view.state, RunState::Succeeded, "{view:?}");
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
         assert!(fixture.supervisor.is_idle());
+    }
+
+    fn custom_vocabulary() -> SummaryVocabulary {
+        SummaryVocabulary {
+            document_types: vec!["memo".to_string()],
+            categories: vec!["legal review".to_string()],
+        }
+    }
+
+    /// A queued run records its own limit and vocabulary, so a restart
+    /// does not trade them for the service's limit and the default lists.
+    #[test]
+    fn a_queued_run_records_its_limit_and_vocabulary() {
+        let fixture = Fixture::new(ANSWER);
+        let mut request = fixture.request("a");
+        request.timeout = Some(Duration::from_secs(900));
+        request.vocabulary = custom_vocabulary();
+        let (view, _) = fixture.supervisor.start_run(request).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        let status = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(status.run_timeout_secs, Some(900));
+        assert_eq!(status.vocabulary, Some(custom_vocabulary()));
+        fixture.wait_finished(id);
+    }
+
+    #[test]
+    fn a_resumed_queued_run_keeps_its_recorded_limit_and_vocabulary() {
+        let mut queued = None;
+        let fixture = Fixture::seeded(
+            "/bin/cat > \"$COUNT.prompt\"\nexec /bin/sleep 30\n",
+            DEFAULT_RUN_TIMEOUT,
+            |store, cwd| {
+                let id = seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                );
+                let mut status = store.status(id).unwrap();
+                status.run_timeout_secs = Some(1);
+                status.vocabulary = Some(custom_vocabulary());
+                store.write_status(&status).unwrap();
+                queued = Some(id);
+            },
+        );
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.error_kind, Some(RunErrorKind::TimedOut), "{view:?}");
+        assert_eq!(view.error.as_deref(), Some("Timed out after 1 second"));
+        let prompt = read(&fixture.path("count.prompt"));
+        assert!(prompt.contains("legal review"), "{prompt}");
     }
 
     #[test]
@@ -2005,6 +2460,76 @@ mod tests {
         assert!(fixture.supervisor.is_idle());
     }
 
+    /// The folder check runs when a queued run leaves the queue, not when it
+    /// was queued: a folder replaced while the run waited fails it before
+    /// its harness starts.
+    #[test]
+    fn a_queued_run_whose_folder_changed_fails_before_its_harness() {
+        let fixture = Fixture::new(&format!(
+            "/bin/echo started >> \"$COUNT\"\n{BLOCK_THEN_ANSWER}"
+        ));
+        let first = fixture.start("a");
+        let second = fixture.start("b");
+        let queued = fixture.start("c");
+        fixture.wait_for(first, |view| view.state == RunState::Running);
+        fixture.wait_for(second, |view| view.state == RunState::Running);
+        assert_eq!(fixture.view(queued).state, RunState::Queued);
+        // Wait until both running harnesses have logged their start.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::fs::read_to_string(fixture.path("count"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+            < 2
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the running harnesses never started"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::write(fixture.path(FOLDER_CHANGED), "").unwrap();
+        fixture.release();
+        for id in [first, second] {
+            assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        }
+        let view = fixture.wait_finished(queued);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some(FOLDER_CHANGED_ERROR));
+        assert_eq!(view.started_at, None);
+        assert_eq!(view.stream_bytes, 0);
+        assert_eq!(read(&fixture.path("count")).lines().count(), 2);
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 2);
+        assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn a_resumed_queued_run_whose_folder_changed_fails_before_its_harness() {
+        let mut queued = None;
+        let fixture = Fixture::seeded(
+            "/bin/echo started >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n",
+            DEFAULT_RUN_TIMEOUT,
+            |store, cwd| {
+                std::fs::write(cwd.join(FOLDER_CHANGED), "").unwrap();
+                queued = Some(seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                ));
+            },
+        );
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(view.error.as_deref(), Some(FOLDER_CHANGED_ERROR));
+        assert_eq!(view.started_at, None);
+        assert!(!fixture.path("count").exists());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+        assert!(fixture.supervisor.is_idle());
+    }
+
     #[test]
     fn a_resumed_queued_run_fails_when_agent_env_is_unreadable() {
         let mut queued = None;
@@ -2033,9 +2558,12 @@ mod tests {
     fn service_options_debug_names_no_environment() {
         let options = ServiceOptions {
             run_timeout: DEFAULT_RUN_TIMEOUT,
+            forced_run_timeout: None,
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
             run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),
+            run_cwd: Arc::new(|_: &Path| Ok(())),
+            opener: crate::open::default_opener(),
         };
         let debug = format!("{options:?}");
         assert!(!debug.contains("secret-value"), "{debug}");

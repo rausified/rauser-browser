@@ -5,11 +5,11 @@ use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ActivityRecorded, AgentChecked, ArtifactListResult, ArtifactResult, ArtifactView,
-    ArtifactsRefreshed, BatchEventResult, BatchRecorded, CaptureEventKind, ConfigResult,
-    ConfigUpdated, ErrorCode, ErrorResponse, FolderChosen, HarnessesDiscovered, HelloResult,
-    NoteConflict, NoteLoaded, NoteSaved, PROTOCOL_VERSION, RecordKey, RecordKeyKind, Request,
-    Response, VisitOutcome, VisitRecorded, WhyRecorded, WorklogResult,
+    ActivityRecorded, ArtifactListResult, ArtifactResult, ArtifactView, ArtifactsRefreshed,
+    BatchEventResult, BatchRecorded, CaptureEventKind, ConfigResult, ConfigUpdated, ErrorCode,
+    ErrorResponse, FolderChosen, HelloResult, NoteConflict, NoteLoaded, NoteSaved,
+    PROTOCOL_VERSION, RecordKey, RecordKeyKind, Request, Response, VisitOutcome, VisitRecorded,
+    WhyRecorded, WorklogResult,
 };
 
 use crate::brand::NAMESPACE;
@@ -17,8 +17,6 @@ use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape
 use crate::config::{self, ConfigStore, NoteKeyRule};
 use crate::consent::ConsentAuthority;
 use crate::frame::{FrameError, read_frame, write_frame};
-use crate::harness::HarnessEnv;
-use crate::harness_setup;
 use crate::index::ArtifactIndex;
 use crate::note;
 #[cfg(unix)]
@@ -33,30 +31,37 @@ pub fn serve(config: ConfigStore) -> Result<()> {
     serve_with_io(input.lock(), output.lock(), config)
 }
 
-/// What harness setup and the run proxy may use from the host process.
-/// Built once per connection; tests build it by hand with a fake search path
-/// and, for run messages, a fake service.
+/// What the run proxy may use from the host process. Built once per
+/// connection; tests build it by hand with a fake service.
 pub struct SetupContext<'a> {
-    pub env: &'a HarnessEnv,
-    /// Where run messages go. `None` answers them `service_unavailable`.
+    /// Where run and harness setup messages go. `None` answers them
+    /// `service_unavailable`.
     #[cfg(unix)]
     pub service: Option<&'a ServiceLink>,
+    #[cfg(not(unix))]
+    pub service: std::marker::PhantomData<&'a ()>,
 }
 
-impl<'a> SetupContext<'a> {
+impl SetupContext<'_> {
     /// A context with no service link.
-    pub fn new(env: &'a HarnessEnv) -> Self {
+    pub fn new() -> Self {
         Self {
-            env,
             #[cfg(unix)]
             service: None,
+            #[cfg(not(unix))]
+            service: std::marker::PhantomData,
         }
+    }
+}
+
+impl Default for SetupContext<'_> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 /// Process requests until the browser closes the native messaging pipe.
 pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore) -> Result<()> {
-    let env = HarnessEnv::from_process(config.dir()?);
     // Building the link never connects; only a run message does.
     #[cfg(unix)]
     let link = ServiceLink::for_config(&config)
@@ -64,11 +69,12 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
             eprintln!("{NAMESPACE}: the service cannot be reached: {link_error:#}");
         })
         .ok();
+    #[cfg(unix)]
     let context = SetupContext {
-        #[cfg(unix)]
         service: link.as_ref(),
-        ..SetupContext::new(&env)
     };
+    #[cfg(not(unix))]
+    let context = SetupContext::new();
     serve_with_context(input, output, config, &context)
 }
 
@@ -242,6 +248,9 @@ fn dispatch(
     consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
+    // Off Unix there is no service, so nothing is forwarded.
+    #[cfg(not(unix))]
+    let _ = context;
     let id = request.request_id();
     if !valid_request_id(id) {
         return error(
@@ -416,27 +425,30 @@ fn dispatch(
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
-        Request::CheckAgent(value) => check_agent(value, config),
-        Request::DiscoverHarnesses(value) => Response::HarnessesDiscovered(HarnessesDiscovered {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id,
-            offers: harness_setup::offers(context.env),
-        }),
-        Request::SetUpHarness(value) => set_up_harness(value, config, context),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
-        // Run ids and offsets are the service's to check.
+        // Run ids and offsets are the service's to check, harness setup
+        // detects and probes on the service's PATH and environment, and
+        // agent.env and run threads live in the service's directory.
         #[cfg(unix)]
         request @ (Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
-        | Request::RetrySave(_)) => forward(&request, context.service),
+        | Request::RetrySave(_)
+        | Request::DiscoverHarnesses(_)
+        | Request::SetUpHarness(_)
+        | Request::OpenPath(_)
+        | Request::GetAgentEnv(_)) => forward(&request, context.service),
         #[cfg(not(unix))]
         Request::StartRun(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
-        | Request::RetrySave(_) => error(
+        | Request::RetrySave(_)
+        | Request::DiscoverHarnesses(_)
+        | Request::SetUpHarness(_)
+        | Request::OpenPath(_)
+        | Request::GetAgentEnv(_) => error(
             id,
             ErrorCode::ServiceUnavailable,
             "The Brauser service is not supported on Windows.",
@@ -522,56 +534,6 @@ fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
             )
         }
     }
-}
-
-/// Harness setup: rediscover, probe, and commit in one request. There is no
-/// dialog and no token; success is the same `config_updated` a save returns.
-fn set_up_harness(
-    value: brauser_protocol::SetUpHarnessRequest,
-    config: &mut ConfigStore,
-    context: &SetupContext<'_>,
-) -> Response {
-    match harness_setup::set_up(config, &value, context.env) {
-        Ok(revision) => Response::ConfigUpdated(ConfigUpdated {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id,
-            config: config.snapshot().clone(),
-            revision,
-        }),
-        Err(setup_error) => error(&value.request_id, setup_error.code, &setup_error.message),
-    }
-}
-
-/// The minimal agent-gated request (§7.3): every AI command goes through the
-/// same readiness gate first.
-fn check_agent(value: brauser_protocol::CheckAgentRequest, config: &mut ConfigStore) -> Response {
-    let _config_lock = match config.lock_current() {
-        Ok(lock) => lock,
-        Err(_) => {
-            return error(
-                &value.request_id,
-                ErrorCode::Internal,
-                "configuration is unavailable",
-            );
-        }
-    };
-    if config.refresh().is_err() {
-        return error(
-            &value.request_id,
-            ErrorCode::InvalidConfig,
-            "configuration is unavailable or needs repair",
-        );
-    }
-    let ready = match config.agent_readiness() {
-        Ok(ready) => ready,
-        Err((code, message)) => return error(&value.request_id, code, &message),
-    };
-    Response::AgentChecked(AgentChecked {
-        protocol_version: PROTOCOL_VERSION,
-        request_id: value.request_id,
-        harness_id: ready.harness_id,
-        harness_version: ready.harness_version,
-    })
 }
 
 fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut ConfigStore) -> Response {
@@ -2026,6 +1988,7 @@ mod tests {
                     capture_enabled: false,
                     strip_params: Vec::new(),
                     agent: None,
+                    summary_vocabulary: crate::config::default_summary_vocabulary(),
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
@@ -2150,8 +2113,7 @@ mod tests {
         let mut next = config.snapshot().clone();
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
-        let env = no_harnesses(folder.path());
-        let context = SetupContext::new(&env);
+        let context = SetupContext::new();
 
         let updated = dispatch(
             Request::UpdateConfig(UpdateConfigRequest {
@@ -2242,8 +2204,7 @@ mod tests {
         std::fs::create_dir(&existing).unwrap();
         let mut config = ConfigStore::for_test(folder.path().join("config.toml"));
         let mut consent = ConsentAuthority::new();
-        let env = no_harnesses(folder.path());
-        let context = SetupContext::new(&env);
+        let context = SetupContext::new();
         for root in [existing.clone(), folder.path().join("absent")] {
             let snapshot = ConfigSnapshot {
                 storage: Some(brauser_protocol::StorageConfig {
@@ -2259,6 +2220,7 @@ mod tests {
                 capture_enabled: false,
                 strip_params: Vec::new(),
                 agent: None,
+                summary_vocabulary: crate::config::default_summary_vocabulary(),
                 adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(
@@ -2303,8 +2265,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let mut config = configured_store(folder.path());
         let mut consent = ConsentAuthority::new();
-        let env = no_harnesses(folder.path());
-        let context = SetupContext::new(&env);
+        let context = SetupContext::new();
         let read = dispatch(
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -2350,8 +2311,7 @@ mod tests {
         let mut next = config.snapshot().clone();
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
-        let env = no_harnesses(folder.path());
-        let context = SetupContext::new(&env);
+        let context = SetupContext::new();
         match dispatch(
             update_request("stale", next),
             &mut config,
@@ -3662,7 +3622,7 @@ id = "work:{host}/{id}"
                     Cursor::new(encoded_request(request)),
                     &mut output,
                     loaded(&self.path),
-                    &SetupContext::new(&no_harnesses(self.folder.path())),
+                    &SetupContext::new(),
                 )
                 .unwrap();
                 decoded_response(output)
@@ -4434,7 +4394,7 @@ id = "work:{host}/{id}"
             }),
             &mut config,
             &mut ConsentAuthority::new(),
-            &SetupContext::new(&no_harnesses(folder.path())),
+            &SetupContext::new(),
         );
         match response {
             Response::NoteLoaded(value) => {
@@ -4525,7 +4485,7 @@ id = "work:{host}/{id}"
             save_request("save-1", "small", "missing"),
             &mut config,
             &mut ConsentAuthority::new(),
-            &SetupContext::new(&no_harnesses(folder.path())),
+            &SetupContext::new(),
         ) {
             Response::NoteSaved(value) => value,
             other => panic!("expected note_saved, got {other:?}"),
@@ -4591,8 +4551,7 @@ id = "work:{host}/{id}"
         std::fs::create_dir(&notes).unwrap();
         let mut config = configured_store(&notes);
         let mut consent = ConsentAuthority::new();
-        let env = no_harnesses(folder.path());
-        let context = SetupContext::new(&env);
+        let context = SetupContext::new();
         let save = |config: &mut ConfigStore,
                     consent: &mut ConsentAuthority,
                     body: &str,
@@ -4645,20 +4604,8 @@ id = "work:{host}/{id}"
         }
     }
 
-    /// A harness environment that finds nothing and passes nothing.
-    fn no_harnesses(folder: &std::path::Path) -> HarnessEnv {
-        HarnessEnv {
-            search_path: std::ffi::OsString::new(),
-            home: None,
-            vars: std::collections::BTreeMap::new(),
-            work_root: folder.join("agent-work"),
-        }
-    }
-
     fn served(requests: &[String], config: ConfigStore) -> Vec<Response> {
-        let folder = tempfile::tempdir().unwrap();
-        let env = no_harnesses(folder.path());
-        served_with(requests, config, &SetupContext::new(&env))
+        served_with(requests, config, &SetupContext::new())
     }
 
     fn served_with(
@@ -4678,14 +4625,6 @@ id = "work:{host}/{id}"
             responses.push(serde_json::from_slice::<Response>(&body).unwrap());
         }
         responses
-    }
-
-    fn check_agent_json() -> String {
-        serde_json::to_string(&Request::CheckAgent(brauser_protocol::CheckAgentRequest {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: "agent-1".into(),
-        }))
-        .unwrap()
     }
 
     fn loaded(path: &std::path::Path) -> ConfigStore {
@@ -6205,51 +6144,6 @@ id = "work:{host}/{id}"
     }
 
     #[test]
-    fn check_agent_refused_for_m1_config_missing_key() {
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("config.toml");
-        config::fixtures::write(&path, folder.path(), "", "", "");
-        let responses = served(&[check_agent_json()], loaded(&path));
-        let (code, message) = refused(&responses[0]);
-        assert_eq!(code, ErrorCode::NotConfigured);
-        assert!(message.contains(&format!("{} settings", crate::brand::APP_NAME)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn check_agent_reports_harness() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = config::fixtures::ready(folder.path());
-        match &served(&[check_agent_json()], loaded(&path))[0] {
-            Response::AgentChecked(value) => {
-                assert_eq!(value.harness_id, "claude-code");
-                assert_eq!(value.harness_version, "2.1.284");
-            }
-            other => panic!("expected agent_checked, got {other:?}"),
-        }
-    }
-
-    /// Step 1 refuses AI commands off unix, even when setup's record still
-    /// matches the harness.
-    #[cfg(not(unix))]
-    #[test]
-    fn check_agent_refused_on_this_platform() {
-        let folder = tempfile::tempdir().unwrap();
-        let (path, _, _) = config::fixtures::ready(folder.path());
-        let responses = served(&[check_agent_json()], loaded(&path));
-        assert_eq!(responses.len(), 1);
-        for response in &responses {
-            assert_eq!(
-                refused(response),
-                (
-                    ErrorCode::NotConfigured,
-                    "AI commands are not available on this platform yet."
-                )
-            );
-        }
-    }
-
-    #[test]
     fn get_config_reports_agent_status_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let config = ConfigStore::for_test(folder.path().join("config.toml"));
@@ -6301,318 +6195,41 @@ id = "work:{host}/{id}"
         }
     }
 
-    /// Native harness setup against fake harnesses on an injected search
-    /// path. No real harness is ever found or run, and no dialog exists.
-    #[cfg(unix)]
-    mod harness_setup {
-        use super::*;
-        use crate::harness::fake::{Fake, PASSING_BODY};
-        use brauser_protocol::{
-            AgentState, DiscoverHarnessesRequest, HarnessOffer, SetUpHarnessRequest,
-        };
-
-        struct Session {
-            fake: Fake,
-            env: HarnessEnv,
-            path: std::path::PathBuf,
-            config: ConfigStore,
-            consent: ConsentAuthority,
-        }
-
-        fn session(body: &str) -> Session {
-            let fake = Fake::new();
-            fake.claude(body);
-            let root = fake.path("notes");
-            std::fs::create_dir(&root).unwrap();
-            let path = fake.path("config.toml");
-            config::fixtures::write(&path, &root, "", "", "");
-            let env = fake.env(&[]);
-            Session {
-                config: loaded(&path),
-                fake,
-                env,
-                path,
-                consent: ConsentAuthority::new(),
-            }
-        }
-
-        impl Session {
-            fn call(&mut self, request: Request) -> Response {
-                let context = SetupContext::new(&self.env);
-                dispatch(request, &mut self.config, &mut self.consent, &context)
-            }
-
-            fn revision(&mut self) -> String {
-                self.config.refresh().unwrap();
-                self.config.revision().to_owned()
-            }
-
-            fn offers(&mut self) -> Vec<HarnessOffer> {
-                match self.call(Request::DiscoverHarnesses(DiscoverHarnessesRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "discover-1".into(),
-                })) {
-                    Response::HarnessesDiscovered(value) => value.offers,
-                    other => panic!("expected harnesses_discovered, got {other:?}"),
-                }
-            }
-
-            fn set_up_harness(
-                &mut self,
-                revision: &str,
-                harness_id: &str,
-                summaries_dir: Option<&str>,
-            ) -> Response {
-                self.call(Request::SetUpHarness(SetUpHarnessRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "setup-1".into(),
-                    expected_revision: revision.into(),
-                    harness_id: harness_id.into(),
-                    env_names: Vec::new(),
-                    summaries_dir: summaries_dir.map(str::to_owned),
-                }))
-            }
-
-            fn update(&mut self, next: ConfigSnapshot) -> Response {
-                let revision = self.revision();
-                self.call(Request::UpdateConfig(UpdateConfigRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "write-1".into(),
-                    expected_revision: revision,
-                    config: next,
-                    picker_token: None,
-                    knowledge_base_token: None,
-                }))
-            }
-
-            /// Discover, then set up the fake claude.
-            fn set_up(&mut self) -> Response {
-                let offers = self.offers();
-                assert!(offers.iter().any(|offer| offer.harness_id == "claude-code"));
-                let revision = self.revision();
-                self.set_up_harness(&revision, "claude-code", None)
-            }
-
-            fn status(&mut self) -> brauser_protocol::AgentStatus {
-                match self.call(Request::GetConfig(GetConfigRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "read-1".into(),
-                })) {
-                    Response::ConfigResult(value) => value.agent_status,
-                    other => panic!("expected config_result, got {other:?}"),
-                }
-            }
-        }
-
-        #[test]
-        fn set_up_harness_probes_and_commits_without_a_dialog() {
-            let mut session = session(PASSING_BODY);
-            let before = session.revision();
-            let response = session.set_up();
-            let Response::ConfigUpdated(updated) = &response else {
-                panic!("expected config_updated, got {response:?}");
-            };
-            let agent = updated.config.agent.as_ref().unwrap();
-            assert_eq!(agent.harness_id, "claude-code");
-            assert_eq!(
-                agent.binary,
-                session.fake.path("bin").join("claude").to_string_lossy()
-            );
-            assert_eq!(agent.env_allow, ["HOME", "PATH"]);
-            assert_eq!(
-                updated
-                    .config
-                    .storage
-                    .as_ref()
-                    .unwrap()
-                    .summaries_dir
-                    .as_deref(),
-                Some("summaries")
-            );
-            assert_ne!(updated.revision, before);
-            assert_eq!(updated.revision, session.revision());
-            assert!(session.fake.log("claude", "stdin.log").is_some());
-            let status = session.status();
-            assert_eq!(status.state, AgentState::Ready);
-            assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
-        }
-
-        #[test]
-        fn set_up_harness_refuses_a_failing_probe_and_leaves_config_unchanged() {
-            let mut session = session("exit 3");
-            let before = std::fs::read(&session.path).unwrap();
-            let revision = session.revision();
-            let response = session.set_up();
-            let (code, message) = refused(&response);
-            assert_eq!(code, ErrorCode::InvalidConfig);
-            assert_eq!(
-                message,
-                "Claude Code failed its test run (test run failed (exit 3)); AI commands stay off"
-            );
-            assert_eq!(session.revision(), revision);
-            assert_eq!(std::fs::read(&session.path).unwrap(), before);
-            assert_eq!(session.status().state, AgentState::NotSetUp);
-        }
-
-        #[test]
-        fn set_up_harness_on_a_stale_revision_is_a_conflict() {
-            let mut session = session(PASSING_BODY);
-            let response = session.set_up_harness("stale", "claude-code", None);
-            assert_eq!(refused(&response).0, ErrorCode::Conflict);
-            assert_eq!(session.fake.log("claude", "stdin.log"), None);
-        }
-
-        #[test]
-        fn set_up_harness_refuses_an_unknown_or_refused_harness() {
-            let mut session = session(PASSING_BODY);
-            session
-                .fake
-                .install("codex", "codex-cli 0.130.0", "", "exit 0");
-            let revision = session.revision();
-            let response = session.set_up_harness(&revision, "other", None);
-            let (code, message) = refused(&response);
-            assert_eq!(code, ErrorCode::Unauthorized);
-            assert!(message.contains("detect again"), "{message}");
-            let response = session.set_up_harness(&revision, "codex", None);
-            let (code, message) = refused(&response);
-            assert_eq!(code, ErrorCode::Unauthorized);
-            assert!(message.contains("has not been reviewed"), "{message}");
-            assert_eq!(session.revision(), revision);
-            assert_eq!(session.fake.log("claude", "stdin.log"), None);
-        }
-
-        #[test]
-        fn update_config_cannot_set_an_agent() {
-            let mut session = session(PASSING_BODY);
-            let mut next = session.config.snapshot().clone();
-            next.agent = Some(brauser_protocol::AgentConfig {
-                harness_id: "claude-code".into(),
-                adapter: brauser_protocol::HarnessAdapter::ClaudeCode,
-                binary: session
-                    .fake
-                    .path("bin")
-                    .join("claude")
-                    .to_string_lossy()
-                    .into_owned(),
-                args: crate::harness::template_args(crate::harness::Adapter::ClaudeCode),
-                env_allow: vec!["HOME".into(), "PATH".into()],
-                timeout_secs: 120,
-            });
-            let response = session.update(next);
-            assert_eq!(refused(&response).0, ErrorCode::Unauthorized);
-            assert_eq!(session.status().state, AgentState::NotSetUp);
-        }
-
-        #[test]
-        fn discover_lists_fake_claude_ready_and_codex_refused() {
-            let mut session = session(PASSING_BODY);
-            session
-                .fake
-                .install("codex", "codex-cli 0.130.0", "", "exit 0");
-            let revision = session.revision();
-            let offers = session.offers();
-            assert_eq!(offers.len(), 2);
-            let claude = offers
-                .iter()
-                .find(|offer| offer.harness_id == "claude-code")
-                .unwrap();
-            assert_eq!(claude.refusal, None);
-            assert_eq!(claude.version.as_deref(), Some("2.1.284"));
-            assert_eq!(
-                claude.binary,
-                session.fake.path("bin").join("claude").to_string_lossy()
-            );
-            let codex = offers
-                .iter()
-                .find(|offer| offer.harness_id == "codex")
-                .unwrap();
-            assert_eq!(
-                codex.refusal.as_deref(),
-                Some("Codex 0.130.0 has not been reviewed for Brauser")
-            );
-            // An unreviewed version stops after --version.
-            assert_eq!(
-                session.fake.log("codex", "argv.log").as_deref(),
-                Some("[--version]\n")
-            );
-            // Discovery never writes config.
-            assert_eq!(session.revision(), revision);
-        }
-
-        #[test]
-        fn setup_cannot_choose_a_summaries_folder() {
-            let mut session = session(PASSING_BODY);
-            let before = std::fs::read(&session.path).unwrap();
-            let revision = session.revision();
-            let response = session.set_up_harness(&revision, "claude-code", Some("ai"));
-            let (code, message) = refused(&response);
-            assert_eq!(code, ErrorCode::InvalidConfig);
-            assert!(message.contains("content folders are fixed"), "{message}");
-            assert_eq!(std::fs::read(&session.path).unwrap(), before);
-            assert_eq!(session.fake.log("claude", "stdin.log"), None);
-            // The fixed name, or none, sets up the harness.
-            let response = session.set_up_harness(&revision, "claude-code", Some("summaries"));
-            match response {
-                Response::ConfigUpdated(value) => assert_eq!(
-                    value.config.storage.unwrap().summaries_dir.as_deref(),
-                    Some("summaries")
-                ),
-                other => panic!("expected config_updated, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn check_agent_reports_harness_after_setup() {
-            let mut session = session(PASSING_BODY);
-            assert!(matches!(session.set_up(), Response::ConfigUpdated(_)));
-            match session.call(serde_json::from_str(&check_agent_json()).unwrap()) {
-                Response::AgentChecked(value) => {
-                    assert_eq!(value.harness_id, "claude-code");
-                    assert_eq!(value.harness_version, "2.1.284");
-                }
-                other => panic!("expected agent_checked, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn get_config_reports_agent_status_states() {
-            let mut session = session(PASSING_BODY);
-            assert_eq!(session.status().state, AgentState::NotSetUp);
-            assert!(matches!(session.set_up(), Response::ConfigUpdated(_)));
-            let status = session.status();
-            assert_eq!(status.state, AgentState::Ready);
-            assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
-            assert_eq!(status.message, None);
-
-            // The harness updated itself in place.
-            let binary = session.fake.path("bin").join("claude");
-            let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
-            std::fs::File::options()
-                .write(true)
-                .open(&binary)
-                .unwrap()
-                .set_modified(later)
-                .unwrap();
-            let status = session.status();
-            assert_eq!(status.state, AgentState::HarnessProblem);
-            assert_eq!(status.harness_version.as_deref(), Some("2.1.284"));
-
-            // A v5 file whose retired privacy confirmation is false is
-            // still ready: the committed harness is enough.
-            let root = session.fake.path("notes");
-            config::fixtures::write(
-                &session.path,
-                &root,
-                "summaries_dir = \"summaries\"",
-                "agent_denylist_confirmed = false",
-                &format!(
-                    "{}{}",
-                    config::fixtures::agent_table(&binary),
-                    config::fixtures::record_table(&binary)
-                ),
-            );
-            assert_eq!(session.status().state, AgentState::Ready);
-        }
+    /// Only the service's harness setup commits a harness; update_config
+    /// may echo it or clear it, never write one.
+    #[test]
+    fn update_config_cannot_set_an_agent() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let mut next = config.snapshot().clone();
+        next.agent = Some(brauser_protocol::AgentConfig {
+            harness: brauser_protocol::HarnessId::Claude,
+            binary: config::fixtures::absent_binary("claude"),
+            version: Some("2.1.284".into()),
+            timeout_secs: 600,
+            probed_at: "2026-10-27T10:00:00Z".into(),
+        });
+        let revision = config.revision().to_owned();
+        let response = dispatch(
+            Request::UpdateConfig(UpdateConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "write-1".into(),
+                expected_revision: revision.clone(),
+                config: next,
+                picker_token: None,
+                knowledge_base_token: None,
+            }),
+            &mut config,
+            &mut ConsentAuthority::new(),
+            &SetupContext::new(),
+        );
+        assert_eq!(refused(&response).0, ErrorCode::Unauthorized);
+        config.refresh().unwrap();
+        assert_eq!(config.revision(), revision);
+        assert_eq!(
+            config.agent_status().state,
+            brauser_protocol::AgentState::NotSetUp
+        );
     }
 
     /// The run proxy against a fake service on a short `/tmp` socket. No
@@ -6670,11 +6287,8 @@ id = "work:{host}/{id}"
 
         /// Dispatch one request with `link` as the connection's service.
         fn call(config: &mut ConfigStore, link: &ServiceLink, request: Request) -> Response {
-            let folder = tempfile::tempdir().unwrap();
-            let env = no_harnesses(folder.path());
             let context = SetupContext {
                 service: Some(link),
-                ..SetupContext::new(&env)
             };
             dispatch(request, config, &mut ConsentAuthority::new(), &context)
         }
@@ -6694,6 +6308,142 @@ id = "work:{host}/{id}"
                     _ => fake::runs_listed(request),
                 }),
             )
+        }
+
+        /// Harness setup runs in the service: both requests go there as
+        /// they are, and its answers come back unchanged.
+        #[test]
+        fn discover_harnesses_is_forwarded_to_the_service() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let snapshot = config.snapshot().clone();
+            let service = FakeService::listen(
+                &socket,
+                Arc::new(move |request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::DiscoverHarnesses(value) => {
+                        Response::HarnessesDiscovered(brauser_protocol::HarnessesDiscovered {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: value.request_id.clone(),
+                            harnesses: vec![brauser_protocol::HarnessFound {
+                                harness: brauser_protocol::HarnessId::Codex,
+                                binary: Some("/opt/homebrew/bin/codex".into()),
+                                version: Some("0.144.4".into()),
+                                problem: None,
+                            }],
+                        })
+                    }
+                    Request::SetUpHarness(value) => Response::ConfigUpdated(ConfigUpdated {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        config: snapshot.clone(),
+                        revision: "after-setup".into(),
+                    }),
+                    _ => fake::runs_listed(request),
+                }),
+            );
+            let link = link(socket, never);
+            match call(
+                &mut config,
+                &link,
+                Request::DiscoverHarnesses(brauser_protocol::DiscoverHarnessesRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "discover-1".into(),
+                }),
+            ) {
+                Response::HarnessesDiscovered(found) => {
+                    assert_eq!(found.request_id, "discover-1");
+                    assert_eq!(found.harnesses[0].version.as_deref(), Some("0.144.4"));
+                }
+                other => panic!("expected harnesses_discovered, got {other:?}"),
+            }
+            let set_up = brauser_protocol::SetUpHarnessRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "setup-1".into(),
+                expected_revision: config.revision().to_owned(),
+                harness: brauser_protocol::HarnessId::Codex,
+                timeout_secs: Some(900),
+                summaries_dir: Some("ai".into()),
+            };
+            match call(&mut config, &link, Request::SetUpHarness(set_up.clone())) {
+                Response::ConfigUpdated(updated) => assert_eq!(updated.revision, "after-setup"),
+                other => panic!("expected config_updated, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(
+                &requests[1],
+                Request::DiscoverHarnesses(value) if value.request_id == "discover-1"
+            ));
+            assert!(matches!(
+                &requests[3],
+                Request::SetUpHarness(value) if *value == set_up
+            ));
+
+            // Without a service link, setup is unavailable, not attempted here.
+            let response = dispatch(
+                Request::SetUpHarness(set_up),
+                &mut config,
+                &mut ConsentAuthority::new(),
+                &SetupContext::new(),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::ServiceUnavailable);
+        }
+
+        /// open_path and get_agent_env act on the service's own directory,
+        /// so the host forwards them unchanged.
+        #[test]
+        fn open_path_and_get_agent_env_are_forwarded_to_the_service() {
+            use brauser_protocol::{
+                AgentEnvListed, GetAgentEnvRequest, OpenPathRequest, OpenTarget, PathOpened,
+            };
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = FakeService::listen(
+                &socket,
+                Arc::new(move |request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::OpenPath(value) => Response::PathOpened(PathOpened {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                    }),
+                    Request::GetAgentEnv(value) => Response::AgentEnvListed(AgentEnvListed {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        names: vec!["FOO".into()],
+                        problem: None,
+                    }),
+                    _ => fake::runs_listed(request),
+                }),
+            );
+            let link = link(socket, never);
+            let open = OpenPathRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "open-1".into(),
+                target: OpenTarget::AgentEnv,
+                run_id: None,
+            };
+            assert!(matches!(
+                call(&mut config, &link, Request::OpenPath(open.clone())),
+                Response::PathOpened(ref opened) if opened.request_id == "open-1"
+            ));
+            match call(
+                &mut config,
+                &link,
+                Request::GetAgentEnv(GetAgentEnvRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "env-1".into(),
+                }),
+            ) {
+                Response::AgentEnvListed(listed) => assert_eq!(listed.names, vec!["FOO"]),
+                other => panic!("expected agent_env_listed, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(&requests[1], Request::OpenPath(value) if *value == open));
+            assert!(matches!(&requests[3], Request::GetAgentEnv(_)));
         }
 
         #[test]
@@ -7112,7 +6862,7 @@ id = "work:{host}/{id}"
         const NEWS_URL: &str = "https://news.example.org/region/livestory/provincial-election-results-live-updates-2026-9.1234567";
 
         struct Install {
-            folder: tempfile::TempDir,
+            _folder: tempfile::TempDir,
             home: PathBuf,
             path: PathBuf,
         }
@@ -7136,7 +6886,11 @@ id = "work:{host}/{id}"
                 fs::create_dir(&state).unwrap();
                 let path = state.join("config.toml");
                 fs::write(&path, config).unwrap();
-                Self { folder, home, path }
+                Self {
+                    _folder: folder,
+                    home,
+                    path,
+                }
             }
 
             fn store(&self) -> ConfigStore {
@@ -7148,7 +6902,7 @@ id = "work:{host}/{id}"
                     request,
                     config,
                     &mut ConsentAuthority::new(),
-                    &SetupContext::new(&no_harnesses(self.folder.path())),
+                    &SetupContext::new(),
                 )
             }
 
@@ -7233,8 +6987,17 @@ id = "work:{host}/{id}"
             ] {
                 assert_eq!(storage[key].as_str(), Some(value), "{key}");
             }
-            // Every other setting, including the harness and adapters, is kept.
-            assert_eq!(without_layout(after), without_layout(before));
+            // Every other setting, including the adapters, is kept. The v5
+            // `[agent]` and `[harness_record]` tables load as not set up and
+            // are dropped by this first save, which also writes the default
+            // summary vocabulary (open access PR 3).
+            let mut before = without_layout(before);
+            assert!(before.remove("agent").is_some());
+            assert!(before.remove("harness_record").is_some());
+            let mut after = without_layout(after);
+            assert!(!after.contains_key("agent") && !after.contains_key("harness_record"));
+            assert!(after.remove("summary_vocabulary").is_some());
+            assert_eq!(after, before);
 
             match install.load(&mut config, NEWS_URL) {
                 Response::NoteLoaded(value) => {

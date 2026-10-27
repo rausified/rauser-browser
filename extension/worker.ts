@@ -11,6 +11,9 @@ import {
   isPolicyLease,
   isQueuedVisit,
   leaseActive,
+  PANEL_NOTICE_KEY,
+  SITE_ACCESS_ORIGINS,
+  type PanelNotice,
   type PolicyLease,
   type QueuedVisit,
   type QueueState,
@@ -24,6 +27,10 @@ import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
 import { httpOrigin, inspectSitePatterns, prunePatternSamples, samplePattern } from "./site-patterns.js";
+import {
+  NOT_A_WEB_PAGE_MESSAGE, SITE_ACCESS_NEEDED_MESSAGE, SUMMARIZE_MENU_ID, SUMMARIZE_MENU_TITLE,
+  summarizeFailureText, summarizeTab,
+} from "./summarize.js";
 import {
   activateTab, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
   recordNavigation, removeTab, replaceTab, setIdle, settleActivity,
@@ -1395,6 +1402,76 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((
   console.warn(`${APP_NAME} side panel setup failed:`, describe(error));
 });
 
+// --- Summarize & log from the shortcut and the context menu ----------------
+
+/** Starts `tab`'s summary run and says how it went, for the panel. */
+async function summaryNotice(tab: ChromeTab, tabId: number): Promise<PanelNotice> {
+  const failed = (message: string): PanelNotice =>
+    ({ kind: "summarize_failed", message, tab_id: tabId, at: Date.now() });
+  const raw = tab.url;
+  let url: URL | null;
+  try {
+    url = raw === undefined ? null : new URL(raw);
+  } catch {
+    url = null;
+  }
+  if (raw === undefined) return failed(await noAddressMessage());
+  if (url === null || !isHttpUrl(url)) return failed(NOT_A_WEB_PAGE_MESSAGE);
+  const host = new HostClient();
+  try {
+    const { run } = await summarizeTab(
+      { id: tabId, url: raw, title: tab.title ?? "" },
+      { scripting: chrome.scripting, host, now: () => new Date() },
+    );
+    return { kind: "run_started", run_id: run.run_id, tab_id: tabId, at: Date.now() };
+  } catch (error) {
+    return failed(summarizeFailureText(error));
+  } finally {
+    host.disconnect();
+  }
+}
+
+/** Why a tab has no address. Without `tabs`, Chrome gives no URL for a page
+ * outside Brauser's site access: one it never covers (chrome://, New Tab), or
+ * any page once the user withdrew that access in Chrome. Unlike capture, this
+ * one user-started check asks Chrome, as the panel's banner does. */
+async function noAddressMessage(): Promise<string> {
+  try {
+    if (!await chrome.permissions.contains({ origins: SITE_ACCESS_ORIGINS })) return SITE_ACCESS_NEEDED_MESSAGE;
+  } catch {
+    // Without an answer, show the ordinary message rather than a false alarm.
+  }
+  return NOT_A_WEB_PAGE_MESSAGE;
+}
+
+async function publishNotice(notice: PanelNotice): Promise<void> {
+  await chrome.storage.session.set({ [PANEL_NOTICE_KEY]: notice });
+  try {
+    await chrome.runtime.sendMessage(notice);
+  } catch {
+    // No panel is open yet; it reads the stored notice when it loads.
+  }
+}
+
+function summarizeFromGesture(tab: ChromeTab | undefined): void {
+  const tabId = tab?.id;
+  if (tab === undefined || tabId === undefined) return;
+  // Chrome opens the side panel only inside the user's gesture, which ends at
+  // the first await, so this call comes before any.
+  void chrome.sidePanel.open({ tabId }).catch((error: unknown) =>
+    console.warn(`${APP_NAME} could not open the side panel:`, describe(error)));
+  void summaryNotice(tab, tabId).then(publishNotice).catch((error: unknown) =>
+    console.warn(`${APP_NAME} summary notice failed:`, describe(error)));
+}
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command === "summarize") summarizeFromGesture(tab);
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === SUMMARIZE_MENU_ID) summarizeFromGesture(tab);
+});
+
 function runMigration(): Promise<void> {
   return serialize(migratePendingRemovals).catch((error: unknown) =>
     console.warn(`${APP_NAME} pending site removal migration failed:`, describe(error)));
@@ -1402,8 +1479,18 @@ function runMigration(): Promise<void> {
 
 // Earlier builds added a "note" page context-menu item and stored per-origin
 // note grants; clear both on install or update so nothing stale survives.
+// Chrome keeps menu items across worker restarts, so the summarize item is
+// registered here only.
 chrome.runtime.onInstalled.addListener((details) => {
-  chrome.contextMenus.removeAll();
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create(
+      { id: SUMMARIZE_MENU_ID, title: SUMMARIZE_MENU_TITLE, contexts: ["page", "selection"] },
+      () => {
+        const error = chrome.runtime.lastError;
+        if (error) console.warn(`${APP_NAME} context menu setup failed:`, error.message);
+      },
+    );
+  });
   void chrome.storage.local.remove(LEGACY_NOTE_ORIGINS_KEY).catch((error: unknown) =>
     console.warn(`${APP_NAME} note grant cleanup failed:`, describe(error)));
   if (details?.reason === "update") void runMigration();

@@ -188,15 +188,9 @@ Their line numbers predate step 6.6, so re-check them.
 `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` (plan: `docs/superpowers/plans/2026-10-26-open-access-and-agent-service.md`) replace the old M2 steps 8.2-8.5 and come first, in
 order. They supersede the denylist, harness-token, `activeTab`, and per-site
 grant parts of the items below wherever those conflict. PR 1 (open access
-and the protocol v6 removals) is done; see Shipped.
+and the protocol v6 removals) and PR 2 (the service skeleton) are done, and
+PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 
-- [ ] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
-  card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
-  with a validated structured answer, pinned Readability extraction, the
-  Summarize & log button, and the polling run card (spec §6; plan Tasks 28-42).
-  Tracks one queue item per plan task, built in order; it closes when they
-  all close. All of them are in progress in the Lane A session; see In
-  Progress.
 - [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
   integration.** The owned summary file, the `summary` daily-log event,
   summaries in the index, Recent, the worklog, and the panel, written under the
@@ -271,24 +265,13 @@ and the protocol v6 removals) is done; see Shipped.
   versions, native registration, the folder picker, standing HTTP(S) access,
   background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
-- [ ] `brwr-6wz` **M2 step 8.2 — Host invocation, now open access PRs 2-3.**
-  A tracking pointer: agent runs move to the per-user Brauser service (spec
-  §5, shipped in #75) with full-access Codex or Claude Code runners (spec §6,
-  `brwr-sr3`), per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`. The
-  allowlisted-environment, templated-argv, harness-token, and §7.1 canary
-  design it described is superseded. Close it when `brwr-sr3` closes (PR 2 shipped in
-  #75); don't build it separately.
 - [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
   Structural first, agent second: for unknown sites, "Improve with AI"
   refines the structural draft by launching an agent job through the Brauser
-  service (the open access PR 2 service, shipped in #75, and PR 3 runners `brwr-sr3`;
+  service (the open access PR 2 service, shipped in #75, and PR 3 runners, shipped in #98;
   spec above), not the old M2 step 8.2 harness path. Agent drafts are
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
-- [ ] `brwr-0ij` **M2 step 8.4 — Content extraction, now open access PR 3.** A
-  tracking pointer: pinned Readability extraction, the Summarize & log button,
-  and the context-menu item are built in `brwr-sr3` (spec §5.3 and §6). With
-  standing access there is no `activeTab` trigger. Close it with `brwr-sr3`.
 - [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel, now open access PR
   4.** A tracking pointer: the summary file, log event, and index/panel
   integration are built in `brwr-so4` (spec §7); there is no denylist check.
@@ -341,15 +324,6 @@ and the protocol v6 removals) is done; see Shipped.
   exact snapshot it saw. Reuse or rebase that work rather than redesigning
   it. The queue had imported this bead as closed from the cycle-8 export;
   it is reopened because that code never reached `main`.
-
-- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
-  child can exit after printing its reply before the parent writes the framed
-  request, intermittently producing `EPIPE` even though production dialog
-  children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly; this was discovered during the current cycle's
-  final Rust verification and does not affect the shipped worker change.
-  Reopened: its fix exists only in the never-merged cycle-6 PR, so it has not
-  reached `main`.
 
 - [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
   drop that races the last in-flight batch stays counted and visible, but its
@@ -462,16 +436,11 @@ were folded into `brwr-q7e` above rather than given their own item.
   the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
   rejects format 0 or more than 64 adapters, which the host returns with
   `adapter_issue` set, so the repair prompt is unreachable.
-- [ ] `brwr-ylm` **Queued and resumed runs launch in a stale notes folder.**
-  `run_cwd` (host/src/service/server.rs ~335) skips the identity check and
-  `resume`/`Inner::run` (supervisor.rs ~341/~663) reuse the recorded cwd;
-  re-check under the lock and fail closed. Latent until a runner ships.
-  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
 - [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
   `record_key` (host/src/native.rs ~494) can push a frame-sized request past
   the cap that `write_request` (host/src/frame.rs ~64) enforces after
   connecting; refuse it as too large before contacting the service.
-  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+  Re-check against open access PR 3 (#98), which reworked the service run path.
 - [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
   host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
 - [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
@@ -522,6 +491,29 @@ were folded into `brwr-q7e` above rather than given their own item.
 
 ## In Progress / This Iteration
 
+- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
+  child can exit after printing its reply before the parent writes the framed
+  request, intermittently producing `EPIPE` even though production dialog
+  children read the request first. Make the fixture obey the real handshake
+  and exercise it repeatedly. The repair is committed as `00dbc75` and
+  included in `728b200`;
+  the bead is blocked on full verification in a runner that permits local IPC.
+
+  Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
+  request, make the reply fixture consume exactly the framed byte count, and
+  stress repeated replies. Review the complete diff and rerun the required
+  checks. Keep this bead open until the driver can verify the full suite: this
+  sandbox refuses Unix sockets (EPERM), including a standalone bind probe.
+  Repair committed: the large-input reproduction failed with Broken pipe before
+  the fix; the child now reads the byte count and complete body before replying.
+  Sixty exchanges cover empty, short and 64 KiB UTF-8 requests without waiting
+  for EOF. No production dialog behavior changed. Full verification remains
+  pending outside the sandbox; no shipped claim or bead closure this cycle.
+
+  Latest verification: see the current health handoff below for clean
+  baseline `46f17b3`. The same IPC restriction remains; the existing repair
+  is retained and this item is not closed.
+
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
   `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
@@ -534,23 +526,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   on #85).
 - [ ] `brwr-hrr` **Give damaged adopted-contract state a visible repair path,
   and guard ID changes against hand-retired contracts.** Follow-up to #85.
-
-- In progress in the Lane A session (PR 3 on `feat/agent-runners-pr3`), not Cookie. Cookie must not claim these:
-- [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
-- [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
-- [ ] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
-- [ ] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
-- [ ] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
-- [ ] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
-- [ ] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
-- [ ] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
-- [ ] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
-- [ ] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
-- [ ] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
-- [ ] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
-- [ ] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
-- [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
-- [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
@@ -618,9 +593,11 @@ were folded into `brwr-q7e` above rather than given their own item.
   migration (`brwr-6x2`), not a relaxation of frozen IDs.
 
 
-- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
 
 - [x] `brwr-hrc` **Note identity: remember contracts removed by hand edits (2026-10-27, #85).** Adapter contracts that vanish from `config.toml` outside the settings path are recorded, so a hand-deleted board adapter cannot leave its modal rule's notes unrecognized.
 
@@ -836,3 +813,90 @@ were folded into `brwr-q7e` above rather than given their own item.
   unchecked in the future rule review.
 - `brwr-vny` is a later product idea: help a person understand a skipped page
   using an actual policy reason, after the ordered Capture Site work.
+
+### Cycle observations (2026-10-27 — dialog fixture repair)
+
+- Health started red solely at Unix-socket service tests: 32 host failures, all
+  explained by denied socket operations; a minimal independent bind also
+  returned EPERM. The workspace started clean and no commit-gate failure file
+  existed. Keep real socket coverage intact and have the driver rerun it.
+- The successful-dialog fixture must read the framed request before answering,
+  as production does. Large requests reliably exposed the old fixture's
+  early-exit race; small requests alone passed by scheduling luck.
+- Node's synchronous child-process transport also returns EPERM here, even for
+  a child that only prints JSON. `test:scripts` consequently fails its win32
+  path simulation, while extension test files pass. This is an environment
+  limitation, not evidence that the registration logic needs replacement.
+- No history reset was attempted: the clean baseline itself fails the socket
+  probe, and none of the preceding five commits is verified green under this
+  restriction. Resetting history cannot restore a denied OS capability.
+- Once the external gate is green, finish the existing unknown-site Capture
+  Site assignment; the private pattern review already provides its inputs.
+  A useful later review would show how selected rules group example pages
+  into the same artifact before enabling them, within the existing review.
+
+### Current health handoff (2026-10-27 — baseline `21d06c3`)
+
+- Clean workspace; no quarantine failure file. The unfiltered opening gate
+  again passes 26 adapter-template tests and 447 host tests, then fails 32
+  service tests. Later Rust test binaries are not reached. All 13 extension
+  test files pass, as do protocol generation, build, fmt, both Clippy
+  configurations, npm install, typecheck, lint, extension build, current-state
+  validation and queue consistency. The repaired dialog fixture completes its
+  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
+- An independent workspace AF_UNIX bind returns errno 1 EPERM.
+  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
+  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
+  and 1 platform skip, with the win32 simulation unable to parse empty output.
+  TESTING.md documents that diagnostic and the restriction. Keep all tests
+  enabled and do not change production IPC to fit this runner.
+- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
+  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4` and `21d06c3`.
+  No commit among the last five is verified green in this runner, so no
+  history reset was attempted. Earlier quarantine recovery is retained; this
+  cycle introduces no product or test change and claims no shipped feature.
+- The driver needs to carry the baseline SHA and an unfiltered external
+  gate result into its next handoff, and provide a runner permitting local
+  IPC and synchronous child output. Another unchanged restricted cycle will
+  reproduce these failures rather than advance the assigned product work.
+- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
+  selectable rules and example artifact grouping using the existing private
+  pattern inputs. Resolve the Notion leading-literal contradiction
+  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
+  preview which example pages share an artifact still belongs in this review;
+  no additional diagnostic view or self-directed feature is needed first.
+
+- Baseline `bdbbbb4` was checked again without test exclusions. Raw Rust
+  output is retained locally at
+  `target/overnight-health/baseline-bdbbbb4/cargo-test.log` (gitignored).
+  The script gate and its diagnostic output are beside it as
+  `scripts-test.log` and `scripts-diagnostic.log`.
+  The first denied fixture bind is `host/src/service/client.rs:436`;
+  server fixtures subsequently time out waiting for the unavailable listener.
+  No product or test changes can grant the missing runner capability.
+  Keep the existing product proposals; adding more internal health work
+  would not unblock the assigned Capture Site implementation.
+
+- Rechecks on `21d06c3` and `5231f9e` reproduce those exact counts with no test
+  exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
+  and all 13 extension files passing. The script diagnostic still reports
+  8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
+  required build/quality checks pass. The repaired dialog fixture passes.
+  Independent socket and JSON-only child probes still return EPERM. No
+  quarantine file existed and no code repair or reset would restore these
+  denied operations. `brwr-1hj` stays in progress and `brwr-t40` stays open.
+  Before scheduling another unchanged cycle, the driver should establish
+  whether its own unfiltered gate passes and supply that result in the
+  handoff. Product priority remains selected-rule Capture Site review and
+  example artifact grouping, not another health surface.
+
+- Baseline `5231f9e` evidence is retained in
+  `target/overnight-health/baseline-5231f9e/` (gitignored), including the
+  unfiltered Cargo output and non-isolated script diagnostic. No quarantine
+  file or incomplete diff existed. No preceding commit in the last five has
+  a verified green gate in this restricted runner, so resetting history would
+  discard work without fixing the denied operations. The dialog repair is
+  retained under blocked `brwr-4vb`; no new feature or contract shipped.
+  The existing Capture Site proposals remain sufficient: resume the host
+  drafter and selected-rule preview once the driver supplies an unfiltered
+  green baseline, rather than scheduling repeated unchanged restricted runs.

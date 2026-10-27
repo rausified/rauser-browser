@@ -28,6 +28,20 @@ let frameEntered = null;
 let onAlarm;
 let onStartup;
 let onInstalled;
+let onCommand;
+let onMenuClicked;
+const menus = [];
+// sidePanel.open calls, in order, and whether each came before any await.
+const panelOpens = [];
+// Messages the worker broadcast to extension pages.
+const broadcasts = [];
+// Answers chrome.scripting.executeScript; the default reads a page.
+let executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
+  frameId: 0, result: {
+    title: "Readable", content: "Body", selection: null, truncated: false, readable: true,
+    href: "https://read.example/article",
+  },
+}];
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
@@ -95,23 +109,31 @@ globalThis.chrome = {
     onInstalled: { addListener(listener) { onInstalled = listener; } },
     onStartup: { addListener(listener) { onStartup = listener; } },
     connectNative: () => fakePort(),
+    // No panel is listening, as when the panel has not loaded yet.
+    async sendMessage(message) {
+      broadcasts.push(structuredClone(message));
+      throw new Error("Could not establish connection. Receiving end does not exist.");
+    },
   },
+  commands: { onCommand: { addListener(listener) { onCommand = listener; } } },
+  scripting: { executeScript: (injection) => executeScript(injection) },
   alarms: {
     async create(name, info) { alarms.set(name, { name, ...info }); },
     async get(name) { return alarms.get(name); },
     onAlarm: { addListener(listener) { onAlarm = listener; } },
   },
   contextMenus: {
-    create() {},
-    removeAll(callback) { callback?.(); },
-    onClicked: { addListener() {} },
+    create(properties) { menus.push(properties); },
+    removeAll(callback) { menus.length = 0; callback?.(); },
+    onClicked: { addListener(listener) { onMenuClicked = listener; } },
   },
   storage: {
     local: storageArea(values),
     session: storageArea(sessionValues),
   },
-  // Chrome grants every HTTP(S) site at install. The worker never asks
-  // Chrome about a permission and never listens for permission changes.
+  // Chrome grants every HTTP(S) site at install. Capture never asks Chrome
+  // about a permission or listens for permission changes; only a summary of
+  // a tab with no address asks (a test replaces this for it).
   permissions: {
     async contains() { throw new Error("the worker must not check Chrome permissions"); },
   },
@@ -149,12 +171,17 @@ globalThis.chrome = {
     async queryState() { return "active"; },
     onStateChanged: { addListener(listener) { onIdleStateChanged = listener; } },
   },
-  sidePanel: { async setPanelBehavior() {} },
+  sidePanel: {
+    async setPanelBehavior() {},
+    async open(options) { panelOpens.push(options); },
+  },
 };
 
 const { queueActivityMapRebuild, rebuildActivityMap } = await import("../dist/worker.js");
 const { HostClient, HostError, PROTOCOL_VERSION } = await import("../dist/native.js");
 const { ConfigSession } = await import("../dist/settings.js");
+const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
+const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
 
 function send(message) {
   return new Promise((resolve, reject) => {
@@ -1707,12 +1734,13 @@ test("host config shape requires every v6 agent and adapter key and no retired p
     },
     capture_enabled: false, strip_params: [],
     agent: null,
+    summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
   };
   assert.equal(isConfig(config), true);
   const agent = {
-    harness_id: "claude-code", adapter: "claude_code", binary: "/usr/local/bin/claude",
-    args: ["-p", "{prompt}"], env_allow: [], timeout_secs: 120,
+    harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284",
+    timeout_secs: 600, probed_at: "2026-10-27T10:00:00Z",
   };
   assert.equal(isConfig({ ...config, agent }), true);
   for (const key of ["agent", "adapters"]) {
@@ -1723,7 +1751,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   assert.equal(isConfig({ ...config, agent_denylist: ["bank.example"] }), false);
   assert.equal(isConfig({ ...config, agent_denylist_confirmed: false }), false);
   assert.equal(isConfig({ ...config, log_incognito: false }), false);
-  assert.equal(isConfig({ ...config, agent: { ...agent, adapter: "claude-code" } }), false);
+  assert.equal(isConfig({ ...config, agent: { ...agent, harness: "claude-code" } }), false);
   // The host always sends summaries_dir, as null until a folder is chosen.
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
@@ -1744,35 +1772,22 @@ test("host config shape requires every v6 agent and adapter key and no retired p
   assert.equal(isResponseShape({ ...result, agent_status: { ...agentStatus, state: "on" } }), false);
   assert.equal(isResponseShape({
     type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0",
-  }), true);
+  }), false);
 
-  // Harness setup: every offer key is present, nullable ones as null.
-  const offer = {
-    adapter: "claude_code", harness_id: "claude-code",
-    binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
-    args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
-    env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
-  };
-  const refused = {
-    ...offer, adapter: "codex", harness_id: "codex", real_path: null,
-    version: null, env_optional: [], refusal: "codex --version output was not recognized",
-  };
-  const discovered = { type: "harnesses_discovered", offers: [offer, refused] };
+  // Discovery reports both harnesses, every key present, nullable ones as null.
+  const found = { harness: "claude", binary: "/usr/local/bin/claude", version: "2.1.284", problem: null };
+  const unusable = { harness: "codex", binary: "/usr/local/bin/codex", version: null,
+    problem: "codex --version output was not recognized" };
+  const discovered = { type: "harnesses_discovered", harnesses: [unusable, found] };
   assert.equal(isResponseShape(discovered), true);
-  assert.equal(isResponseShape({ ...discovered, offers: [] }), true);
-  assert.equal(isResponseShape({ ...discovered, offers: null }), false);
-  for (const key of Object.keys(offer)) {
-    const without = { ...offer };
+  assert.equal(isResponseShape({ ...discovered, harnesses: [] }), true);
+  assert.equal(isResponseShape({ ...discovered, harnesses: null }), false);
+  for (const key of Object.keys(found)) {
+    const without = { ...found };
     delete without[key];
-    assert.equal(isResponseShape({ ...discovered, offers: [without] }), false, key);
+    assert.equal(isResponseShape({ ...discovered, harnesses: [without] }), false, key);
   }
-  assert.equal(isResponseShape({ ...discovered, offers: [{ ...offer, adapter: "generic" }] }), false);
-  assert.equal(isResponseShape({
-    ...discovered, offers: [{ ...offer, env_optional: ["ANTHROPIC_API_KEY"] }],
-  }), false);
-  assert.equal(isResponseShape({
-    ...discovered, offers: [{ ...offer, env_optional: [{ name: "X", present: "yes" }] }],
-  }), false);
+  assert.equal(isResponseShape({ ...discovered, harnesses: [{ ...found, harness: "generic" }] }), false);
 
   // Harness setup answers config_updated; the v5 token response is gone.
   const setUp = { type: "harness_setup_confirmed", harness_token: "t", config, summary: "Harness" };
@@ -1819,6 +1834,7 @@ function configResult(request, origin, overrides = {}) {
       },
       capture_enabled: true, strip_params: [],
       agent: null,
+      summary_vocabulary: { document_types: ["report"], categories: ["news"] },
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,
@@ -2327,6 +2343,157 @@ test("installing Capture Site policy measures already-open pages without inventi
   } finally {
     Date.now = realNow;
   }
+});
+
+// --- Summarize & log (plan Task 39) -----------------------------------------
+
+const SUMMARY_URL = "https://read.example/article";
+const SUMMARY_RUN = {
+  run_id: "00000000-0000-4000-8000-000000000039", state: "queued", harness: "codex",
+  record_key: { kind: "url", value: SUMMARY_URL }, written_record_key: null,
+  url: SUMMARY_URL, title: "Readable", cwd: null,
+  created_at: "2026-10-27T09:00:00-07:00", started_at: null, finished_at: null,
+  error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+  stream_bytes: 0, can_retry_save: false, answer: null,
+};
+
+// The port the summary run opened, once it has sent start_run.
+async function startRunPort(after) {
+  let found = null;
+  await until(() => {
+    found = ports.slice(after).find((port) => port.sent.some((message) => message.type === "start_run")) ?? null;
+    return found !== null;
+  }, "start_run");
+  return { port: found, request: found.sent.find((message) => message.type === "start_run") };
+}
+
+test("summarize command opens the panel before any await and starts a run", async () => {
+  sessionValues.clear();
+  panelOpens.length = 0;
+  broadcasts.length = 0;
+  const before = ports.length;
+  onCommand("summarize", { id: 7, windowId: 1, url: SUMMARY_URL, title: "Tab", incognito: false });
+  // Chrome lets a shortcut open the panel only inside the gesture.
+  assert.deepEqual(panelOpens, [{ tabId: 7 }]);
+
+  const { port, request } = await startRunPort(before);
+  assert.equal(request.url, SUMMARY_URL);
+  assert.equal(request.title, "Readable");
+  assert.equal(request.content, "Body");
+  assert.equal(request.record_key, null);
+  assert.equal(request.harness, null);
+  assert.match(request.requested_at, /[+-]\d\d:\d\d$/);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: SUMMARY_RUN, existing: false,
+  });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
+  const notice = sessionValues.get(PANEL_NOTICE_KEY);
+  assert.equal(notice.kind, "run_started");
+  assert.equal(notice.run_id, SUMMARY_RUN.run_id);
+  assert.equal(notice.tab_id, 7);
+  assert.equal(typeof notice.at, "number");
+  await until(() => broadcasts.length === 1, "the broadcast notice");
+  assert.deepEqual(broadcasts[0], notice);
+  await until(() => port.closed, "the summary host port to close");
+
+  // Another command is ignored, and a non-HTTP(S) tab gets a notice at once.
+  onCommand("other", { id: 7, url: SUMMARY_URL, incognito: false });
+  assert.equal(panelOpens.length, 1);
+  sessionValues.clear();
+  onCommand("summarize", { id: 8, url: "chrome://extensions/", incognito: false });
+  assert.deepEqual(panelOpens.at(-1), { tabId: 8 });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the non-HTTP(S) notice");
+  assert.deepEqual(
+    { ...sessionValues.get(PANEL_NOTICE_KEY), at: 0 },
+    { kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 8, at: 0 },
+  );
+});
+
+test("service_unavailable from the command path is stored as a notice", async () => {
+  sessionValues.clear();
+  broadcasts.length = 0;
+  const before = ports.length;
+  const message = "The Brauser service is not running. Register it again.";
+  onCommand("summarize", { id: 9, url: SUMMARY_URL, title: "Tab", incognito: false });
+  const { port, request } = await startRunPort(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "service_unavailable", message,
+  });
+  await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the stored notice");
+  const notice = sessionValues.get(PANEL_NOTICE_KEY);
+  // The same setup instructions the panel shows, then the host's reason.
+  assert.deepEqual({ ...notice, at: 0 }, {
+    kind: "summarize_failed", message: `${SERVICE_SETUP_INSTRUCTIONS} ${message}`, tab_id: 9, at: 0,
+  });
+  await until(() => broadcasts.length === 1, "the broadcast notice");
+
+  // A page the extractor cannot read never reaches the host.
+  sessionValues.clear();
+  const realExecute = executeScript;
+  executeScript = async () => { throw new Error("Cannot access contents of the page"); };
+  try {
+    const opened = ports.length;
+    onCommand("summarize", { id: 10, url: SUMMARY_URL, title: "Tab", incognito: false });
+    await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the unreadable notice");
+    assert.match(sessionValues.get(PANEL_NOTICE_KEY).message, /can't read this page/);
+    assert.ok(ports.slice(opened).every((opened) => !opened.sent.some((sent) => sent.type === "start_run")));
+  } finally {
+    executeScript = realExecute;
+  }
+});
+
+test("with site access withdrawn, the shortcut points to Brauser's site access", async () => {
+  // Without `tabs`, Chrome gives no URL for a tab Brauser cannot access: an
+  // ungranted page (chrome://, New Tab) or any page once access is withdrawn.
+  const realContains = chrome.permissions.contains;
+  const asked = [];
+  try {
+    for (const [granted, expected] of [
+      [false, /needs site access.*re-enable/i],
+      [true, /^Summaries work on http\(s\) pages\.$/],
+    ]) {
+      chrome.permissions.contains = async (permissions) => { asked.push(permissions); return granted; };
+      sessionValues.clear();
+      onCommand("summarize", { id: 12, title: "Tab", incognito: false });
+      await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the notice");
+      const notice = sessionValues.get(PANEL_NOTICE_KEY);
+      assert.equal(notice.kind, "summarize_failed");
+      assert.match(notice.message, expected);
+    }
+    assert.deepEqual(asked.map((permissions) => [...permissions.origins].sort()),
+      [["http://*/*", "https://*/*"], ["http://*/*", "https://*/*"]]);
+
+    // An unanswered check shows the ordinary message, not a false alarm.
+    chrome.permissions.contains = async () => { throw new Error("unavailable"); };
+    sessionValues.clear();
+    onMenuClicked({ menuItemId: "brauser-summarize" }, { id: 12, title: "Tab", incognito: false });
+    await until(() => sessionValues.has(PANEL_NOTICE_KEY), "the notice");
+    assert.equal(sessionValues.get(PANEL_NOTICE_KEY).message, "Summaries work on http(s) pages.");
+  } finally {
+    chrome.permissions.contains = realContains;
+  }
+});
+
+test("context menu item is registered on install", async () => {
+  onInstalled({ reason: "install" });
+  await until(() => menus.length === 1, "the context menu item");
+  assert.deepEqual(menus, [{ id: "brauser-summarize", title: "Summarize with Brauser", contexts: ["page", "selection"] }]);
+
+  sessionValues.clear();
+  panelOpens.length = 0;
+  const before = ports.length;
+  onMenuClicked({ menuItemId: "brauser-summarize" }, { id: 11, url: SUMMARY_URL, title: "Tab", incognito: false });
+  assert.deepEqual(panelOpens, [{ tabId: 11 }]);
+  const { port, request } = await startRunPort(before);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: SUMMARY_RUN, existing: true,
+  });
+  await until(() => sessionValues.get(PANEL_NOTICE_KEY)?.tab_id === 11, "the menu notice");
+  onMenuClicked({ menuItemId: "someone-else" }, { id: 11, url: SUMMARY_URL, incognito: false });
+  assert.equal(panelOpens.length, 1);
 });
 
 test("worker wake and maintenance alarms expire samples without starting a host", async () => {
