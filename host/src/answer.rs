@@ -257,20 +257,24 @@ fn string_list<'a>(
 fn entity_list(entities: &Map<String, Value>, key: &str) -> Result<Vec<String>, String> {
     let name = format!("entities.{key}");
     let mut kept: Vec<String> = Vec::new();
+    // Lowercased beside `kept`, and the walk stops past the limit, so an
+    // untrusted answer's long list costs at most MAX_ENTITIES per item.
+    let mut seen: Vec<String> = Vec::new();
     for item in string_list(entities, key, &name)? {
-        if item.is_empty()
-            || kept
-                .iter()
-                .any(|seen| seen.to_lowercase() == item.to_lowercase())
-        {
+        if item.is_empty() {
             continue;
+        }
+        let lower = item.to_lowercase();
+        if seen.contains(&lower) {
+            continue;
+        }
+        if kept.len() == MAX_ENTITIES {
+            return Err(format!("{name} has more than {MAX_ENTITIES} items"));
         }
         bounded(item, &name, MAX_ENTITY_CHARS)?;
         no_controls(item, &name)?;
         kept.push(item.to_string());
-    }
-    if kept.len() > MAX_ENTITIES {
-        return Err(format!("{name} has more than {MAX_ENTITIES} items"));
+        seen.push(lower);
     }
     Ok(kept)
 }
@@ -495,6 +499,31 @@ mod tests {
         let mut value = answer();
         value.as_object_mut().unwrap().remove("assessment");
         assert!(parse(&value, &kb).unwrap_err().contains("assessment"));
+    }
+
+    #[test]
+    fn entity_list_stops_at_the_first_item_past_the_limit() {
+        let (_dir, kb) = knowledge_base();
+        // Duplicates in any case do not count toward the limit.
+        let mut people: Vec<String> = (0..MAX_ENTITIES).map(|i| format!("P{i}")).collect();
+        people.extend((0..MAX_ENTITIES).map(|i| format!("p{i}")));
+        let mut value = answer();
+        value["entities"]["people"] = json!(people);
+        assert_eq!(
+            parse(&value, &kb).unwrap().entities.people.len(),
+            MAX_ENTITIES
+        );
+        // One more distinct item fails before anything after it is read,
+        // so an untrusted answer's long list costs no more than the limit.
+        people.push("extra".to_string());
+        people.push("p".repeat(MAX_ENTITY_CHARS + 1));
+        value["entities"]["people"] = json!(people);
+        let error = parse(&value, &kb).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        let many: Vec<String> = (0..29_000).map(|i| format!("a{i}")).collect();
+        value["entities"]["people"] = json!(many);
+        let error = parse(&value, &kb).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
     }
 
     #[test]
