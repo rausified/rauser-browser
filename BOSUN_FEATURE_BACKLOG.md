@@ -142,12 +142,14 @@ Their line numbers predate step 6.6, so re-check them.
   the gap with a failing native-delivery regression, added the allowlist plus
   `forward_back`, and retained older bounded activity without deriving unknown
   edges. Both single and batch delivery terminally reject invented values.
-- [ ] `brwr-1fo` **Bidi and zero-width characters spoof log rows.**
+- [x] `brwr-1fo` **Bidi and zero-width characters spoof log rows.**
   `safe_markdown_line` strips control chars but not Unicode format chars
   (U+202E, U+200B–U+200F, U+2066–U+2069, U+FEFF), so a hostile title can
   visually disguise an entry. Step 6.6's artifact renderer
   (`index.rs::safe_markdown`) has the same gap. Cover both with one shared
-  sanitizer.
+  sanitizer. Fixed with a shared bounded presentation sanitizer for both
+  delivery paths, YAML artifact titles, Markdown context, and plain worklogs;
+  exact encoded payloads and source logs survive regeneration unchanged.
 - [ ] `brwr-992` **Activity checks are duplicated across delivery paths.**
   `record_activity` (native.rs ~640–717) re-implements `check_activity_policy`
   (~977–1020); unify so single and batch delivery can't drift. Take after the
@@ -327,6 +329,11 @@ Their line numbers predate step 6.6, so re-check them.
 - [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
   dated as-built and probe records to `docs/history.md`, and make AGENTS.md
   "Current state" a short table.
+- [ ] `brwr-3cc` **Preserve single-event recovery across presentation changes.**
+  Legacy intents retain a rendered-entry hash rather than prepared bytes.
+  Independent review added exact-hash compatibility for this sanitizer
+  upgrade; future rendering changes still need recovery independent of the
+  renderer, with the same integrity checks. Compact batches retain their bytes.
 
 ### Cookie's own proposals (only after the plan work above)
 
@@ -357,11 +364,12 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## In Progress / This Iteration
 
-- None. Next take the first ready deploy blocker above (`brwr-1fo`), following
-  `bd ready`; the helper is P3 and the page-load check is already closed.
+- None. Next take `brwr-992`, the first remaining ready deploy blocker,
+  following `bd ready`. `brwr-3cc` is a P3 follow-up, not a new plan blocker.
 
 ## Shipped
 
+- **Category:** Security & Privacy. **Keep invisible formatting out of generated work history (2026-10-27).** A shared host sanitizer now replaces Unicode format and control characters with spaces in daily row titles/context, regenerated artifact titles/context, and plain worklogs, and escapes Obsidian comments, highlights, and tags in generated Markdown. Both single and batch delivery use it while canonical encoded event payloads stay exact; reindex regenerates safe owned files without changing source logs. The review recorded legacy interrupted-entry recovery across renderer upgrades separately as `brwr-3cc`. **Metrics:** 319 Rust tests (+4) and 8 extension suites passing; two failing-first regressions, all 170 Unicode 17 format scalars verified locally, and full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, and extension build/tests green.
 - **Category:** Security & Privacy. **Reject invented navigation trails while preserving older activity (2026-10-27).** The native host now restricts new trail transitions to Chrome's known values plus the worker's existing back/forward encoding, returning terminal `rejected` before log or index writes through both single and batch delivery. Older bounded log and cache payloads retain their measurements and exact replay identity, while unknown transition kinds cannot become derived edges; reindex keeps the original shape limits and leaves source logs untouched. **Metrics:** 314 Rust tests (+3) and 8 extension suites passing; full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue consistency green.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** New Capability. **Turn durable activity into a local index and bounded artifact records (2026-10-16).** Each accepted activity now updates a standard SQLite `index.db` with artifact, visit, edge, and dirty-set tables while leaving the append-only Markdown log authoritative. Brauser lazily regenerates only dirty, owned artifact files at native connection boundaries, preserves unchanged mtimes, gives case-colliding IDs distinct hash-suffixed paths, replaces external edits only after checking ownership, neutralizes hostile presentation text, and bounds long histories with daily, weekly, then monthly Timeline rollups. `brauser reindex` reconstructs the database and files from bounded owned markers, and older configs receive a non-overlapping `artifacts_dir` default without weakening native consent. **Metrics:** 284 Rust tests and 8 extension suites passing; 13 new index, ownership, delivery-integration, migration, replay-integrity, multi-page SQLite, chronology, rollup, and wire regressions, with full protocol generation, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
@@ -386,6 +394,17 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Notes / Ideas for Later
 
+- The shared presentation sanitizer belongs at the output boundary: raw
+  canonical events must remain usable for replay and rebuilding, while YAML,
+  Markdown, and copyable worklogs need the appropriate plain or escaped
+  rendering. Future field and relationship displays should reuse it instead
+  of growing another sanitizer. `brwr-3cc` records the older single-entry
+  intent limitation found during this review; complete markers still dedupe.
+- After the remaining deploy blockers, `brwr-1hj` (Capture Site) is still the
+  most direct product improvement: a person should be able to start useful
+  capture from the page they are reading. The existing named-session and
+  incoming-trail proposals can later explain why cross-tool work belongs
+  together; another internal status view would not answer that need.
 - Keep live-delivery validation separate from historical decoding whenever a
   new semantic constraint lands: preserving measurements does not require
   interpreting an unknown trail. `brwr-1g2` is the product follow-up that turns

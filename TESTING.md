@@ -115,6 +115,17 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced a sanitizer-upgrade recovery failure with a pre-upgrade v1 intent and a log torn inside a Unicode format character. Exact-hash compatibility now resumes that original entry through both single and batch delivery, preserves unrelated bytes, refuses changed payloads and edited tails, and deduplicates a complete marker. A second regression covers activity and context payloads. Future renderer-independent single-entry intent storage remains tracked as `brwr-3cc`; no macOS execution is claimed.
+- 2026-10-27: Unicode-spoofing regressions first failed in daily rows and
+  generated artifact files, then passed with the shared host presentation
+  sanitizer. Tests exercise single and batch activity/legacy delivery, explicit
+  context, exact encoded marker payloads, reindexing into owned files, unchanged
+  source logs, plain worklogs, character caps, and readable non-ASCII text.
+  The format-character table was exhaustively compared with the local Node
+  Unicode 17 `General_Category=Cf` property (170 scalars); no dependency or
+  network fetch is needed. These are host filesystem tests, not evidence of
+  an Obsidian/VS Code preview or a macOS Chrome run. The smoke runner still
+  expects 14 scripted dialogs.
 - 2026-10-27: Trail-transition validation uses a strict allowlist for new activity and the original bounded shape checks for historical markers. The regressions test terminal refusal through both native delivery paths, all browser values plus `forward_back`, and a pre-validation ingestion cache followed by reindexing an owned marker. They verify actual SQLite edge kinds, retained activity totals and exact payloads, unchanged source logs, and continued rejection of oversized or unpaired legacy trails. No browser or native dialog is involved.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.
