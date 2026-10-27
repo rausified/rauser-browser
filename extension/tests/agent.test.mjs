@@ -11,7 +11,7 @@ const config = {
     root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
     summaries_dir: "summaries",
   },
-  capture_enabled: false, sites: [], strip_params: [],
+  capture_enabled: false, strip_params: [],
   agent: null,
   adapters: { format: 1, artifacts: [] },
 };
@@ -62,7 +62,8 @@ test("isConfig requires exactly the v6 keys", () => {
   for (const key of ["agent_denylist_confirmed", "log_incognito"]) {
     assert.equal(isConfig({ ...config, [key]: false }), false, key);
   }
-  for (const key of ["storage", "capture_enabled", "sites", "strip_params", "agent", "adapters"]) {
+  assert.equal(isConfig({ ...config, sites: [] }), false, "sites");
+  for (const key of ["storage", "capture_enabled", "strip_params", "agent", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);

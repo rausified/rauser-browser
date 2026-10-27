@@ -5,7 +5,7 @@ const AGENT_AND_ADAPTERS: &str = r#""agent":null,"adapters":{"format":1,"artifac
 
 fn config(storage: &str) -> String {
     format!(
-        r#"{{{storage}"capture_enabled":false,"sites":[],"strip_params":["utm_*","fbclid","gclid"],{AGENT_AND_ADAPTERS}}}"#
+        r#"{{{storage}"capture_enabled":false,"strip_params":["utm_*","fbclid","gclid"],{AGENT_AND_ADAPTERS}}}"#
     )
 }
 
@@ -119,6 +119,23 @@ fn v6_config_rejects_retired_privacy_keys() {
     ] {
         assert!(serde_json::from_str::<Response>(&config_with_extra(key)).is_err());
     }
+}
+
+#[test]
+fn v6_config_rejects_sites() {
+    let plain = update(&config(r#""storage":null,"#));
+    assert!(serde_json::from_str::<Request>(&plain).is_ok(), "{plain}");
+    let with_sites = plain.replace(
+        r#""capture_enabled":false,"#,
+        r#""capture_enabled":false,"sites":[{"origin":"https://work.example","path_prefix":"/"}],"#,
+    );
+    assert_ne!(with_sites, plain);
+    assert!(serde_json::from_str::<Request>(&with_sites).is_err());
+    let empty_sites = plain.replace(
+        r#""capture_enabled":false,"#,
+        r#""capture_enabled":false,"sites":[],"#,
+    );
+    assert!(serde_json::from_str::<Request>(&empty_sites).is_err());
 }
 
 #[test]

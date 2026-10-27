@@ -84,7 +84,6 @@ const CONFIG = {
     artifacts_dir: "artifacts", summaries_dir: null,
   },
   capture_enabled: false,
-  sites: [],
   strip_params: [],
   agent: null,
   adapters: { format: 1, artifacts: [] },

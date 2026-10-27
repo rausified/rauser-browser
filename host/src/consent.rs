@@ -183,7 +183,6 @@ mod tests {
         let snapshot = ConfigSnapshot {
             storage: Some(storage.clone()),
             capture_enabled: false,
-            sites: Vec::new(),
             strip_params: Vec::new(),
             ..crate::config::empty_config()
         };

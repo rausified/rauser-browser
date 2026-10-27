@@ -63,7 +63,6 @@ export function leaseFor(config: ConfigSnapshot, currentRevision: string): Polic
     revision: currentRevision,
     expires_at: Date.now() + POLICY_LEASE_MS,
     capture_enabled: config.capture_enabled,
-    sites: config.sites,
     adapters: config.adapters,
   };
 }
@@ -274,7 +273,7 @@ export class ConfigSession {
   }
 
   /**
-   * Write the sites and adapters an earlier build removed or saw revoked out
+   * Write the adapters for sites an earlier build removed or saw revoked out
    * of the host config, in one update_config, then let the worker lift its
    * capture block once the host's lease no longer holds them. `config` and
    * `revision` are what this page last read. Returns whether it saved.
@@ -289,7 +288,6 @@ export class ConfigSession {
       const state = await worker<WorkerStatus>({ kind: "get_status" });
       if (!state.pending_removals.length) return;
       const removed = new Set(state.pending_removals);
-      const sites = config.sites.filter((site) => !removed.has(site.origin));
       // An invalid or future adapter document can only pass the host's
       // narrow repair exception when echoed without structural changes, so
       // it stays as it is; the worker keeps its block until a later fix.
@@ -298,13 +296,11 @@ export class ConfigSession {
         artifacts: config.adapters.artifacts.filter((adapter) =>
           typeof adapter.origin !== "string" || !removed.has(adapter.origin)),
       };
-      if (sites.length !== config.sites.length ||
-          adapters.artifacts.length !== config.adapters.artifacts.length) {
+      if (adapters.artifacts.length !== config.adapters.artifacts.length) {
         await this.saveConfig({
           ...config,
-          sites,
           adapters,
-          capture_enabled: config.capture_enabled && sites.length > 0,
+          capture_enabled: config.capture_enabled && siteOrigins(adapters).length > 0,
         }, null);
         saved = true;
       }

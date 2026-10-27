@@ -183,7 +183,6 @@ function lease(origin) {
     revision: `host-revision:${origin}`,
     expires_at: Date.now() + 60_000,
     capture_enabled: true,
-    sites: [{ origin, path_prefix: "/" }],
     adapters: { format: 1, artifacts: [artifact(origin)] },
   };
 }
@@ -418,6 +417,48 @@ test("a matching adapter is captured without any permission check", async () => 
   });
   await flush();
   assert.equal((await send({ kind: "get_status" })).queued, 1);
+});
+
+test("a stored v5 lease that still has sites captures its adapters", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://v5-lease.example";
+  values.set(storageKey("policy_v1"), { ...lease(origin), sites: [{ origin, path_prefix: "/" }] });
+  tabs.set(45, { id: 45, url: `${origin}/items/open`, title: "Open", incognito: false });
+  onCommitted({
+    tabId: 45, frameId: 0, documentId: "doc-v5-lease", documentLifecycle: "active",
+    url: `${origin}/items/open`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.queued, 1);
+});
+
+test("an expired lease blocks capture", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://expired-lease.example";
+  values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() - 1 });
+  tabs.set(46, { id: 46, url: `${origin}/items/open`, title: "Open", incognito: false });
+  onCommitted({
+    tabId: 46, frameId: 0, documentId: "doc-expired-lease", documentLifecycle: "active",
+    url: `${origin}/items/open`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  // The navigation asks the host to renew the lapsed lease. With no renewal,
+  // the expired lease still captures nothing.
+  const port = await until(() => ports[0], "the worker to ask for a renewal");
+  assert.equal((await sentOn(port, 1)).type, "get_config");
+  port.drop();
+  const status = await until(async () => {
+    const current = await send({ kind: "get_status" });
+    return current.host_error && current;
+  }, "the failed renewal");
+  assert.equal(status.queued, 0);
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  ports.length = 0;
 });
 
 test("a capture-disabled lease clears the queue and blocks capture", async () => {
@@ -1021,7 +1062,7 @@ test("a host that cannot be started reports the session disconnected", async () 
   let changes = 0;
   const session = new ConfigSession(() => { changes += 1; });
   session.config = {
-    storage: null, capture_enabled: false, sites: [], strip_params: [],
+    storage: null, capture_enabled: false, strip_params: [],
   };
   session.revision = "r1";
   assert.equal(session.connected, true);
@@ -1118,7 +1159,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
       root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: null,
     },
-    capture_enabled: false, sites: [], strip_params: [],
+    capture_enabled: false, strip_params: [],
     agent: null,
     adapters: { format: 1, artifacts: [] },
   };
@@ -1225,7 +1266,7 @@ function configResult(request, origin, overrides = {}) {
         root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
         summaries_dir: null,
       },
-      capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [],
+      capture_enabled: true, strip_params: [],
       agent: null,
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
@@ -1324,7 +1365,8 @@ test("the worker renews a lease near expiry from the host config", async () => {
     const policy = values.get(storageKey("policy_v1"));
     return policy.expires_at > Date.now() + 23 * HOUR_MS && policy;
   }, "a renewed lease");
-  assert.deepEqual(renewed.sites, [{ origin, path_prefix: "/" }]);
+  assert.equal("sites" in renewed, false);
+  assert.deepEqual(renewed.adapters.artifacts.map((adapter) => adapter.origin), [origin]);
   await until(() => port.closed, "the host connection to close");
 });
 
@@ -1430,6 +1472,7 @@ test("an older cached lease renews once instead of permanently disabling backgro
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   values.set(storageKey("policy_v1"), legacy);
   tabs.set(13, { id: 13, url: `${origin}/items/migrated`, title: "Migrated", incognito: false });
 
@@ -1454,6 +1497,7 @@ test("an older cached lease does not start the host for an unrelated navigation"
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   values.set(storageKey("policy_v1"), legacy);
   tabs.set(14, { id: 14, url: "https://elsewhere.example/", title: "Elsewhere", incognito: false });
 
@@ -1470,6 +1514,7 @@ test("disabled or malformed cached policy does not cause background host wakeups
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   legacy.capture_enabled = false;
   values.set(storageKey("policy_v1"), legacy);
   onAlarm({ name: SYNC_ALARM });
@@ -1487,6 +1532,7 @@ test("a local pause still blocks migration of an older cached lease", async () =
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   values.set(storageKey("policy_v1"), legacy);
   values.set(storageKey("pause_pending_v1"), true);
   await send({ kind: "sync_now" });

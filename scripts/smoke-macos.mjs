@@ -1057,7 +1057,8 @@ async function run() {
         });
       }, dismissPicker);
       const reply = await hostConfig(wrapper);
-      requireCondition(reply.config.storage === null && !reply.config.capture_enabled && reply.config.sites.length === 0,
+      requireCondition(reply.config.storage === null && !reply.config.capture_enabled &&
+        reply.config.adapters.artifacts.length === 0 && !("sites" in reply.config),
         "The isolated host configuration changed after picker cancellation");
       requireCondition(!(await maybeLstat(configPath)), "A config file appeared after picker cancellation");
     });
@@ -1077,9 +1078,8 @@ async function run() {
             throw Object.assign(new Error(`${chosen} is not empty; rerun and choose an empty folder`), { fatal: true });
           }
           notesRoot = chosen;
-          requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0 &&
-            reply.config.adapters.artifacts.length === 0,
-          "Saving the folder changed adapters, sites, or the capture switch");
+          requireCondition(!reply.config.capture_enabled && reply.config.adapters.artifacts.length === 0,
+            "Saving the folder changed adapters or the capture switch");
           const status = await settingsStatus();
           requireCondition(status?.startsWith("No site has an adapter yet."), `Settings page says: ${status}`);
         }, () => pickFolder(notes));
@@ -1136,9 +1136,7 @@ async function run() {
         requireCondition(await sameFolder(selectedRoot),
           `Expected ${notesRoot}; host has ${selectedRoot ?? "none"}`);
         requireCondition(reply.config.capture_enabled === true, "Capture is not enabled in the host");
-        requireCondition(reply.config.sites.length === 1 &&
-          reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/",
-        "Host site rule does not match the fixture origin");
+        requireCondition(!("sites" in reply.config), "The host still sends a v5 site list");
         requireCondition(reply.config.adapters.artifacts.length === 1 &&
           reply.config.adapters.artifacts[0].origin === origin, "The host has no adapter for the fixture origin");
       }, { timeout: 30_000, interval: 500, signal: abort.signal });
@@ -1454,7 +1452,7 @@ async function run() {
         const reply = await hostConfig(wrapper);
         requireCondition(reply.config.agent?.binary === `${fakeBin}/claude` &&
           reply.config.storage?.summaries_dir === "summaries",
-        `The host config after setup: ${JSON.stringify({ ...reply.config, sites: undefined })}`);
+        `The host config after setup: ${JSON.stringify(reply.config)}`);
         requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "2.1.284",
           `Agent status: ${JSON.stringify(reply.agent_status)}`);
         const probes = await probeRuns();
@@ -1481,7 +1479,7 @@ async function run() {
         const reply = await hostConfig(wrapper);
         const agent = reply.config.agent;
         requireCondition(agent?.binary === `${fakeBin}/codex` && agent.env_allow.join(",") === "HOME,PATH",
-        `The host config after Codex setup: ${JSON.stringify({ ...reply.config, sites: undefined })}`);
+        `The host config after Codex setup: ${JSON.stringify(reply.config)}`);
         requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "0.144.4",
           `Agent status: ${JSON.stringify(reply.agent_status)}`);
         const expectedArgv = agent.args.map((arg) => `[${arg === "{prompt}" ? PROBE_ARGV[1] : arg}]`).join("");
@@ -1497,9 +1495,8 @@ async function run() {
       await inSettings((page) => page.click(`button[aria-label="Remove site ${origin}"]`));
       await waitFor(async () => {
         const reply = await hostConfig(wrapper);
-        requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0 &&
-          reply.config.adapters.artifacts.length === 0,
-        "Host still has capture enabled, the site rule, or its adapter");
+        requireCondition(!reply.config.capture_enabled && reply.config.adapters.artifacts.length === 0,
+          "Host still has capture enabled or the site's adapter");
         // A capture change echoes the harness unchanged.
         if (options.headless) {
           requireCondition(reply.config.agent !== null, "Site removal dropped the AI harness");

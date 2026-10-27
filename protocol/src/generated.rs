@@ -102,7 +102,6 @@ pub struct ConfigSnapshot {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub storage: Option<StorageConfig>,
     pub capture_enabled: bool,
-    pub sites: Vec<SiteConfig>,
     pub strip_params: Vec<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub agent: Option<AgentConfig>,
@@ -502,13 +501,6 @@ pub struct AgentChecked {
     pub request_id: String,
     pub harness_id: String,
     pub harness_version: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SiteConfig {
-    pub origin: String,
-    pub path_prefix: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

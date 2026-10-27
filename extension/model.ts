@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, AdapterDocument, OverflowMarker, SiteConfig, VisitEvent, VisitOutcome,
+  ActivityEvent, AdapterDocument, OverflowMarker, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
 import {
   compileDocument,
@@ -21,7 +21,7 @@ export interface PolicyLease {
   revision: string;
   expires_at: number;
   capture_enabled: boolean;
-  sites: SiteConfig[];
+  // Capture origins are the adapter origins; a v5 lease's `sites` is ignored.
   adapters: AdapterDocument;
 }
 
@@ -146,26 +146,21 @@ export function isHttpUrl(url: URL): boolean {
   return url.protocol === "http:" || url.protocol === "https:";
 }
 
-export function matchingSite(lease: PolicyLease, rawUrl: string): SiteConfig | null {
-  if (!lease.capture_enabled || lease.expires_at <= Date.now()) return null;
+/** Whether the lease allows automatic capture at all right now. */
+export function leaseActive(lease: PolicyLease, now = Date.now()): boolean {
+  return lease.capture_enabled && lease.expires_at > now;
+}
+
+/** Parse a URL automatic capture may consider: HTTP(S), no credentials. */
+export function captureUrl(raw: string): URL | null {
   let url: URL;
   try {
-    url = new URL(rawUrl);
+    url = new URL(raw);
   } catch {
     return null;
   }
   if (!isHttpUrl(url) || url.username || url.password) return null;
-  return (
-    lease.sites.find((site) => siteMatchesUrl(site, url)) ?? null
-  );
-}
-
-export function siteMatchesUrl(site: SiteConfig, url: URL): boolean {
-  if (site.origin !== url.origin) return false;
-  const prefix = site.path_prefix;
-  if (prefix === "/") return true;
-  if (prefix.endsWith("/")) return url.pathname.startsWith(prefix);
-  return url.pathname === prefix || url.pathname.startsWith(`${prefix}/`);
+  return url;
 }
 
 export function isPolicyLease(value: unknown): value is PolicyLease {
@@ -175,7 +170,6 @@ export function isPolicyLease(value: unknown): value is PolicyLease {
 function isPolicyLeaseShape(value: unknown): value is PolicyLease {
   if (typeof value !== "object" || value === null) return false;
   const lease = value as Record<string, unknown>;
-  const sites = lease.sites;
   const adapters = lease.adapters;
   return (
     typeof lease.revision === "string" &&
@@ -183,24 +177,12 @@ function isPolicyLeaseShape(value: unknown): value is PolicyLease {
     typeof lease.expires_at === "number" &&
     Number.isFinite(lease.expires_at) &&
     typeof lease.capture_enabled === "boolean" &&
-    Array.isArray(sites) &&
-    sites.every(
-      (site: unknown) =>
-        typeof site === "object" &&
-        site !== null &&
-        typeof (site as Record<string, unknown>).origin === "string" &&
-        typeof (site as Record<string, unknown>).path_prefix === "string",
-    ) &&
     typeof adapters === "object" &&
     adapters !== null &&
     Array.isArray((adapters as Record<string, unknown>).artifacts) &&
     ((adapters as Record<string, unknown>).artifacts as unknown[]).every((artifact) =>
       typeof artifact === "object" && artifact !== null &&
-      typeof (artifact as Record<string, unknown>).origin === "string" &&
-      sites.some((site: unknown) =>
-        typeof site === "object" && site !== null &&
-        (site as Record<string, unknown>).origin ===
-          (artifact as Record<string, unknown>).origin))
+      typeof (artifact as Record<string, unknown>).origin === "string")
   );
 }
 
@@ -212,7 +194,8 @@ type AdapterCompiler = (adapters: unknown) => CompileResult;
  * `install` always validates because extension messages are untrusted.
  * `restore` validates a stored lease once after worker startup and then trusts
  * the revision that the host minted, avoiding a full compile on every storage
- * read. The lease's site gate still runs before the compiled document is used.
+ * read. The lease's active and adapter-origin checks still run before the
+ * compiled document is used.
  */
 export class PolicyLeaseCache {
   private cached: { revision: string; doc: CompiledDocument } | null = null;

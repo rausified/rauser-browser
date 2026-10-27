@@ -10,12 +10,11 @@ use adapter_templates::{Document as AdapterTemplates, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
-    ErrorCode, HarnessAdapter, SiteConfig, StorageConfig,
+    ErrorCode, HarnessAdapter, StorageConfig,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use url::Url;
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -32,7 +31,6 @@ const MAX_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_ROOT_PATH_BYTES: usize = 4 * 1024;
 const MAX_LOCATION_PATH_BYTES: usize = 512;
 const MAX_PATH_COMPONENT_BYTES: usize = 255;
-const MAX_SITES: usize = 128;
 const MAX_STRIP_PARAMS: usize = 64;
 const MAX_RULE_BYTES: usize = 64;
 const MAX_AGENT_ARGS: usize = 64;
@@ -377,6 +375,18 @@ impl ConfigStore {
     /// not depend on adapter recognition and remain usable.
     pub fn adapter_issue(&self) -> Option<&str> {
         self.adapter_issue.as_deref()
+    }
+
+    /// The origins automatic capture may record, from the adapter document
+    /// compiled for the current revision. Empty while `adapter_issue` is set.
+    pub fn capture_origins(&self) -> Vec<String> {
+        if self.adapter_issue.is_some() {
+            return Vec::new();
+        }
+        self.adapter_document
+            .as_ref()
+            .map(document_origins)
+            .unwrap_or_default()
     }
 
     pub fn adapter_warnings(&mut self) -> &[AdapterWarning] {
@@ -791,8 +801,10 @@ struct StoredConfig {
     root_identity: Option<String>,
     #[serde(default)]
     capture_enabled: bool,
-    #[serde(default)]
-    sites: Vec<SiteConfig>,
+    // Accept and ignore the retired v5 site allowlist. Capture origins now
+    // come from the adapters; new config writes omit it.
+    #[serde(default, skip_serializing, rename = "sites")]
+    _sites: Option<toml::Value>,
     #[serde(default = "default_strip_params")]
     strip_params: Vec<String>,
     // Accept and ignore the retired M1 key. New config writes omit it.
@@ -979,7 +991,7 @@ impl StoredConfig {
             root_picker_confirmed: value.storage.is_some(),
             root_identity,
             capture_enabled: value.capture_enabled,
-            sites: value.sites.clone(),
+            _sites: None,
             strip_params: value.strip_params.clone(),
             _near_repeat_secs: None,
             _agent_denylist: None,
@@ -1004,7 +1016,6 @@ impl From<StoredConfig> for ConfigSnapshot {
         Self {
             storage: value.storage.map(StorageConfig::from),
             capture_enabled: value.capture_enabled,
-            sites: value.sites,
             strip_params: value.strip_params,
             agent: None,
             adapters: AdapterDocument {
@@ -1269,7 +1280,6 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
     ConfigSnapshot {
         storage: None,
         capture_enabled: false,
-        sites: Vec::new(),
         strip_params: default_strip_params(),
         agent: None,
         adapters: AdapterDocument {
@@ -1308,12 +1318,6 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
 }
 
 pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
-    if config.sites.len() > MAX_SITES {
-        bail!("site allowlist exceeds the 128-entry limit");
-    }
-    for site in &config.sites {
-        validate_site(site)?;
-    }
     if config.strip_params.len() > MAX_STRIP_PARAMS {
         bail!("tracking-parameter list exceeds the 64-entry limit");
     }
@@ -1330,8 +1334,8 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
             bail!("tracking parameters must be simple names or prefix patterns ending in *");
         }
     }
-    if config.capture_enabled && (config.storage.is_none() || config.sites.is_empty()) {
-        bail!("capture requires a selected notes folder and at least one site");
+    if config.capture_enabled && config.storage.is_none() {
+        bail!("capture requires a selected notes folder");
     }
     if let Some(agent) = &config.agent {
         validate_agent(agent)?;
@@ -1349,20 +1353,29 @@ fn validate_adapters(config: &ConfigSnapshot) -> Result<Vec<AdapterWarning>> {
 }
 
 fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
-    let document = compile_adapters(config)?;
-    for (index, adapter) in document.adapters().iter().enumerate() {
-        if !config
-            .sites
-            .iter()
-            .any(|site| site.origin == adapter.origin())
-        {
-            bail!(
-                "adapter {index} uses origin {:?}, which is not enabled for capture",
-                adapter.origin()
-            );
+    compile_adapters(config)
+}
+
+/// The origins automatic capture may record: the distinct origins of the
+/// config's adapters. A site is on exactly when it has an adapter. An adapter
+/// document that does not validate yields no origins, so capture stays off.
+/// The host itself reads `ConfigStore::capture_origins`, which reuses the
+/// document already compiled for the current revision.
+#[cfg(test)]
+pub(crate) fn capture_origins(config: &ConfigSnapshot) -> Vec<String> {
+    compile_validated_adapters(config)
+        .map(|document| document_origins(&document))
+        .unwrap_or_default()
+}
+
+fn document_origins(document: &AdapterTemplates) -> Vec<String> {
+    let mut origins = Vec::new();
+    for adapter in document.adapters() {
+        if !origins.iter().any(|origin| origin == adapter.origin()) {
+            origins.push(adapter.origin().to_owned());
         }
     }
-    Ok(document)
+    origins
 }
 
 pub(crate) fn adapter_policy_valid(config: &ConfigSnapshot) -> bool {
@@ -1667,66 +1680,6 @@ fn validate_persisted(config: &ConfigSnapshot) -> Result<()> {
     Ok(())
 }
 
-fn validate_site(site: &SiteConfig) -> Result<()> {
-    if site.origin.len() > 2048 || site.path_prefix.len() > 2048 {
-        bail!("site allowlist entry is too long");
-    }
-    let parsed = Url::parse(&site.origin).context("site origin is invalid")?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.origin().ascii_serialization() != site.origin
-    {
-        bail!("site origin must be an exact HTTP(S) scheme, host, and optional port");
-    }
-    if !site.path_prefix.starts_with('/')
-        || !site.path_prefix.bytes().all(|byte| byte.is_ascii_graphic())
-        || !valid_percent_encoding(&site.path_prefix)
-        || site.path_prefix.contains("//")
-        || (site.path_prefix != "/" && site.path_prefix.ends_with('/'))
-        || site.path_prefix.contains('?')
-        || site.path_prefix.contains('#')
-        || site.path_prefix.contains('\\')
-        || site
-            .path_prefix
-            .split('/')
-            .any(|part| part == "." || part == "..")
-    {
-        bail!("site path prefix must be an absolute URL path without query or traversal");
-    }
-    let full = Url::parse(&format!("{}{}", site.origin, site.path_prefix))
-        .context("site path prefix is invalid")?;
-    if full.path() != site.path_prefix {
-        bail!("site path prefix must use canonical URL encoding");
-    }
-    Ok(())
-}
-
-fn valid_percent_encoding(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        if bytes[offset] == b'%' {
-            if bytes
-                .get(offset + 1)
-                .is_none_or(|value| !value.is_ascii_hexdigit())
-                || bytes
-                    .get(offset + 2)
-                    .is_none_or(|value| !value.is_ascii_hexdigit())
-            {
-                return false;
-            }
-            offset += 3;
-        } else {
-            offset += 1;
-        }
-    }
-    true
-}
-
 fn validate_storage(storage: &StorageConfig) -> Result<()> {
     if storage.root.len() > MAX_ROOT_PATH_BYTES {
         bail!("storage.root exceeds the 4096-byte path limit");
@@ -2020,12 +1973,8 @@ mod tests {
         })
     }
 
-    fn adapter_config(origin: &str, artifacts: Vec<serde_json::Value>) -> ConfigSnapshot {
+    fn adapter_config(artifacts: Vec<serde_json::Value>) -> ConfigSnapshot {
         ConfigSnapshot {
-            sites: vec![SiteConfig {
-                origin: origin.into(),
-                path_prefix: "/".into(),
-            }],
             adapters: AdapterDocument {
                 format: 1,
                 artifacts,
@@ -2103,7 +2052,7 @@ mod tests {
     }
 
     #[test]
-    fn adapter_config_requires_an_enabled_origin_and_shared_origin_scope() {
+    fn adapter_config_needs_no_site_entry_but_requires_shared_origin_scope() {
         let jira = adapter(
             "https://acme.atlassian.net",
             "jira.issue",
@@ -2113,13 +2062,16 @@ mod tests {
         let without_site = ConfigSnapshot {
             adapters: AdapterDocument {
                 format: 1,
-                artifacts: vec![jira.clone()],
+                artifacts: vec![jira],
             },
             ..empty_config()
         };
-        let error = validate(&without_site).unwrap_err().to_string();
-        assert!(error.contains("not enabled for capture"), "{error}");
-        validate(&adapter_config("https://acme.atlassian.net", vec![jira])).unwrap();
+        // An adapter turns its site on; there is no separate site entry.
+        validate(&without_site).unwrap();
+        assert_eq!(
+            capture_origins(&without_site),
+            vec!["https://acme.atlassian.net".to_owned()]
+        );
 
         let github = adapter(
             "https://github.com",
@@ -2127,34 +2079,31 @@ mod tests {
             "/{owner:name|lower}/{repo:name}/issues/{number:int}",
             "github.issue:{host}/{owner}/{repo}/{number}",
         );
-        let error = validate(&adapter_config("https://github.com", vec![github.clone()]))
+        let error = validate(&adapter_config(vec![github.clone()]))
             .unwrap_err()
             .to_string();
         assert!(error.contains("shared_origin_unscoped"), "{error}");
         let mut acknowledged = github;
         acknowledged["unscoped"] = json!("acknowledged");
-        validate(&adapter_config("https://github.com", vec![acknowledged])).unwrap();
+        validate(&adapter_config(vec![acknowledged])).unwrap();
     }
 
     #[test]
     fn adapter_overlap_warnings_name_both_rules() {
-        let config = adapter_config(
-            "https://work.example",
-            vec![
-                adapter(
-                    "https://work.example",
-                    "work.issue",
-                    "/issues/{id:int}",
-                    "work.issue:{host}/{id}",
-                ),
-                adapter(
-                    "https://work.example",
-                    "work.ticket",
-                    "/issues/{id:int}",
-                    "work.ticket:{host}/{id}",
-                ),
-            ],
-        );
+        let config = adapter_config(vec![
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.ticket",
+                "/issues/{id:int}",
+                "work.ticket:{host}/{id}",
+            ),
+        ]);
         assert_eq!(
             validate_adapters(&config).unwrap(),
             vec![AdapterWarning {
@@ -2171,23 +2120,20 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let config = adapter_config(
-            "https://work.example",
-            vec![
-                adapter(
-                    "https://work.example",
-                    "work.issue",
-                    "/issues/{id:int}",
-                    "work.issue:{host}/{id}",
-                ),
-                adapter(
-                    "https://work.example",
-                    "work.ticket",
-                    "/issues/{id:int}",
-                    "work.ticket:{host}/{id}",
-                ),
-            ],
-        );
+        let config = adapter_config(vec![
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.ticket",
+                "/issues/{id:int}",
+                "work.ticket:{host}/{id}",
+            ),
+        ]);
         store.update(config, MISSING_REVISION).unwrap().unwrap();
         let mut store = loaded(&path);
 
@@ -2219,24 +2165,18 @@ mod tests {
 
     #[test]
     fn existing_adapter_id_template_cannot_change_before_migrations_exist() {
-        let current = adapter_config(
+        let current = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
-        let next = adapter_config(
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
+        let next = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.ticket:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.ticket:{host}/{id}",
+        )]);
         validate(&next).unwrap();
         let error = validate_adapter_transition(&current, &next)
             .unwrap_err()
@@ -2262,12 +2202,12 @@ mod tests {
             "/tickets/{id:int}",
             "work.issue:{host}/ticket/{id}",
         );
-        let current = adapter_config("https://work.example", vec![first.clone(), second.clone()]);
+        let current = adapter_config(vec![first.clone(), second.clone()]);
         validate(&current).unwrap();
 
         // Adapter order is policy precedence, not adapter identity. Reordering
         // two same-type adapters does not change either durable ID contract.
-        let reordered = adapter_config("https://work.example", vec![second, first]);
+        let reordered = adapter_config(vec![second, first]);
         validate(&reordered).unwrap();
         validate_adapter_transition(&current, &reordered).unwrap();
     }
@@ -2286,25 +2226,22 @@ mod tests {
             "/tickets/{id:int}",
             "work.issue:{host}/ticket/{id}",
         );
-        let current = adapter_config("https://work.example", vec![survivor.clone(), removed]);
-        let next = adapter_config("https://work.example", vec![survivor.clone()]);
+        let current = adapter_config(vec![survivor.clone(), removed]);
+        let next = adapter_config(vec![survivor.clone()]);
         validate(&current).unwrap();
         validate(&next).unwrap();
 
         validate_adapter_transition(&current, &next).unwrap();
 
-        let changed = adapter_config(
-            "https://work.example",
-            vec![
-                survivor,
-                adapter(
-                    "https://work.example",
-                    "work.issue",
-                    "/tickets/{id:int}",
-                    "work.issue:{host}/changed/{id}",
-                ),
-            ],
-        );
+        let changed = adapter_config(vec![
+            survivor,
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/tickets/{id:int}",
+                "work.issue:{host}/changed/{id}",
+            ),
+        ]);
         validate(&changed).unwrap();
         assert!(validate_adapter_transition(&current, &changed).is_err());
     }
@@ -2314,28 +2251,22 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let original = adapter_config(
+        let original = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         let revision = store
             .update(original.clone(), MISSING_REVISION)
             .unwrap()
             .unwrap();
-        let remapped = adapter_config(
+        let remapped = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.ticket",
-                "/issues/{id:int}",
-                "work.ticket:{host}/{id}",
-            )],
-        );
+            "work.ticket",
+            "/issues/{id:int}",
+            "work.ticket:{host}/{id}",
+        )]);
         let direct_error = store
             .update(remapped.clone(), &revision)
             .unwrap_err()
@@ -2344,22 +2275,19 @@ mod tests {
             direct_error.contains("cannot change until artifact migrations"),
             "{direct_error}"
         );
-        let type_only = adapter_config(
+        let type_only = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.ticket",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.ticket",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         let type_error = store.update(type_only, &revision).unwrap_err().to_string();
         assert!(
             type_error.contains("cannot change until artifact migrations"),
             "{type_error}"
         );
 
-        let removed = adapter_config("https://work.example", Vec::new());
+        let removed = adapter_config(Vec::new());
         let revision = store.update(removed, &revision).unwrap().unwrap();
         assert!(
             fs::read_to_string(&store.path)
@@ -2378,15 +2306,12 @@ mod tests {
             "{error}"
         );
 
-        let disjoint = adapter_config(
+        let disjoint = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.ticket",
-                "/tickets/{id:int}",
-                "work.ticket:{host}/{id}",
-            )],
-        );
+            "work.ticket",
+            "/tickets/{id:int}",
+            "work.ticket:{host}/{id}",
+        )]);
         let revision = restarted.update(disjoint, &revision).unwrap().unwrap();
         restarted.update(original, &revision).unwrap().unwrap();
     }
@@ -2409,17 +2334,11 @@ mod tests {
             "work.issue:{host}/{id}",
         );
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![original.clone()]),
-                MISSING_REVISION,
-            )
+            .update(adapter_config(vec![original.clone()]), MISSING_REVISION)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![moved.clone()]),
-                &revision,
-            )
+            .update(adapter_config(vec![moved.clone()]), &revision)
             .unwrap()
             .unwrap();
 
@@ -2430,10 +2349,7 @@ mod tests {
             "work.issue:{host}/changed/{id}",
         );
         let error = store
-            .update(
-                adapter_config("https://work.example", vec![moved, remapped]),
-                &revision,
-            )
+            .update(adapter_config(vec![moved, remapped]), &revision)
             .unwrap_err()
             .to_string();
         assert!(
@@ -2460,31 +2376,19 @@ mod tests {
             "work.issue:{host}/{id}",
         );
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![original]),
-                MISSING_REVISION,
-            )
+            .update(adapter_config(vec![original]), MISSING_REVISION)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", Vec::new()),
-                &revision,
-            )
+            .update(adapter_config(Vec::new()), &revision)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", vec![disjoint]),
-                &revision,
-            )
+            .update(adapter_config(vec![disjoint]), &revision)
             .unwrap()
             .unwrap();
         let revision = store
-            .update(
-                adapter_config("https://work.example", Vec::new()),
-                &revision,
-            )
+            .update(adapter_config(Vec::new()), &revision)
             .unwrap()
             .unwrap();
 
@@ -2495,10 +2399,7 @@ mod tests {
             "work.issue:{host}/changed/{id}",
         );
         let error = store
-            .update(
-                adapter_config("https://work.example", vec![remapped]),
-                &revision,
-            )
+            .update(adapter_config(vec![remapped]), &revision)
             .unwrap_err()
             .to_string();
         assert!(
@@ -2673,15 +2574,12 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let original = adapter_config(
+        let original = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         store.update(original, MISSING_REVISION).unwrap().unwrap();
         let text = fs::read_to_string(&path).unwrap();
         fs::write(&path, text.replacen("format = 1", "format = 2", 1)).unwrap();
@@ -2697,15 +2595,12 @@ mod tests {
         };
         let revision = store.revision().to_owned();
         let revision = store.update(reset, &revision).unwrap().unwrap();
-        let remapped = adapter_config(
+        let remapped = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/changed/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/changed/{id}",
+        )]);
 
         let error = store.update(remapped, &revision).unwrap_err().to_string();
         assert!(
@@ -2721,15 +2616,12 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let path = folder.path().join("config.toml");
         let mut store = ConfigStore::for_test(path.clone());
-        let mut config = adapter_config(
+        let mut config = adapter_config(vec![adapter(
             "https://work.example",
-            vec![adapter(
-                "https://work.example",
-                "work.issue",
-                "/issues/{id:int}",
-                "work.issue:{host}/{id}",
-            )],
-        );
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
         config.storage = Some(StorageConfig {
             root: root.to_string_lossy().into_owned(),
             profile: "neutral".into(),
@@ -2776,6 +2668,95 @@ mod tests {
             .unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(!text.contains("agent_denylist") && !text.contains("log_incognito"));
+    }
+
+    #[test]
+    fn v5_sites_key_is_accepted_and_dropped_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/allowed\" }]",
+            "",
+        );
+        let mut store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert!(store.configured());
+        assert!(store.snapshot().capture_enabled);
+        assert_eq!(backup_count(dir.path()), 0);
+        let rev = store.revision().to_owned();
+        store
+            .update(store.snapshot().clone(), &rev)
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sites"), "{text}");
+        assert!(!text.contains("path_prefix"), "{text}");
+    }
+
+    #[test]
+    fn capture_enabled_needs_only_a_notes_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = StorageConfig {
+            root: dir.path().to_string_lossy().into_owned(),
+            profile: "neutral".into(),
+            log_dir: "log".into(),
+            pages_dir: "pages".into(),
+            later_dir: "later".into(),
+            artifacts_dir: "artifacts".into(),
+            summaries_dir: None,
+        };
+        let enabled = ConfigSnapshot {
+            storage: Some(storage),
+            capture_enabled: true,
+            ..empty_config()
+        };
+        validate_base(&enabled).unwrap();
+        validate(&enabled).unwrap();
+        let no_folder = ConfigSnapshot {
+            capture_enabled: true,
+            ..empty_config()
+        };
+        let error = validate_base(&no_folder).unwrap_err().to_string();
+        assert!(error.contains("notes folder"), "{error}");
+    }
+
+    #[test]
+    fn capture_origins_are_the_distinct_adapter_origins() {
+        let config = adapter_config(vec![
+            adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.page",
+                "/pages/{id:int}",
+                "work.page:{host}/{id}",
+            ),
+            adapter(
+                "https://other.example",
+                "other.issue",
+                "/issues/{id:int}",
+                "other.issue:{host}/{id}",
+            ),
+        ]);
+        let mut origins = capture_origins(&config);
+        origins.sort();
+        assert_eq!(
+            origins,
+            vec![
+                "https://other.example".to_owned(),
+                "https://work.example".to_owned()
+            ]
+        );
+        assert!(capture_origins(&empty_config()).is_empty());
     }
 
     #[test]
@@ -3529,7 +3510,7 @@ mod tests {
     #[test]
     fn remounted_or_missing_folder_keeps_settings_without_a_backup() {
         // An external or network volume can disappear, or come back with a
-        // new device number. Neither may wipe the site allowlist.
+        // new device number. Neither may wipe the saved settings.
         let base = tempfile::tempdir().unwrap();
         let root = base.path().join("selected");
         let away = base.path().join("away");
@@ -3547,10 +3528,6 @@ mod tests {
                 summaries_dir: None,
             }),
             capture_enabled: true,
-            sites: vec![SiteConfig {
-                origin: "https://example.com".into(),
-                path_prefix: "/".into(),
-            }],
             ..empty_config()
         };
         let identity = selected_root_identity(&root).unwrap();

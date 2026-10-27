@@ -416,7 +416,6 @@
       "required": [
         "storage",
         "capture_enabled",
-        "sites",
         "strip_params",
         "agent",
         "adapters"
@@ -434,13 +433,6 @@
         },
         "capture_enabled": {
           "type": "boolean"
-        },
-        "sites": {
-          "type": "array",
-          "maxItems": 128,
-          "items": {
-            "$ref": "#/$defs/SiteConfig"
-          }
         },
         "strip_params": {
           "type": "array",
@@ -1356,26 +1348,6 @@
         "harness_version": {
           "type": "string",
           "maxLength": 256
-        }
-      }
-    },
-    "SiteConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "origin",
-        "path_prefix"
-      ],
-      "properties": {
-        "origin": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2048
-        },
-        "path_prefix": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2048
         }
       }
     },

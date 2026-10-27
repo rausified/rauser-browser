@@ -457,7 +457,7 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     };
     let policy = CapturePolicy {
         enabled: config.snapshot().capture_enabled,
-        sites: &config.snapshot().sites,
+        origins: &config.capture_origins(),
         strip_params: &config.snapshot().strip_params,
     };
     let capture_outcome = store.record(policy, &value.event);
@@ -633,7 +633,7 @@ fn record_activity(
     };
     let policy = CapturePolicy {
         enabled: true,
-        sites: &config.snapshot().sites,
+        origins: &config.capture_origins(),
         strip_params: &config.snapshot().strip_params,
     };
     let capture_outcome = store.record_activity(policy, &value.event);
@@ -852,7 +852,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
     let outcome = store.record_batch(
         CapturePolicy {
             enabled: config.snapshot().capture_enabled,
-            sites: &config.snapshot().sites,
+            origins: &config.capture_origins(),
             strip_params: &config.snapshot().strip_params,
         },
         &value.batch_id,
@@ -1035,7 +1035,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     };
     let policy = CapturePolicy {
         enabled: config.snapshot().capture_enabled,
-        sites: &config.snapshot().sites,
+        origins: &config.capture_origins(),
         strip_params: &config.snapshot().strip_params,
     };
     let capture_outcome = store.record_why(policy, &value.event);
@@ -1113,7 +1113,7 @@ fn regenerate_artifacts(config: &mut ConfigStore) {
 
 /// Resolve the canonical URL and vault shared by `load_note` and `save_note`.
 /// Notes work on any HTTP(S) page (§5.3): unlike visit logging, this never
-/// checks the site allowlist. The error is a small `(code, message)` pair,
+/// checks the capture origins. The error is a small `(code, message)` pair,
 /// not a `Response`, so callers pay for the large `Response` enum only once.
 struct NoteContext {
     canonical: String,
@@ -1838,7 +1838,6 @@ mod tests {
                 config: ConfigSnapshot {
                     storage: None,
                     capture_enabled: false,
-                    sites: Vec::new(),
                     strip_params: Vec::new(),
                     agent: None,
                     adapters: crate::config::empty_config().adapters,
@@ -1864,7 +1863,7 @@ mod tests {
         match &responses[1] {
             Response::ConfigResult(value) => {
                 assert!(value.config.storage.is_none());
-                assert!(value.config.sites.is_empty());
+                assert!(value.config.adapters.artifacts.is_empty());
                 assert!(value.config_issue.is_some());
             }
             other => panic!("expected config_result, got {other:?}"),
@@ -1882,7 +1881,6 @@ mod tests {
         let snapshot = ConfigSnapshot {
             storage: None,
             capture_enabled: false,
-            sites: Vec::new(),
             strip_params: vec!["utm_*".into(), "fbclid".into(), "gclid".into()],
             ..crate::config::empty_config()
         };
@@ -2064,7 +2062,6 @@ mod tests {
                     summaries_dir: None,
                 }),
                 capture_enabled: false,
-                sites: Vec::new(),
                 strip_params: Vec::new(),
                 agent: None,
                 adapters: crate::config::empty_config().adapters,
@@ -2126,10 +2123,6 @@ mod tests {
         };
         let mut next = current;
         next.capture_enabled = true;
-        next.sites = vec![brauser_protocol::SiteConfig {
-            origin: "https://work.example".into(),
-            path_prefix: "/".into(),
-        }];
         next.adapters.artifacts.push(serde_json::json!({
             "type": "work.issue",
             "origin": "https://work.example",
@@ -2187,7 +2180,6 @@ mod tests {
                 summaries_dir: None,
             }),
             capture_enabled: false,
-            sites: Vec::new(),
             strip_params: Vec::new(),
             ..crate::config::empty_config()
         };
@@ -2199,19 +2191,12 @@ mod tests {
         store
     }
 
-    fn write_adapter_config(
-        path: &std::path::Path,
-        root: &std::path::Path,
-        origin: &str,
-        adapter: &str,
-    ) {
+    fn write_adapter_config(path: &std::path::Path, root: &std::path::Path, adapter: &str) {
         config::fixtures::write(
             path,
             root,
             "artifacts_dir = \"artifacts\"",
-            &format!(
-                "capture_enabled = true\nsites = [{{ origin = {origin:?}, path_prefix = \"/\" }}]"
-            ),
+            "capture_enabled = true",
             &format!("[adapters]\nformat = 1\n\n{adapter}"),
         );
     }
@@ -2260,7 +2245,6 @@ mod tests {
         write_adapter_config(
             &path,
             &root,
-            "https://docs.google.com",
             r#"[[artifacts]]
 type = "gdoc"
 origin = "https://docs.google.com"
@@ -2310,7 +2294,6 @@ id = "gdoc:{host}/{id}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
@@ -2364,7 +2347,6 @@ id = "work:{host}/{id}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
@@ -2417,7 +2399,6 @@ id = "work:{host}/{id}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
@@ -2450,7 +2431,6 @@ id = "work:{host}/{id}"
         write_adapter_config(
             &path,
             &root,
-            "https://acme.atlassian.net",
             r#"[[artifacts]]
 type = "jira.issue"
 origin = "https://acme.atlassian.net"
@@ -2494,16 +2474,11 @@ id = "{prefix}:{{host}}/{{id}}"
 "#
             )
         };
-        write_adapter_config(&path, &root, "https://work.example", &adapter("work"));
+        write_adapter_config(&path, &root, &adapter("work"));
         let mut config = loaded(&path);
         let url = "https://work.example/items/7";
         let loaded = note_load(&mut config, url);
-        write_adapter_config(
-            &path,
-            &root,
-            "https://work.example",
-            &adapter("replacement"),
-        );
+        write_adapter_config(&path, &root, &adapter("replacement"));
         match note_save(&mut config, url, "unsaved", &loaded.revision, loaded.key) {
             Response::NoteConflict(conflict) => {
                 assert_eq!(conflict.reason, "key_changed");
@@ -2519,7 +2494,7 @@ id = "{prefix}:{{host}}/{{id}}"
         let root = folder.path().join("notes");
         std::fs::create_dir(&root).unwrap();
         let path = folder.path().join("config.toml");
-        write_adapter_config(&path, &root, "https://work.example", "");
+        write_adapter_config(&path, &root, "");
         let mut config = loaded(&path);
         let url = "https://work.example/items/7";
 
@@ -2554,7 +2529,6 @@ id = "{prefix}:{{host}}/{{id}}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
@@ -2614,7 +2588,7 @@ id = "work:{host}/{id}"
 
         // Remove the adapter. The URL no longer resolves through any
         // adapter, as if its site had been removed.
-        write_adapter_config(&path, &root, "https://work.example", "");
+        write_adapter_config(&path, &root, "");
 
         let loaded_after = note_load(&mut config, url);
         assert!(
@@ -2633,7 +2607,6 @@ id = "work:{host}/{id}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
@@ -2661,7 +2634,7 @@ id = "work:{host}/{id}"
             other => panic!("expected note_saved, got {other:?}"),
         }
 
-        write_adapter_config(&path, &root, "https://work.example", "");
+        write_adapter_config(&path, &root, "");
 
         let loaded_after = note_load(&mut config, url);
         assert!(
@@ -2728,7 +2701,6 @@ id = "jira:{host}/{key}"
         write_adapter_config(
             &path,
             &root,
-            "https://work.example",
             r#"[[artifacts]]
 type = "work.item"
 origin = "https://work.example"
@@ -3444,6 +3416,138 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected rejected trail, got {other:?}"),
         }
+    }
+
+    /// A v6 config: capture on, one adapter, and no `sites` key at all.
+    fn adapter_only_config(folder: &tempfile::TempDir) -> (ConfigStore, std::path::PathBuf) {
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        (loaded(&path), root)
+    }
+
+    fn hour_timestamp() -> String {
+        time::OffsetDateTime::now_utc()
+            .replace_minute(0)
+            .unwrap()
+            .replace_second(0)
+            .unwrap()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    }
+
+    fn work_item_activity(occurred_at: &str, trails: Vec<ActivityTrail>) -> ActivityEvent {
+        ActivityEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: "work:work.example/7".into(),
+            artifact_type: "work.item".into(),
+            url: "https://work.example/items/7".into(),
+            title: Some("Work item".into()),
+            occurred_at: occurred_at.into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 3,
+            background_seconds: 0,
+            modes: Vec::new(),
+            trails,
+            refs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn adapter_origin_is_captured_without_a_sites_entry() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, _root) = adapter_only_config(&folder);
+        assert_eq!(config.adapter_issue(), None);
+        assert_eq!(
+            config.capture_origins(),
+            vec!["https://work.example".to_owned()]
+        );
+        let response = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "activity-1".into(),
+                event: work_item_activity(&hour_timestamp(), Vec::new()),
+            },
+            &mut config,
+        );
+        match response {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(
+                    recorded.outcome,
+                    VisitOutcome::Persisted,
+                    "{:?}",
+                    recorded.reason
+                );
+            }
+            other => panic!("expected persisted activity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_still_suppresses_deliveries_outside_every_adapter_origin() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, root) = adapter_only_config(&folder);
+        let occurred_at = hour_timestamp();
+        let response = record_visit(
+            RecordVisitRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "visit-other".into(),
+                event: VisitEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    url: "https://other.example/items/7".into(),
+                    title: Some("Elsewhere".into()),
+                    occurred_at: occurred_at.clone(),
+                    incognito: false,
+                },
+            },
+            &mut config,
+        );
+        match response {
+            Response::VisitRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Suppressed);
+                assert_eq!(recorded.reason.as_deref(), Some("not_an_artifact"));
+            }
+            other => panic!("expected a suppressed visit, got {other:?}"),
+        }
+        let foreign_trail = ActivityTrail {
+            from_artifact_id: Some("other:other.example/2".into()),
+            from_url: Some("https://other.example/items/2".into()),
+            transition: "link".into(),
+        };
+        let response = record_activity(
+            RecordActivityRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "activity-trail".into(),
+                event: work_item_activity(&occurred_at, vec![foreign_trail]),
+            },
+            &mut config,
+        );
+        match response {
+            Response::ActivityRecorded(recorded) => {
+                assert_eq!(recorded.outcome, VisitOutcome::Rejected);
+                assert_eq!(recorded.reason.as_deref(), Some("trail_identity_mismatch"));
+            }
+            other => panic!("expected a rejected trail, got {other:?}"),
+        }
+        assert!(!root.join("log").exists());
     }
 
     fn refused(response: &Response) -> (ErrorCode, &str) {

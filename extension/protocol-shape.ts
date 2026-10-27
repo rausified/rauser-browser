@@ -109,9 +109,9 @@ function isArtifactListItem(value: unknown): boolean {
 }
 
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
- * `agent_denylist` means the host speaks another shape. */
+ * `agent_denylist` or `sites` means the host speaks another shape. */
 const CONFIG_KEYS: readonly string[] = [
-  "storage", "capture_enabled", "sites", "strip_params", "agent", "adapters",
+  "storage", "capture_enabled", "strip_params", "agent", "adapters",
 ];
 
 export function isConfig(value: unknown): boolean {
@@ -128,11 +128,6 @@ export function isConfig(value: unknown): boolean {
     if (!stringOrNull(record.summaries_dir)) return false;
   }
   return typeof config.capture_enabled === "boolean" &&
-    Array.isArray(config.sites) &&
-    config.sites.every((site: unknown) =>
-      typeof site === "object" && site !== null &&
-      typeof (site as Record<string, unknown>).origin === "string" &&
-      typeof (site as Record<string, unknown>).path_prefix === "string") &&
     isStringArray(config.strip_params) &&
     isAgent(config.agent) && isAdapterDocument(config.adapters);
 }

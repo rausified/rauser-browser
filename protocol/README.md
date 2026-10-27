@@ -33,7 +33,7 @@ or newer TOML file yields an inert empty snapshot, its raw-file revision, and a
 backs up those exact bytes before replacing the file.
 
 `ConfigSnapshot.storage` must be present: use `null` only to explicitly clear
-the selected notes folder. `sites` and `strip_params` are
+the selected notes folder. `strip_params` is
 also required. The generated Rust deserializer rejects omitted nullable fields,
 matching the JSON Schema requirement. Existing M0 TOML defaults to an empty
 site list, `utm_*`/`fbclid`/`gclid` stripping, and a 300-second repeat window.
@@ -61,7 +61,8 @@ Version 5 adds the required `ConfigSnapshot.adapters` document: `format` is
 the adapter-template language version and `artifacts` contains at most 64
 adapter tables. The JSON Schema bounds their outer shape; the host validates
 their complete grammar, origins, scope, and IDs with the Rust
-`adapter-templates` engine. Every adapter origin must also appear in `sites`.
+`adapter-templates` engine. In version 5 every adapter origin also had to
+appear in `sites`; version 6 removes `sites`.
 `config_result.adapter_warnings` identifies bounded pairs of rules that may
 overlap (the earlier configured rule wins), while `adapter_issue` suspends
 automatic capture for a malformed or unsupported on-disk adapter document.
@@ -89,6 +90,13 @@ Harness setup has no native dialog and no token: `confirm_harness_setup`,
 one test prompt, and commits it, answering `config_updated`. A failed test
 run is `invalid_config` and changes nothing; `update_config` still cannot set
 a harness entry.
+`ConfigSnapshot.sites` and `SiteConfig` are gone, and the host refuses
+`sites` as an unknown key. A site is on exactly when it has an adapter: the
+host records automatic capture only on the exact origins of a valid adapter
+document, and none while `adapter_issue` is set. Turning capture on needs only
+a notes folder. Path-prefix narrowing is dropped. A version 5 `config.toml`
+that still has `sites` loads unchanged, and the host drops the key on its next
+save.
 
 `load_note` returns the host-derived `RecordKey` and any bounded older
 URL-keyed notes that now resolve to the same artifact. `save_note` must echo

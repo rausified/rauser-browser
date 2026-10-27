@@ -149,8 +149,8 @@ function updateControls(): void {
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
-  // The host refuses capture without a notes folder and, until protocol v6
-  // drops sites, without at least one site.
+  // The host refuses capture without a notes folder, and capture has nothing
+  // to record until some site has an adapter.
   resumeButton.disabled = !connected || busy || repairing || repairingAdapters ||
     session.config?.capture_enabled !== false || !session.config.storage ||
     !siteOrigins(session.config.adapters).length;
@@ -611,7 +611,7 @@ function closeAdapterEditor(): void {
 
 /**
  * Save a new adapter document. A site is on while it has an adapter, so the
- * sites follow the document, and the first adapter saved with a notes folder
+ * host derives the sites from the document, and the first adapter saved with a notes folder
  * turns capture on unless a pause is still pending. A folder selection the
  * host has not saved yet is saved with it.
  */
@@ -624,17 +624,15 @@ async function saveAdapterDocument(document: AdapterDocument, success: string): 
     await withConfigMutationLock(async () => {
       const config = session.config!;
       const storage = selection ? storageFor(selection.path, config.storage) : config.storage;
-      // Transitional until protocol v6 drops sites (Task 9).
-      const sites = siteOrigins(document).map((origin) => ({ origin, path_prefix: "/" }));
+      const hasSites = siteOrigins(document).length > 0;
       const state = await worker<WorkerStatus>({ kind: "get_status" });
       const first = config.adapters.artifacts.length === 0 && document.artifacts.length > 0 &&
         storage !== null && !state.pause_pending;
       await session.saveConfig({
         ...config,
         storage,
-        sites,
         adapters: document,
-        capture_enabled: sites.length > 0 && (first || config.capture_enabled),
+        capture_enabled: hasSites && (first || config.capture_enabled),
       }, selection?.token ?? null);
     });
     if (selection && picker === selection) picker = null;

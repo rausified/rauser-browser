@@ -64,7 +64,6 @@ export type ErrorCode = "invalid_request" | "unsupported_protocol_version" | "in
 export interface ConfigSnapshot {
   storage: StorageConfig | null;
   capture_enabled: boolean;
-  sites: SiteConfig[];
   strip_params: string[];
   agent: AgentConfig | null;
   adapters: AdapterDocument;
@@ -385,11 +384,6 @@ export interface AgentChecked {
   request_id: string;
   harness_id: string;
   harness_version: string;
-}
-
-export interface SiteConfig {
-  origin: string;
-  path_prefix: string;
 }
 
 export interface VisitEvent {

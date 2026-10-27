@@ -5,10 +5,11 @@ import {
   POLICY_STORAGE_KEY,
   PolicyLeaseCache,
   TRUSTED_PAGES,
+  captureUrl,
   emptyQueue,
   isPolicyLease,
   isQueuedVisit,
-  matchingSite,
+  leaseActive,
   type PolicyLease,
   type QueuedVisit,
   type QueueState,
@@ -162,21 +163,31 @@ async function readPolicy(): Promise<PolicyLease | null> {
   return (await readPolicyState()).lease;
 }
 
-type LegacyPolicyLease = Omit<PolicyLease, "adapters">;
+type LegacyPolicyLease = Omit<PolicyLease, "adapters"> & { origins: string[] };
 
 function legacyPolicyLease(value: unknown): LegacyPolicyLease | null {
   if (typeof value !== "object" || value === null || "adapters" in value) return null;
-  // Protocol v4 leases had exactly the current policy fields except for the
+  // Protocol v4 leases had the current policy fields and a site list, but no
   // adapter document. Adding an empty document lets the current validator
   // check that old shape without treating arbitrary corrupt state as an
-  // upgrade signal.
+  // upgrade signal. The site origins decide which navigations renew it.
+  const sites = (value as Record<string, unknown>).sites;
+  if (!Array.isArray(sites)) return null;
+  const origins: string[] = [];
+  for (const site of sites) {
+    const origin = typeof site === "object" && site !== null
+      ? (site as Record<string, unknown>).origin
+      : undefined;
+    if (typeof origin !== "string") return null;
+    origins.push(origin);
+  }
   const candidate = { ...value, adapters: { format: 1, artifacts: [] } };
   if (!isPolicyLease(candidate)) return null;
   return {
     revision: candidate.revision,
     expires_at: candidate.expires_at,
     capture_enabled: candidate.capture_enabled,
-    sites: candidate.sites,
+    origins,
   };
 }
 
@@ -426,17 +437,23 @@ function withoutHash(rawUrl: string): string | null {
   }
 }
 
-/** Match only a URL already allowed by the lease's site policy. Adapters are
- * origin-wide, so a URL whose origin has no adapter in this lease never
+/** Whether the lease has an adapter on this URL's origin. Adapters are
+ * origin-wide, so a site is on exactly when it has one. */
+function leaseCoversOrigin(lease: PolicyLease, url: URL): boolean {
+  return lease.adapters.artifacts.some((artifact) => artifact.origin === url.origin);
+}
+
+/** Match only while the lease is active, and only on an origin that has an
+ * adapter in this lease. A URL whose origin has no adapter here never
  * matches, even when the compiled document for its revision still has one. */
 function matchingArtifact(
   lease: PolicyLease,
   rawUrl: string,
   title?: string,
 ): Extract<EvaluateResult, { match: true }> | null {
-  if (!matchingSite(lease, rawUrl)) return null;
-  const origin = new URL(rawUrl).origin;
-  if (!lease.adapters.artifacts.some((artifact) => artifact.origin === origin)) return null;
+  if (!leaseActive(lease)) return null;
+  const url = captureUrl(rawUrl);
+  if (!url || !leaseCoversOrigin(lease, url)) return null;
   const compiled = policyLeases.compiledFor(lease);
   if (!compiled) return null;
   const found = evaluate(compiled, rawUrl, title);
@@ -828,15 +845,18 @@ async function syncNeeds(): Promise<SyncNeeds> {
 /** Whether this URL needs a host renewal before capture can decide. */
 async function leaseNeedsRenewalFor(url: string): Promise<boolean> {
   const state = await readPolicyState();
+  const parsed = captureUrl(url);
+  if (!parsed) return false;
   if (state.legacyLease) {
-    const legacy = { ...state.legacyLease, expires_at: Infinity, adapters: { format: 1, artifacts: [] } };
-    return matchingSite(legacy, url) !== null && !await pausePending();
+    return state.legacyLease.capture_enabled &&
+      state.legacyLease.origins.includes(parsed.origin) &&
+      !await pausePending();
   }
   const lease = state.lease;
   if (!lease || !lease.capture_enabled || lease.expires_at > Date.now()) return false;
-  // matchingSite refuses every URL once the lease lapses, so ask it as if
-  // the lease were still current.
-  if (!matchingSite({ ...lease, expires_at: Infinity }, url)) return false;
+  // Ask as if the lapsed lease were still current: only an origin it has an
+  // adapter for needs a renewal.
+  if (!leaseCoversOrigin(lease, parsed)) return false;
   return !await pausePending();
 }
 
