@@ -66,6 +66,11 @@ pub struct ConfigStore {
     adapter_issue: Option<String>,
     adapter_warnings: Option<Vec<AdapterWarning>>,
     adapter_document: Option<AdapterTemplates>,
+    retired_adapter_contracts: Vec<serde_json::Value>,
+    /// Compiled on first use from `retired_adapter_contracts` (and, while
+    /// `adapter_document` is unavailable, the current contracts that still
+    /// validate alone); cleared whenever either changes.
+    retained_adapters: Option<Vec<AdapterTemplates>>,
 }
 
 struct DiskState {
@@ -265,6 +270,8 @@ impl ConfigStore {
         self.adapter_issue = None;
         self.adapter_warnings = Some(Vec::new());
         self.adapter_document = None;
+        self.retired_adapter_contracts.clear();
+        self.retained_adapters = None;
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -310,6 +317,8 @@ impl ConfigStore {
             adapter_issue: None,
             adapter_warnings: Some(Vec::new()),
             adapter_document: Some(AdapterTemplates::default()),
+            retired_adapter_contracts: Vec::new(),
+            retained_adapters: None,
         }
     }
 
@@ -321,6 +330,7 @@ impl ConfigStore {
         self.root_identity = state.root_identity;
         self.agent = state.agent;
         self.adapter_extensions = state.adapter_extensions;
+        self.retired_adapter_contracts = state.retired_adapter_contracts;
         if revision_changed {
             self.set_adapter_policy(false);
         }
@@ -415,6 +425,33 @@ impl ConfigStore {
             .map_err(|reason| anyhow::anyhow!("URL is not an artifact: {reason}"))
     }
 
+    /// The artifact a URL no live adapter recognizes was keyed to before:
+    /// the one ID that a removed or reshaped adapter's retained contract
+    /// (or, while the adapter document is unavailable, a current contract
+    /// that validates alone) gives the original URL. Each contract is
+    /// evaluated separately; two different IDs are ambiguous and give none.
+    pub(crate) fn retained_artifact_id(&mut self, url: &str) -> Option<String> {
+        let retained = self.retained_adapters.get_or_insert_with(|| {
+            let mut contracts = self.retired_adapter_contracts.clone();
+            if self.adapter_document.is_none() {
+                contracts.extend(individually_valid_adapter_contracts(&self.config));
+            }
+            contracts
+                .into_iter()
+                .filter_map(|contract| compile_adapters(&single_contract_config(contract)).ok())
+                .collect()
+        });
+        let ids = retained
+            .iter()
+            .filter_map(|document| document.evaluate(url, None).ok())
+            .map(|found| found.artifact_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        match ids.len() {
+            1 => ids.into_iter().next(),
+            _ => None,
+        }
+    }
+
     fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()
@@ -422,6 +459,7 @@ impl ConfigStore {
     }
 
     fn set_adapter_policy(&mut self, include_warnings: bool) {
+        self.retained_adapters = None;
         if !self.adapter_extensions.is_empty() {
             let keys = self
                 .adapter_extensions
@@ -747,7 +785,7 @@ impl ConfigStore {
             &next,
             next_identity.clone(),
             &agent,
-            retired_adapter_contracts,
+            retired_adapter_contracts.clone(),
             adapter_extensions.clone(),
         ))
         .context("serializing config TOML")?;
@@ -788,6 +826,7 @@ impl ConfigStore {
         self.root_identity = next_identity;
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
+        self.retired_adapter_contracts = retired_adapter_contracts;
         self.set_adapter_policy(true);
         if let Err(error) = sync_parent(&parent) {
             eprintln!(
@@ -919,16 +958,24 @@ impl From<StoredStorage> for StorageConfig {
 /// `artifacts` name; adopting a colliding default would make the whole config
 /// unreadable before the user had any way to choose a different location.
 fn unused_artifacts_dir(occupied: &[&Path]) -> String {
-    for suffix in 0u32.. {
+    // An empty location has no components and would block every name;
+    // validation rejects it later. Every other location blocks at most the
+    // one single-component name matching its first component, so one of
+    // the first `occupied.len() + 1` candidates is always free.
+    let occupied: Vec<Vec<String>> = occupied
+        .iter()
+        .map(|path| lower_components(path))
+        .filter(|parts| !parts.is_empty())
+        .collect();
+    for suffix in 0..=occupied.len() {
         let candidate = match suffix {
             0 => "artifacts".to_owned(),
             1 => "brauser-artifacts".to_owned(),
             value => format!("brauser-artifacts-{value}"),
         };
         let candidate_parts = lower_components(Path::new(&candidate));
-        if occupied.iter().all(|path| {
-            let parts = lower_components(path);
-            !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(&parts)
+        if occupied.iter().all(|parts| {
+            !parts.starts_with(&candidate_parts) && !candidate_parts.starts_with(parts)
         }) {
             return candidate;
         }
@@ -1603,16 +1650,20 @@ fn validate_adapter_history(history: &[serde_json::Value]) -> Result<()> {
         if adapter_contract(contract).as_ref() != Some(contract) {
             bail!("adapter ID history is invalid");
         }
-        let config = ConfigSnapshot {
-            adapters: AdapterDocument {
-                format: 1,
-                artifacts: vec![contract.clone()],
-            },
-            ..empty_config()
-        };
-        compile_adapters(&config).context("adapter ID history is invalid")?;
+        compile_adapters(&single_contract_config(contract.clone()))
+            .context("adapter ID history is invalid")?;
     }
     Ok(())
+}
+
+fn single_contract_config(contract: serde_json::Value) -> ConfigSnapshot {
+    ConfigSnapshot {
+        adapters: AdapterDocument {
+            format: 1,
+            artifacts: vec![contract],
+        },
+        ..empty_config()
+    }
 }
 
 /// Preserve every contract an older host can validate independently, even
@@ -2136,6 +2187,46 @@ mod tests {
         let storage = store.snapshot().storage.as_ref().unwrap();
         assert_eq!(storage.pages_dir, "artifacts");
         assert_eq!(storage.artifacts_dir, "brauser-artifacts");
+    }
+
+    #[test]
+    fn old_config_with_an_empty_location_reports_the_usual_issue() {
+        // An empty location must not stall the artifact-name search; the
+        // file should fail validation exactly as it does with artifacts_dir.
+        let issue = |storage_extra: &'static str, line: &'static str| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let folder = tempfile::tempdir().unwrap();
+                let path = folder.path().join("config.toml");
+                fixtures::write(&path, folder.path(), storage_extra, "", "");
+                let (field, _) = line.split_once(" = ").unwrap();
+                let body = fs::read_to_string(&path)
+                    .unwrap()
+                    .replace(line, &format!("{field} = \"\""));
+                fs::write(&path, body).unwrap();
+                let _ = sender.send(loaded(&path).config_issue().map(str::to_owned));
+            });
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("loading with an emptied {line} hung"))
+        };
+        for line in [
+            "log_dir = \"log\"",
+            "pages_dir = \"pages\"",
+            "later_dir = \"later\"",
+            "summaries_dir = \"summaries\"",
+        ] {
+            let with_artifacts = issue(
+                "artifacts_dir = \"artifacts\"\nsummaries_dir = \"summaries\"",
+                line,
+            );
+            assert!(
+                with_artifacts.is_some(),
+                "an emptied {line} should be rejected"
+            );
+            let without_artifacts = issue("summaries_dir = \"summaries\"", line);
+            assert_eq!(without_artifacts, with_artifacts, "{line}");
+        }
     }
 
     #[test]
