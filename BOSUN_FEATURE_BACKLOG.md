@@ -331,10 +331,6 @@ and the protocol v6 removals) is done; see Shipped.
   run for the same key can start. Use bounded retries and an in-memory end
   state, keeping the key reserved, rather than holding the queue on a failing
   disk.
-- [ ] `brwr-hrc` **Note identity: remember contracts removed by hand edits
-  (P1, follow-up to #70).** Record adapter contracts that vanish from
-  `config.toml` outside the settings path, so a hand-deleted board adapter
-  cannot leave its modal rule's notes unrecognized.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -410,7 +406,10 @@ main, check the item off as "not reproduced" and say why. The last item,
   hyphenated UUID, but the hex payload keeps the raw `event_id`, so
   `parse_marker_event` (host/src/index.rs ~1403/1422) rejects the line.
   Canonicalize `event_id` in the payload at capture for single and batch
-  activity and for why (host/src/capture.rs).
+  activity and for why (host/src/capture.rs) the way `record_summary`
+  already does (capture.rs ~408-415). The lane C2 review re-confirmed this
+  (findings 18/25); writers are `record_activity` ~296/~337, `record_why`
+  ~373, and batch activity ~730/~764.
 - [ ] `brwr-u8n` **URLs that grow past 8192 bytes when normalized are
   captured, then dropped on rescan.** Capture bounds the raw URL
   (host/src/capture.rs ~627/~802, `activity_shape_is_valid` ~154/166) but
@@ -435,15 +434,72 @@ main, check the item off as "not reproduced" and say why. The last item,
   panel adds the Use button for every older note (extension/panel.ts ~222-246)
   even when the artifact note already exists, where `use_as_artifact_note`
   (host/src/note.rs ~597) always refuses. Show only View in that case.
-- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
-  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
-  stripping a query key that an adapter rule matches on (Jira's
-  `selectedIssue`) is accepted and collapses artifact identity. Decided
-  2026-10-27: a save that adds or changes such an entry is refused with a clear
-  message; an existing config with the conflict still loads and saves, shows a
-  warning, and offers a one-click "Stop stripping <param>" fix. Also record
-  which params were stripped. P2; depends on `brwr-hrc` (rebase onto it first,
-  both edit config.rs).
+
+
+### Cross-PR seam review defects (lane C2, 2026-10-27)
+
+A 2026-10-27 review of the seams between the PRs merged that night (main at
+6ad6020) confirmed each of these with a probe test that fails on that commit.
+None blocks deploy, so they are P3 bugs, and they wait behind the plan work
+above. Line numbers were re-checked on 0ab41f4; re-check them against current
+main. Same rules as the lane C list: write the regression test in the bead
+first, show it fails, then fix, one cycle each; if it does not fail, check the
+item off as "not reproduced" and say why. Findings 18 and 25 of this review
+were folded into `brwr-q7e` above rather than given their own item.
+
+- [ ] `brwr-jdi` **An adapter change made elsewhere costs the next note edit.**
+  `scheduleReload` (extension/panel.ts ~507) calls `notes.retry()`, which only
+  reloads after a failed load (note-editor.ts ~127), so the editor keeps the
+  old record key and the next autosave gets `key_changed`. Reload the note
+  when the config revision changed.
+- [ ] `brwr-mm0` **A delivery absorbed by Pause, Discard or Dismiss never
+  refreshes the card.** Only `panelTick` (extension/panel.ts ~539) compares
+  `delivered_batches`; the other `refreshStatus()` callers (~559/~581/~596)
+  overwrite it unchecked, so the card keeps stale totals.
+- [ ] `brwr-gob` **The pending-pause Why hint names a disabled button.**
+  `whyPausedReason` (extension/panel.ts ~294) says "Use Pause capture" while
+  `updateControls` (~406) disables it because the host is unreachable.
+- [ ] `brwr-b50` **The card keeps "native host is not connected" after the
+  host returns.** `render()` (extension/panel.ts ~456) runs on reconnect but
+  never calls `refreshArtifact`; refresh on a false-to-true transition.
+- [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
+  sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
+  see show "○ Not an artifact" (~155 via `showNoPage` ~820).
+- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
+  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
+  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
+  whole-second forms. Make them agree.
+- [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
+  the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
+  rejects format 0 or more than 64 adapters, which the host returns with
+  `adapter_issue` set, so the repair prompt is unreachable.
+- [ ] `brwr-ylm` **Queued and resumed runs launch in a stale notes folder.**
+  `run_cwd` (host/src/service/server.rs ~335) skips the identity check and
+  `resume`/`Inner::run` (supervisor.rs ~341/~663) reuse the recorded cwd;
+  re-check under the lock and fail closed. Latent until a runner ships.
+  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
+  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
+  the cap that `write_request` (host/src/frame.rs ~64) enforces after
+  connecting; refuse it as too large before contacting the service.
+  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+- [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
+  host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
+- [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
+  `whyPausedReason`/`whySaveBlocked` (extension/panel.ts ~289-310) ignore
+  `pending_removals`, which the panel's own warning (~448) calls off.
+- [ ] `brwr-hnr` **Summary-only days count as opened days.** The Summary arm
+  of `derive` (host/src/index.rs ~1394) inserts the day with no open, unlike
+  the Activity (~1217) and Legacy (~1340) arms. Latent until summaries ship.
+- [ ] `brwr-t8m` **Capture Site promises a save that retired adapter history
+  will refuse.** `planCaptureSite` (extension/capture-site.ts ~35) cannot see
+  `[[adapter_id_history]]`, so the host's frozen-ID check (host/src/config.rs
+  `validate_adapter_transition_with_history` ~2105) fails at commit. Re-check
+  against #85's retired-contract recording first.
+- [ ] `brwr-rft` **Coalesced activity keeps the old title's refs.**
+  `coalesceActivity` (extension/worker.ts ~285/~295) unions refs while taking
+  the newer title, so the host rejects it with `activity_refs_mismatch`; keep
+  the winning title's refs as activity.ts (~177) does.
 
 ### Cookie's own proposals (only after the plan work above)
 
@@ -476,6 +532,19 @@ main, check the item off as "not reproduced" and say why. The last item,
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- In progress in the Columbus session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
+  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
+  stripping a query key that an adapter rule matches on (Jira's
+  `selectedIssue`) is accepted and collapses artifact identity. Decided
+  2026-10-27: a save that adds or changes such an entry is refused with a clear
+  message; an existing config with the conflict still loads and saves, shows a
+  warning, and offers a one-click "Stop stripping <param>" fix. Also record
+  which params were stripped. P2; in progress in the Columbus session (builds
+  on #85).
+- [ ] `brwr-hrr` **Give damaged adopted-contract state a visible repair path,
+  and guard ID changes against hand-retired contracts.** Follow-up to #85.
 
 - In progress in the Lane A session (PR 3 on `feat/agent-runners-pr3`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
@@ -549,6 +618,8 @@ main, check the item off as "not reproduced" and say why. The last item,
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- [x] `brwr-hrc` **Note identity: remember contracts removed by hand edits (2026-10-27, #85).** Adapter contracts that vanish from `config.toml` outside the settings path are recorded, so a hand-deleted board adapter cannot leave its modal rule's notes unrecognized.
 
 - **Category:** New Feature. **Inspect private page patterns from the panel and settings (2026-10-27).** A collapsed panel review shows the shaped current address and same-origin link patterns only after a click, including on unknown sites. The shared shaper removes identifier/query values and title-like segments; the isolated top-frame reader checks page identity, scans at most 500 anchors and returns at most 50 shapes, generalizing singleton literals. Configured sites retain at most 20 visited shapes for seven days with local show/clear controls, including during host repair; incognito tabs, pauses and removals stay excluded, and samples never enter delivery or the vault. Closing, collapsing or navigating drops link results. This completes `brwr-b39`; unknown-site host drafting and enabling remain in `brwr-t40`. **Metrics:** 332 Rust tests and 11 extension test files passing; 21 new shaper, worker and composed UI scenarios; full required gate, both Clippy configurations and queue consistency green. macOS smoke unavailable on Linux; no scripted-dialog or smoke-step changes. Salvaged onto main by hand after the overnight rebase failed; the independent review pass also stopped attention timing on the previous artifact after an oversized same-origin navigation.
 
