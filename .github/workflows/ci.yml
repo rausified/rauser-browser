@@ -49,6 +49,8 @@ jobs:
       # run in both engines: Rust in `cargo test`, TypeScript here.
       - name: Run extension worker tests
         run: npm run test:extension
+      - name: Run development script tests
+        run: npm run test:scripts
       # Uses the host built by "Build Rust workspace" and the extension build.
       - name: Compare adapter-template engines on generated cases
         run: npm run test:adapter-diff -- --cases 5000
