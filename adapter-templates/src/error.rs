@@ -10,7 +10,7 @@ use serde::Serialize;
 macro_rules! codes {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal,)* }) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name {
             $($variant,)*
         }

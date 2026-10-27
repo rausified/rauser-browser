@@ -322,7 +322,11 @@ pub fn check_draft(
 /// A shared origin whose catalog entry has no tenant position offers only
 /// unscoped, whatever its existing adapters are scoped by: no drafted rule
 /// binds a tenant there.
-fn scope_state(existing: &Document, origin: Option<&str>, policy: &DraftPolicy) -> ScopeState {
+pub(crate) fn scope_state(
+    existing: &Document,
+    origin: Option<&str>,
+    policy: &DraftPolicy,
+) -> ScopeState {
     let Some(origin) = origin.filter(|o| SHARED_ORIGINS.contains(o)) else {
         return ScopeState::NotShared;
     };
