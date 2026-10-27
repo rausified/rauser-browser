@@ -138,9 +138,10 @@ Their line numbers predate step 6.6, so re-check them.
   Fixed all three: starter availability now requires a real draft, installed
   GitHub types are detected without typed scope, and future adapter-table keys
   are preserved host-side as an adapter-only issue with explicit reset repair.
-- [ ] `brwr-rto` **Trail transitions are unvalidated free text.** `trail.transition`
-  (host/src/capture.rs ~136) accepts any string up to 64 chars and will feed
-  step 6.6's index reader; restrict it to Chrome's TransitionType values.
+- [x] `brwr-rto` **Restrict trail transitions to browser values.** Confirmed
+  the gap with a failing native-delivery regression, added the allowlist plus
+  `forward_back`, and retained older bounded activity without deriving unknown
+  edges. Both single and batch delivery terminally reject invented values.
 - [ ] `brwr-1fo` **Bidi and zero-width characters spoof log rows.**
   `safe_markdown_line` strips control chars but not Unicode format chars
   (U+202E, U+200B–U+200F, U+2066–U+2069, U+FEFF), so a hostile title can
@@ -151,6 +152,16 @@ Their line numbers predate step 6.6, so re-check them.
   `record_activity` (native.rs ~640–717) re-implements `check_activity_policy`
   (~977–1020); unify so single and batch delivery can't drift. Take after the
   two above.
+- [ ] `brwr-ee5` **Recover missing index ingestion from durable logs.** A valid
+  but incomplete ingestion cache must catch up after append/index interruption
+  on the next delivery or query without requiring event replay or explicit
+  reindex. Keep log acknowledgement independent of disposable-cache success;
+  report stale history if catch-up cannot complete.
+- [ ] `brwr-ezb` **Keep artifact notes reachable after adapter or site removal.**
+  Verify the current historical-identity handling against the full native
+  save/remove/load acceptance matrix: alternate routes, occupied URL notes,
+  ambiguous mappings, cache deletion and reindex. Capture must remain off and
+  no note may be silently merged or overwritten.
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
   expected count in `scripts/smoke-macos.mjs` in the same commit. The smoke run
@@ -200,10 +211,6 @@ Their line numbers predate step 6.6, so re-check them.
   for index updates and dirty-set regeneration. Test concurrent hosts with no
   surfaced `SQLITE_BUSY`, no lost or duplicated rows, and no double
   regeneration.
-- [ ] `brwr-x0d` **Panel list and streaming-text helper.** A small, tested,
-  framework-free helper for keyed, filterable list rendering and append-only
-  streamed text. Recent, the worklog, the M2 answer card, and the M4 omnibar
-  all build on it. Build it before 6.7.
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8 — Certify the three starter adapters.** Check
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
@@ -221,14 +228,15 @@ Their line numbers predate step 6.6, so re-check them.
   existing activity, notes, and index rows through explicit append-only
   alias/re-key events (the needed part of step 7.2). This replaces the
   conservative ID freeze instead of relaxing it.
-- [ ] `brwr-npy` **§12.2 step 2 — Headless page-load check in CI (optional,
-  recommended).** Load the built `extension/dist/` in headless Chrome and open
-  the panel and settings page, so a stale-manifest class of failure is caught
-  before a manual run.
 - [ ] `brwr-bzx` **Windows CI.** Add a `windows-latest` job for the host build,
   tests, and clippy, plus the extension checks. Fix code and tests that have
   assumed macOS/Unix since 2026-10-15, and keep the existing Windows code
   paths. Interactive Windows checks are separate **[human]** work.
+- [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
+  Windows CI, record an isolated real-Chrome run with source and OS/browser
+  versions, native registration, picker/consent and first grants, background
+  capture, Pause/revocation, notes, Recent/worklog and later Capture Site.
+  Windows remains unvalidated until its own acceptance is recorded.
 - [ ] `brwr-9yc` **[human] Decide how a Chrome-spawned host authenticates the
   AI harness** (DESIGN §14 open M2 question; it affects John's Bedrock setup).
   Cookie may write an options proposal in §14; John decides. Blocks 8.2.
@@ -237,6 +245,12 @@ Their line numbers predate step 6.6, so re-check them.
   untrusted-data block, host-owned working directory, timeout, output cap,
   process-tree kill, and the confirmed-install-location check (§7.1), with the
   fake-harness tests and the §7.1 canary listed in step 8.2.
+  The authoritative queue also waits for safe Re-learn, browser interaction
+  stabilization, and the harness-auth human decision.
+- [ ] `brwr-ooy` **Bound AI harness execution on Windows.** Before Windows M2
+  acceptance, prove the same cleared environment, private work directory,
+  bounded output, timeout/cancellation and process-tree containment with fake
+  executables in Windows CI. A Windows build alone is not harness support.
 - [ ] `brwr-jfe` **Concurrent native message loop (before 8.3).** Refactor
   `serve_with_context` into a stdin reader thread, a worker for long requests,
   and one serialized writer, reusing `run_bounded`'s thread/mpsc pattern. No
@@ -253,8 +267,9 @@ Their line numbers predate step 6.6, so re-check them.
 - [ ] `brwr-0ij` **M2 step 8.4 — Content extraction.** Bundled, pinned Readability-style
   extraction, the `summarize` command, context menu, and toolbar trigger, and
   the §8 permissions. **[human]** sub-step first (`brwr-rva`): the real-Chrome `activeTab`
-  checks (a)–(d) in step 8.4 need macOS; build the rest behind them only once
-  they are recorded.
+  checks (a)–(d) in step 8.4 need separate macOS and Windows evidence; build
+  the rest behind those and streaming. Reuse scripting from Capture Site or
+  add it if absent; the other M1.5b work is not a prerequisite.
 - [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel.** Denylist checks, the §5.2
   and §4.4 summary write and result contract, the §3.1 extension-page CSP with
   a manifest test, and the external-editor race, shared summaries directory,
@@ -275,12 +290,18 @@ Their line numbers predate step 6.6, so re-check them.
 
 ### Focused quality follow-up
 
+- [ ] `brwr-x0d` **Share list and streaming-text rendering when a consumer needs it.**
+  Recent and worklogs already shipped without the proposed helper. Keep this
+  P3: extract a small framework-free primitive only when Capture Site or
+  streaming demonstrates repeated rendering needs; do not rewrite the panel
+  solely to create an abstraction.
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
-  Extend the built-page check or its scripted host so it opens the artifact
-  card, filters Recent, changes and copies a worklog, and migrates an older
-  note. The boundary and state-machine tests shipped with step 6.7, but this
-  composed browser path should catch DOM wiring regressions without a live
-  account, credential, or network call.
+  Extend the existing built-page smoke check so it opens the artifact card,
+  saves context, filters Recent, changes and copies a worklog, migrates an
+  older note, and refreshes after background delivery. Cover close/reopen
+  during debounce and an in-flight save, retaining any lost edits in durable
+  recovery. This P2 stabilization gate precedes M2; use only isolated local
+  fixtures and preserve setup smoke and dialog counts.
 - [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
   child can exit after printing its reply before the parent writes the framed
   request, intermittently producing `EPIPE` even though production dialog
@@ -309,6 +330,12 @@ Their line numbers predate step 6.6, so re-check them.
 
 ### Cookie's own proposals (only after the plan work above)
 
+- [ ] `brwr-1g2` **Show the incoming trail on the artifact card.** The card
+  currently shows only a linked count even though the host records validated
+  cross-tool edges. After ordered plan work, surface bounded incoming sources
+  with a title, honest navigation wording and explicit safe links, following
+  DESIGN.md §5.7. Keep back/forward and missing sources honest and never turn
+  unknown historical transition text into a relationship.
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -330,10 +357,12 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## In Progress / This Iteration
 
-- None. The next ready plan item is `brwr-npy` (the optional headless page-load check); `brwr-5yn` remains a human-only live-tool gate.
+- None. Next take the first ready deploy blocker above (`brwr-1fo`), following
+  `bd ready`; the helper is P3 and the page-load check is already closed.
 
 ## Shipped
 
+- **Category:** Security & Privacy. **Reject invented navigation trails while preserving older activity (2026-10-27).** The native host now restricts new trail transitions to Chrome's known values plus the worker's existing back/forward encoding, returning terminal `rejected` before log or index writes through both single and batch delivery. Older bounded log and cache payloads retain their measurements and exact replay identity, while unknown transition kinds cannot become derived edges; reindex keeps the original shape limits and leaves source logs untouched. **Metrics:** 314 Rust tests (+3) and 8 extension suites passing; full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue consistency green.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** New Capability. **Turn durable activity into a local index and bounded artifact records (2026-10-16).** Each accepted activity now updates a standard SQLite `index.db` with artifact, visit, edge, and dirty-set tables while leaving the append-only Markdown log authoritative. Brauser lazily regenerates only dirty, owned artifact files at native connection boundaries, preserves unchanged mtimes, gives case-colliding IDs distinct hash-suffixed paths, replaces external edits only after checking ownership, neutralizes hostile presentation text, and bounds long histories with daily, weekly, then monthly Timeline rollups. `brauser reindex` reconstructs the database and files from bounded owned markers, and older configs receive a non-overlapping `artifacts_dir` default without weakening native consent. **Metrics:** 284 Rust tests and 8 extension suites passing; 13 new index, ownership, delivery-integration, migration, replay-integrity, multi-page SQLite, chronology, rollup, and wire regressions, with full protocol generation, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** Reliability. `brwr-6at` **Ship bounded, crash-recoverable activity batches (2026-10-16).** The service worker now sends up to 64 same-local-day records under a replay-stable batch ID and exact overflow snapshot, while the native host validates every event before publishing the survivors through one compact intent, one append, and one log sync. Queue pressure coalesces only compatible undispatched hours that still fit the hard byte cap, lights the toolbar badge at 80%, and carries dropped-hour count and range into the append-only log; lost acknowledgements cannot erase newer overflow. The retired near-repeat window is gone from protocol, consent, new config writes, and log scanning, so deliberate `/log` actions are never collapsed, while old configs and queues still drain safely. **Metrics:** 271 Rust tests and 8 extension suites passing; 6 durability regressions, with full protocol generation, current-state consistency, build, test, format, both clippy gates, clean npm install, typecheck, lint, extension checks, and queue export green.
@@ -357,17 +386,30 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Notes / Ideas for Later
 
-- Every PR #34 deploy blocker and M1.5a steps 6.5–6.7 are now closed. The next
-  ready plan item is `brwr-npy`, while the final M1.5a starter certification is
-  correctly held behind the human/live-tool gate.
+- Keep live-delivery validation separate from historical decoding whenever a
+  new semantic constraint lands: preserving measurements does not require
+  interpreting an unknown trail. `brwr-1g2` is the product follow-up that turns
+  the already-valid relationships into useful context on the current card;
+  it stays behind the ordered plan rather than extending this blocker fix.
+- M1.5a steps 6.5–6.7 shipped, but the security-review blockers and the
+  authoritative queue's derived-history follow-ups still precede new plan
+  work. `brwr-npy` was already closed by source review on 2026-10-18 because
+  macOS CI drives the built panel and settings; that is not a new browser run.
+  `brwr-9xg` adds the missing artifact interactions. Starter certification
+  remains behind its human/live-tool gate.
+- The 2026-10-27 queue export carries forward existing database planning
+  updates: `brwr-ee5`, `brwr-ezb`, `brwr-i1g`, and `brwr-ooy`; the existing
+  `brwr-npy` closure; M2 dependency changes; and `brwr-x0d`'s P3 deferral.
+  `brwr-b2e` remains the canonical SQLite replacement (`brwr-83m` is its
+  closed duplicate). These are reconciled queue state, not work shipped in
+  this cycle.
 - Artifact-file conflicts are now visible from the settings regeneration
   action, including bounded relative paths, while the generator continues to
   leave those unowned occupants and their dirty records untouched.
-- `brwr-9xg` follows this feature with browser-level interaction coverage for
-  the composed panel. The current Rust boundary tests, note-state test, and
-  settings fake DOM prove the contracts, but not the full card/filter/worklog
-  click path in built Chrome; it can share the scripted fixture planned for
-  the headless page-load check rather than adding a separate test harness.
+- `brwr-9xg` follows the artifact workspace with browser-level interaction
+  coverage for the composed panel. The Rust boundary tests, note-state test,
+  and settings fake DOM do not prove the full card/filter/worklog click path;
+  extend the existing headless smoke fixture rather than add another harness.
 - An overflow that appears while the final queued batch is in flight is now
   preserved rather than over-acknowledged, but it needs a later artifact event
   before it has a validated log anchor. `brwr-m64` records the follow-up for an

@@ -3410,6 +3410,98 @@ scope = { owner = ["acme"] }
     }
 
     #[test]
+    fn unknown_trail_transitions_are_terminal_on_single_and_batch_delivery() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        for transition in [
+            "mentions",
+            "unknown",
+            "Link",
+            "link,forward_back",
+            "link\n",
+            "",
+            "\u{202e}link",
+        ] {
+            let mut event = activity_for_invalid_policy();
+            event.occurred_at = time::OffsetDateTime::now_utc()
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            event.trails.push(ActivityTrail {
+                from_artifact_id: Some("work:work.example/2".into()),
+                from_url: Some("https://work.example/issues/2".into()),
+                transition: transition.into(),
+            });
+            let single = record_activity(
+                RecordActivityRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "single-transition".into(),
+                    event: event.clone(),
+                },
+                &mut config,
+            );
+            let batch = record_batch(
+                RecordBatchRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "batch-transition".into(),
+                    batch_id: uuid::Uuid::new_v4().to_string(),
+                    events: vec![CaptureBatchItem {
+                        kind: CaptureEventKind::Activity,
+                        visit: None,
+                        activity: Some(event),
+                    }],
+                    overflow: None,
+                },
+                &mut config,
+            );
+            let Response::ActivityRecorded(single) = single else {
+                panic!("expected an activity result");
+            };
+            let Response::BatchRecorded(batch) = batch else {
+                panic!("expected a batch result");
+            };
+            assert_eq!(batch.results.len(), 1);
+            for (outcome, reason, relative_path) in [
+                (single.outcome, single.reason, single.relative_path),
+                (
+                    batch.results[0].outcome,
+                    batch.results[0].reason.clone(),
+                    batch.results[0].relative_path.clone(),
+                ),
+            ] {
+                assert_eq!(outcome, VisitOutcome::Rejected, "{transition:?}");
+                assert_eq!(reason.as_deref(), Some("invalid_activity"));
+                assert!(relative_path.is_none());
+            }
+        }
+        assert!(!root.join("log").exists());
+        assert!(!config.cache_dir().unwrap().join("index.db").exists());
+    }
+
+    #[test]
     fn host_revalidates_activity_identity_and_trail_sources() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
