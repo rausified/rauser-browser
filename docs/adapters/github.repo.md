@@ -17,8 +17,11 @@ fixed word: it is valid only because `owner` is a scoped path capture, which
 anchors the template (adapter-templates.md §4.1, §6). An `unscoped` variant of
 this rule has no anchor and does not validate.
 
-The adapter has no `title` templates and no `refs`. The host derives a
-repository's title from its ID (`owner/repo`).
+The adapter has no `title` templates and no `refs`. When a PR or issue
+adapter declares `within` this repository type, the host derives the
+repository's title from its ID (`owner/repo`) and its URL from its captures
+(`https://github.com/<owner>/<repo>`). Without such a declaration it does not
+(see Known limits).
 
 ## Containers: `within`
 
@@ -54,7 +57,16 @@ With `scope.owner = ["acme-corp"]` and the PR and issue starters ahead of it:
 - A scope miss is terminal (adapter-templates.md §6). A pull request outside
   the PR adapter's scope but inside this adapter's scope is dropped, not
   counted toward its repository. The starters use one scope for all three
-  adapters, so this only arises after editing one scope by hand.
+  adapters, but they can still differ: settings pre-fills the repository's
+  organizations with the union of the PR and issue scopes, so a PR scope that
+  already differed from the issue scope leaves some organizations covered by
+  the repository adapter and only one of the other two. Editing one scope by
+  hand has the same effect.
+- The repository is named from its ID only while some adapter declares
+  `within` `github.repo`. In a repositories-only setup, with no PR or issue
+  adapter linked, the repository record shows the title and URL of the
+  latest page visited inside it, such as a README blob. Fixing this needs a
+  language-level container marker, and the limit is accepted for now.
 - Files, branches, commits, and other repository pages are not separate
   artifacts. They count toward the repository only.
 - Organization and repository renames create a new ID. There are no rename

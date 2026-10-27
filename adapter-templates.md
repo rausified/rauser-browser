@@ -269,6 +269,8 @@ within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
 
 Roll-up: a visit recognized as artifact A within container C counts once toward A and once toward C, never twice toward C. A visit is recognized by exactly one adapter (first match wins, §3), so C's totals are its own pages plus everything within it, each second counted once, and C's days opened are the union of its own days and its contents' days. The host derives containers and keeps these totals in its index (DESIGN.md §5).
 
+Title and URL: the host names a container row from its ID, not from the page last seen inside it, but only when some adapter in the document declares `within` that container's type. It assumes the container ID's native part (after `<scheme>:`) is `{host}/<path segments>`: the title is everything after the first `/` (for GitHub, `owner/repo`), and the URL is the adapter's origin followed by `/` and that title. A container ID template shaped differently, such as one that leads with a capture other than `{host}` or whose segments do not form the container's own path, gets a wrong title and a broken link; such templates are not supported yet.
+
 ## 9. Title templates
 
 ### 9.1 Grammar and semantics

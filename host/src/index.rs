@@ -5097,6 +5097,26 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
     }
 
+    /// Ruling 17 (accepted limit): with no adapter declaring `within`
+    /// `github.repo`, the repository is not known to be a container, so its
+    /// record keeps the latest sub-page's title and URL.
+    #[test]
+    fn a_repo_without_any_within_declaration_keeps_the_page_title() {
+        let document = github_document(false);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let mut blob = github_blob(1, "2026-10-15T11:00:00Z");
+        blob.title = Some("widgets/README.md at main · acme-corp/widgets".into());
+        index.record_activity(&blob, &[]).unwrap();
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(repo.title, "widgets/README.md at main · acme-corp/widgets");
+        assert_eq!(
+            repo.url,
+            "https://github.com/acme-corp/widgets/blob/main/README.md"
+        );
+    }
+
     #[test]
     fn artifact_view_names_its_container_and_contents() {
         let document = github_document(true);
