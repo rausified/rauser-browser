@@ -268,19 +268,26 @@ async function saveWhy(): Promise<void> {
   }
 }
 
-// A local pause the host has not confirmed yet counts too: the user turned
-// capture off, though the host would still record.
-function whyCapturePaused(): boolean {
-  return session.config?.capture_enabled === false || session.status?.pause_pending === true;
-}
-
-/** Why "Why I'm here" cannot be saved right now, or null when it can. The
- * host records nothing while capture is paused, so Save waits for Resume. */
-function whySaveBlocked(): string | null {
-  if (!currentPage || !currentArtifact || artifactPageUrl !== currentPage.url) return WHY_WAIT_FOR_ARTIFACT;
-  if (whyCapturePaused()) {
+/** Why capture keeps "Why I'm here" from saving, or null. The host records
+ * nothing while paused. A local pause the host has not confirmed counts too:
+ * the user turned capture off, though the host would still record, and
+ * finishing it takes Pause capture rather than Resume. */
+function whyPausedReason(): string | null {
+  if (session.config?.capture_enabled === false) {
     return "Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.";
   }
+  if (session.status?.pause_pending === true) {
+    return "Capture is paused locally, so this can't be saved. Use Pause capture to finish saving this setting in the host.";
+  }
+  return null;
+}
+
+/** Why "Why I'm here" cannot be saved right now, or null when it can. */
+function whySaveBlocked(): string | null {
+  if (!currentPage || !currentArtifact || artifactPageUrl !== currentPage.url) return WHY_WAIT_FOR_ARTIFACT;
+  const paused = whyPausedReason();
+  if (paused) return paused;
+  if (!session.connected) return "The native host is unavailable, so this can't be saved yet.";
   if (!artifactWhy.value.trim()) return "Type why you're here, then save.";
   if (changing()) return "Wait for the panel to finish its current task, then save.";
   return null;
@@ -387,7 +394,9 @@ function updateControls(): void {
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
-  whyPausedHint.hidden = !whyCapturePaused();
+  const paused = whyPausedReason();
+  whyPausedHint.hidden = paused === null;
+  if (paused !== null) whyPausedHint.textContent = paused;
 }
 
 function renderSetupWarning(): void {

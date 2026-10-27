@@ -837,6 +837,9 @@ test("an unsaved Why draft survives a host outage", async () => {
   await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
   assert.equal(page.el("artifact-card").hidden, false);
   assert.equal(page.el("artifact-why").value, "my unsaved draft");
+  // Saving waits for the host; the draft stays editable.
+  assert.equal(page.el("save-why").disabled, true);
+  assert.equal(page.el("artifact-why").disabled, false);
 
   // The host is back; the user follows a link to another URL of the same artifact.
   page.state.hostDead = false;
@@ -846,6 +849,7 @@ test("an unsaved Why draft survives a host outage", async () => {
   assert.equal(page.el("artifact-card").hidden, false);
   assert.equal(page.el("artifact-why").value, "my unsaved draft",
     "the unsaved Why draft was replaced after the host outage");
+  assert.equal(page.el("save-why").disabled, false);
 });
 
 test("Save why is disabled while capture is paused, keeps the draft, and points to Resume capture", async () => {
@@ -880,8 +884,10 @@ test("Save why stays disabled while a local pause waits for the host", async () 
   typeWhy(page, "a draft while paused");
   assert.equal(page.el("save-why").disabled, true);
   assert.equal(page.el("why-paused-hint").hidden, false);
+  // Resume capture is not offered until the host confirms the pause.
+  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture to finish saving this setting in the host\./);
   page.el("save-why").dispatch("click");
   await settle();
   assert.equal(page.sent("record_why").length, 0);
-  assert.match(page.el("status").textContent, /Use Resume capture in settings/);
+  assert.match(page.el("status").textContent, /Use Pause capture to finish/);
 });
