@@ -134,6 +134,12 @@ struct IndexState {
     /// without containers stays readable by an earlier host.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     containers: BTreeSet<String>,
+    /// Where each container's generated file was written, relative to the
+    /// home folder, kept until that file is removed when its container no
+    /// longer derives a record (its only activity was a roll-up the adapter
+    /// document no longer makes). Omitted when empty, like `containers`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    container_files: BTreeMap<String, PathBuf>,
 }
 
 impl IndexState {
@@ -558,6 +564,7 @@ impl ArtifactIndex {
         state.dirty = dirty;
         // The files on disk are still the ones `previous` regenerated.
         state.containers = previous.containers;
+        state.container_files = previous.container_files;
     }
 
     /// Artifacts whose generated file depends on the adapter document: a
@@ -704,12 +711,22 @@ impl ArtifactIndex {
         let mut published_at = Instant::now();
         let mut interval = checkpoint;
         // Every container this pass derives, and any earlier one whose file
-        // is still dirty (not yet rewritten without its roll-up).
+        // is still dirty (not yet rewritten without its roll-up). A container
+        // type's artifact counts even with only direct visits: its file is
+        // titled from its ID while some adapter declares that type.
+        let container_types = Containers::new(self.adapters.as_deref()).types;
         let containers = derived
             .edges
             .iter()
             .filter(|edge| edge.kind == "within")
             .map(|edge| edge.target.clone())
+            .chain(
+                derived
+                    .artifacts
+                    .values()
+                    .filter(|row| container_types.contains(row.artifact_type.as_str()))
+                    .map(|row| row.artifact_id.clone()),
+            )
             .chain(
                 state
                     .containers
@@ -718,11 +735,50 @@ impl ArtifactIndex {
                     .cloned(),
             )
             .collect::<BTreeSet<_>>();
+        // Each container's file, and, until it is removed, the file of an
+        // earlier container that no longer derives a record.
+        let container_files = containers
+            .iter()
+            .filter_map(|id| {
+                derived
+                    .artifacts
+                    .get(id)
+                    .map(|row| (id.clone(), artifact_path(&self.storage.artifacts_dir, row)))
+            })
+            .chain(
+                state
+                    .container_files
+                    .iter()
+                    .filter(|(id, _)| {
+                        state.dirty.contains(*id) && !derived.artifacts.contains_key(*id)
+                    })
+                    .map(|(id, path)| (id.clone(), path.clone())),
+            )
+            .collect::<BTreeMap<_, _>>();
         // A caught-up or rebuilt state needs publishing even if no file does.
-        let mut unpublished = publish || containers != state.containers;
+        let mut unpublished =
+            publish || containers != state.containers || container_files != state.container_files;
         state.containers = containers;
+        state.container_files = container_files;
         for id in dirty {
             let Some(artifact) = derived.artifacts.get(&id) else {
+                // A container whose only activity was a roll-up the adapters
+                // no longer make: its file would keep totals the index no
+                // longer has, so it is removed (only if still Brauser's).
+                if let Some(path) = state.container_files.get(&id).cloned() {
+                    if let Err(error) = remove_artifact(&root, &path, &id) {
+                        report.failed += 1;
+                        let path = path.to_string_lossy().into_owned();
+                        report
+                            .first_failure
+                            .get_or_insert_with(|| format!("{path}: {error:#}"));
+                        if report.failed_paths.len() < 64 {
+                            report.failed_paths.push(path);
+                        }
+                        continue;
+                    }
+                    state.container_files.remove(&id);
+                }
                 state.dirty.remove(&id);
                 unpublished = true;
                 continue;
@@ -978,6 +1034,7 @@ impl ArtifactIndex {
             dirty: BTreeSet::new(),
             logs: BTreeMap::new(),
             containers: BTreeSet::new(),
+            container_files: BTreeMap::new(),
         }
     }
 
@@ -2441,6 +2498,41 @@ fn replace_artifact(
     drop(cleanup);
     sync_directory(&dir).context("syncing artifact directory")?;
     Ok(ArtifactWrite::Written)
+}
+
+/// Remove the generated file at `relative` for `artifact_id`, an artifact
+/// that no longer derives a record. A missing file, or one that is not
+/// Brauser's file for that artifact (a symlink, a directory, or content
+/// without its frontmatter), is left alone.
+fn remove_artifact(root: &Dir, relative: &Path, artifact_id: &str) -> Result<()> {
+    let parent = relative.parent().context("artifact path has no parent")?;
+    let filename = relative
+        .file_name()
+        .context("artifact path has no filename")?;
+    let dir = match root.open_dir(parent) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("opening artifact directory"),
+    };
+    let metadata = match dir.symlink_metadata(filename) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("checking artifact file"),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4 * 1024 * 1024
+    {
+        return Ok(());
+    }
+    let mut existing = Vec::new();
+    Read::by_ref(&mut dir.open(filename).context("opening existing artifact")?)
+        .take(4 * 1024 * 1024 + 1)
+        .read_to_end(&mut existing)?;
+    if !owned_artifact(&existing, artifact_id) {
+        return Ok(());
+    }
+    dir.remove_file(filename)
+        .context("removing artifact file")?;
+    sync_directory(&dir).context("syncing artifact directory")
 }
 
 /// Each checkpoint rewrites the whole cache, so space them by at least four
@@ -5360,6 +5452,90 @@ print(json.dumps([tables,row]))"#;
         // github.repo is still a declared container type, so it keeps the
         // container's own name; only the roll-up goes.
         assert_direct_only(&report, &file, "acme-corp/widgets");
+    }
+
+    /// A container with only direct visits has no `within` edge, yet its
+    /// file is titled from its ID while some adapter declares its type, so
+    /// losing that declaration must rewrite it with its page title.
+    #[test]
+    fn losing_within_retitles_a_container_with_only_direct_visits() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(true);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        let mut blob = github_blob(2, "2026-10-15T11:00:00Z");
+        blob.title = Some("widgets/README.md at main · acme-corp/widgets".into());
+        old.record_activity(&blob, &[]).unwrap();
+        assert_eq!(old.regenerate_dirty().unwrap().written, 1);
+        let repo_file = || {
+            let file = artifact_files(root.path())
+                .into_iter()
+                .find(|path| path.to_string_lossy().contains("github-repo"))
+                .unwrap();
+            fs::read_to_string(file).unwrap()
+        };
+        assert!(
+            repo_file().contains("title: \"acme-corp/widgets\"\n"),
+            "{}",
+            repo_file()
+        );
+        let after = github_document(false);
+        let new = index(&root, &cache).with_adapters(Some(&after));
+        let report = new.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (1, 0), "{report:?}");
+        assert!(
+            repo_file().contains("title: \"widgets/README.md at main · acme-corp/widgets\"\n"),
+            "{}",
+            repo_file()
+        );
+    }
+
+    /// A container known only from rolled-up activity has no record once
+    /// that roll-up goes, so its generated file goes too rather than keep
+    /// totals the index no longer has.
+    #[test]
+    fn losing_the_only_roll_up_removes_the_container_file() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(true);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        old.record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        assert_eq!(old.regenerate_dirty().unwrap().written, 2);
+        let is_repo = |path: &PathBuf| path.to_string_lossy().contains("github-repo");
+        assert!(artifact_files(root.path()).iter().any(is_repo));
+        let after = scoped_github_document(true, &["other-org"]);
+        let new = index(&root, &cache).with_adapters(Some(&after));
+        new.regenerate_dirty().unwrap();
+        assert!(new.artifact(GITHUB_REPO_ID).unwrap().is_none());
+        let files = artifact_files(root.path());
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(!files.iter().any(is_repo), "{files:?}");
+        // The pass is complete: a second one has nothing left to do.
+        let again = new.regenerate_dirty().unwrap();
+        assert_eq!((again.written, again.conflicts), (0, 0), "{again:?}");
+    }
+
+    /// A vanished container's path no longer holding Brauser's file (the
+    /// user replaced it) is left alone.
+    #[test]
+    fn a_replaced_container_file_is_not_removed() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(true);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        old.record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        assert_eq!(old.regenerate_dirty().unwrap().written, 2);
+        let repo = artifact_files(root.path())
+            .into_iter()
+            .find(|path| path.to_string_lossy().contains("github-repo"))
+            .unwrap();
+        fs::write(&repo, "my own notes\n").unwrap();
+        let after = scoped_github_document(true, &["other-org"]);
+        let new = index(&root, &cache).with_adapters(Some(&after));
+        new.regenerate_dirty().unwrap();
+        assert_eq!(fs::read_to_string(&repo).unwrap(), "my own notes\n");
     }
 
     #[test]

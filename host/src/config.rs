@@ -2673,6 +2673,27 @@ fn validate_within_transition<'a>(
     established: impl Iterator<Item = &'a serde_json::Value> + Clone,
     next: &[serde_json::Value],
 ) -> Result<()> {
+    // Same-identity siblings build the same artifacts, so they must agree on
+    // their container; otherwise each would look like it drops the other's.
+    for (at, candidate) in next.iter().enumerate() {
+        let (Some(identity), Some(artifact_type)) = (
+            adapter_contract_identity(candidate),
+            adapter_contract_type(candidate),
+        ) else {
+            continue;
+        };
+        let disagrees = next[at + 1..].iter().any(|sibling| {
+            adapter_contract_identity(sibling) == Some(identity)
+                && adapter_contract_type(sibling) == Some(artifact_type)
+                && declared_container(sibling) != declared_container(candidate)
+        });
+        if disagrees {
+            let origin = identity.0;
+            bail!(
+                "adapters of type {artifact_type:?} on {origin:?} with the same origin, type, and ID must declare the same within; give each of them the same within, or none"
+            );
+        }
+    }
     for candidate in next {
         let (Some(identity), Some(artifact_type)) = (
             adapter_contract_identity(candidate),
@@ -5068,6 +5089,47 @@ mod tests {
             validate_adapter_transition_with_history(&current, &next, &[], &by_hand, None)
                 .unwrap_err(),
         );
+    }
+
+    /// Adapters sharing an origin, type, and ID build the same artifacts, so
+    /// they must agree on `within`; a mixed pair would be accepted once and
+    /// then make every later save look like it drops the container.
+    #[test]
+    fn same_identity_siblings_must_declare_the_same_within() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let mixed = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_pr_adapter(&["b"]),
+        ]);
+        let error = store.update(mixed, MISSING_REVISION).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("within") && message.contains("same origin, type, and ID"),
+            "{message}"
+        );
+        // Agreeing siblings save, and a later edit to either still does.
+        let revision = store
+            .update(
+                adapter_config(vec![
+                    within_github_repo(github_pr_adapter(&["a"])),
+                    within_github_repo(github_pr_adapter(&["b"])),
+                ]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .update(
+                adapter_config(vec![
+                    within_github_repo(github_pr_adapter(&["a", "c"])),
+                    within_github_repo(github_pr_adapter(&["b"])),
+                ]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
     }
 
     /// Ruling 2: `previous` also counts as declaring container C when the
