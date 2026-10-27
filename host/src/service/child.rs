@@ -1,5 +1,7 @@
 //! A child process whose stdout arrives as lines and whose stderr arrives as
-//! raw chunks, read on one thread per pipe. Every runner spawns its harness
+//! raw chunks, read on one thread per pipe; stdin is written on a thread of
+//! its own, so a consumer never blocks writing while the child waits for its
+//! output to be read. Every runner spawns its harness
 //! through [`LineChild::spawn`], which goes through [`ProcessSlot::spawn`] so
 //! cancel and timeout reach the child's whole process group.
 
@@ -7,7 +9,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::thread;
 use std::time::Duration;
 
@@ -44,7 +46,9 @@ pub struct LineChild {
     slot: ProcessSlot,
     /// The exit status, once reaped.
     status: Option<ExitStatus>,
-    stdin: Option<ChildStdin>,
+    /// Feeds the stdin writer thread; dropping it closes the child's stdin
+    /// once what was queued is written.
+    stdin: Option<Sender<Vec<u8>>>,
     lines: Receiver<ChildLine>,
 }
 
@@ -58,7 +62,7 @@ impl LineChild {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = slot.spawn(&mut command)?;
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().map(writer);
         let (sender, lines) = mpsc::sync_channel(QUEUE_CAPACITY);
         let open = Arc::new(AtomicUsize::new(2));
         match child.stdout.take() {
@@ -82,20 +86,24 @@ impl LineChild {
         })
     }
 
-    /// Write `line` and a `\n` to the child's stdin.
+    /// Queue `line` and a `\n` for the child's stdin, without waiting for
+    /// the child to read it: a child that writes output while it reads its
+    /// input can block on the bounded output queue until the consumer
+    /// drains it, so writing here must never wait on the child. Fails with
+    /// [`io::ErrorKind::BrokenPipe`] once stdin is closed or an earlier
+    /// write failed, as when the child has exited.
     pub fn write_line(&mut self, line: &str) -> io::Result<()> {
-        let Some(stdin) = self.stdin.as_mut() else {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "the child's stdin is closed",
-            ));
-        };
-        stdin.write_all(line.as_bytes())?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()
+        let mut bytes = Vec::with_capacity(line.len() + 1);
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        self.stdin
+            .as_ref()
+            .and_then(|stdin| stdin.send(bytes).ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "the child's stdin is closed"))
     }
 
-    /// Close the child's stdin, so it reads end of file.
+    /// Close the child's stdin, so it reads end of file after what was
+    /// already queued.
     pub fn close_stdin(&mut self) {
         self.stdin = None;
     }
@@ -155,6 +163,27 @@ impl LineChild {
             None => slot.reap(&mut child),
         }
     }
+}
+
+/// Write what arrives on the returned sender to `stdin` on a thread of its
+/// own. The thread closes stdin once the sender is dropped and the queue is
+/// written, or at the first failed write, after which sends fail. A child
+/// that never reads leaves the thread blocked until it exits, when the write
+/// fails with a broken pipe.
+fn writer(mut stdin: ChildStdin) -> Sender<Vec<u8>> {
+    let (sender, queue) = mpsc::channel::<Vec<u8>>();
+    thread::spawn(move || {
+        for bytes in queue {
+            if stdin
+                .write_all(&bytes)
+                .and_then(|()| stdin.flush())
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    sender
 }
 
 /// Run `read` on its own thread; the last pipe to finish sends `Closed`.
@@ -505,6 +534,37 @@ mod tests {
         let status = waited.recv_timeout(Duration::from_secs(5));
         slot.kill();
         assert!(status.is_ok(), "the wait never ended");
+    }
+
+    /// A child that echoes its input as it reads it, like `cat`, takes a
+    /// prompt far larger than the queue and the pipes hold without the
+    /// writes blocking: the consumer drains its output while the prompt is
+    /// still going in.
+    #[test]
+    fn a_large_prompt_to_an_echoing_child_does_not_block() {
+        let slot = ProcessSlot::default();
+        let mut child = LineChild::spawn(&slot, sh("exec cat")).unwrap();
+        let watchdog = slot.clone();
+        let (stop, stopped) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            if stopped.recv_timeout(Duration::from_secs(5)).is_err() {
+                watchdog.kill();
+            }
+        });
+        let count = 30_000;
+        let started = Instant::now();
+        for i in 0..count {
+            child.write_line(&format!("line {i:05}")).unwrap();
+        }
+        child.close_stdin();
+        let written = started.elapsed();
+        let lines = collect(&child);
+        let _ = stop.send(());
+        assert!(written < Duration::from_secs(4), "writing took {written:?}");
+        let lines = stdout(&lines);
+        assert_eq!(lines.len(), count);
+        assert_eq!(lines[count - 1], format!("line {:05}", count - 1));
+        assert!(child.wait().unwrap().success());
     }
 
     /// Once its leader is reaped, a group's id can be reused, so the slot
