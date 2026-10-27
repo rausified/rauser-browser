@@ -883,34 +883,33 @@ were folded into `brwr-q7e` above rather than given their own item.
   A useful later review would show how selected rules group example pages
   into the same artifact before enabling them, within the existing review.
 
-### Current health handoff (2026-10-27 — quarantine recovery)
+### Current health handoff (2026-10-27 — baseline `1305440`)
 
-- Recovered cycle 4 documentation; its missing commit message is now present.
-  This cycle still begins red, so no new feature was started.
-- The same IPC restriction persists on clean merged baselines `728b200` and
-  `90f88b4`. The last five commits contain no state verified green under this
-  restriction. A history reset cannot restore a denied OS capability; retain
-  `00dbc75` and leave all socket and script coverage enabled.
-- The root blocker is runner capability, not an incomplete code change. The
-  driver should run the unfiltered gate where Unix bind/connect and Node
-  synchronous child output are permitted, and preserve that result for the
-  next cycle. No approval or code rollback can resolve EPERM inside this run.
-  Current raw health logs are under ignored `target/overnight-health/`.
-- For useful script diagnostics here, run
-  `node --test --test-isolation=none scripts/tests/dev-service.test.mjs`.
-  The normal test-isolated runner reports only a failed file; the diagnostic
-  reports the actual win32 simulation failure. Neither invocation passes.
-- Once the health gate is genuinely green, resume `brwr-1hj` through its
-  `brwr-t40` blocker. The next useful product increment remains host drafting
-  with selectable rules and example artifact grouping, using the existing
-  private pattern inputs; additional pattern diagnostics do not complete it.
-- Rechecked clean `8b7acd7`: the same 32 service failures and independent
-  AF_UNIX/Node EPERM probes persist. All other required checks pass; no product
-  or test changes were made. `brwr-4vb` stays blocked on external verification.
-  Preserve the driver's full-gate result and baseline SHA in the next handoff;
-  repeating denied operations in an unchanged runner cannot advance Capture Site.
-- Once verified, continue `brwr-1hj` through `brwr-t40`: combine the existing
-  private inputs with host drafting, selectable rules and example artifact
-  grouping. Resolve the Notion leading-literal contradiction (`brwr-gf1`)
-  explicitly before claiming the named identity cases. No further diagnostic
-  view or self-directed product item is needed ahead of this assigned work.
+- Clean workspace; no quarantine failure file. The unfiltered opening gate
+  again passes 26 adapter-template tests and 447 host tests, then fails 32
+  service tests. Later Rust test binaries are not reached. All 13 extension
+  test files pass, as do protocol generation, build, fmt, both Clippy
+  configurations, npm install, typecheck, lint, extension build, current-state
+  validation and queue consistency. The repaired dialog fixture completes its
+  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
+- Independent workspace AF_UNIX bind and connect both return errno 1 EPERM.
+  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
+  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
+  and 1 platform skip, with the win32 simulation unable to parse empty output.
+  TESTING.md documents that diagnostic and the restriction. Keep all tests
+  enabled and do not change production IPC to fit this runner.
+- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29` and
+  `8b7acd7`. No commit among the last five is verified green in this runner,
+  so no history reset was attempted. Earlier quarantine documentation was
+  recovered; this cycle introduces no product or test change and claims no
+  shipped feature.
+- The driver needs to carry the baseline SHA and an unfiltered external
+  gate result into its next handoff, and provide a runner permitting local
+  IPC and synchronous child output. Another unchanged restricted cycle will
+  reproduce these failures rather than advance the assigned product work.
+- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
+  selectable rules and example artifact grouping using the existing private
+  pattern inputs. Resolve the Notion leading-literal contradiction
+  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
+  preview which example pages share an artifact still belongs in this review;
+  no additional diagnostic view or self-directed feature is needed first.
