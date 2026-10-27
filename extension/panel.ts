@@ -268,8 +268,10 @@ async function saveWhy(): Promise<void> {
   }
 }
 
+// A local pause the host has not confirmed yet counts too: the user turned
+// capture off, though the host would still record.
 function whyCapturePaused(): boolean {
-  return session.config?.capture_enabled === false;
+  return session.config?.capture_enabled === false || session.status?.pause_pending === true;
 }
 
 /** Why "Why I'm here" cannot be saved right now, or null when it can. The

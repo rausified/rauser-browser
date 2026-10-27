@@ -865,3 +865,23 @@ test("Save why is disabled while capture is paused, keeps the draft, and points 
   assert.match(hint.textContent, /Use Resume capture in settings to turn it back on\./);
   assert.equal(page.sent("record_why").length, 0);
 });
+
+test("Save why stays disabled while a local pause waits for the host", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+    // The worker paused, but the host still has capture on.
+    workerReply: () => ({ ok: true, value: { ...statusFor(), pause_pending: true } }),
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  await noteLoaded(page);
+  await settle();
+  typeWhy(page, "a draft while paused");
+  assert.equal(page.el("save-why").disabled, true);
+  assert.equal(page.el("why-paused-hint").hidden, false);
+  page.el("save-why").dispatch("click");
+  await settle();
+  assert.equal(page.sent("record_why").length, 0);
+  assert.match(page.el("status").textContent, /Use Resume capture in settings/);
+});
