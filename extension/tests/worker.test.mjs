@@ -55,7 +55,7 @@ function storageArea(entries) {
   return {
     async get(key) {
       const result = {};
-      for (const name of Array.isArray(key) ? key : [key]) {
+      for (const name of key === null ? [...entries.keys()] : Array.isArray(key) ? key : [key]) {
         if (entries.has(name)) result[name] = structuredClone(entries.get(name));
       }
       return result;
@@ -2603,4 +2603,29 @@ test("worker wake and maintenance alarms expire samples without starting a host"
   onAlarm({ name: "brauser-sync" });
   await flush();
   assert.deepEqual(values.get(key), {});
+});
+
+test("expired capture-site drafts are deleted at startup and on maintenance", async () => {
+  const { DRAFT_HANDOFF_TTL_MS } = await import("../dist/capture-site-handoff.js");
+  const origin = "https://handoff.example";
+  const entry = (id, created) => ({
+    id, origin, created, adapters: [], baseline_rules: [], visited: [{ shape: "/pages/{num}", count: 1 }], links: [],
+  });
+  sessionValues.clear();
+  const fresh = entry("fresh", Date.now());
+  sessionValues.set("captureSiteDraft:fresh", fresh);
+  sessionValues.set("captureSiteDraft:old", entry("old", Date.now() - DRAFT_HANDOFF_TTL_MS - 1));
+  sessionValues.set("captureSiteDraft:bad", { id: "other" });
+  sessionValues.set("unrelated", { created: 0 });
+  onStartup();
+  await until(() => !sessionValues.has("captureSiteDraft:old"), "the startup sweep");
+  assert.equal(sessionValues.has("captureSiteDraft:bad"), false, "a malformed entry is deleted");
+  assert.deepEqual(sessionValues.get("captureSiteDraft:fresh"), fresh);
+  assert.deepEqual(sessionValues.get("unrelated"), { created: 0 });
+
+  sessionValues.set("captureSiteDraft:later", entry("later", Date.now() - DRAFT_HANDOFF_TTL_MS - 1));
+  onAlarm({ name: SYNC_ALARM });
+  await until(() => !sessionValues.has("captureSiteDraft:later"), "the maintenance sweep");
+  assert.ok(sessionValues.has("captureSiteDraft:fresh"));
+  sessionValues.clear();
 });

@@ -27,6 +27,7 @@ import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
 import { httpOrigin, inspectSitePatterns, prunePatternSamples, samplePattern } from "./site-patterns.js";
+import { pruneDraftHandoffs } from "./capture-site-handoff.js";
 import {
   NOT_A_WEB_PAGE_MESSAGE, SITE_ACCESS_NEEDED_MESSAGE, SUMMARIZE_MENU_ID, SUMMARIZE_MENU_TITLE,
   summarizeFailureText, summarizeTab,
@@ -1328,14 +1329,27 @@ chrome.idle?.onStateChanged.addListener((state) => {
   }).catch((error: unknown) => console.warn(`${APP_NAME} idle update skipped:`, describe(error)));
 });
 
+// Capture Site's advanced-editor handoffs expire after 30 minutes. Settings
+// deletes the one it opens; worker start and maintenance delete the rest.
+function pruneCaptureSiteDrafts(): void {
+  void pruneDraftHandoffs(chrome.storage.session, Date.now())
+    .catch((error: unknown) => console.warn(`${APP_NAME} capture-site draft cleanup skipped:`, describe(error)));
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) {
     void syncWithHost();
     void serialize(pruneCurrentSitePatterns).catch(patternFailure);
+    pruneCaptureSiteDrafts();
   }
 });
 
-chrome.runtime.onStartup.addListener(() => void syncWithHost());
+chrome.runtime.onStartup.addListener(() => {
+  pruneCaptureSiteDrafts();
+  void syncWithHost();
+});
+
+pruneCaptureSiteDrafts();
 
 export async function rebuildActivityMap(): Promise<void> {
   if (!chrome.tabs.query || !chrome.webNavigation.getFrame) return;

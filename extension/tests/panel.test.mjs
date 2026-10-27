@@ -224,6 +224,7 @@ async function install({
       id: "test-id",
       lastError: undefined,
       getManifest: () => ({ options_ui: { page: "options.html" } }),
+      getURL: (path) => `chrome-extension://test-id/${path}`,
       openOptionsPage: async () => undefined,
       connectNative() {
         const messageListeners = [];
@@ -1209,22 +1210,58 @@ test("a shared origin with pending scope keeps Save disabled until the user choo
 });
 
 test("an empty draft explains why and offers advanced settings", async () => {
-  let opened = 0;
   const page = await draftReview(WIKI_URL, { draft: () => ({
     ...wikiDraft(), adapters: [], preview: [],
     dropped: [{ shape: "/{slug}/{tailhex32}", adapter: null, rule: null, reason: "draft_no_leading_literal" }],
   }) });
-  chrome.runtime.openOptionsPage = async () => { opened += 1; };
   await drafted(page);
   assert.equal(page.el("capture-site-advanced").hidden, false);
   assert.match(page.el("capture-site-message").textContent, /could not draft/i);
   assert.match(page.el("capture-site-dropped").textContent, /no fixed route word/);
   assert.equal(page.el("capture-site-save").disabled, true);
   page.el("capture-site-advanced").click();
-  assert.equal(opened, 1);
-  page.el("capture-site-cancel").click();
+  await until(() => page.state.created.length === 1, "advanced settings to open");
+  const [key] = [...page.state.session.keys()].filter((name) => name.startsWith("captureSiteDraft:"));
+  assert.equal(page.state.created[0].url, `chrome-extension://test-id/options.html#draft=${key.slice("captureSiteDraft:".length)}`);
+  assert.deepEqual(page.state.session.get(key).adapters, []);
+  assert.equal(page.el("capture-site-review").hidden, true, "the handed-off draft leaves the panel");
   assert.equal(page.el("capture-site-advanced").hidden, true);
   assert.equal(updates(page).length, 0);
+});
+
+test("the advanced handoff stores only the drafted adapters and shapes for 30 minutes", async () => {
+  const { DRAFT_HANDOFF_TTL_MS, canonicalJson } = await import("../dist/capture-site-handoff.js");
+  const title = "Secret Launch Plan · Acme Wiki";
+  const page = await draftReview(WIKI_URL, { title });
+  await drafted(page);
+  assert.equal(page.el("capture-site-advanced").hidden, false, "a drafted review also offers the advanced editor");
+  page.el("capture-site-title-suffix").value = " · Acme Wiki";
+  page.el("capture-site-title-suffix").dispatch("input");
+  const before = Date.now();
+  page.el("capture-site-advanced").click();
+  await until(() => page.state.created.length === 1, "advanced settings to open");
+  const keys = [...page.state.session.keys()].filter((name) => name.startsWith("captureSiteDraft:"));
+  assert.equal(keys.length, 1);
+  const entry = page.state.session.get(keys[0]);
+  assert.equal(`captureSiteDraft:${entry.id}`, keys[0]);
+  assert.equal(page.state.created[0].url, `chrome-extension://test-id/options.html#draft=${entry.id}`);
+  assert.equal(entry.origin, WIKI);
+  assert.ok(entry.created >= before && entry.created <= Date.now());
+  assert.ok(DRAFT_HANDOFF_TTL_MS === 30 * 60_000);
+  // The reviewed selection (rule 1 starts unchecked) without the title overlay.
+  const table = wikiDraft().adapters[0].adapter;
+  const kept = { ...table, match: [table.match[0]] };
+  assert.deepEqual(entry.adapters, [kept]);
+  assert.deepEqual(entry.baseline_rules, [kept.match.map(canonicalJson)]);
+  assert.deepEqual(entry.visited, [{ shape: "/pages/{num}", count: 1 }]);
+  assert.deepEqual(entry.links, [{ shape: "/archive/{num}", count: 4 }, { shape: "/space/{id}", count: 1 }]);
+  const text = JSON.stringify(entry);
+  assert.equal(text.includes(WIKI_URL), false, "no raw URL");
+  assert.equal(text.includes("Secret Launch Plan"), false, "no tab title");
+  assert.equal(text.includes("Acme Wiki"), false, "no title ending");
+  assert.equal(page.el("capture-site-review").hidden, true);
+  assert.equal(updates(page).length, 0);
+  assert.deepEqual(sentAfter(page, page.from), ["draft_site"]);
 });
 
 test("the tab title is shown only in the review and never sent to the drafter", async () => {

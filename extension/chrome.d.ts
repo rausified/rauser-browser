@@ -35,7 +35,8 @@ interface ChromeTabChangeInfo {
 }
 
 interface ChromeStorageArea {
-  get(keys: string | string[]): Promise<Record<string, unknown>>;
+  /** `null` reads every entry. */
+  get(keys: string | string[] | null): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
   remove?(keys: string | string[]): Promise<void>;
   setAccessLevel?(options: { accessLevel: "TRUSTED_CONTEXTS" }): Promise<void>;

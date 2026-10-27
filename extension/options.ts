@@ -1,5 +1,5 @@
 import type {
-  AdapterDocument, FolderPurpose, HarnessFound, HarnessId, StorageConfig,
+  AdapterDocument, FolderPurpose, HarnessFound, HarnessId, RuleProvenance, ScopeChoiceView, StorageConfig,
 } from "../protocol/ts/generated.js";
 import { HOME_LAYOUT, isHttpUrl, type WorkerStatus } from "./model.js";
 import {
@@ -43,6 +43,8 @@ import {
   starterOffers,
   type StarterOffer,
 } from "./starter-adapters.js";
+import { checkReason, type DraftChecked } from "./capture-site.js";
+import { canonicalJson, takeDraftHandoff, type DraftHandoff } from "./capture-site-handoff.js";
 
 const status = element<HTMLDivElement>("status");
 const buildId = element<HTMLSpanElement>("build-id");
@@ -102,7 +104,10 @@ let vocabularyEdited = false;
 let serviceProblem: string | null = null;
 type AdapterEdit =
   | { kind: "new" }
-  | { kind: "existing"; identity: string; snapshot: string };
+  | { kind: "existing"; identity: string; snapshot: string }
+  // Capture Site's drafted adapters, handed off from the side panel. The
+  // editor holds them as one JSON array.
+  | { kind: "draft"; handoff: DraftHandoff };
 
 let adapterEdit: AdapterEdit | null = null;
 let githubScopeText = "";
@@ -500,8 +505,71 @@ function renderAdapters(): void {
 }
 
 type CandidateResult =
-  | { ok: true; adapter: AdapterObject; document: AdapterDocument }
+  | { ok: true; adapter: AdapterObject; added: AdapterObject[]; document: AdapterDocument }
   | { ok: false; message: string };
+
+// The host checks at most 8 drafted adapters.
+const MAX_DRAFT_ADAPTERS = 8;
+
+/** The drafted adapters as edited: a JSON array of 1–8 valid adapters, all
+ * on the handed-off origin. */
+function parseDraftAdapters(text: string, origin: string): { ok: true; adapters: AdapterObject[] } | { ok: false; message: string } {
+  const shape = `The drafted rules must be a JSON array of 1–${MAX_DRAFT_ADAPTERS} adapter objects.`;
+  if (text.length > MAX_DRAFT_ADAPTERS * 65_536) return { ok: false, message: shape };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    return { ok: false, message: `The drafted rules are not valid JSON: ${error instanceof Error ? error.message : "invalid JSON"}` };
+  }
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_DRAFT_ADAPTERS) return { ok: false, message: shape };
+  const adapters: AdapterObject[] = [];
+  for (const [index, item] of value.entries()) {
+    const parsed = parseAdapterJson(JSON.stringify(item) ?? "");
+    if (!parsed.ok) return { ok: false, message: `Adapter ${index + 1}: ${parsed.message}` };
+    if (adapterOrigin(parsed.adapter) !== origin) {
+      return { ok: false, message: `Adapter ${index + 1}: drafted rules stay on ${origin}.` };
+    }
+    adapters.push(parsed.adapter);
+  }
+  return { ok: true, adapters };
+}
+
+// Keys a user adds by hand. The drafter never writes them, so an adapter
+// carrying one is the user's own and all its rules are user-written.
+const HAND_WRITTEN_KEYS = ["alias", "fields", "path_case"];
+// The overlays the review owns. They are stripped from the checked tables;
+// the scope travels as its own field.
+const OVERLAY_KEYS = new Set(["title", "scope", "unscoped"]);
+
+/**
+ * What `check_site_draft` receives for the edited drafted adapters: each
+ * table without its title, scope and unscoped overlays; per-rule provenance,
+ * where a rule unlike every drafted rule of its adapter, or any rule of an
+ * adapter with a hand-added key, is user-written; and the scope choice.
+ */
+function draftChecked(handoff: DraftHandoff, adapters: readonly AdapterObject[]): DraftChecked {
+  const copied = session.config?.adapters.artifacts.find((adapter) =>
+    adapter.origin === handoff.origin && objectValue(adapter.scope) !== null)?.scope;
+  const checked: DraftChecked = { adapters: [], provenance: [], scope: [] };
+  for (const [index, adapter] of adapters.entries()) {
+    const table = Object.fromEntries(Object.entries(adapter).filter(([key]) => !OVERLAY_KEYS.has(key)));
+    const handWritten = HAND_WRITTEN_KEYS.some((key) => Object.hasOwn(adapter, key));
+    const baseline = new Set(handoff.baseline_rules[index] ?? []);
+    const rules = Array.isArray(table.match) ? table.match as unknown[] : [];
+    checked.adapters.push(table);
+    checked.provenance.push(rules.map((rule): RuleProvenance =>
+      !handWritten && baseline.has(canonicalJson(rule)) ? "drafted" : "user_written"));
+    const scope = objectValue(adapter.scope);
+    let choice: ScopeChoiceView | null = null;
+    if (adapter.unscoped !== undefined) choice = "unscoped";
+    else if (scope && !(copied !== undefined && canonicalJson(scope) === canonicalJson(copied))) {
+      choice = { values: Object.values(scope).flatMap((values) => Array.isArray(values) ? values.map(String) : []) };
+    }
+    checked.scope.push(choice);
+  }
+  return checked;
+}
 
 function adapterIdentity(adapter: AdapterObject): string | null {
   const origin = adapterOrigin(adapter);
@@ -527,9 +595,17 @@ function readAdapterCandidate(): CandidateResult {
   if (session.config.adapters.format !== 1) {
     return { ok: false, message: `Adapter format ${session.config.adapters.format} cannot be edited by this build.` };
   }
+  const artifacts = [...session.config.adapters.artifacts];
+  if (adapterEdit.kind === "draft") {
+    const drafted = parseDraftAdapters(adapterJson.value, adapterEdit.handoff.origin);
+    if (!drafted.ok) return drafted;
+    const document = { format: 1, artifacts: [...artifacts, ...drafted.adapters] };
+    const problem = validateAdapterDocument(document);
+    return problem ? { ok: false, message: problem }
+      : { ok: true, adapter: drafted.adapters[0]!, added: drafted.adapters, document };
+  }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
-  const artifacts = [...session.config.adapters.artifacts];
   if (adapterEdit.kind === "new") artifacts.push(parsed.adapter);
   else {
     const target = adapterEdit;
@@ -543,7 +619,7 @@ function readAdapterCandidate(): CandidateResult {
   }
   const document = { format: 1, artifacts };
   const problem = validateAdapterDocument(document);
-  return problem ? { ok: false, message: problem } : { ok: true, adapter: parsed.adapter, document };
+  return problem ? { ok: false, message: problem } : { ok: true, adapter: parsed.adapter, added: [parsed.adapter], document };
 }
 
 function adapterCandidate(): CandidateResult | null {
@@ -598,12 +674,12 @@ function refreshAdapterEditor(): void {
   updateControls();
 }
 
-function openAdapterEditor(edit: AdapterEdit, adapter: AdapterObject, heading: string): void {
+function openAdapterEditor(edit: AdapterEdit, adapter: AdapterObject | AdapterObject[], heading: string): void {
   adapterEdit = edit;
   adapterEditor.hidden = false;
   adapterEditorHeading.textContent = heading;
   adapterJson.value = JSON.stringify(adapter, null, 2);
-  adapterPreviewUrl.value = exampleUrl(adapter);
+  adapterPreviewUrl.value = exampleUrl(Array.isArray(adapter) ? adapter[0]! : adapter);
   adapterPreviewTitle.value = "";
   refreshAdapterEditor();
 }
@@ -642,13 +718,18 @@ function closeAdapterEditor(): void {
  * turns capture on unless a pause is still pending. A folder selection the
  * host has not saved yet is saved with it.
  */
-async function saveAdapterDocument(document: AdapterDocument, success: string): Promise<void> {
+async function saveAdapterDocument(
+  document: AdapterDocument, success: string, check?: () => Promise<string | null>,
+): Promise<void> {
   if (!session.config || busy) return;
   busy = true;
   updateControls();
   const selection = picker;
+  let warning: string | null = null;
   try {
     await withConfigMutationLock(async () => {
+      // A drafted save is re-checked by the host first, for this revision.
+      if (check) warning = await check();
       const config = session.config!;
       const storage = selection ? storageFor(selection.path, config.storage) : config.storage;
       const hasSites = siteOrigins(document).length > 0;
@@ -664,7 +745,8 @@ async function saveAdapterDocument(document: AdapterDocument, success: string): 
     });
     if (selection && picker === selection) picker = null;
     closeAdapterEditor();
-    show(success);
+    if (warning) show(`${success} ${warning}`, true);
+    else show(success);
   } catch (error) {
     show(`Could not save artifact adapters: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
@@ -715,8 +797,75 @@ async function saveAdapter(): Promise<void> {
     show("Finish removing this site from the host before adding it again. Reload this page to retry.", true);
     return;
   }
+  if (adapterEdit?.kind === "draft") {
+    await saveDraftedAdapters(adapterEdit.handoff, candidate.added, candidate.document);
+    return;
+  }
   const action = adapterEdit?.kind === "new" ? "added" : "updated";
   await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`);
+}
+
+/**
+ * Save edited drafted adapters. The host re-checks them first with
+ * `check_site_draft`: a dropped rule (a drafted rule that fails a check, or
+ * any rule of an adapter the host cannot read) blocks the save with its
+ * reason, as does a refused scope. A user-written rule's failure only warns,
+ * and the full edited document is saved.
+ */
+async function saveDraftedAdapters(
+  handoff: DraftHandoff, adapters: AdapterObject[], document: AdapterDocument,
+): Promise<void> {
+  const checked = draftChecked(handoff, adapters);
+  const types = adapters.map((adapter, index) => adapterLabel(adapter, index));
+  const check = async (): Promise<string | null> => {
+    const revision = session.revision;
+    if (!revision) throw new Error("Settings are not loaded. Reload this page.");
+    const reply = await session.checkSiteDraft(handoff.origin, revision, checked, handoff.visited, handoff.links);
+    if (reply.revision !== revision) throw new Error("Settings changed. Review the drafted rules again.");
+    if (reply.rules.length !== adapters.length || reply.scope.length !== adapters.length ||
+        reply.rules.some((rules, a) => rules.length !== checked.provenance[a]!.length)) {
+      throw new Error("Brauser's host did not check every rule. Nothing was saved.");
+    }
+    const warnings: string[] = [];
+    for (const [a, rules] of reply.rules.entries()) {
+      for (const [r, verdict] of rules.entries()) {
+        if (verdict.verdict === "dropped") {
+          throw new Error(`${types[a]} rule ${r + 1} cannot be saved: ${checkReason(verdict.reason)}. Nothing was saved.`);
+        }
+        if (verdict.verdict === "warned") warnings.push(`${types[a]} rule ${r + 1}: ${checkReason(verdict.reason)}`);
+      }
+      const scope = reply.scope[a]!;
+      if (scope.reason !== null) {
+        throw new Error(`The scope of ${types[a]} was not accepted: ${checkReason(scope.reason)}. Nothing was saved.`);
+      }
+    }
+    return warnings.length ? `Your edited rules were saved as written despite: ${warnings.join("; ")}.` : null;
+  };
+  await saveAdapterDocument(document, `Drafted capture rules for ${new URL(handoff.origin).host} saved.`, check);
+}
+
+/** Open the adapter editor on a draft the side panel handed off in
+ * `#draft=<id>`. The entry is read once and deleted; an expired one is
+ * ignored. */
+async function openHandedOffDraft(): Promise<void> {
+  const match = /^#draft=([A-Za-z0-9-]{1,64})$/.exec(typeof location === "undefined" ? "" : location.hash);
+  if (!match) return;
+  let entry: DraftHandoff | null;
+  try {
+    entry = await takeDraftHandoff(chrome.storage.session, match[1]!, Date.now());
+  } catch (error) {
+    show(`Could not open the Capture Site draft: ${describe(error)}`, true);
+    return;
+  }
+  if (!entry) {
+    show("This Capture Site draft expired or was already opened. Open Capture Site on the page again.", true);
+    return;
+  }
+  if (busy || !session.config) return;
+  // An empty draft starts from a template; every rule in it is the user's.
+  const adapters = entry.adapters.length ? entry.adapters : [newAdapter(entry.origin)];
+  openAdapterEditor({ kind: "draft", handoff: entry }, adapters,
+    `Review drafted capture rules for ${new URL(entry.origin).host}`);
 }
 
 async function removeAdapter(index: number): Promise<void> {
@@ -1167,5 +1316,6 @@ void (async () => {
     await session.refreshStatus().catch(() => undefined);
     updateControls();
   }
+  if (session.connected) await openHandedOffDraft();
   if (session.connected) await refreshAgentEnv();
 })();

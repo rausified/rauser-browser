@@ -1,14 +1,16 @@
-import type { DraftDropReason, SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
+import type { SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
 import type { WorkerStatus } from "./model.js";
 import { HostError } from "./native.js";
 import { ConfigSession, describe, element, withConfigMutationLock, worker } from "./settings.js";
 import {
-  captureMode, captureOrigin, draftRequest, planCaptureSite, planDraftedSite, siteConfigured, tenantPrefill,
+  DROP_REASONS, captureMode, captureOrigin, checkReason, draftRequest, planCaptureSite, planDraftedSite, siteConfigured,
+  tenantPrefill,
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
 import { starterKind } from "./starter-adapters.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
+import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
 
 export interface CapturePage {
   url: string;
@@ -34,35 +36,6 @@ const STALE = "Settings changed. Cancel and open Capture Site again to review th
 const UNCHECKED_LABELS: Record<UncheckedReason, string> = {
   link_only: "seen only in links on this page",
   token_only: "loose: its ID has no fixed shape",
-};
-
-const SAFETY_PAGES = "a sign-in, search, dashboard or sharing page";
-const NO_ROUTE_WORD = "no fixed route word to draft from safely";
-const FAILED_CHECKS = "it did not pass Brauser's safety checks";
-const DROP_REASONS: Record<DraftDropReason, string> = {
-  root: "the site's home page",
-  probe: SAFETY_PAGES,
-  search_or_paging: "search or paging pages",
-  blocked_route: "sign-in, sharing or account pages",
-  param_name: "its ID would come from a search, paging or tracking setting",
-  already_recognized: "already captured by this site's rules",
-  no_route_word: NO_ROUTE_WORD,
-  no_identifier: "no page ID in the address",
-  limit: "more kinds of page than Brauser drafts at once",
-  draft_forbidden_key: FAILED_CHECKS,
-  draft_no_scope_source: FAILED_CHECKS,
-  draft_scope_conflict: FAILED_CHECKS,
-  draft_no_leading_literal: NO_ROUTE_WORD,
-  draft_rest_second: "it would match too many pages",
-  draft_id_needs_typed_capture: "its ID has no fixed shape",
-  draft_search_capture: "its ID would come from search or paging",
-  draft_matches_probe: `it would also capture ${SAFETY_PAGES}`,
-  draft_overlap: "already captured by this site's rules",
-  draft_blocked_route: "sign-in, sharing or account pages",
-  draft_paging_capture: "its ID would come from search or paging",
-  draft_invalid_rule: FAILED_CHECKS,
-  draft_scope_pending: FAILED_CHECKS,
-  draft_scope_choice: FAILED_CHECKS,
 };
 
 /** One capture of a path template, in words. */
@@ -108,12 +81,6 @@ function child<K extends keyof HTMLElementTagNameMap>(
   if (className) node.className = className;
   parent.append(node);
   return node;
-}
-
-/** Plain words for a host check refusal code. */
-function checkReason(reason: string | null): string {
-  return (reason !== null && Object.hasOwn(DROP_REASONS, reason) ? DROP_REASONS[reason as DraftDropReason] : null) ??
-    FAILED_CHECKS;
 }
 
 /**
@@ -222,7 +189,7 @@ export class CaptureSitePanel {
     for (const input of [this.scopeValues, this.titleSuffix]) {
       input.addEventListener("input", () => this.updateDraftPreview());
     }
-    this.advanced.addEventListener("click", () => this.actions.openSettings());
+    this.advanced.addEventListener("click", () => void this.openAdvanced());
     // As for Page patterns: a reload or document replacement keeps the tab
     // ID and can keep the URL, so any new load or URL change in the reviewed
     // tab discards a drafted review and its link shapes.
@@ -396,7 +363,9 @@ export class CaptureSitePanel {
     this.titleCurrent.textContent = `This tab's title: ${target.title ?? ""}`;
     this.titleSuffix.value = "";
     this.renderDropped(draft);
-    this.advanced.hidden = draft.adapters.length !== 0;
+    // The advanced editor is offered for every draft, and is the only way
+    // forward for an empty one.
+    this.advanced.hidden = false;
     if (!draft.adapters.length) {
       const noRouteWord = draft.dropped.some((row) => row.reason === "no_route_word" || row.reason === "draft_no_leading_literal");
       this.previewMessage = `Brauser could not draft capture rules for this site from what this page shows.${noRouteWord
@@ -426,6 +395,40 @@ export class CaptureSitePanel {
       for (const row of probes) {
         child(list, "li", `${row.adapter === null ? "Skipped" : "Would be captured"}: ${row.url}`, row.adapter === null ? "" : "warning");
       }
+    }
+  }
+
+  /**
+   * Hand the draft to the settings page's adapter editor. The entry holds
+   * the reviewed selection's checked tables with its chosen scope (or, when
+   * the review is not yet complete, the drafted tables as they came), and
+   * the private shapes. It never holds a raw URL, a link href, the tab title
+   * or the title ending typed from it. The review then closes.
+   */
+  private async openAdvanced(): Promise<void> {
+    const target = this.target;
+    const draft = this.draft;
+    const input = this.draftInput;
+    if (!target || target.mode !== "draft" || !draft || !input || this.saving) {
+      this.actions.openSettings();
+      return;
+    }
+    const plan = this.draftPlan;
+    const adapters = plan
+      ? plan.document.artifacts.slice(-plan.checked.adapters.length).map((adapter) => {
+        const table = { ...adapter };
+        delete table.title;
+        return table;
+      })
+      : draft.adapters.map((view) => view.adapter);
+    const entry = draftHandoff(crypto.randomUUID(), target.origin, adapters, input.visited, input.links, Date.now());
+    try {
+      await storeDraftHandoff(chrome.storage.session, entry);
+      await chrome.tabs.create({ url: chrome.runtime.getURL(`options.html#draft=${entry.id}`) });
+      if (this.target === target) this.close();
+    } catch (error) {
+      await chrome.storage.session.remove?.(handoffKey(entry.id)).catch(() => undefined);
+      this.actions.show(`Could not open advanced settings: ${describe(error)}`, true);
     }
   }
 

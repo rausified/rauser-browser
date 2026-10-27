@@ -3,7 +3,7 @@
 // private URL shapes, and this module turns the review's selection into the
 // checked tables and the document to save.
 import type {
-  AdapterDocument, ConfigSnapshot, DraftScopeState, DraftTenantView, RuleProvenance,
+  AdapterDocument, ConfigSnapshot, DraftDropReason, DraftScopeState, DraftTenantView, RuleProvenance,
   ScopeChoiceView, ShapeCount, SiteDrafted,
 } from "../protocol/ts/generated.js";
 import { canonicalCapture, urlSegments } from "./adapter-templates.js";
@@ -97,6 +97,42 @@ export function planCaptureSite(
 }
 
 // --- Drafted sites -----------------------------------------------------------
+
+const SAFETY_PAGES = "a sign-in, search, dashboard or sharing page";
+const NO_ROUTE_WORD = "no fixed route word to draft from safely";
+const FAILED_CHECKS = "it did not pass Brauser's safety checks";
+/** Plain words for each drafter and checker reason. */
+export const DROP_REASONS: Record<DraftDropReason, string> = {
+  root: "the site's home page",
+  probe: SAFETY_PAGES,
+  search_or_paging: "search or paging pages",
+  blocked_route: "sign-in, sharing or account pages",
+  param_name: "its ID would come from a search, paging or tracking setting",
+  already_recognized: "already captured by this site's rules",
+  no_route_word: NO_ROUTE_WORD,
+  no_identifier: "no page ID in the address",
+  limit: "more kinds of page than Brauser drafts at once",
+  draft_forbidden_key: FAILED_CHECKS,
+  draft_no_scope_source: FAILED_CHECKS,
+  draft_scope_conflict: FAILED_CHECKS,
+  draft_no_leading_literal: NO_ROUTE_WORD,
+  draft_rest_second: "it would match too many pages",
+  draft_id_needs_typed_capture: "its ID has no fixed shape",
+  draft_search_capture: "its ID would come from search or paging",
+  draft_matches_probe: `it would also capture ${SAFETY_PAGES}`,
+  draft_overlap: "already captured by this site's rules",
+  draft_blocked_route: "sign-in, sharing or account pages",
+  draft_paging_capture: "its ID would come from search or paging",
+  draft_invalid_rule: FAILED_CHECKS,
+  draft_scope_pending: FAILED_CHECKS,
+  draft_scope_choice: FAILED_CHECKS,
+};
+
+/** Plain words for a host check refusal code. */
+export function checkReason(reason: string | null): string {
+  return (reason !== null && Object.hasOwn(DROP_REASONS, reason) ? DROP_REASONS[reason as DraftDropReason] : null) ??
+    FAILED_CHECKS;
+}
 
 export type CaptureMode = "starter" | "draft" | "configured" | "unsupported";
 
