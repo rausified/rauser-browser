@@ -580,12 +580,23 @@ impl ArtifactIndex {
                 continue;
             };
             let mut line = if let Some(summary) = &row.summary {
-                format!(
+                let mut line = format!(
                     "Summarized: {} — {}, {} importance",
                     plain_text(&summary.title),
                     plain_text(&summary.document_type),
                     summary.importance
-                )
+                );
+                // A future adapter-attached summary (spec §7.2's "the
+                // adapter does recognize the page" branch) can land on an
+                // artifact that also has real measured activity; keep both
+                // instead of silently dropping the measures.
+                if row.focused > 0 || row.background > 0 || row.opens > 0 {
+                    line.push_str(&format!(
+                        " — {}",
+                        measures(row.focused, row.background, row.opens)
+                    ));
+                }
+                line
             } else {
                 let mut line = format!(
                     "{} {}: {}",
@@ -2973,6 +2984,48 @@ print(json.dumps([tables,row]))"#;
         assert!(text.starts_with("Opened 1 artifact,"));
         assert!(text.contains("Summarized: A good discussion — discussion, high importance"));
         assert!(!text.contains("seen"));
+    }
+
+    #[test]
+    fn worklog_keeps_measures_when_a_summary_lands_on_an_already_measured_artifact() {
+        // Exercises the future adapter-attached-summary case (spec §7.2's
+        // "the adapter does recognize the page" branch, not wired by any
+        // caller yet): the summary wording must not silently drop real
+        // measured activity on the same artifact.
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000020",
+            "PROJ-1",
+            "Ticket",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&event, &[]).unwrap();
+        index
+            .record_summary(&SummaryEvent {
+                event_id: uuid::Uuid::new_v4().to_string(),
+                artifact_id: event.artifact_id.clone(),
+                artifact_type: event.artifact_type.clone(),
+                url: event.url.clone(),
+                title: "Ticket".into(),
+                occurred_at: "2026-10-15T13:00:00Z".into(),
+                document_type: "ticket".into(),
+                category: "work".into(),
+                importance: "high".into(),
+                summary_path: "pages/proj-1.summary.md".into(),
+            })
+            .unwrap();
+
+        let (text, count) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-15").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(text.contains("Summarized: Ticket — ticket, high importance"));
+        assert!(text.contains("focused 2 min"), "{text}");
     }
 
     #[test]

@@ -67,6 +67,14 @@ pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'stati
         || summary.summary_path.starts_with('/')
         || summary.summary_path.split('/').any(|part| part == "..")
         || !summary.summary_path.ends_with(".summary.md")
+        // The rendered link wraps this in `<...>` (CommonMark's bracketed
+        // destination form), which forbids line breaks and unescaped `<`/
+        // `>`. Reject rather than escape: a vault-relative path has no
+        // legitimate reason to need any of these.
+        || summary
+            .summary_path
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '<' | '>'))
     {
         return Err("invalid_summary_path");
     }
@@ -149,6 +157,23 @@ mod tests {
         let mut bad = summary();
         bad.summary_path = "pages/news-ycombinator-com.md".into();
         assert_eq!(validate_page_summary(&bad), Err("invalid_summary_path"));
+    }
+
+    #[test]
+    fn a_summary_path_with_a_link_breaking_character_is_rejected() {
+        for path in [
+            "pages/>evil.summary.md",
+            "pages/<script>.summary.md",
+            "pages/evil\n.summary.md",
+        ] {
+            let mut bad = summary();
+            bad.summary_path = path.into();
+            assert_eq!(
+                validate_page_summary(&bad),
+                Err("invalid_summary_path"),
+                "{path} should be rejected"
+            );
+        }
     }
 
     #[test]
