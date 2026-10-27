@@ -665,7 +665,7 @@ impl Inner {
     /// Start the harness session and run its turn, streaming events into the
     /// record. `Ok` is the final answer text; `Err` is the failure reason.
     fn drive(
-        &self,
+        self: &Arc<Self>,
         id: Uuid,
         control: &RunControl,
         status: &RunStatusFile,
@@ -685,45 +685,41 @@ impl Inner {
             page_path,
             env,
         };
+        // Record each child's process group the moment it is spawned, so a
+        // restart can kill a harness that hangs without writing anything.
+        let worker = Arc::downgrade(self);
+        control.slot.set_on_spawn(Some(Arc::new(move |group| {
+            if let Some(worker) = worker.upgrade() {
+                worker.note(id, |status| status.process_group = Some(group));
+            }
+        })));
         let mut session = runner
             .start(&spec, &control.slot)
             .map_err(|error| format!("starting the harness: {error:#}"))?;
-        let mut recorded_group = None;
         let mut truncated = false;
-        let outcome = session.turn(&spec.prompt, &mut |event| {
-            let group = control.slot.group();
-            if group.is_some() && group != recorded_group {
-                recorded_group = group;
-                self.note(id, |status| status.process_group = group);
+        let outcome = session.turn(&spec.prompt, &mut |event| match event {
+            HarnessEvent::Text(text) => match self.store.append_stream(id, &text) {
+                Ok(true) => {}
+                Ok(false) if !truncated => {
+                    truncated = true;
+                    self.note(id, |status| status.stream_truncated = true);
+                }
+                Ok(false) => {}
+                Err(error) => eprintln!("brauser service: run {id} stream: {error:#}"),
+            },
+            HarnessEvent::Diagnostic(bytes) => {
+                if let Err(error) = self.store.append_log(id, &bytes) {
+                    eprintln!("brauser service: run {id} log: {error:#}");
+                }
             }
-            match event {
-                HarnessEvent::Text(text) => match self.store.append_stream(id, &text) {
-                    Ok(true) => {}
-                    Ok(false) if !truncated => {
-                        truncated = true;
-                        self.note(id, |status| status.stream_truncated = true);
-                    }
-                    Ok(false) => {}
-                    Err(error) => eprintln!("brauser service: run {id} stream: {error:#}"),
-                },
-                HarnessEvent::Diagnostic(bytes) => {
-                    if let Err(error) = self.store.append_log(id, &bytes) {
-                        eprintln!("brauser service: run {id} log: {error:#}");
-                    }
-                }
-                HarnessEvent::Session(SessionRef::CodexThread(thread)) => {
-                    self.note(id, |status| status.thread_id = Some(thread));
-                }
-                HarnessEvent::Session(SessionRef::ClaudeSession(session)) => {
-                    self.note(id, |status| status.session_id = Some(session));
-                }
+            HarnessEvent::Session(SessionRef::CodexThread(thread)) => {
+                self.note(id, |status| status.thread_id = Some(thread));
+            }
+            HarnessEvent::Session(SessionRef::ClaudeSession(session)) => {
+                self.note(id, |status| status.session_id = Some(session));
             }
         });
         session.close();
-        let group = control.slot.group();
-        if group.is_some() && group != recorded_group {
-            self.note(id, |status| status.process_group = group);
-        }
         match outcome {
             TurnOutcome::Answered { final_text } => Ok(final_text),
             TurnOutcome::Failed { reason } => Err(reason),
@@ -1301,6 +1297,48 @@ mod tests {
                 .starts_with("Timed out after"),
             "{view:?}"
         );
+    }
+
+    #[test]
+    fn silent_run_records_its_group_so_restart_recovery_kills_it() {
+        // The harness never writes anything, so only the spawn can record
+        // its process group.
+        let fixture = Fixture::new("sleep 30 &\nwait\n");
+        let id = fixture.start("a");
+        let store = &fixture.supervisor.inner.store;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let group = loop {
+            if let Some(group) = store.status(id).unwrap().process_group {
+                break group;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "a silent run never recorded its process group"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(fixture.stream(id), "");
+
+        // A new service process recovers the record this one left behind.
+        let restarted = RunStore::open(fixture.path("runs")).unwrap();
+        maintenance::recover(
+            &restarted,
+            OffsetDateTime::now_utc(),
+            std::process::id().wrapping_add(1),
+            &group_alive,
+            &kill_group,
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while group_alive(group) {
+            assert!(
+                Instant::now() < deadline,
+                "recovery left process group {group} running"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        fixture.wait_finished(id);
+        let status = restarted.status(id).unwrap();
+        assert_eq!(status.state, RunState::Failed);
     }
 
     #[test]

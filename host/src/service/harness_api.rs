@@ -60,10 +60,24 @@ pub enum TurnOutcome {
     Failed { reason: String },
 }
 
-#[derive(Debug, Default)]
+/// Called with each new child's process group as soon as it is spawned.
+type SpawnHook = Arc<dyn Fn(i32) + Send + Sync>;
+
+#[derive(Default)]
 struct SlotState {
     group: Option<i32>,
     killed: bool,
+    on_spawn: Option<SpawnHook>,
+}
+
+impl std::fmt::Debug for SlotState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlotState")
+            .field("group", &self.group)
+            .field("killed", &self.killed)
+            .field("on_spawn", &self.on_spawn.is_some())
+            .finish()
+    }
 }
 
 /// The process group of a run's current child, shared between the runner
@@ -84,8 +98,10 @@ impl ProcessSlot {
     }
 
     /// Spawn `command` as the leader of a new process group and record that
-    /// group. After [`ProcessSlot::kill`] this refuses with
-    /// [`io::ErrorKind::Interrupted`] and starts nothing.
+    /// group, then pass it to the [`ProcessSlot::set_on_spawn`] hook before
+    /// returning, so it is known before the child produces anything. After
+    /// [`ProcessSlot::kill`] this refuses with [`io::ErrorKind::Interrupted`]
+    /// and starts nothing.
     pub fn spawn(&self, command: &mut Command) -> io::Result<Child> {
         let mut state = self.lock();
         if state.killed {
@@ -95,8 +111,22 @@ impl ProcessSlot {
             ));
         }
         let child = command.process_group(0).spawn()?;
-        state.group = Some(Pid::from_child(&child).as_raw_pid());
+        let group = Pid::from_child(&child).as_raw_pid();
+        state.group = Some(group);
+        let hook = state.on_spawn.clone();
+        // The hook runs outside the slot lock, so a kill is never held up
+        // behind it.
+        drop(state);
+        if let Some(hook) = hook {
+            hook(group);
+        }
         Ok(child)
+    }
+
+    /// Set (or, with `None`, clear) the hook [`ProcessSlot::spawn`] calls
+    /// with each new process group.
+    pub fn set_on_spawn(&self, hook: Option<SpawnHook>) {
+        self.lock().on_spawn = hook;
     }
 
     /// Mark the slot killed and send SIGKILL to the recorded process group.
