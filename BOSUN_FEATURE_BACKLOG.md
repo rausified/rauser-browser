@@ -188,29 +188,33 @@ Their line numbers predate step 6.6, so re-check them.
 `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md` (plan: `docs/superpowers/plans/2026-10-26-open-access-and-agent-service.md`) replace the old M2 steps 8.2-8.5 and come first, in
 order. They supersede the denylist, harness-token, `activeTab`, and per-site
 grant parts of the items below wherever those conflict. PR 1 (open access
-and the protocol v6 removals) is done; see Shipped.
+and the protocol v6 removals) and PR 2 (the service skeleton) are done, and
+PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 
-- [ ] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
+- [x] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
   card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
   with a validated structured answer, pinned Readability extraction, the
   Summarize & log button, and the polling run card (spec §6; plan Tasks 28-42).
-  Tracks one Cookie queue item per plan task, built in this order, each
-  depending on the one before; it closes when they all close:
-  - [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
-  - [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
-  - [ ] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
-  - [ ] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
-  - [ ] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
-  - [ ] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
-  - [ ] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
-  - [ ] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
-  - [ ] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
-  - [ ] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
-  - [ ] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
-  - [ ] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
-  - [ ] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
-  - [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
-  - [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
+  Built on `feat/agent-runners-pr3` (2026-10-27); see Shipped. **[human]**
+  check still to run (TESTING.md "Real-UI acceptance"): a real Codex and a
+  real Claude Code summary from the dev build, and **Open in Codex** opening
+  the thread in Codex Desktop. Tracked one Cookie queue item per plan task,
+  built in this order, each depending on the one before:
+  - [x] `brwr-t28` Task 28: Line-streaming child process primitive (after PR 2).
+  - [x] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
+  - [x] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
+  - [x] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
+  - [x] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
+  - [x] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
+  - [x] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
+  - [x] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
+  - [x] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
+  - [x] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
+  - [x] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
+  - [x] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
+  - [x] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
+  - [x] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
+  - [x] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
 - [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
   integration.** The owned summary file, the `summary` daily-log event,
   summaries in the index, Recent, the worklog, and the panel, written under the
@@ -287,7 +291,8 @@ and the protocol v6 removals) is done; see Shipped.
   versions, native registration, the folder picker, standing HTTP(S) access,
   background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
-- [ ] `brwr-6wz` **M2 step 8.2 — Host invocation, now open access PRs 2-3.**
+- [x] `brwr-6wz` **M2 step 8.2 — Host invocation, now open access PRs 2-3.**
+  Closed with `brwr-sr3` (2026-10-27): the service runs the real runners.
   A tracking pointer: agent runs move to the per-user Brauser service (spec
   §5, open-access PR 2) with full-access Codex or Claude Code runners (spec §6,
   open-access PR 3), per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`. The
@@ -301,7 +306,8 @@ and the protocol v6 removals) is done; see Shipped.
   spec above), not the old M2 step 8.2 harness path. Agent drafts are
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
-- [ ] `brwr-0ij` **M2 step 8.4 — Content extraction, now open access PR 3.** A
+- [x] `brwr-0ij` **M2 step 8.4 — Content extraction, now open access PR 3.**
+  Closed with `brwr-sr3` (2026-10-27). A
   tracking pointer: pinned Readability extraction, the Summarize & log button,
   and the context-menu item are built in open-access PR 3 (spec §5.3 and §6). With
   standing access there is no `activeTab` trigger. Close it with open-access PR 3.
@@ -531,10 +537,11 @@ main, check the item off as "not reproduced" and say why. The last item,
   remains the separate alias/re-key migration, not a relaxation of frozen IDs.
 
 
-- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
 
+- **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
 - **Category:** New Capability. **Start capturing known work sites from the current page (2026-10-27).** The panel now reviews and enables Jira Cloud, SharePoint/OneDrive and separately scoped GitHub pull requests/issues without opening JSON. It shows the actual page's match, labeled illustrative examples and all fixed safety probes, preserves configured sites and pauses, and refuses stale reviews or pending removals. Existing note edits save before identity changes, with copy-out on failure; page-installed policy starts attention on already-open artifacts without inventing cold opens or suppressing real opens during background renewal. Unknown-site drafting stays queued in `brwr-t40`, and the parent remains open. **Metrics:** 332 Rust tests and 10 extension test files passing; 26 new model, composed-panel and worker regressions; full required gate, both Clippy configurations and queue consistency green. macOS smoke refused on Linux; 14 scripted dialogs unchanged.
 
 - **Category:** Bug Fix. **Keep shared and older notes reachable after capture rules are removed (2026-10-27).** Historical note recovery now retains the older URL-note list and its read-only viewing action after adapter removal, recognition narrowing and site removal. Both URL lookup directions share durable activity, mode and explicit-context evidence, so alternate routes and context-only history recover the same note without inventing activity. Native request tests prove separate URL notes, migration refusals, stale-key copy-out, cache deletion/reindex and suppressed capture preserve existing content. **Metrics:** 332 Rust tests (+5) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
