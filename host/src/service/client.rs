@@ -2,7 +2,9 @@
 //! service when it is not running (through launchd on macOS), check that it
 //! is this build, then forward one request.
 
+use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
@@ -76,6 +78,9 @@ pub struct ServiceLink {
     /// The build on disk now. A host whose `build_id` differs is the stale
     /// party and never restarts the service.
     pub disk_build: fn() -> String,
+    /// Held while deciding on and making a restart, so that of several hosts
+    /// finding the same stale service only one restarts it.
+    pub restart_lock: PathBuf,
 }
 
 impl ServiceLink {
@@ -87,6 +92,7 @@ impl ServiceLink {
             wait: DEFAULT_WAIT,
             build_id: build_id(),
             disk_build: build_id,
+            restart_lock: paths.restart_lock(),
         })
     }
 
@@ -95,10 +101,15 @@ impl ServiceLink {
     /// this host is the build on disk. A `service_hello` that finds the
     /// connection closed (a service exiting at its idle deadline) is tried
     /// once more on a fresh connection; hello is idempotent.
+    ///
+    /// A restart is decided under [`ServiceLink::restart_lock`], with the
+    /// build checked again once the lock is held, so a host that waited for
+    /// another host's restart finds the fresh service and leaves it running.
     pub fn request(&self, request: &Request) -> Result<Response, ServiceError> {
         let mut launched = false;
         let mut restarted = false;
         let mut reconnected = false;
+        let mut restart_lock = None;
         loop {
             let mut stream = self.connect(&mut launched)?;
             let current = match self.hello(&mut stream, request.request_id()) {
@@ -110,6 +121,7 @@ impl ServiceLink {
                 result => result?,
             };
             if current {
+                drop(restart_lock);
                 return exchange(&mut stream, request);
             }
             if restarted {
@@ -119,12 +131,37 @@ impl ServiceLink {
                 return Err(ServiceError::Unavailable(HOST_OUTDATED.into()));
             }
             drop(stream);
+            if restart_lock.is_none() {
+                restart_lock = Some(self.lock_restart()?);
+                continue;
+            }
             restarted = true;
             // The restart starts the service, so a refused connection while
             // it comes up is waited out rather than launched again.
             launched = true;
             self.start(true)?;
         }
+    }
+
+    /// Wait for the exclusive lock on [`ServiceLink::restart_lock`]; it is
+    /// released when the returned file is dropped.
+    fn lock_restart(&self) -> Result<File, ServiceError> {
+        let unavailable = |error: std::io::Error| {
+            ServiceError::Unavailable(format!(
+                "The Brauser service could not be restarted: locking {}: {error}",
+                self.restart_lock.display()
+            ))
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&self.restart_lock)
+            .map_err(unavailable)?;
+        file.lock().map_err(unavailable)?;
+        Ok(file)
     }
 
     fn start(&self, restart: bool) -> Result<(), ServiceError> {
@@ -488,6 +525,7 @@ pub(crate) mod fake {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -515,6 +553,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&calls);
         let link = ServiceLink {
+            restart_lock: socket.with_file_name("restart.lock"),
             socket,
             launch: Box::new(move |restart| {
                 recorded.lock().unwrap().push(restart);
@@ -599,23 +638,81 @@ mod tests {
     fn stale_service_build_is_restarted() {
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
+        // The service is the old build until it is restarted.
+        let fresh = Arc::new(AtomicBool::new(false));
+        let serving = Arc::clone(&fresh);
         let service = FakeService::listen(
             &socket,
-            Arc::new(|request, hellos| match request {
-                Request::ServiceHello(_) if hellos == 0 => fake::ready(request, "old"),
+            Arc::new(move |request, _| match request {
+                Request::ServiceHello(_) if !serving.load(Ordering::SeqCst) => {
+                    fake::ready(request, "old")
+                }
                 Request::ServiceHello(_) => fake::ready(request, BUILD),
                 _ => fake::runs_listed(request),
             }),
         );
-        let (link, calls) = link(socket, |_| Launch::Started);
+        let (link, calls) = link(socket, move |_| {
+            fresh.store(true, Ordering::SeqCst);
+            Launch::Started
+        });
         assert!(matches!(
             link.request(&list_runs()).unwrap(),
             Response::RunsListed(_)
         ));
         assert_eq!(*calls.lock().unwrap(), vec![true]);
+        // Hello, hello again under the restart lock, hello the restarted
+        // service, then the request.
         let requests = service.requests();
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[2], list_runs());
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[3], list_runs());
+    }
+
+    #[test]
+    fn hosts_racing_on_a_stale_service_restart_it_once() {
+        use std::sync::Barrier;
+
+        let dir = fake::short_dir();
+        let socket = fake::socket_in(&dir);
+        let fresh = Arc::new(AtomicBool::new(false));
+        // Both hosts' first hellos are answered "old" before either goes on.
+        let barrier = Arc::new(Barrier::new(2));
+        let serving = Arc::clone(&fresh);
+        FakeService::listen(
+            &socket,
+            Arc::new(move |request, hellos| match request {
+                Request::ServiceHello(_) if serving.load(Ordering::SeqCst) => {
+                    fake::ready(request, BUILD)
+                }
+                Request::ServiceHello(_) => {
+                    if hellos < 2 {
+                        barrier.wait();
+                    }
+                    fake::ready(request, "old")
+                }
+                _ => fake::runs_listed(request),
+            }),
+        );
+        // Each restart records whether it found the fresh service running.
+        let restarts = Arc::new(Mutex::new(Vec::new()));
+        let hosts: Vec<_> = (0..2)
+            .map(|_| {
+                let restarts = Arc::clone(&restarts);
+                let fresh = Arc::clone(&fresh);
+                let (link, _) = link(socket.clone(), move |restart| {
+                    assert!(restart);
+                    restarts
+                        .lock()
+                        .unwrap()
+                        .push(fresh.swap(true, Ordering::SeqCst));
+                    Launch::Started
+                });
+                thread::spawn(move || link.request(&list_runs()))
+            })
+            .collect();
+        for host in hosts {
+            assert!(matches!(host.join().unwrap(), Ok(Response::RunsListed(_))));
+        }
+        assert_eq!(*restarts.lock().unwrap(), vec![false]);
     }
 
     #[test]
@@ -745,10 +842,12 @@ mod tests {
     fn version_skew_restarts_once() {
         let dir = fake::short_dir();
         let socket = fake::socket_in(&dir);
+        let fresh = Arc::new(AtomicBool::new(false));
+        let serving = Arc::clone(&fresh);
         FakeService::listen(
             &socket,
-            Arc::new(|request, hellos| match request {
-                Request::ServiceHello(_) if hellos == 0 => error(
+            Arc::new(move |request, _| match request {
+                Request::ServiceHello(_) if !serving.load(Ordering::SeqCst) => error(
                     request.request_id(),
                     ErrorCode::UnsupportedProtocolVersion,
                     "extension and host protocol versions differ",
@@ -757,7 +856,10 @@ mod tests {
                 _ => fake::runs_listed(request),
             }),
         );
-        let (link, calls) = link(socket, |_| Launch::Started);
+        let (link, calls) = link(socket, move |_| {
+            fresh.store(true, Ordering::SeqCst);
+            Launch::Started
+        });
         assert!(matches!(
             link.request(&list_runs()).unwrap(),
             Response::RunsListed(_)
