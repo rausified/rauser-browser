@@ -64,3 +64,69 @@ impl DraftPolicy {
         self.shared.iter().find(|entry| entry.origin == origin)
     }
 }
+
+/// The host catalog, parsed the way the host parses it, for unit tests.
+#[cfg(test)]
+pub(crate) fn test_catalog() -> DraftPolicy {
+    use serde_json::Value as Json;
+
+    const CATALOG: &str = include_str!("../../protocol/capture-site/catalog.json");
+    let strings = |v: &Json| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let c: Json = serde_json::from_str(CATALOG).unwrap();
+    let fill = |k: &str| c["fill"][k].as_str().unwrap().to_owned();
+    DraftPolicy {
+        probe_paths: strings(&c["probe_paths"]),
+        search_keys: strings(&c["search_keys"]),
+        paging_keys: strings(&c["paging_keys"]),
+        blocked_route_words: strings(&c["blocked_route_words"]),
+        mode_words: c["mode_words"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned()))
+            .collect(),
+        fill: Fill {
+            num: fill("num"),
+            key: fill("key"),
+            slug: fill("slug"),
+            uuid: fill("uuid"),
+            hex32: fill("hex32"),
+            hex40: fill("hex40"),
+            hex64: fill("hex64"),
+            tailhex32: fill("tailhex32"),
+            id: fill("id"),
+        },
+        starter_types: strings(&c["starter_types"]),
+        shared: c["shared_origins"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(origin, e)| SharedOrigin {
+                origin: origin.clone(),
+                tenant: e["tenant"].as_object().map(|t| {
+                    (
+                        t["segment"].as_u64().unwrap() as usize,
+                        t["capture"].as_str().unwrap().to_owned(),
+                    )
+                }),
+                account_index: e["account_index"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| {
+                        (
+                            a["literal"].as_str().unwrap().to_owned(),
+                            a["segment"].as_u64().unwrap() as usize,
+                        )
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}

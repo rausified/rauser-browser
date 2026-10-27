@@ -20,6 +20,7 @@ mod overlap;
 mod path;
 mod policy;
 pub mod shape;
+pub mod structural;
 mod title;
 mod value;
 
