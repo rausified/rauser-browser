@@ -353,6 +353,10 @@ struct VisitRow {
     /// `worklog` can report it distinctly instead of as a zero-measure,
     /// merely-"seen" artifact.
     summary: Option<SummaryEvent>,
+    /// A container's copy of a visit to an artifact within it. The visit
+    /// itself is the child's row; totals across artifacts skip this copy so
+    /// each second counts once.
+    contained: bool,
 }
 
 #[derive(Clone)]
@@ -375,6 +379,10 @@ struct WorklogRow {
     focused: u64,
     background: u64,
     opens: u64,
+    /// Focus and opens from the artifact's own visits, without those of
+    /// artifacts within it, for the range's totals.
+    own_focused: u64,
+    own_opens: u64,
     /// The latest summary (by `occurred_at`) among this artifact's visits
     /// within the worklog's date range, if any.
     summary: Option<SummaryEvent>,
@@ -484,6 +492,7 @@ impl ArtifactIndex {
                 }
             }
         }
+        self.dirty_containers(&mut state);
         self.publish_state_and_database(&state)?;
         if conflicts > 0 {
             bail!("an indexed event ID cannot be reused with different content");
@@ -527,7 +536,58 @@ impl ArtifactIndex {
                 dirty.insert(id.clone());
             }
         }
+        // `previous` is rendered with the current adapters too, so a
+        // document change since it was published is compared separately.
+        if previous.adapters != self.adapters_fingerprint() {
+            dirty.extend(self.adapter_dependent_files(state));
+        }
         state.dirty = dirty;
+    }
+
+    /// Artifacts whose generated file depends on the adapter document: a
+    /// container's roll-up of the visits within it, which no other
+    /// derivation has. An adapter change marks only these dirty, so other
+    /// owned files keep any external edits.
+    fn adapter_dependent_files(&self, state: &IndexState) -> BTreeSet<String> {
+        if Containers::new(self.adapters.as_deref()).types.is_empty() {
+            return BTreeSet::new();
+        }
+        let rendered = |adapters: Option<&Document>| {
+            derive(state, adapters)
+                .artifacts
+                .into_iter()
+                .map(|(id, row)| (id, render_artifact(&self.storage.artifacts_dir, &row)))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let (plain, contained) = (rendered(None), rendered(self.adapters.as_deref()));
+        contained
+            .into_iter()
+            .filter(|(id, markdown)| plain.get(id) != Some(markdown))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Mark dirty the container of every dirty artifact within one, since
+    /// a visit to the child changes the container's roll-up too.
+    fn dirty_containers(&self, state: &mut IndexState) {
+        let mut containers = Containers::new(self.adapters.as_deref());
+        if containers.types.is_empty() || state.dirty.is_empty() {
+            return;
+        }
+        let mut found = BTreeSet::new();
+        for event in state.events.values() {
+            let (url, artifact_id) = match event {
+                CachedEvent::Activity(event) => (&event.url, &event.artifact_id),
+                CachedEvent::Legacy(event) => (&event.url, &event.artifact_id),
+                CachedEvent::Why(_) | CachedEvent::Summary(_) => continue,
+            };
+            if state.dirty.contains(artifact_id)
+                && let Some((_, container, _)) = containers.of(url, artifact_id)
+            {
+                found.insert(container);
+            }
+        }
+        state.dirty.extend(found);
     }
 
     /// Rebuild both cache files from owned log markers, then regenerate every
@@ -747,6 +807,15 @@ impl ArtifactIndex {
         let adapters = self.adapters_fingerprint();
         let resolution_changed = state.adapters != adapters;
         state.adapters = adapters;
+        // Containers follow the adapters too: their files regenerate when
+        // the document changes, not only after the next visit (§8.3).
+        if resolution_changed {
+            let dependent = self.adapter_dependent_files(&state);
+            state.dirty.extend(dependent);
+        }
+        if republish || changed || resolution_changed {
+            self.dirty_containers(&mut state);
+        }
         let publish = republish || changed || resolution_changed || !self.database_path().is_file();
         Ok((state, publish))
     }
@@ -1160,6 +1229,10 @@ impl ArtifactIndex {
             row.focused = row.focused.saturating_add(visit.focused_secs);
             row.background = row.background.saturating_add(visit.background_secs);
             row.opens = row.opens.saturating_add(visit.opens);
+            if !visit.contained {
+                row.own_focused = row.own_focused.saturating_add(visit.focused_secs);
+                row.own_opens = row.own_opens.saturating_add(visit.opens);
+            }
             if let Some(summary) = &visit.summary
                 && row.summary.as_ref().is_none_or(|current| {
                     timestamp_order(&summary.occurred_at, &current.occurred_at).is_ge()
@@ -1168,13 +1241,15 @@ impl ArtifactIndex {
                 row.summary = Some(summary.clone());
             }
         }
+        // A container is still listed with its rolled-up measures, but the
+        // range's totals count each visit once, by its own artifact.
         let opened = rows
             .values()
-            .filter(|row| row.opens > 0 || row.summary.is_some())
+            .filter(|row| row.own_opens > 0 || row.summary.is_some())
             .count();
         let carried = rows
             .values()
-            .filter(|row| row.opens == 0 && row.summary.is_none() && row.focused > 0)
+            .filter(|row| row.own_opens == 0 && row.summary.is_none() && row.own_focused > 0)
             .count();
         let mut text = format!(
             "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
@@ -1402,6 +1477,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
     let mut visits = Vec::new();
     let mut edges = BTreeMap::<(String, String, String), EdgeRow>::new();
     let mut whys = BTreeMap::<String, (OffsetDateTime, String)>::new();
+    let mut containers = Containers::new(adapters);
     for event in ordered_events(state) {
         match event {
             CachedEvent::Activity(event) => {
@@ -1472,6 +1548,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     title,
                     url: event.url.clone(),
                     summary: None,
+                    contained: false,
                 });
                 for trail in &event.trails {
                     if trail_transition_is_valid(&trail.transition)
@@ -1517,6 +1594,25 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                 }
                 for target in targets {
                     add_edge(&mut edges, &event.artifact_id, &target, "mentions", &day);
+                }
+                if let Some(container) = containers.of(&event.url, &event.artifact_id) {
+                    roll_up(
+                        &mut artifacts,
+                        &mut visits,
+                        &mut edges,
+                        container,
+                        ContainedVisit {
+                            child: &event.artifact_id,
+                            event_id: &event.event_id,
+                            occurred_at: &event.occurred_at,
+                            at,
+                            day: &day,
+                            focused: u64::from(event.focused_seconds),
+                            background: u64::from(event.background_seconds),
+                            opens: u64::from(event.opens),
+                            activity: Some(event),
+                        },
+                    );
                 }
             }
             CachedEvent::Why(event) => {
@@ -1579,7 +1675,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     event_id: event.marker_id.clone(),
                     artifact_id: event.artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
-                    local_date: day,
+                    local_date: day.clone(),
                     focused_secs: 0,
                     background_secs: 0,
                     opens: 1,
@@ -1587,7 +1683,27 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     title: event.title.clone(),
                     url: event.url.clone(),
                     summary: None,
+                    contained: false,
                 });
+                if let Some(container) = containers.of(&event.url, &event.artifact_id) {
+                    roll_up(
+                        &mut artifacts,
+                        &mut visits,
+                        &mut edges,
+                        container,
+                        ContainedVisit {
+                            child: &event.artifact_id,
+                            event_id: &event.marker_id,
+                            occurred_at: &event.occurred_at,
+                            at,
+                            day: &day,
+                            focused: 0,
+                            background: 0,
+                            opens: 1,
+                            activity: None,
+                        },
+                    );
+                }
             }
             CachedEvent::Summary(event) => {
                 let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -1642,6 +1758,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     title: event.title.clone(),
                     url: event.url.clone(),
                     summary: Some(event.clone()),
+                    contained: false,
                 });
             }
         }
@@ -1657,12 +1774,177 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
             timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
         });
         row.why = whys.remove(&row.artifact_id).map(|(_, text)| text);
+        // A container is named for itself, never for whichever page inside
+        // it was visited last (goal 4).
+        if containers.types.contains(row.artifact_type.as_str())
+            && let Ok(url) = Url::parse(&row.url)
+        {
+            row.title = container_title(&row.artifact_id);
+            row.url = container_url(&url.origin().ascii_serialization(), &row.artifact_id);
+        }
     }
     Derived {
         artifacts,
         visits,
         edges: edges.into_values().collect(),
     }
+}
+
+/// The container (type, ID, adapter origin) a logged visit rolls up into:
+/// only when the current document still recognizes the visit's URL as the
+/// same artifact it was logged as, and that adapter declares `within`.
+fn container_for(
+    adapters: Option<&Document>,
+    url: &str,
+    artifact_id: &str,
+) -> Option<(String, String, String)> {
+    let document = adapters?;
+    let found = document.evaluate(url, None).ok()?;
+    if found.artifact_id != artifact_id {
+        return None;
+    }
+    let within = found.within?;
+    if within.artifact_id == artifact_id {
+        return None;
+    }
+    let origin = document.adapters().get(found.adapter)?.origin().to_owned();
+    Some((within.artifact_type, within.artifact_id, origin))
+}
+
+/// A container ID's native part, after `<scheme>:<host>/`: for GitHub,
+/// `owner/repo`.
+fn container_title(id: &str) -> String {
+    let native = id.split_once(':').map_or(id, |(_, rest)| rest);
+    native
+        .split_once('/')
+        .map_or(native, |(_, rest)| rest)
+        .to_owned()
+}
+
+fn container_url(origin: &str, id: &str) -> String {
+    format!("{}/{}", origin.trim_end_matches('/'), container_title(id))
+}
+
+/// A container's (type, ID, adapter origin), as `container_for` finds it.
+type ContainerRef = (String, String, String);
+
+/// Container lookups for one derivation, memoized by (URL, artifact ID)
+/// because many logged visits share a URL.
+struct Containers<'a> {
+    adapters: Option<&'a Document>,
+    /// Types some adapter declares as its `within` container.
+    types: BTreeSet<&'a str>,
+    found: BTreeMap<(String, String), Option<ContainerRef>>,
+}
+
+impl<'a> Containers<'a> {
+    fn new(adapters: Option<&'a Document>) -> Self {
+        let types = adapters
+            .into_iter()
+            .flat_map(Document::adapters)
+            .filter_map(|adapter| adapter.within().map(|within| within.artifact_type()))
+            .collect();
+        Self {
+            adapters,
+            types,
+            found: BTreeMap::new(),
+        }
+    }
+
+    fn of(&mut self, url: &str, artifact_id: &str) -> Option<ContainerRef> {
+        if self.types.is_empty() {
+            return None;
+        }
+        let adapters = self.adapters;
+        self.found
+            .entry((url.to_owned(), artifact_id.to_owned()))
+            .or_insert_with(|| container_for(adapters, url, artifact_id))
+            .clone()
+    }
+}
+
+/// One visit to an artifact within a container.
+struct ContainedVisit<'a> {
+    child: &'a str,
+    event_id: &'a str,
+    occurred_at: &'a str,
+    at: OffsetDateTime,
+    day: &'a str,
+    focused: u64,
+    background: u64,
+    opens: u64,
+    /// The activity, for the container's timeline; `None` for an M1 visit.
+    activity: Option<&'a ActivityEvent>,
+}
+
+/// Add one contained visit to its container's record, creating the record
+/// if the container was never visited directly. The child's own row is
+/// unchanged; a visit matches exactly one adapter, so it reaches its
+/// container exactly once. Days are a set, so they union.
+fn roll_up(
+    artifacts: &mut BTreeMap<String, ArtifactRow>,
+    visits: &mut Vec<VisitRow>,
+    edges: &mut BTreeMap<(String, String, String), EdgeRow>,
+    (container_type, container_id, origin): ContainerRef,
+    visit: ContainedVisit<'_>,
+) {
+    let title = container_title(&container_id);
+    let url = container_url(&origin, &container_id);
+    let row = artifacts
+        .entry(container_id.clone())
+        .or_insert_with(|| ArtifactRow {
+            artifact_id: container_id.clone(),
+            artifact_type: container_type,
+            site: Url::parse(&origin)
+                .ok()
+                .and_then(|origin| origin.host_str().map(str::to_owned))
+                .unwrap_or_default(),
+            title: title.clone(),
+            url: url.clone(),
+            first_seen: visit.day.to_owned(),
+            last_seen: visit.day.to_owned(),
+            focused_secs: 0,
+            background_secs: 0,
+            opens: 0,
+            days: BTreeSet::new(),
+            last_mode: None,
+            why: None,
+            activities: Vec::new(),
+            summaries: Vec::new(),
+            legacy_visits: Vec::new(),
+            latest_at: visit.at,
+        });
+    row.focused_secs = row.focused_secs.saturating_add(visit.focused);
+    row.background_secs = row.background_secs.saturating_add(visit.background);
+    row.opens = row.opens.saturating_add(visit.opens);
+    if visit.opens > 0 {
+        row.days.insert(visit.day.to_owned());
+    }
+    if visit.day < row.first_seen.as_str() {
+        row.first_seen = visit.day.to_owned();
+    }
+    if visit.day > row.last_seen.as_str() {
+        row.last_seen = visit.day.to_owned();
+    }
+    match visit.activity {
+        Some(activity) => row.activities.push(activity.clone()),
+        None => row.legacy_visits.push(visit.at),
+    }
+    visits.push(VisitRow {
+        event_id: visit.event_id.to_owned(),
+        artifact_id: container_id.clone(),
+        occurred_at: visit.occurred_at.to_owned(),
+        local_date: visit.day.to_owned(),
+        focused_secs: visit.focused,
+        background_secs: visit.background,
+        opens: visit.opens,
+        mode: None,
+        title,
+        url,
+        summary: None,
+        contained: true,
+    });
+    add_edge(edges, visit.child, &container_id, "within", visit.day);
 }
 
 fn add_edge(
@@ -2372,9 +2654,12 @@ fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<Sqlite
             ]
         })
         .collect();
+    // One row per logged visit: a container's copy would count it twice
+    // in any per-day total a reader takes.
     let visits = derived
         .visits
         .iter()
+        .filter(|row| !row.contained)
         .map(|row| {
             vec![
                 SqlValue::Text(row.event_id.clone()),
@@ -4522,6 +4807,294 @@ print(json.dumps([tables,row]))"#;
             0
         );
         assert_eq!(query(linked), "0");
+    }
+
+    const GITHUB_REPO_ID: &str = "github.repo:github.com/acme-corp/widgets";
+    const GITHUB_PR_ID: &str = "github.pr:github.com/acme-corp/widgets/7";
+
+    /// Ruling 1: the PR and issue starters inside the repo, then the repo
+    /// catch-all, all scoped to one owner. `within` is optional so a test
+    /// can index under the document before containers existed.
+    fn github_document(within: bool) -> adapter_templates::Document {
+        let container = serde_json::json!({
+            "type": "github.repo",
+            "id": "github.repo:{host}/{owner}/{repo}",
+        });
+        let mut pr = serde_json::json!({
+            "type": "github.pr",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}],
+            "scope": {"owner": ["acme-corp"]},
+            "modes": {"files": "review", "commits": "view", "checks": "view"},
+            "id": "github.pr:{host}/{owner}/{repo}/{number}",
+        });
+        let mut issue = serde_json::json!({
+            "type": "github.issue",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}],
+            "scope": {"owner": ["acme-corp"]},
+            "id": "github.issue:{host}/{owner}/{repo}/{number}",
+        });
+        if within {
+            pr["within"] = container.clone();
+            issue["within"] = container;
+        }
+        let repo = serde_json::json!({
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "scope": {"owner": ["acme-corp"]},
+            "id": "github.repo:{host}/{owner}/{repo}",
+        });
+        let document: adapter_templates::Value = serde_json::from_value(serde_json::json!({
+            "format": 1,
+            "artifacts": [pr, issue, repo],
+        }))
+        .unwrap();
+        adapter_templates::Document::from_value(&document).unwrap()
+    }
+
+    /// A GitHub activity event with `opens = 1` and the given measures.
+    fn github_activity(
+        n: u32,
+        (artifact_type, artifact_id): (&str, &str),
+        url: &str,
+        at: &str,
+        (focused, background): (u32, u32),
+    ) -> ActivityEvent {
+        let mut event = activity(&format!("00000000-0000-4000-8000-{n:012}"), "X", "Page", at);
+        event.artifact_type = artifact_type.into();
+        event.artifact_id = artifact_id.into();
+        event.url = url.into();
+        event.modes.clear();
+        event.focused_seconds = focused;
+        event.background_seconds = background;
+        event
+    }
+
+    fn github_pr(n: u32, number: u32, at: &str) -> ActivityEvent {
+        github_activity(
+            n,
+            (
+                "github.pr",
+                &format!("github.pr:github.com/acme-corp/widgets/{number}"),
+            ),
+            &format!("https://github.com/acme-corp/widgets/pull/{number}"),
+            at,
+            (125, 61),
+        )
+    }
+
+    fn github_blob(n: u32, at: &str) -> ActivityEvent {
+        github_activity(
+            n,
+            ("github.repo", GITHUB_REPO_ID),
+            "https://github.com/acme-corp/widgets/blob/main/README.md",
+            at,
+            (30, 0),
+        )
+    }
+
+    #[test]
+    fn contained_visits_roll_up_once_into_the_container() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let pr = github_pr(1, 7, "2026-10-15T10:00:00Z");
+        let blob = github_blob(2, "2026-10-15T11:00:00Z");
+        index.record_activities([&pr, &blob], &[]).unwrap();
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(
+            (
+                repo.focused_seconds,
+                repo.background_seconds,
+                repo.opens,
+                repo.days_opened
+            ),
+            (155, 61, 2, 1)
+        );
+        let pull = index.artifact(GITHUB_PR_ID).unwrap().unwrap();
+        assert_eq!(
+            (pull.focused_seconds, pull.background_seconds, pull.opens),
+            (125, 61, 1)
+        );
+        // Recent shows the repo as one row with its rolled-up day.
+        let (items, _, _) = index.recent(None, None, 10).unwrap();
+        let rows = items
+            .iter()
+            .map(|item| (item.artifact_id.as_str(), item.focused_seconds, item.opens))
+            .collect::<Vec<_>>();
+        assert_eq!(rows, [(GITHUB_REPO_ID, 155, 2), (GITHUB_PR_ID, 125, 1)]);
+        // A contained delivery dirties its container's file too.
+        assert_eq!(index.regenerate_dirty().unwrap().written, 2);
+        let more = github_pr(3, 7, "2026-10-15T12:00:00Z");
+        index.record_activity(&more, &[]).unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 2);
+    }
+
+    #[test]
+    fn container_days_are_a_union() {
+        let document = github_document(true);
+        let days = |events: &[ActivityEvent]| {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let index = index(&root, &cache).with_adapters(Some(&document));
+            index.record_activities(events, &[]).unwrap();
+            index.artifact(GITHUB_REPO_ID).unwrap().unwrap().days_opened
+        };
+        assert_eq!(
+            days(&[
+                github_pr(1, 7, "2026-10-15T10:00:00Z"),
+                github_blob(2, "2026-10-16T10:00:00Z"),
+            ]),
+            2
+        );
+        assert_eq!(
+            days(&[
+                github_pr(1, 7, "2026-10-15T10:00:00Z"),
+                github_pr(2, 8, "2026-10-15T11:00:00Z"),
+            ]),
+            1
+        );
+    }
+
+    #[test]
+    fn a_container_never_visited_directly_has_a_usable_title_and_url() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        index
+            .record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(repo.artifact_type, "github.repo");
+        assert_eq!(repo.title, "acme-corp/widgets");
+        assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
+        assert_eq!((repo.focused_seconds, repo.opens), (125, 1));
+    }
+
+    #[test]
+    fn container_title_ignores_sub_page_titles() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let pr = github_pr(1, 7, "2026-10-15T10:00:00Z");
+        let mut blob = github_blob(2, "2026-10-15T11:00:00Z");
+        blob.title = Some("widgets/README.md at main · acme-corp/widgets".into());
+        index.record_activities([&pr, &blob], &[]).unwrap();
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(repo.title, "acme-corp/widgets");
+        assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
+    }
+
+    #[test]
+    fn events_that_no_longer_match_their_id_do_not_roll_up() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let mut stale = github_pr(1, 7, "2026-10-15T10:00:00Z");
+        stale.url = "https://github.com/acme-corp/widgets/issues/7".into();
+        index.record_activity(&stale, &[]).unwrap();
+        assert!(index.artifact(GITHUB_REPO_ID).unwrap().is_none());
+        assert!(index.artifact(GITHUB_PR_ID).unwrap().is_some());
+    }
+
+    #[test]
+    fn within_edges_link_child_to_container() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        index
+            .record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        assert_eq!(
+            sqlite_check(
+                &index.database_path(),
+                &format!(
+                    "select kind, weight from edges where source_artifact_id = '{GITHUB_PR_ID}' and target_artifact_id = '{GITHUB_REPO_ID}'"
+                ),
+            ),
+            "ok\nwithin 1\n"
+        );
+    }
+
+    #[test]
+    fn worklog_day_totals_count_each_visit_once() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let d1 = Date::from_calendar_date(2026, time::Month::October, 15).unwrap();
+        let d2 = d1.next_day().unwrap();
+        index
+            .record_activities(
+                [
+                    &github_pr(1, 7, "2026-10-15T10:00:00Z"),
+                    &github_blob(2, "2026-10-15T11:00:00Z"),
+                    &github_pr(3, 8, "2026-10-16T10:00:00Z"),
+                ],
+                &[],
+            )
+            .unwrap();
+        // index.db keeps one visit row per logged event, so a day's total
+        // is 155 focused seconds, not 280 with the PR counted again.
+        assert_eq!(
+            sqlite_check(
+                &index.database_path(),
+                "select sum(focused_secs), count(*) from visits where local_date = '2026-10-15'",
+            ),
+            "ok\n155 2\n"
+        );
+        let (text, rows) = index.worklog(d1, d1).unwrap();
+        assert!(text.starts_with("Opened 2 artifacts,"), "{text}");
+        assert_eq!(rows, 2);
+        assert!(
+            text.contains(&format!(
+                "github.repo {GITHUB_REPO_ID}: acme-corp/widgets — focused 2 min"
+            )),
+            "{text}"
+        );
+        // A day with only a PR opened one artifact, though the repo it sits
+        // within is still listed with the rolled-up time.
+        let (text, rows) = index.worklog(d2, d2).unwrap();
+        assert!(
+            text.starts_with("Opened 1 artifact, and focused on 0 left open"),
+            "{text}"
+        );
+        assert_eq!(rows, 2);
+        assert!(text.contains(GITHUB_REPO_ID), "{text}");
+    }
+
+    #[test]
+    fn adding_within_regenerates_container_files() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(false);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        write_log(
+            root.path(),
+            "2026-10-15.md",
+            &[&github_pr(1, 7, "2026-10-15T10:00:00Z")],
+        );
+        assert_eq!(old.reindex().unwrap().written, 1);
+        assert!(old.artifact(GITHUB_REPO_ID).unwrap().is_none());
+        let after = github_document(true);
+        let new = index(&root, &cache).with_adapters(Some(&after));
+        let report = new.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (1, 0), "{report:?}");
+        let files = artifact_files(root.path());
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(
+            files
+                .iter()
+                .any(|path| path.to_string_lossy().contains("github-repo")),
+            "{files:?}"
+        );
     }
 
     #[test]
