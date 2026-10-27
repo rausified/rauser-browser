@@ -73,7 +73,7 @@ pub fn open_target(
         }
     };
     opener(&args).map_err(|error| match error.kind() {
-        ErrorKind::Unsupported => invalid("Opening is only supported on macOS."),
+        ErrorKind::Unsupported => invalid(crate::open::UNSUPPORTED_MESSAGE),
         _ => (
             ErrorCode::Internal,
             format!("Could not open {what}: {error}"),

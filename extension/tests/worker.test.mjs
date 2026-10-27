@@ -1656,6 +1656,36 @@ test("a host that cannot be started reports the session disconnected", async () 
   session.host.disconnect();
 });
 
+test("openSummary asks the host to open the page's summary", async () => {
+  ports.length = 0;
+  const session = new ConfigSession(() => undefined);
+  try {
+    const opening = session.openSummary("https://example.com/spec");
+    const port = ports[0];
+    const request = await sentOn(port, 1);
+    assert.deepEqual(Object.keys(request).sort(), ["protocol_version", "request_id", "type", "url"]);
+    assert.equal(request.type, "open_summary");
+    assert.equal(request.protocol_version, PROTOCOL_VERSION);
+    assert.equal(request.url, "https://example.com/spec");
+    port.reply({
+      type: "summary_opened", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      relative_path: "summaries/spec.summary.md",
+    });
+    assert.equal(await opening, undefined);
+
+    const refused = session.openSummary("https://example.com/none");
+    const second = await sentOn(port, 2);
+    port.reply({
+      type: "error", protocol_version: PROTOCOL_VERSION, request_id: second.request_id,
+      code: "invalid_request", message: "This page has no summary yet.",
+    });
+    await assert.rejects(refused, (error) => error instanceof HostError &&
+      error.code === "invalid_request" && error.message === "This page has no summary yet.");
+  } finally {
+    session.host.disconnect();
+  }
+});
+
 test("a post-save folder issue suspends policy instead of installing a lease", async () => {
   values.clear();
   sessionValues.clear();

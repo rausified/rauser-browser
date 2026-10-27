@@ -289,6 +289,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return isRunView(value.run);
     case "path_opened":
       return true;
+    case "summary_opened":
+      return typeof value.relative_path === "string";
     case "agent_env_listed":
       return Array.isArray(value.names) && value.names.length <= 64 &&
         isStringArray(value.names) && stringOrNull(value.problem);

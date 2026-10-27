@@ -865,6 +865,22 @@ pub struct PathOpened {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OpenSummaryRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryOpened {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetAgentEnvRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -923,6 +939,7 @@ pub enum Request {
     CancelRun(CancelRunRequest),
     RetrySave(RetrySaveRequest),
     OpenPath(OpenPathRequest),
+    OpenSummary(OpenSummaryRequest),
     GetAgentEnv(GetAgentEnvRequest),
     ServiceHello(ServiceHelloRequest),
 }
@@ -954,6 +971,7 @@ impl Request {
             Self::CancelRun(value) => value.protocol_version,
             Self::RetrySave(value) => value.protocol_version,
             Self::OpenPath(value) => value.protocol_version,
+            Self::OpenSummary(value) => value.protocol_version,
             Self::GetAgentEnv(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
@@ -985,6 +1003,7 @@ impl Request {
             Self::CancelRun(value) => &value.request_id,
             Self::RetrySave(value) => &value.request_id,
             Self::OpenPath(value) => &value.request_id,
+            Self::OpenSummary(value) => &value.request_id,
             Self::GetAgentEnv(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
@@ -1016,6 +1035,7 @@ pub enum Response {
     RunsListed(RunsListed),
     RunUpdated(RunUpdated),
     PathOpened(PathOpened),
+    SummaryOpened(SummaryOpened),
     AgentEnvListed(AgentEnvListed),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
@@ -1045,6 +1065,7 @@ impl Response {
             Self::RunsListed(value) => value.protocol_version,
             Self::RunUpdated(value) => value.protocol_version,
             Self::PathOpened(value) => value.protocol_version,
+            Self::SummaryOpened(value) => value.protocol_version,
             Self::AgentEnvListed(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
@@ -1074,6 +1095,7 @@ impl Response {
             Self::RunsListed(value) => &value.request_id,
             Self::RunUpdated(value) => &value.request_id,
             Self::PathOpened(value) => &value.request_id,
+            Self::SummaryOpened(value) => &value.request_id,
             Self::AgentEnvListed(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,

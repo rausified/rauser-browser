@@ -31,8 +31,9 @@ pub fn serve(config: ConfigStore) -> Result<()> {
     serve_with_io(input.lock(), output.lock(), config)
 }
 
-/// What the run proxy may use from the host process. Built once per
-/// connection; tests build it by hand with a fake service.
+/// What the run proxy and `open_summary` may use from the host process.
+/// Built once per connection; tests build it by hand with a fake service or
+/// a recording opener.
 pub struct SetupContext<'a> {
     /// Where run and harness setup messages go. `None` answers them
     /// `service_unavailable`.
@@ -40,6 +41,10 @@ pub struct SetupContext<'a> {
     pub service: Option<&'a ServiceLink>,
     #[cfg(not(unix))]
     pub service: std::marker::PhantomData<&'a ()>,
+    /// How `open_summary` opens a file: `/usr/bin/open` in a macOS release
+    /// build, the `OPEN_LOG_ENV` recorder in test builds, and `Unsupported`
+    /// elsewhere.
+    pub open: crate::open::Opener,
 }
 
 impl SetupContext<'_> {
@@ -50,6 +55,7 @@ impl SetupContext<'_> {
             service: None,
             #[cfg(not(unix))]
             service: std::marker::PhantomData,
+            open: crate::open::default_opener(),
         }
     }
 }
@@ -72,6 +78,7 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
     #[cfg(unix)]
     let context = SetupContext {
         service: link.as_ref(),
+        ..SetupContext::new()
     };
     #[cfg(not(unix))]
     let context = SetupContext::new();
@@ -248,9 +255,6 @@ fn dispatch(
     consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
-    // Off Unix there is no service, so nothing is forwarded.
-    #[cfg(not(unix))]
-    let _ = context;
     let id = request.request_id();
     if !valid_request_id(id) {
         return error(
@@ -425,6 +429,7 @@ fn dispatch(
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
+        Request::OpenSummary(value) => open_summary(value, config, context.open),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
@@ -1773,6 +1778,72 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         artifact: Some(artifact),
         summary,
     })
+}
+
+/// Open the summary file of the record the page's note uses (§7.2). The key
+/// is resolved and the file's ownership read under `lock_current`, so a
+/// config update cannot change the record in between; the opener runs after
+/// the lock is released. Only a file `summary::owned_summary` accepts for
+/// that key is opened, never another file at the generated name.
+fn open_summary(
+    value: brauser_protocol::OpenSummaryRequest,
+    config: &mut ConfigStore,
+    open: crate::open::Opener,
+) -> Response {
+    let found = match config.lock_current() {
+        Ok(_config_lock) => resolve_key_parts(config, &value.url).and_then(|parts| {
+            parts
+                .vault
+                .find_summary(&parts.key, &parts.canonical)
+                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable"))
+        }),
+        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable")),
+    };
+    let (relative, linked) = match found {
+        Ok(crate::vault::FoundSummary::Owned { relative, linked }) => (relative, linked),
+        Ok(crate::vault::FoundSummary::Absent) => {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidRequest,
+                "This page has no summary yet.",
+            );
+        }
+        Ok(crate::vault::FoundSummary::Unowned) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "The file at the summary path is not a Brauser summary.",
+            );
+        }
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    // resolve_key_parts only succeeds with a home folder configured.
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return error(
+            &value.request_id,
+            ErrorCode::NotConfigured,
+            "choose a home folder first",
+        );
+    };
+    let path = std::path::Path::new(&storage.root).join(relative);
+    // `--` ends open's options, so no path can be read as one.
+    match open(&["--".into(), path.into_os_string()]) {
+        Ok(()) => Response::SummaryOpened(brauser_protocol::SummaryOpened {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            relative_path: linked,
+        }),
+        Err(open_error) if open_error.kind() == io::ErrorKind::Unsupported => error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            crate::open::UNSUPPORTED_MESSAGE,
+        ),
+        Err(open_error) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            &format!("Could not open the summary: {open_error}"),
+        ),
+    }
 }
 
 /// The latest summary of a page no live adapter recognizes, keyed the way
@@ -4662,6 +4733,232 @@ id = "work:{host}/{id}"
         assert_eq!(items[0].summary, Some(expected_summary(&event)));
     }
 
+    std::thread_local! {
+        /// What the recording opener was asked to open on this test's thread.
+        static OPENED: std::cell::RefCell<Vec<Vec<String>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn recording_opener(args: &[std::ffi::OsString]) -> io::Result<()> {
+        OPENED.with(|opened| {
+            opened.borrow_mut().push(
+                args.iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect(),
+            );
+        });
+        Ok(())
+    }
+
+    fn take_opened() -> Vec<Vec<String>> {
+        OPENED.with(|opened| std::mem::take(&mut *opened.borrow_mut()))
+    }
+
+    fn open_summary_with(
+        config: &mut ConfigStore,
+        url: &str,
+        open: crate::open::Opener,
+    ) -> Response {
+        dispatch(
+            Request::OpenSummary(brauser_protocol::OpenSummaryRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "open-summary".into(),
+                url: url.into(),
+            }),
+            config,
+            &mut ConsentAuthority::new(),
+            &SetupContext {
+                open,
+                ..SetupContext::new()
+            },
+        )
+    }
+
+    /// A minimal file `summary::owned_summary` accepts for `key`.
+    fn owned_summary_text(key: &RecordKey, canonical_url: &str) -> String {
+        let id = match key.kind {
+            RecordKeyKind::Url => "url_id",
+            RecordKeyKind::Artifact => "artifact_id",
+        };
+        format!(
+            "---\ntitle: \"T\"\nbrauser:\n  kind: summary\n  canonical_url: {}\n  {id}: {}\n---\n\nAgent text.\n",
+            serde_json::to_string(canonical_url).unwrap(),
+            serde_json::to_string(&key.value).unwrap(),
+        )
+    }
+
+    /// Write `contents` at the record's summary path; returns that path,
+    /// home-folder relative with `/` separators.
+    fn place_summary(
+        config: &ConfigStore,
+        key: &RecordKey,
+        canonical_url: &str,
+        contents: &str,
+    ) -> String {
+        let storage = config.snapshot().storage.as_ref().unwrap();
+        let vault = Vault::open_checked(storage, config.root_identity()).unwrap();
+        let relative = vault.summary_relative_path(key, canonical_url).unwrap();
+        let path = std::path::Path::new(&storage.root).join(&relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+        relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    fn error_of(response: Response) -> (ErrorCode, String) {
+        match response {
+            Response::Error(ErrorResponse { code, message, .. }) => (code, message),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_summary_opens_only_an_owned_summary() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        take_opened();
+
+        // A file at the summary path that is not this record's summary is
+        // never opened: a plain note, then another record's summary.
+        let relative = place_summary(&config, &key, url, "# My own notes\n");
+        let (code, message) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert_eq!(
+            message,
+            "The file at the summary path is not a Brauser summary."
+        );
+        let other = crate::vault::url_record_key("https://example.com/other").unwrap();
+        place_summary(
+            &config,
+            &key,
+            url,
+            &owned_summary_text(&other, "https://example.com/other"),
+        );
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(take_opened().is_empty());
+
+        place_summary(&config, &key, url, &owned_summary_text(&key, url));
+        match open_summary_with(&mut config, url, recording_opener) {
+            Response::SummaryOpened(opened) => {
+                assert_eq!(opened.request_id, "open-summary");
+                assert_eq!(opened.relative_path, relative);
+            }
+            other => panic!("expected summary_opened, got {other:?}"),
+        }
+        let absolute = notes.join(&relative).to_string_lossy().into_owned();
+        assert_eq!(take_opened(), vec![vec!["--".to_owned(), absolute]]);
+    }
+
+    #[test]
+    fn open_summary_uses_the_key_the_pages_note_uses() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let artifact = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        take_opened();
+        // A summary under the page's URL key is not the adapter artifact's.
+        let url_key = crate::vault::url_record_key(url).unwrap();
+        place_summary(&config, &url_key, url, &owned_summary_text(&url_key, url));
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+
+        let relative = place_summary(&config, &artifact, url, &owned_summary_text(&artifact, url));
+        assert!(matches!(
+            open_summary_with(&mut config, url, recording_opener),
+            Response::SummaryOpened(ref opened) if opened.relative_path == relative
+        ));
+        assert_eq!(
+            take_opened(),
+            vec![vec![
+                "--".to_owned(),
+                root.join(&relative).to_string_lossy().into_owned()
+            ]]
+        );
+    }
+
+    #[test]
+    fn open_summary_without_a_summary_is_invalid_request() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        take_opened();
+        let (code, message) = error_of(open_summary_with(
+            &mut config,
+            "https://example.com/spec",
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert_eq!(message, "This page has no summary yet.");
+        // A name the host cannot read as a file is not a summary either.
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        let relative = place_summary(&config, &key, url, "");
+        let path = notes.join(&relative);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(take_opened().is_empty());
+
+        // Without a home folder there is nothing to open.
+        let mut unconfigured = ConfigStore::for_test(folder.path().join("none.toml"));
+        let (code, _) = error_of(open_summary_with(
+            &mut unconfigured,
+            "https://example.com/spec",
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::NotConfigured);
+        assert!(take_opened().is_empty());
+    }
+
+    #[test]
+    fn open_summary_reports_an_opener_that_cannot_open() {
+        fn unsupported(_: &[std::ffi::OsString]) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported"))
+        }
+        fn failing(_: &[std::ffi::OsString]) -> io::Result<()> {
+            Err(io::Error::other("no opener"))
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        place_summary(&config, &key, url, &owned_summary_text(&key, url));
+        let (code, message) = error_of(open_summary_with(&mut config, url, unsupported));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert_eq!(message, "Opening is only supported on macOS.");
+        let (code, message) = error_of(open_summary_with(&mut config, url, failing));
+        assert_eq!(code, ErrorCode::Internal);
+        assert!(message.contains("no opener"), "{message}");
+    }
+
     #[test]
     fn loading_a_note_works_on_any_http_page_without_site_authorization() {
         let folder = tempfile::tempdir().unwrap();
@@ -6572,6 +6869,7 @@ id = "work:{host}/{id}"
         fn call(config: &mut ConfigStore, link: &ServiceLink, request: Request) -> Response {
             let context = SetupContext {
                 service: Some(link),
+                ..SetupContext::new()
             };
             dispatch(request, config, &mut ConsentAuthority::new(), &context)
         }

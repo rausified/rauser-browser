@@ -668,3 +668,26 @@ fn artifact_result_requires_a_nullable_summary() {
     assert!(serde_json::from_str::<Response>(none).is_ok());
     assert!(serde_json::from_str::<Response>(&none.replace(r#","summary":null"#, "")).is_err());
 }
+
+#[test]
+fn open_summary_requires_url() {
+    let request = r#"{"type":"open_summary","protocol_version":6,"request_id":"r","url":"https://example.com/a"}"#;
+    let parsed: Request = serde_json::from_str(request).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), request);
+    for bad in [
+        request.replace(r#","url":"https://example.com/a""#, ""),
+        request.replace(r#""url":"https://example.com/a""#, r#""url":null"#),
+        request.replace('}', r#","path":"summaries/a.summary.md"}"#),
+    ] {
+        assert!(serde_json::from_str::<Request>(&bad).is_err(), "{bad}");
+    }
+    let opened = r#"{"type":"summary_opened","protocol_version":6,"request_id":"r","relative_path":"summaries/a.summary.md"}"#;
+    let parsed: Response = serde_json::from_str(opened).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), opened);
+    assert!(
+        serde_json::from_str::<Response>(
+            &opened.replace(r#","relative_path":"summaries/a.summary.md""#, "")
+        )
+        .is_err()
+    );
+}

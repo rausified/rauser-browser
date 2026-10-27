@@ -307,6 +307,18 @@ export class ConfigSession {
     }, "path_opened");
   }
 
+  /** Open the page's summary file. The host resolves the record the page's
+   * note uses and opens only that record's own summary; a page without one
+   * rejects with `invalid_request`. */
+  async openSummary(url: string): Promise<void> {
+    await this.host.call({
+      type: "open_summary",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      url,
+    }, "summary_opened");
+  }
+
   /**
    * Write the adapters for sites an earlier build removed or saw revoked out
    * of the host config, in one update_config, then let the worker lift its

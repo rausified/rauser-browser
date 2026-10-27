@@ -117,7 +117,6 @@ impl Vault {
     /// older config can still name another folder, which
     /// `checked_relative_dir` does not screen for link-breaking characters,
     /// so the whole path is checked here and a failing one is an error.
-    #[cfg_attr(not(any(test, unix)), allow(dead_code))]
     pub(crate) fn summary_relative_path(
         &self,
         key: &RecordKey,
@@ -180,6 +179,53 @@ impl Vault {
         let path = self.summary_relative_path(key, canonical_url)?;
         replace_owned_file(&self.root, &path, contents, "summary", &|bytes| {
             crate::summary::owned_summary(bytes, key)
+        })
+    }
+
+    /// What occupies the record's summary path, read the way
+    /// `write_summary` reads an occupant: only a regular file of at most
+    /// 4 MiB whose bytes `summary::owned_summary` accepts for `key` is
+    /// `Owned`. A vault with no summaries folder has no summary.
+    pub(crate) fn find_summary(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+    ) -> Result<FoundSummary> {
+        if self.summaries_dir.is_none() {
+            return Ok(FoundSummary::Absent);
+        }
+        let path = self.summary_relative_path(key, canonical_url)?;
+        let linked = slash_path(&path).context("summary path is not UTF-8")?;
+        let parent = path.parent().context("summary path has no parent")?;
+        let filename = path.file_name().context("summary path has no filename")?;
+        let dir = match self.root.open_dir(parent) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(FoundSummary::Absent);
+            }
+            Err(error) => return Err(error).context("opening summaries directory"),
+        };
+        let inspected = match dir.symlink_metadata(filename) {
+            Ok(inspected) => inspected,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(FoundSummary::Absent);
+            }
+            Err(error) => return Err(error).context("checking summary file"),
+        };
+        if inspected.file_type().is_symlink()
+            || !inspected.is_file()
+            || inspected.len() > MAX_OWNED_FILE_BYTES as u64
+        {
+            return Ok(FoundSummary::Unowned);
+        }
+        let occupant =
+            read_inspected_occupant(&dir, filename, &inspected).context("reading summary file")?;
+        Ok(match occupant {
+            Some(bytes) if crate::summary::owned_summary(&bytes, key) => FoundSummary::Owned {
+                relative: path,
+                linked,
+            },
+            _ => FoundSummary::Unowned,
         })
     }
 
@@ -519,6 +565,19 @@ impl Vault {
             warnings,
         })
     }
+}
+
+/// What `Vault::find_summary` found at a record's summary path.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FoundSummary {
+    /// Nothing is there yet.
+    Absent,
+    /// The record's own summary: its home-folder relative path, and the same
+    /// path with `/` separators as summary events write it.
+    Owned { relative: PathBuf, linked: String },
+    /// Something else holds the name: another file, a directory, a symlink,
+    /// or another record's summary.
+    Unowned,
 }
 
 /// The outcome of `replace_owned_file`.

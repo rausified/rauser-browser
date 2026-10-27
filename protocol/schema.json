@@ -74,6 +74,7 @@
         { "$ref": "#/$defs/CancelRunRequest" },
         { "$ref": "#/$defs/RetrySaveRequest" },
         { "$ref": "#/$defs/OpenPathRequest" },
+        { "$ref": "#/$defs/OpenSummaryRequest" },
         { "$ref": "#/$defs/GetAgentEnvRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
@@ -133,6 +134,7 @@
         { "$ref": "#/$defs/RunsListed" },
         { "$ref": "#/$defs/RunUpdated" },
         { "$ref": "#/$defs/PathOpened" },
+        { "$ref": "#/$defs/SummaryOpened" },
         { "$ref": "#/$defs/AgentEnvListed" },
         { "$ref": "#/$defs/ServiceReady" },
         {
@@ -1902,6 +1904,30 @@
         "type": { "const": "path_opened" },
         "protocol_version": { "type": "integer", "const": 6 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "OpenSummaryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask the native host to open the summary file of the record the page's note uses. Only a file whose brauser block names that record as a summary is opened.",
+      "required": ["type", "protocol_version", "request_id", "url"],
+      "properties": {
+        "type": { "const": "open_summary" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 }
+      }
+    },
+    "SummaryOpened": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The summary file was handed to the desktop opener. relative_path is home-folder relative with / separators.",
+      "required": ["type", "protocol_version", "request_id", "relative_path"],
+      "properties": {
+        "type": { "const": "summary_opened" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "relative_path": { "type": "string", "minLength": 1, "maxLength": 4096 }
       }
     },
     "GetAgentEnvRequest": {

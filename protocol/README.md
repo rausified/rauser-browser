@@ -222,6 +222,17 @@ page's `web.page` identity, or a removed adapter's recorded artifact); a
 failed lookup there leaves `summary` null rather than erroring. A summary is
 never counted as an open, so it adds to no worklog or Recent open count.
 
+`open_summary` names a page `url` and is answered by the native host on every
+platform. The host resolves the record key the page's note uses and opens
+that record's summary file (`summaries/<note stem>.summary.md`) with the
+desktop opener, answering `summary_opened` with its home-folder relative
+`relative_path` (`/` separators). Only a file whose `brauser:` block is that
+record's `summary` is opened: no file is `invalid_request` "This page has no
+summary yet.", and anything else at the name is `conflict` "The file at the
+summary path is not a Brauser summary." Where there is no opener (off macOS)
+the answer is `invalid_request` "Opening is only supported on macOS.", the
+same wording as `open_path`. These two messages were added within version 6.
+
 Harness setup is two messages, answered by the Brauser service (the native
 host forwards them; off macOS they answer `service_unavailable`), and has no
 native dialog. `discover_harnesses` returns `harnesses_discovered` with both

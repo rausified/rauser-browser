@@ -255,3 +255,9 @@ test("path_opened and agent_env_listed responses are checked", () => {
     type: "agent_env_listed", names: Array.from({ length: 65 }, (_, n) => `K${n}`), problem: null,
   }), false);
 });
+
+test("summary_opened responses carry the opened path", () => {
+  assert.equal(isResponseShape({ type: "summary_opened", relative_path: "summaries/a.summary.md" }), true);
+  assert.equal(isResponseShape({ type: "summary_opened" }), false);
+  assert.equal(isResponseShape({ type: "summary_opened", relative_path: 7 }), false);
+});
