@@ -360,7 +360,10 @@ mod tests {
     #[test]
     fn killed_slot_yields_closed() {
         let slot = ProcessSlot::default();
-        let child = LineChild::spawn(&slot, sh("echo started; sleep 30; echo late")).unwrap();
+        // `sleep` is forked before "started" is printed: a kill racing the
+        // fork could miss the new process and leave it holding the pipes.
+        let child =
+            LineChild::spawn(&slot, sh("sleep 30 & echo started; wait; echo late")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             assert!(Instant::now() < deadline, "the child never started");
