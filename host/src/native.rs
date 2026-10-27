@@ -262,6 +262,28 @@ fn dispatch(
                     );
                 }
             };
+            // Confirming a proposed artifact folder commits only once every
+            // artifact file is queued: a cache left clean by an earlier host
+            // that wrote into the then-implicit folder must not hide files
+            // that are missing. A new root or log folder rebuilds its own
+            // cache, and a folder that needs repair has nothing to queue.
+            let same_history = |current: &brauser_protocol::StorageConfig| {
+                value.config.storage.as_ref().is_some_and(|next| {
+                    next.root == current.root && next.log_dir == current.log_dir
+                })
+            };
+            if artifacts_dir_proposed
+                && config.config_issue().is_none()
+                && previous.storage.as_ref().is_some_and(same_history)
+                && let Err(queue_error) = queue_all_artifact_files(config)
+            {
+                eprintln!("{NAMESPACE}: warning: could not queue artifact files: {queue_error:#}");
+                return error(
+                    &value.request_id,
+                    ErrorCode::Internal,
+                    "could not queue artifact files for the confirmed folder",
+                );
+            }
             match config.update_with_grants(
                 value.config.clone(),
                 &value.expected_revision,
@@ -277,9 +299,6 @@ fn dispatch(
                         value.consent_token.as_deref(),
                         value.harness_token.as_deref(),
                     );
-                    if artifacts_dir_proposed {
-                        mark_all_artifacts_dirty(config);
-                    }
                     Response::ConfigUpdated(ConfigUpdated {
                         protocol_version: PROTOCOL_VERSION,
                         request_id: value.request_id,
@@ -1141,24 +1160,15 @@ fn reconcile_index_from_logs(config: &ConfigStore) {
     }
 }
 
-/// The artifact folder was just confirmed. A cache left clean by an earlier
-/// host that wrote into the then-implicit folder must not hide artifacts
-/// whose files are missing, so the next regeneration rewrites them all.
-fn mark_all_artifacts_dirty(config: &mut ConfigStore) {
-    let Ok(_lock) = config.lock_current() else {
-        return;
-    };
-    let Some(storage) = config.snapshot().storage.as_ref() else {
-        return;
-    };
-    if let Ok(cache_dir) = config.cache_dir()
-        && let Err(error) = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-            .and_then(|index| index.rebuild())
-    {
-        eprintln!(
-            "{NAMESPACE}: warning: could not queue artifact files; run `brauser reindex`: {error:#}"
-        );
-    }
+/// Mark every artifact dirty so the next regeneration rewrites its file.
+fn queue_all_artifact_files(config: &ConfigStore) -> Result<()> {
+    let _lock = config.lock_current()?;
+    let storage = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .context("no notes folder is configured")?;
+    ArtifactIndex::open_in(storage, config.root_identity(), &config.cache_dir()?)?.rebuild()
 }
 
 fn regenerate_artifacts(config: &mut ConfigStore) {
@@ -4876,6 +4886,55 @@ id = "work:{host}/{id}"
         assert!(!config.artifacts_dir_proposed());
         regenerate_artifacts(&mut config);
         assert!(root.join("artifacts").is_dir());
+    }
+
+    #[test]
+    fn proposed_artifact_folder_stays_proposed_if_files_cannot_be_queued() {
+        // Confirming the folder must not commit unless every artifact file is
+        // already queued; otherwise a clean cache could hide missing files.
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write_legacy(&path, &root, "", "capture_enabled = false", "");
+        let mut config = loaded(&path);
+        std::fs::write(config.cache_dir().unwrap(), "not a directory").unwrap();
+        let next = config.snapshot().clone();
+        let mut consent = ConsentAuthority::new();
+        let confirmed = consent
+            .confirm_config_with(
+                Current::new(config.snapshot(), true),
+                config.revision(),
+                &next,
+                None,
+                |_| Ok(true),
+            )
+            .unwrap()
+            .unwrap();
+        let env = no_harnesses(folder.path());
+        let context = SetupContext {
+            env: &env,
+            confirm: no_dialog,
+        };
+        let response = dispatch(
+            Request::UpdateConfig(UpdateConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "update-1".into(),
+                expected_revision: config.revision().to_owned(),
+                config: next,
+                picker_token: None,
+                consent_token: Some(confirmed.consent_token),
+                harness_token: None,
+            }),
+            &mut config,
+            &mut consent,
+            &context,
+        );
+        assert!(
+            matches!(&response, Response::Error(value) if value.code == ErrorCode::Internal),
+            "{response:?}"
+        );
+        assert!(loaded(&path).artifacts_dir_proposed());
     }
 
     #[test]

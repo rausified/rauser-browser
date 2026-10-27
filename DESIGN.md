@@ -569,7 +569,7 @@ extends = "neutral"
 frontmatter = "toml"
 ```
 
-A config.toml written before `artifacts_dir` existed keeps loading. The host proposes a folder that no other content location uses and that does not already exist in the notes folder (`artifacts`, then `brauser-artifacts`, `brauser-artifacts-2`, …), writes no artifact files there, and names it in the confirmation of the next settings save, which records it. Existing folders are checked only once the notes folder's identity is verified. Until the save, the index keeps those artifacts pending and `brauser reindex` rebuilds only the index; the save queues every artifact file for regeneration.
+A config.toml written before `artifacts_dir` existed keeps loading. The host proposes a folder that no other content location uses and that does not already exist in the notes folder (`artifacts`, then `brauser-artifacts`, `brauser-artifacts-2`, …), writes no artifact files there, and names it in the confirmation of the next settings save, which records it. Existing folders are checked only once the notes folder's identity is verified. Until the save, the index keeps those artifacts pending and `brauser reindex` rebuilds only the index; the save commits only after every artifact file is queued for regeneration.
 
 **Reading is lenient, writing follows the profile.** The indexer parses both link styles and any frontmatter format. Switching profiles never rewrites existing files; `brauser migrate --profile <name>` converts them and defaults to a dry run.
 
