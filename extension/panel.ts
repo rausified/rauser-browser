@@ -71,6 +71,10 @@ const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 
 const session = new ConfigSession(render);
 let captureSite: CaptureSitePanel | null = null;
+// Suppress note loads only while capture policy can change their identity.
+// Once the post-save reload starts, tab events must reach NoteEditor's token
+// handling so a slow response cannot bind the editor to a page we have left.
+let changingNoteIdentity = false;
 let busy = false;
 let replaying = false;
 let tickRunning = false;
@@ -540,8 +544,12 @@ captureSite = new CaptureSitePanel(session, {
   isBusy: changing,
   changed: updateControls,
   show,
-  beforeSave: () => notes.showPage(null),
+  beforeSave: () => {
+    changingNoteIdentity = true;
+    return notes.showPage(null);
+  },
   afterSave: async () => {
+    changingNoteIdentity = false;
     await notes.showPage(currentPage);
     await refreshArtifact();
   },
@@ -765,7 +773,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   showPageArea("note");
   currentPage = { url: tab.url, title, tabId: tab.id };
   updateControls();
-  if (!captureSite?.saving) await notes.showPage({ url: tab.url, title });
+  if (!changingNoteIdentity) await notes.showPage({ url: tab.url, title });
   void refreshArtifact();
 }
 

@@ -590,6 +590,40 @@ test("a failed old-note save keeps a copy-out through capture setup", async () =
   assert.equal(updates(page).length, 1);
 });
 
+test("switching pages during the post-capture note reload follows the new note", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let reloading = false;
+  const nextUrl = "https://acme.atlassian.net/browse/PROJ-43";
+  const page = await captureReview(JIRA_URL, { async intercept(request, state) {
+    if (request.type === "load_note" && state.revision === "2") {
+      if (request.url === JIRA_URL) {
+        reloading = true;
+        await gate;
+      }
+      return { ...hostReply(request), body: request.url };
+    }
+  } });
+  page.el("capture-site-save").click();
+  await until(() => reloading, "post-save note reload");
+  try {
+    page.navigate(nextUrl, 2);
+    await until(() => page.el("page-url").textContent === nextUrl, "new page header");
+  } finally {
+    release();
+  }
+  await until(() => !page.el("note-body").disabled && page.el("note-body").value === nextUrl,
+    "the new page's note after capture setup");
+  page.el("note-body").value = "Edit for the new page";
+  page.el("note-body").dispatch("input");
+  // A tab change flushes the edit without waiting for the autosave timer.
+  page.navigate("https://other.example/", 3);
+  await until(() => page.state.requests.some((request) => request.type === "save_note"), "note save");
+  const saved = page.state.requests.find((request) => request.type === "save_note");
+  assert.equal(saved.url, nextUrl);
+  assert.equal(saved.body, "Edit for the new page");
+});
+
 test("a verification failure after commit says the site was saved and never resubmits", async () => {
   const page = await captureReview(JIRA_URL, { intercept(request, state) {
     if (request.type === "get_config" && state.revision === "2") {
