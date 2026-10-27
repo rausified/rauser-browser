@@ -240,7 +240,9 @@ export class ConfigSession {
       consent_token: confirmed.consent_token,
       // Only native harness setup mints a harness grant (§7.3).
       harness_token: null,
-    }, "config_updated");
+    // Confirming a proposed artifact folder first queues every artifact
+    // file, a bounded rebuild that can take as long as the dialog.
+    }, "config_updated", 5 * 60_000);
     this.config = updated.config;
     this.setRevision(updated.revision);
     onCommitted?.();

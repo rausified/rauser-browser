@@ -1025,6 +1025,50 @@ test("a declined artifact folder confirmation writes nothing", async () => {
   assert.ok(!state.requests.some((request) => request.type === "update_config"));
 });
 
+test("an artifact folder confirmation waits for an adapter repair", async () => {
+  // Saving settings unchanged over an empty adapter document that still has
+  // unsupported keys is the whole-document reset, which drops those keys.
+  const state = install({
+    sites: [],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision), config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: "The adapter table contains unsupported keys (future)",
+        adapter_warnings: [],
+      }),
+      refresh_artifacts: () =>
+        ({ type: "error", code: "not_configured", message: "save settings to confirm the artifact files folder first" }),
+    },
+  });
+  await openSettings();
+  env.elements.get("refresh-artifacts").click();
+  await until(() => statusText().startsWith("Could not update artifact files") && idle(), "the refused refresh");
+  assert.match(statusText(), /Repair the adapter document first/);
+  assert.ok(!state.requests.some((request) => request.type === "confirm_config" || request.type === "update_config"));
+});
+
+test("a settings save allows time for the host to queue artifact files", async () => {
+  // Confirming a proposed artifact folder rebuilds the bounded index before
+  // the host replies; a short timeout would report a save that later commits.
+  const state = install();
+  await openSettings();
+  const delays = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, delay, ...rest) => {
+    delays.push(delay);
+    return realSetTimeout(callback, delay, ...rest);
+  };
+  try {
+    await typeSite("https://b.example");
+    env.elements.get("enable-site").click();
+    await until(() => state.requests.some((request) => request.type === "update_config"), "the save");
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  // One long wait is the confirmation dialog; the other is the save itself.
+  assert.equal(delays.filter((delay) => delay >= 5 * 60_000).length, 2, `delays: ${delays}`);
+});
+
 test("manual artifact refresh reports unowned path conflicts", async () => {
   const state = install();
   await openSettings();

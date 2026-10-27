@@ -1178,7 +1178,13 @@ async function refreshArtifactFiles(): Promise<void> {
       if (!(error instanceof HostError && error.code === "not_configured")) throw error;
       // A config from before artifacts_dir only proposes the artifact folder.
       // Saving the settings unchanged asks the host to name it for
-      // confirmation; once recorded, its files can be written.
+      // confirmation; once recorded, its files can be written. Over an
+      // adapter document that needs repair, that save is the whole-document
+      // reset, which would drop keys this page cannot show.
+      if (session.adapterIssue) {
+        throw new Error("Repair the adapter document first, then update artifact files to confirm their folder.",
+          { cause: error });
+      }
       await withConfigMutationLock(() => session.saveConfig({ ...session.config! }, null));
       response = await refresh();
     }
