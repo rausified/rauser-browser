@@ -661,6 +661,36 @@ async function saveAdapterDocument(document: AdapterDocument, success: string): 
   }
 }
 
+/**
+ * Remove an adapter document that needs repair. The host drops unsupported
+ * `[adapters]` keys only on a real adapter change or, for a document already
+ * empty on the wire, an exact no-op update. So the repair changes nothing
+ * else; capture turns off in a second update, and success is reported only
+ * once the host no longer reports the issue.
+ */
+async function resetAdapters(): Promise<void> {
+  if (!session.config || busy) return;
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(async () => {
+      await session.saveConfig({ ...session.config!, adapters: { format: 1, artifacts: [] } }, null);
+      if (session.adapterIssue !== null) throw new Error(session.adapterIssue);
+      if (session.config!.capture_enabled) {
+        await session.saveConfig({ ...session.config!, capture_enabled: false }, null);
+      }
+    });
+    closeAdapterEditor();
+    show("Invalid adapter rules removed; automatic capture remains off until new rules are added.");
+  } catch (error) {
+    show(`Could not remove the artifact adapters: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
 async function saveAdapter(): Promise<void> {
   const candidate = readAdapterCandidate();
   if (!candidate.ok) {
@@ -993,10 +1023,7 @@ async function removeHarness(): Promise<void> {
 
 detectButton.addEventListener("click", () => void detectHarnesses());
 newAdapterButton.addEventListener("click", () => beginAdapterEdit("new"));
-resetAdaptersButton.addEventListener("click", () => void saveAdapterDocument(
-  { format: 1, artifacts: [] },
-  "Invalid adapter rules removed; automatic capture remains off until new rules are added.",
-));
+resetAdaptersButton.addEventListener("click", () => void resetAdapters());
 refreshArtifactsButton.addEventListener("click", () => void refreshArtifactFiles());
 saveAdapterButton.addEventListener("click", () => void saveAdapter());
 cancelAdapterButton.addEventListener("click", closeAdapterEditor);
