@@ -30,7 +30,9 @@ use crate::vault::{
     TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
 };
 
-const STATE_VERSION: u8 = 1;
+// v2 adds `CachedEvent::Summary`; bumping forces a v1 cache to rescan the
+// log rather than silently omit summaries already durable there.
+const STATE_VERSION: u8 = 2;
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_FILES: usize = 100_000;
@@ -117,6 +119,10 @@ struct VisitRow {
     mode: Option<String>,
     title: String,
     url: String,
+    /// Set only for a visit derived from a `CachedEvent::Summary`, so
+    /// `worklog` can report it distinctly instead of as a zero-measure,
+    /// merely-"seen" artifact.
+    summary: Option<SummaryEvent>,
 }
 
 #[derive(Clone)]
@@ -132,6 +138,16 @@ struct Derived {
     artifacts: BTreeMap<String, ArtifactRow>,
     visits: Vec<VisitRow>,
     edges: Vec<EdgeRow>,
+}
+
+#[derive(Default)]
+struct WorklogRow {
+    focused: u64,
+    background: u64,
+    opens: u64,
+    /// The latest summary (by `occurred_at`) among this artifact's visits
+    /// within the worklog's date range, if any.
+    summary: Option<SummaryEvent>,
 }
 
 impl ArtifactIndex {
@@ -517,7 +533,7 @@ impl ArtifactIndex {
     /// dates. Callers validate and bound the range before reaching here.
     pub fn worklog(&self, start: Date, end: Date) -> Result<(String, usize)> {
         let derived = derive(&self.load_or_rebuild()?.events);
-        let mut rows = BTreeMap::<String, (u64, u64, u64)>::new();
+        let mut rows = BTreeMap::<String, WorklogRow>::new();
         for visit in &derived.visits {
             let Ok(date) = parse_date(&visit.local_date) else {
                 continue;
@@ -526,12 +542,25 @@ impl ArtifactIndex {
                 continue;
             }
             let row = rows.entry(visit.artifact_id.clone()).or_default();
-            row.0 = row.0.saturating_add(visit.focused_secs);
-            row.1 = row.1.saturating_add(visit.background_secs);
-            row.2 = row.2.saturating_add(visit.opens);
+            row.focused = row.focused.saturating_add(visit.focused_secs);
+            row.background = row.background.saturating_add(visit.background_secs);
+            row.opens = row.opens.saturating_add(visit.opens);
+            if let Some(summary) = &visit.summary
+                && row.summary.as_ref().is_none_or(|current| {
+                    timestamp_order(&summary.occurred_at, &current.occurred_at).is_ge()
+                })
+            {
+                row.summary = Some(summary.clone());
+            }
         }
-        let opened = rows.values().filter(|row| row.2 > 0).count();
-        let carried = rows.values().filter(|row| row.2 == 0 && row.0 > 0).count();
+        let opened = rows
+            .values()
+            .filter(|row| row.opens > 0 || row.summary.is_some())
+            .count();
+        let carried = rows
+            .values()
+            .filter(|row| row.opens == 0 && row.summary.is_none() && row.focused > 0)
+            .count();
         let mut text = format!(
             "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
             if opened == 1 { "" } else { "s" }
@@ -540,23 +569,36 @@ impl ArtifactIndex {
         ordered.sort_by(|left, right| {
             right
                 .1
-                .0
-                .cmp(&left.1.0)
-                .then(right.1.2.cmp(&left.1.2))
+                .focused
+                .cmp(&left.1.focused)
+                .then(right.1.opens.cmp(&left.1.opens))
                 .then(left.0.cmp(&right.0))
         });
         let mut shown = 0usize;
-        for (id, (focused, background, opens)) in &ordered {
+        for (id, row) in &ordered {
             let Some(artifact) = derived.artifacts.get(id) else {
                 continue;
             };
-            let mut line = format!(
-                "{} {}: {}",
-                artifact.artifact_type,
-                id,
-                plain_text(&artifact.title)
-            );
-            line.push_str(&format!(" — {}", measures(*focused, *background, *opens)));
+            let mut line = if let Some(summary) = &row.summary {
+                format!(
+                    "Summarized: {} — {}, {} importance",
+                    plain_text(&summary.title),
+                    plain_text(&summary.document_type),
+                    summary.importance
+                )
+            } else {
+                let mut line = format!(
+                    "{} {}: {}",
+                    artifact.artifact_type,
+                    id,
+                    plain_text(&artifact.title)
+                );
+                line.push_str(&format!(
+                    " — {}",
+                    measures(row.focused, row.background, row.opens)
+                ));
+                line
+            };
             if let Some(why) = &artifact.why {
                 line.push_str(&format!(". Why: {}", plain_text(why)));
             }
@@ -739,6 +781,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     mode: event.modes.last().map(|mode| mode.mode.clone()),
                     title,
                     url: event.url.clone(),
+                    summary: None,
                 });
                 for trail in &event.trails {
                     if trail_transition_is_valid(&trail.transition)
@@ -820,6 +863,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     mode: None,
                     title: event.title.clone(),
                     url: event.url.clone(),
+                    summary: None,
                 });
             }
             CachedEvent::Summary(event) => {
@@ -873,6 +917,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     mode: None,
                     title: event.title.clone(),
                     url: event.url.clone(),
+                    summary: Some(event.clone()),
                 });
             }
         }
@@ -2870,6 +2915,101 @@ print(json.dumps([tables,row]))"#;
         let report = index.reindex().unwrap();
         assert_eq!(report.written, 0);
         assert!(!root.path().join("artifacts").exists());
+    }
+
+    #[test]
+    fn worklog_names_a_summary_only_artifact_instead_of_just_seen() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        index
+            .record_summary(&SummaryEvent {
+                event_id: uuid::Uuid::new_v4().to_string(),
+                artifact_id: artifact_id.clone(),
+                artifact_type: "web.page".into(),
+                url: url.into(),
+                title: "A good discussion".into(),
+                occurred_at: "2026-10-15T12:00:00Z".into(),
+                document_type: "discussion".into(),
+                category: "reading".into(),
+                importance: "high".into(),
+                summary_path: "pages/hn-item.summary.md".into(),
+            })
+            .unwrap();
+
+        let (text, count) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-15").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        // Zero focused/background/opens must not collapse this into the
+        // generic "seen" wording a bare-activity artifact with no measured
+        // time would get: a summary is a distinct, named action.
+        assert!(text.starts_with("Opened 1 artifact,"));
+        assert!(text.contains("Summarized: A good discussion — discussion, high importance"));
+        assert!(!text.contains("seen"));
+    }
+
+    #[test]
+    fn a_version_1_state_cache_is_rescanned() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let url_hash = sha256_hex(url.as_bytes());
+        let event = SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: "2026-10-26T18:00:00Z".into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        };
+        let payload = hex::encode(serde_json::to_vec(&event).unwrap());
+        let line = format!(
+            "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            event.occurred_at,
+        );
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-10-26.md"), format!("{LOG_HEADER}\n{line}")).unwrap();
+
+        // A cache written by a build that predates `CachedEvent::Summary`
+        // (version 1) must never be trusted as-is: it cannot contain this
+        // summary, so loading it unchanged would hide it until a manual
+        // reindex. Write one by hand and confirm it is rescanned instead.
+        let stale_cache_dir = cache.path();
+        fs::create_dir_all(stale_cache_dir).unwrap();
+        let stale_state = serde_json::json!({
+            "version": 1,
+            "root": root.path().to_string_lossy(),
+            "root_identity": open_selected_root(root.path(), None).unwrap().1,
+            "log_dir": "log",
+            "artifacts_dir": "artifacts",
+            "events": {},
+            "dirty": [],
+        });
+        fs::write(
+            stale_cache_dir.join("index-state.json"),
+            serde_json::to_vec(&stale_state).unwrap(),
+        )
+        .unwrap();
+
+        let index = index(&root, &cache);
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!(
+            report.written, 1,
+            "a v1 cache must be rescanned, not trusted"
+        );
+        assert_eq!(artifact_files(root.path()).len(), 1);
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {

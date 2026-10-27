@@ -402,10 +402,16 @@ impl CaptureStore {
                 reason: reason.into(),
             };
         }
+        let timestamp = match parse_event_time(&summary.occurred_at) {
+            Ok(value) => value,
+            Err(reason) => return CaptureOutcome::Rejected { reason },
+        };
+        let (day_dir, _) = self.log_parts(timestamp);
+        let link = relative_log_link(&day_dir, &summary.summary_path);
         let title = safe_markdown_line(Some(&summary.title), MAX_TITLE_BYTES);
         let document_type = safe_markdown_line(Some(&summary.document_type), 64);
         let body = format!(
-            "{} — Summarized: {} — {}, {} importance",
+            "{} — Summarized: {} — {}, {} importance — [summary](<{link}>)",
             summary.occurred_at, title, document_type, summary.importance
         );
         let visit = VisitEvent {
@@ -782,7 +788,10 @@ impl CaptureStore {
         marker_payload: Option<(&str, serde_json::Value)>,
         gate: EntryGate,
     ) -> CaptureOutcome {
-        if !policy.enabled {
+        // Summarize & log is an explicit, one-page action, not automatic
+        // capture: it must still append its event while capture is paused
+        // (spec §7.2/§7.3), so only `SiteAllowlist` entries honor the toggle.
+        if !policy.enabled && matches!(gate, EntryGate::SiteAllowlist) {
             return CaptureOutcome::Suppressed {
                 reason: "capture_disabled".into(),
             };
@@ -1393,6 +1402,13 @@ impl CaptureStore {
             .join(format!("{month:02}"));
         (relative_dir, format!("{year:04}-{month:02}-{day:02}.md"))
     }
+}
+
+/// A link from a daily-log entry under `day_dir` (log-dir-relative, e.g.
+/// `log/2026/10`) to a vault-root-relative target, e.g. a summary file.
+fn relative_log_link(day_dir: &Path, target: &str) -> String {
+    let ups = day_dir.components().count();
+    format!("{}{target}", "../".repeat(ups))
 }
 
 fn parse_event_id(value: &str) -> std::result::Result<String, String> {
@@ -2568,12 +2584,16 @@ mod tests {
         let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
         assert!(markdown.contains("Summarized: A good discussion"));
         assert!(markdown.contains("discussion, medium importance"));
+        assert!(markdown.contains("[summary](<../../../pages/hn-item.summary.md>)"));
         assert!(markdown.contains(" kind=summary data="));
         assert!(markdown.contains("news.ycombinator.com"));
     }
 
     #[test]
-    fn a_summary_is_suppressed_when_capture_is_disabled() {
+    fn a_summary_persists_while_capture_is_paused() {
+        // Summarize & log is an explicit, one-page action (spec §7.2/§7.3):
+        // unlike automatic capture, it must not be silenced by the master
+        // capture_enabled toggle.
         let root = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
         let store =
@@ -2584,12 +2604,10 @@ mod tests {
             strip_params: &[],
         };
         let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
-        assert_eq!(
+        assert!(matches!(
             store.record_summary(policy, &summary),
-            CaptureOutcome::Suppressed {
-                reason: "capture_disabled".into()
-            }
-        );
+            CaptureOutcome::Persisted { .. }
+        ));
     }
 
     #[test]
