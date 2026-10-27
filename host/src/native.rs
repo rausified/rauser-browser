@@ -1190,56 +1190,62 @@ fn note_context(
     // requires must still be visible here, or this path and capture would
     // disagree on whether the page is recognized.
     let matched = config.adapter_match(url, None).ok();
-    let key = match matched.as_ref() {
-        Some(found) => RecordKey {
-            kind: RecordKeyKind::Artifact,
-            value: found.artifact_id.clone(),
-        },
-        // No adapter currently recognizes this URL (for example, its
-        // adapter or last enabled site was removed). Before falling back to
-        // a fresh URL key, check whether it was previously recorded under an
-        // artifact, so that artifact's existing shared note stays reachable
-        // instead of appearing empty. The note's own stored identity is
-        // checked first because it survives independently of activity (a
-        // note saved while capture was paused, or before any activity was
-        // ever delivered, has no index row to recover from); the index is
-        // only a fallback for a note saved under a different alternate URL.
-        None => {
-            // Collect every distinct match from BOTH sources into one set
-            // before deciding uniqueness: stripped query identity can make
-            // two different artifacts share the same canonical URL, and
-            // trusting either source alone -- even one that is itself
-            // unambiguous -- could still miss a conflicting match the
-            // other source holds. Guessing between them would silently
-            // redirect a save into an unrelated artifact's note, so the
-            // recovery is trusted only when the union is unambiguous.
-            let mut candidates = std::collections::BTreeSet::new();
-            if let Ok(note_candidates) = vault.note_candidates() {
+    let key =
+        match matched.as_ref() {
+            Some(found) => RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: found.artifact_id.clone(),
+            },
+            // No adapter currently recognizes this URL (for example, its
+            // adapter or last enabled site was removed). Before falling back to
+            // a fresh URL key, check whether it was previously recorded under an
+            // artifact, so that artifact's existing shared note stays reachable
+            // instead of appearing empty. The note's stored identity
+            // survives even without delivered activity; indexed history
+            // also recovers notes created on a different alternate route.
+            None => {
+                // Collect every distinct match from BOTH sources into one set
+                // before deciding uniqueness: stripped query identity can make
+                // two different artifacts share the same canonical URL, and
+                // trusting either source alone -- even one that is itself
+                // unambiguous -- could still miss a conflicting match the
+                // other source holds. Guessing between them would silently
+                // redirect a save into an unrelated artifact's note, so the
+                // recovery is trusted only when the union is unambiguous.
+                let unavailable = || {
+                    (
+                        ErrorCode::Internal,
+                        "note identity is unavailable; recovery lookup failed",
+                    )
+                };
+                let mut candidates = std::collections::BTreeSet::new();
+                let note_candidates = vault.note_candidates().map_err(|_| unavailable())?;
                 candidates.extend(note_candidates.iter().filter_map(|contents| {
                     note::artifact_keyed_note_identity(contents, &canonical)
                 }));
-            }
-            if let Ok(cache_dir) = config.cache_dir()
-                && let Ok(index) =
-                    ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
-                && let Ok(ids) = index.artifact_candidates_for_url(&canonical)
-            {
-                candidates.extend(ids);
-            }
-            match candidates.len() {
-                1 => RecordKey {
-                    kind: RecordKeyKind::Artifact,
-                    value: candidates
-                        .into_iter()
-                        .next()
-                        .expect("checked len == 1 above"),
-                },
-                _ => {
-                    crate::vault::url_record_key(&canonical).expect("canonical HTTP URL has a key")
+                // Failure is not an empty candidate set: a missing source can
+                // conceal a conflicting identity and redirect an autosave.
+                let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
+                let index = ArtifactIndex::open_in(storage, config.root_identity(), &cache_dir)
+                    .map_err(|_| unavailable())?;
+                candidates.extend(
+                    index
+                        .artifact_candidates_for_url(&canonical)
+                        .map_err(|_| unavailable())?,
+                );
+                match candidates.len() {
+                    1 => RecordKey {
+                        kind: RecordKeyKind::Artifact,
+                        value: candidates
+                            .into_iter()
+                            .next()
+                            .expect("checked len == 1 above"),
+                    },
+                    _ => crate::vault::url_record_key(&canonical)
+                        .expect("canonical HTTP URL has a key"),
                 }
             }
-        }
-    };
+        };
     let mut older_urls = vec![canonical.clone()];
     if let Some(found) = matched
         && include_older_notes
@@ -3650,6 +3656,142 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
                 outcomes.push((outcome, reason, relative_path));
             }
             assert_eq!(outcomes[0], outcomes[1], "{label}");
+        }
+    }
+
+    #[test]
+    fn unavailable_history_cannot_select_a_partial_note_identity() {
+        for publication_failure in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            let write_config = |adapters: &str| {
+                config::fixtures::write(
+                    &path,
+                    &root,
+                    "artifacts_dir = \"artifacts\"",
+                    "capture_enabled = true\nsites = [{ origin = \"https://work.example\", path_prefix = \"/\" }]\nstrip_params = [\"item\"]",
+                    &format!("[adapters]\nformat = 1\n{adapters}"),
+                );
+            };
+            write_config(
+                r#"
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items", query = { item = "{id:int}" } }, { path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+            );
+            let mut config = loaded(&path);
+            let canonical = "https://work.example/items";
+            let first_url = "https://work.example/items?item=1";
+            let second_url = "https://work.example/issues/2";
+            let first = note_load(&mut config, first_url);
+            let Response::NoteSaved(first_saved) = note_save(
+                &mut config,
+                first_url,
+                "First note",
+                &first.revision,
+                first.key.clone(),
+            ) else {
+                panic!("expected first note")
+            };
+            let second = note_load(&mut config, second_url);
+            let Response::NoteSaved(second_saved) = note_save(
+                &mut config,
+                second_url,
+                "Second note",
+                &second.revision,
+                second.key.clone(),
+            ) else {
+                panic!("expected second note")
+            };
+            // Only history reveals that the stripped URL also belongs to
+            // the second artifact; its note was created on another route.
+            let mut event = activity_for_invalid_policy();
+            event.url = "https://work.example/items?item=2".into();
+            event.artifact_id = second.key.value;
+            assert!(matches!(
+                record_activity(
+                    RecordActivityRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "history".into(),
+                        event,
+                    },
+                    &mut config
+                ),
+                Response::ActivityRecorded(ActivityRecorded {
+                    outcome: VisitOutcome::Persisted,
+                    ..
+                })
+            ));
+            write_config("");
+            assert_eq!(
+                note_load(&mut config, canonical).key.kind,
+                RecordKeyKind::Url
+            );
+            let first_path = root.join(first_saved.relative_path);
+            let second_path = root.join(second_saved.relative_path);
+            let first_bytes = std::fs::read(&first_path).unwrap();
+            let second_bytes = std::fs::read(&second_path).unwrap();
+            let cache = config.cache_dir().unwrap();
+            let fault = if publication_failure {
+                std::fs::remove_file(cache.join("index-state.json")).unwrap();
+                let fault = cache.join("index.db");
+                std::fs::remove_file(&fault).unwrap();
+                std::fs::create_dir(&fault).unwrap();
+                fault
+            } else {
+                let fault = root.join("log/oversized.md");
+                std::fs::File::create(&fault)
+                    .unwrap()
+                    .set_len(32 * 1024 * 1024 + 1)
+                    .unwrap();
+                fault
+            };
+            let responses = [
+                load_note(
+                    brauser_protocol::LoadNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "load-unavailable".into(),
+                        url: canonical.into(),
+                    },
+                    &mut config,
+                ),
+                // A client holding a formerly valid artifact key must not
+                // be able to overwrite it using an incomplete candidate set.
+                note_save(
+                    &mut config,
+                    canonical,
+                    "Wrong note",
+                    &first_saved.revision,
+                    first.key.clone(),
+                ),
+            ];
+            for response in responses {
+                let Response::Error(reply) = response else {
+                    panic!("history failure must not resolve a note identity: {response:?}")
+                };
+                assert_eq!(reply.code, ErrorCode::Internal);
+                assert!(reply.message.contains("note identity is unavailable"));
+            }
+            assert_eq!(std::fs::read(first_path).unwrap(), first_bytes);
+            assert_eq!(std::fs::read(second_path).unwrap(), second_bytes);
+            if publication_failure {
+                std::fs::remove_dir(fault).unwrap();
+            } else {
+                std::fs::remove_file(fault).unwrap();
+            }
+            assert_eq!(
+                note_load(&mut config, canonical).key.kind,
+                RecordKeyKind::Url
+            );
+            assert!(
+                matches!(note_save(&mut config, canonical, "Keep copy-out", &first_saved.revision, first.key),
+                Response::NoteConflict(NoteConflict { reason, .. }) if reason == "key_changed")
+            );
         }
     }
 

@@ -115,6 +115,14 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced a wrong-note load and overwrite
+  when log catch-up failed and note recovery silently ignored the missing
+  historical candidates. The regression creates two artifacts sharing a
+  stripped canonical URL, with the second note on an alternate route, removes
+  the adapter, and injects both an oversized log and a SQLite publication
+  failure. Loads and saves now report unavailable identity, both note files
+  remain byte-exact, and clearing either fault restores ambiguity handling
+  and the stale-key refusal. No browser or real dialog is involved.
 - 2026-10-27: Index catch-up is tested through the native handlers by restoring
   valid older cache files after a durable append, reopening configuration, then
   querying or delivering another single/batched event without replaying the

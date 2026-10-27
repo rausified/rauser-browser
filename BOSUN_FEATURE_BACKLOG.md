@@ -404,11 +404,11 @@ Their line numbers predate step 6.6, so re-check them.
   transactional SQLite ingestion should resume bounded batches across requests,
   rather than permanently stop at the current per-pass read cap. Preserve the
   new recovery and unavailable-history assertions when replacing it.
-- `brwr-ezb` should check the complete note-removal matrix next. Its queue note
-  calls out the existing best-effort index-error handling in `note_context`:
-  unavailable history must not look like an unambiguous empty identity mapping.
-  This cycle serializes note reads that may repair caches; it does not claim
-  that separate note-access acceptance is complete.
+- `brwr-ezb` should check the complete note-removal matrix next. Independent
+  review reproduced a wrong-note load and save when catch-up failure hid a
+  conflicting historical identity. Recovery now refuses incomplete lookups,
+  with a regression for log bounds and cache-publication failures. The broader
+  adapter/site-removal acceptance matrix remains open.
 - Capture Site remains the next visible product investment once the remaining
   deploy blocker is closed. Re-learn and named focus sessions already cover the
   useful follow-ups; another internal health view would duplicate existing work.
