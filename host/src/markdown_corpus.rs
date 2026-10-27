@@ -33,24 +33,90 @@ fn escaped(text: &str, at: usize) -> bool {
         == 1
 }
 
+/// A character's place in a run of one repeated character.
+#[derive(Clone, Copy)]
+struct Run {
+    /// From zero.
+    position: usize,
+    length: usize,
+    at_end: bool,
+}
+
+/// For each character of `chars`, its place in its run of `target`; `None`
+/// off a run.
+fn runs(chars: &[char], target: char) -> Vec<Option<Run>> {
+    let mut out = vec![None; chars.len()];
+    let mut start = 0;
+    while start < chars.len() {
+        if chars[start] != target {
+            start += 1;
+            continue;
+        }
+        let end = (start..chars.len())
+            .find(|at| chars[*at] != target)
+            .unwrap_or(chars.len());
+        for (at, slot) in out.iter_mut().enumerate().take(end).skip(start) {
+            *slot = Some(Run {
+                position: at - start,
+                length: end - start,
+                at_end: end == chars.len(),
+            });
+        }
+        start = end;
+    }
+    out
+}
+
 /// Whether `output` is `input` with exactly the neutralizer's changes and
 /// nothing else, read off the input one character at a time: each `<` as
 /// `&lt;`; each `!` before `[` or at the end, after an even run of
-/// backslashes, as `\!`; and one more backslash after a trailing odd run.
-/// Every other input character must appear unchanged, so a neutralizer that
-/// dropped, added or moved any other character, backslashes before `![`
-/// included, fails.
+/// backslashes, as `\!`; each backtick, `$` and tab as `&#96;`, `&#36;` and
+/// `&#9;`; each `~` in a run of three or more, or in a run that ends the
+/// input, as `&#126;`; each space from the fourth of a run on, and every
+/// space of a run that ends the input, as `&#32;`; a backslash that ends an
+/// odd run directly before a character written as an entity dropped; and one
+/// more backslash after a trailing odd run. Every other input character must
+/// appear unchanged, so a neutralizer that dropped, added or moved any other
+/// character, backslashes before `![` included, fails.
 fn only_the_escapes_changed(input: &str, output: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    let tildes = runs(&chars, '~');
+    let spaces = runs(&chars, ' ');
+    let entity = |at: usize| -> Option<&'static str> {
+        match chars[at] {
+            '`' => Some("&#96;"),
+            '$' => Some("&#36;"),
+            '\t' => Some("&#9;"),
+            '~' => tildes[at]
+                .filter(|run| run.at_end || run.length >= 3)
+                .map(|_| "&#126;"),
+            ' ' => spaces[at]
+                .filter(|run| run.at_end || run.position >= 3)
+                .map(|_| "&#32;"),
+            _ => None,
+        }
+    };
     let mut rest = output;
     let mut backslashes = 0usize;
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
+    for (at, &ch) in chars.iter().enumerate() {
+        let next = chars.get(at + 1).copied();
         let expected = match ch {
             '<' => "&lt;".to_owned(),
-            '!' if matches!(chars.peek(), Some('[') | None) && backslashes.is_multiple_of(2) => {
+            '!' if matches!(next, Some('[') | None) && backslashes.is_multiple_of(2) => {
                 "\\!".to_owned()
             }
-            _ => ch.to_string(),
+            // Only backticks, `$` and `~` are escapable; a backslash before
+            // a tab or space is literal and stays.
+            '\\' if backslashes.is_multiple_of(2)
+                && matches!(next, Some('`' | '$' | '~'))
+                && entity(at + 1).is_some() =>
+            {
+                String::new()
+            }
+            _ => match entity(at) {
+                Some(escape) => escape.to_owned(),
+                None => ch.to_string(),
+            },
         };
         match rest.strip_prefix(expected.as_str()) {
             Some(after) => rest = after,
@@ -128,6 +194,14 @@ fn the_corpus_comes_out_inert() {
     {
         for text in std::iter::once(output).chain(joined) {
             assert!(!text.contains('<'), "raw '<' in {text:?} from {input:?}");
+            // Nothing can open a code span, fence, indented code block or
+            // math (DESIGN.md §5.2 step 6).
+            for raw in ["`", "$", "~~~", "\t", "    "] {
+                assert!(
+                    !text.contains(raw),
+                    "raw {raw:?} in {text:?} from {input:?}"
+                );
+            }
             for (at, _) in text.match_indices("![") {
                 assert!(
                     escaped(text, at),

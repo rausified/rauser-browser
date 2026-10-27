@@ -11,6 +11,11 @@
 // (GFM), and fails if any rendered HTML holds an element or attribute outside
 // a small allowlist of inert text markup. Every `<` a renderer emits is
 // markup (text `<` is always written as `&lt;`), so each one is checked.
+// Neutralized body text must render with no <code> or <pre> at all, and its
+// raw form must hold no backtick, `$`, tab, run of three `~` or run of four
+// spaces, since Obsidian hands code spans, fences, indented code and math to
+// Mermaid, Dataview and math engines. Each renderer must also decode the
+// numeric entities the neutralizer writes to their plain characters.
 //
 //   npm run test:markdown-neutralizer
 //   node scripts/check-markdown-neutralizer.mjs --outputs pairs.json
@@ -32,7 +37,9 @@ import { gfm, gfmHtml } from "micromark-extension-gfm";
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OUTPUT_ENV = "BRAUSER_NEUTRALIZE_CORPUS_OUT";
 
-// Inert text elements and the attributes the renderers give them.
+// Inert text elements and the attributes the renderers give them, for front
+// matter rendered as body text (`yaml_string` output keeps backticks, so code
+// spans and fences can form there).
 const ALLOWED = new Map([
   ["p", []],
   ["a", ["href", "title"]],
@@ -61,6 +68,12 @@ const ALLOWED = new Map([
   ["input", ["type", "checked", "disabled"]],
 ]);
 
+// Neutralized body text: no code span, fenced block or indented code block
+// can form, because Obsidian hands their contents to Mermaid, Dataview, math
+// and plugin engines (DESIGN.md §5.2 step 6). So <code> and <pre> are not
+// allowed at all.
+const ALLOWED_BODY = new Map([...ALLOWED].filter(([tag]) => tag !== "code" && tag !== "pre"));
+
 // The only `style` value allowed, and only on <th> and <td>.
 const ALIGNMENT_STYLE = /^text-align:(left|right|center)$/;
 
@@ -85,7 +98,7 @@ const TAG =
 const ATTRIBUTE = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
 /** Every problem in rendered `html`, as short descriptions. */
-export function problems(html) {
+export function problems(html, allowedElements = ALLOWED) {
   const found = [];
   for (let at = html.indexOf("<"); at !== -1; at = html.indexOf("<", at + 1)) {
     TAG.lastIndex = at;
@@ -96,7 +109,7 @@ export function problems(html) {
     }
     const [, closing, rawName, rawAttributes] = match;
     const name = rawName.toLowerCase();
-    const allowed = ALLOWED.get(name);
+    const allowed = allowedElements.get(name);
     if (!allowed) {
       found.push(`element <${name}>`);
       continue;
@@ -119,6 +132,30 @@ export function problems(html) {
     if (name === "input" && (attributes.get("type") !== "checkbox" || !attributes.has("disabled"))) {
       found.push("an <input> that is not a disabled checkbox");
     }
+  }
+  return found;
+}
+
+/**
+ * Every problem in raw neutralized body text: characters that could open a
+ * code span, fence, indented code block or math, as short descriptions.
+ */
+export function rawProblems(text) {
+  const found = [];
+  if (text.includes("`")) {
+    found.push("a raw backtick");
+  }
+  if (text.includes("$")) {
+    found.push("a raw '$'");
+  }
+  if (/~{3}/.test(text)) {
+    found.push("a run of three or more raw '~'");
+  }
+  if (text.includes("\t")) {
+    found.push("a raw tab");
+  }
+  if (/ {4}/.test(text)) {
+    found.push("a run of four or more raw spaces");
   }
   return found;
 }
@@ -156,7 +193,8 @@ function corpusPairs(outputs) {
 }
 
 // Unneutralized inputs every renderer must be caught rendering live, so the
-// check cannot pass vacuously.
+// check cannot pass vacuously. The body list adds inputs that are only live
+// in an Obsidian engine: code spans, fences and indented code.
 const LIVE = [
   "a <img src=x> b",
   "![x](https://e.example/a.png)",
@@ -165,12 +203,40 @@ const LIVE = [
   "<table><tr><td style=\"text-align:left;background:url(https://e.example/a.png)\">x</td></tr></table>",
 ];
 
+const LIVE_BODY = [
+  ...LIVE,
+  "`= this.file.name`",
+  "```mermaid\nA@{ img: \"https://e.example/m.png\" }\n```",
+  "~~~dataviewjs\ndv.el(\"img\")\n~~~",
+  "    = this.file.name",
+];
+
+// The neutralizer's numeric entities, and the text each renderer must show.
+const ENTITIES = "&#96;x&#96; &#36;y&#36; &#126;&#126;&#126; a&#9;b   &#32;c";
+const DECODED = "`x` $y$ ~~~ a\tb    c";
+
 function selfCheck() {
-  for (const text of LIVE) {
-    for (const [renderer, render] of RENDERERS) {
-      if (problems(render(text)).length === 0) {
-        throw new Error(`self-check: ${renderer} rendering of ${JSON.stringify(text)} was not flagged`);
+  for (const [renderer, render] of RENDERERS) {
+    const html = render(ENTITIES);
+    if (html.trim() !== `<p>${DECODED}</p>`) {
+      throw new Error(`self-check: ${renderer} rendered ${JSON.stringify(ENTITIES)} as ${JSON.stringify(html)}`);
+    }
+  }
+  for (const [list, allowed] of [
+    [LIVE, ALLOWED],
+    [LIVE_BODY, ALLOWED_BODY],
+  ]) {
+    for (const text of list) {
+      for (const [renderer, render] of RENDERERS) {
+        if (problems(render(text), allowed).length === 0) {
+          throw new Error(`self-check: ${renderer} rendering of ${JSON.stringify(text)} was not flagged`);
+        }
       }
+    }
+  }
+  for (const text of LIVE_BODY.slice(LIVE.length)) {
+    if (rawProblems(text).length === 0) {
+      throw new Error(`self-check: raw ${JSON.stringify(text)} was not flagged`);
     }
   }
 }
@@ -190,10 +256,21 @@ function main() {
     // matter support would; each `joinedN` is the output followed by another
     // neutralized fragment.
     for (const [kind, document] of Object.entries(documents)) {
+      // Everything but front matter is neutralized body text.
+      const body = kind !== "frontmatter";
+      if (body) {
+        const found = rawProblems(document);
+        if (found.length > 0) {
+          failures += 1;
+          console.error(
+            `FAIL raw (${kind})\n  input:    ${JSON.stringify(input)}\n  rendered: ${JSON.stringify(document)}\n  ${found.join("\n  ")}`,
+          );
+        }
+      }
       for (const [renderer, render] of RENDERERS) {
         checked += 1;
         const html = render(document);
-        const found = problems(html);
+        const found = problems(html, body ? ALLOWED_BODY : ALLOWED);
         if (found.length > 0) {
           failures += 1;
           console.error(

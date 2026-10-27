@@ -1,10 +1,11 @@
 //! Markdown and YAML safety helpers shared by every host-written file
 //! (DESIGN.md §5.2 step 6, §6.3). Single-line fields are escaped with
-//! `inline`; multi-line agent text keeps its Markdown, with `<` and image
-//! `!`s escaped by `neutralize_remote` so no CommonMark, GFM or Obsidian
-//! embed construct fetches a remote resource (fenced blocks a viewer hands
-//! to another engine, such as Mermaid, are out of scope). Links follow the
-//! profile's link style.
+//! `inline`; multi-line agent text keeps most of its Markdown, with `<`,
+//! image `!`s, backticks, `$`, fence-length `~` runs and indentation that
+//! would make code escaped by `neutralize_remote`, so no CommonMark, GFM or
+//! Obsidian embed construct fetches a remote resource and no code span,
+//! fence or math reaches Mermaid, Dataview or a math engine. Links follow
+//! the profile's link style.
 
 use std::path::{Component, Path};
 
@@ -22,8 +23,27 @@ pub(crate) fn yaml_string(value: &str) -> String {
 }
 
 /// One line of escaped Markdown, at most `limit` characters before escaping.
+/// On top of `markdown_line`'s backslash escapes, every backtick, `$` and `~`
+/// is written as a numeric entity, as in `neutralize_remote`, so no code span
+/// (a Dataview inline query), math, or fence can form wherever the line is
+/// placed, at the start of a line or a list item included. Since
+/// `markdown_line` escapes every backslash, the backslash it puts before a
+/// backtick is dropped for the entity.
 pub(crate) fn inline(value: &str, limit: usize) -> String {
-    crate::presentation::markdown_line(value, limit)
+    let line = crate::presentation::markdown_line(value, limit);
+    let mut out = String::with_capacity(line.len() + line.len() / 4);
+    for ch in line.chars() {
+        match ch {
+            '`' => {
+                out.pop();
+                out.push_str("&#96;");
+            }
+            '$' => out.push_str("&#36;"),
+            '~' => out.push_str("&#126;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// The link syntax a profile writes. The neutral profile uses relative
@@ -122,7 +142,7 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 }
 
 /// Agent Markdown with nothing that can make a viewer fetch a remote
-/// resource, by a context-free escape:
+/// resource or hand text to another engine, by a context-free escape:
 ///
 /// - every `<` becomes `&lt;`. An entity is only ever text in CommonMark and
 ///   GFM, so no tag, autolink, comment, CDATA section, processing
@@ -131,41 +151,87 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 ///   of backslashes already escapes it. An escaped `!` cannot start an image,
 ///   so inline, full, collapsed and shortcut reference images and Obsidian
 ///   `![[embeds]]` cannot form;
-/// - a `!` at the very end is escaped as `\!`, and a trailing odd run of
-///   backslashes gets one more, so the output can be joined with another
-///   neutralized fragment or with host text without re-forming `![` or
-///   cancelling a following `\!`. Text written directly before the output
-///   must likewise not end in an unescaped `!` or an odd run of backslashes;
-///   both `neutralize_remote` and `inline` output satisfy that;
-/// - nothing else changes. Links, emphasis, lists, code, tables and fences
-///   still render.
+/// - every backtick becomes `&#96;`, every `$` `&#36;`, and every tab
+///   `&#9;`; every `~` in a run of three or more becomes `&#126;`, and every
+///   space from the fourth of a run on becomes `&#32;`. So no code span,
+///   fenced block, indented code block or math can form, in any container.
+///   Obsidian hands those to other engines: Mermaid (whose v11
+///   `@{ img: ... }` loads a remote image), Dataview (`= ...` and `$= ...`
+///   inline queries in code spans, also run inside code blocks by default,
+///   and `dataview`/`dataviewjs` fences), math and plugin blocks. Runs of
+///   one or two `~` stay, so strikethrough still renders. A backslash that
+///   escapes a backtick, `$` or `~` written as an entity is dropped, since
+///   the entity already shows the plain character; numeric entities are
+///   used rather than backslashes because agent backslashes cannot undo
+///   them;
+/// - a `!` at the very end is escaped as `\!`, a trailing run of `~` or of
+///   spaces is written as entities whatever its length, and a trailing odd
+///   run of backslashes gets one more, so the output can be joined with
+///   another neutralized fragment or with host text without re-forming `![`,
+///   a fence, or indented code, or cancelling a following `\!`. Text written
+///   directly before the output must likewise not end in an unescaped `!`,
+///   an odd run of backslashes, a `~`, a space or a tab; both
+///   `neutralize_remote` and `inline` output satisfy that;
+/// - nothing else changes. Links, emphasis, strikethrough, lists indented
+///   up to three spaces, and tables still render.
 ///
 /// The escape does not depend on where a character falls, so it needs no
 /// model of a viewer's parser. An earlier scanner turned each construct into
 /// a code span, which meant mirroring how each viewer finds fences, list
 /// items, table cells, code spans, link titles and autolink literals; review
 /// kept finding inputs where a real renderer paired things differently and
-/// rendered a tag live. Inside code spans and blocks, where Markdown is not
-/// parsed, the escapes show literally (`&lt;`, `\!`), and an `<https://..>`
-/// autolink shows as text. Those cosmetic costs are accepted. Fenced blocks
-/// that a viewer renders with a separate engine (Mermaid, math, plugin
-/// blocks) are not covered (DESIGN.md §5.2 step 6).
+/// rendered a tag live. Agent prose loses code formatting by design: code
+/// shows as plain text with its backticks, and a list nested four or more
+/// spaces deep, or by tabs, is flattened into its parent's text
+/// (DESIGN.md §5.2 step 6).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn neutralize_remote(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + text.len() / 4);
     let mut backslashes = 0usize;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
+    let mut at = 0;
+    while at < chars.len() {
+        let ch = chars[at];
+        let escaped = !backslashes.is_multiple_of(2);
+        if matches!(ch, '~' | ' ') {
+            let length = chars[at..].iter().take_while(|next| **next == ch).count();
+            let at_end = at + length == chars.len();
+            for position in 0..length {
+                let entity = match ch {
+                    '~' if at_end || length >= 3 => "&#126;",
+                    ' ' if at_end || position >= 3 => "&#32;",
+                    _ => {
+                        out.push(ch);
+                        continue;
+                    }
+                };
+                // A backslash before a space is literal, so only an escaped
+                // `~` loses its backslash.
+                if ch == '~' && position == 0 && escaped {
+                    out.pop();
+                }
+                out.push_str(entity);
+            }
+            at += length;
+            backslashes = 0;
+            continue;
+        }
         match ch {
             '<' => out.push_str("&lt;"),
             // A `!` at the end is escaped too, so a `[` written after the
             // output cannot make an image of it.
-            '!' if matches!(chars.peek(), Some('[') | None) && backslashes.is_multiple_of(2) => {
-                out.push_str("\\!")
+            '!' if matches!(chars.get(at + 1), Some('[') | None) && !escaped => out.push_str("\\!"),
+            '`' | '$' => {
+                if escaped {
+                    out.pop();
+                }
+                out.push_str(if ch == '`' { "&#96;" } else { "&#36;" });
             }
+            '\t' => out.push_str("&#9;"),
             _ => out.push(ch),
         }
         backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
+        at += 1;
     }
     // A trailing odd run of backslashes would escape the first character
     // written after the output, such as the `\` of a following `\![`, so it
@@ -203,7 +269,7 @@ mod tests {
                 "![[https://e.example/x.png]]",
                 "\\![[https://e.example/x.png]]",
             ),
-            ("![`a`](u)", "\\![`a`](u)"),
+            ("![`a`](u)", "\\![&#96;a&#96;](u)"),
             ("[![a](u)](v)", "[\\![a](u)](v)"),
             ("!![x](u)", "!\\![x](u)"),
             ("![[a]](u)", "\\![[a]](u)"),
@@ -220,7 +286,7 @@ mod tests {
                 "<img\nsrc=https://e.example/c.png>",
                 "&lt;img\nsrc=https://e.example/c.png>",
             ),
-            ("`a\n![x](u)\nb`", "`a\n\\![x](u)\nb`"),
+            ("`a\n![x](u)\nb`", "&#96;a\n\\![x](u)\nb&#96;"),
             // Tags in any case, comments, CDATA, processing instructions,
             // declarations and autolinks.
             ("<IFRAME src=x></IFRAME>", "&lt;IFRAME src=x>&lt;/IFRAME>"),
@@ -232,31 +298,35 @@ mod tests {
             ("see <https://x.example/a>", "see &lt;https://x.example/a>"),
             ("<a@b.example>", "&lt;a@b.example>"),
             ("a < b and c > d", "a &lt; b and c > d"),
-            // Next to backticks, inside code, fences of any indent, table
-            // cells and reference definitions, the rule is the same.
+            // Next to backticks, in what would have been code or fences of
+            // any indent, table cells and reference definitions, the rule is
+            // the same.
             (
                 "`<img src=https://e.example/c.png>",
-                "`&lt;img src=https://e.example/c.png>",
+                "&#96;&lt;img src=https://e.example/c.png>",
             ),
-            ("`<img>`", "`&lt;img>`"),
-            ("``<img src=u>`", "``&lt;img src=u>`"),
-            ("`x`![a](u)`", "`x`\\![a](u)`"),
+            ("`<img>`", "&#96;&lt;img>&#96;"),
+            ("``<img src=u>`", "&#96;&#96;&lt;img src=u>&#96;"),
+            ("`x`![a](u)`", "&#96;x&#96;\\![a](u)&#96;"),
             (
                 "<a title='`'>`<img src=u>`",
-                "&lt;a title='`'>`&lt;img src=u>`",
+                "&lt;a title='&#96;'>&#96;&lt;img src=u>&#96;",
             ),
-            ("```\n<img src=u>\n```", "```\n&lt;img src=u>\n```"),
+            (
+                "```\n<img src=u>\n```",
+                "&#96;&#96;&#96;\n&lt;img src=u>\n&#96;&#96;&#96;",
+            ),
             (
                 "  ```\n  <img src=u>\n  ```",
-                "  ```\n  &lt;img src=u>\n  ```",
+                "  &#96;&#96;&#96;\n  &lt;img src=u>\n  &#96;&#96;&#96;",
             ),
             (
                 "- a\n  ```\n  x\n```\n<img src=y>\n```\n<!--\n",
-                "- a\n  ```\n  x\n```\n&lt;img src=y>\n```\n&lt;!--\n",
+                "- a\n  &#96;&#96;&#96;\n  x\n&#96;&#96;&#96;\n&lt;img src=y>\n&#96;&#96;&#96;\n&lt;!--\n",
             ),
             (
                 "- a\n  ~~~\n  x\n ~~~\n![x](u)",
-                "- a\n  ~~~\n  x\n ~~~\n\\![x](u)",
+                "- a\n  &#126;&#126;&#126;\n  x\n &#126;&#126;&#126;\n\\![x](u)",
             ),
             (
                 "| a | b |\n|---|---|\n| <b|<img src=x> | c |",
@@ -264,7 +334,7 @@ mod tests {
             ),
             (
                 "| `x|y` ![a](https://e/x.png) |",
-                "| `x|y` \\![a](https://e/x.png) |",
+                "| &#96;x|y&#96; \\![a](https://e/x.png) |",
             ),
             (
                 "  [r]:https://e.example/b.png",
@@ -276,9 +346,12 @@ mod tests {
                 "[r]:\n  https://e.example/b.png \"t\"\n\n\\![x][r]",
             ),
             ("[r]:\n<img src=x>|y", "[r]:\n&lt;img src=x>|y"),
-            ("[a](u '`')<img src=x>`", "[a](u '`')&lt;img src=x>`"),
+            (
+                "[a](u '`')<img src=x>`",
+                "[a](u '&#96;')&lt;img src=x>&#96;",
+            ),
             ("[a](<img src=x>)", "[a](&lt;img src=x>)"),
-            ("a\r<img src=u>\r`b", "a\r&lt;img src=u>\r`b"),
+            ("a\r<img src=u>\r`b", "a\r&lt;img src=u>\r&#96;b"),
             // An escaped `!` stays escaped; one after an escaped backslash
             // gets its own escape. An escaped `<` shows its entity.
             ("\\![x](u) \\<img>", "\\![x](u) \\&lt;img>"),
@@ -316,6 +389,62 @@ mod tests {
             ("\\", "\\\\"),
             ("x\\\\\\", "x\\\\\\\\"),
             ("x\\\\", "x\\\\"),
+            // A trailing run of `~` or spaces is escaped whole, so a run
+            // that follows cannot extend it into a fence or indented code.
+            ("x~", "x&#126;"),
+            ("~~s~~", "~~s&#126;&#126;"),
+            ("x ", "x&#32;"),
+            ("x\n  ", "x\n&#32;&#32;"),
+            ("x\t", "x&#9;"),
+        ] {
+            assert_eq!(neutralize_remote(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn no_code_span_fence_indented_code_or_math_can_form() {
+        for (input, expected) in [
+            // Dataview inline queries live in code spans.
+            ("`= this.file.name`", "&#96;= this.file.name&#96;"),
+            ("`$= dv.current()`", "&#96;&#36;= dv.current()&#96;"),
+            ("``a `b` c``", "&#96;&#96;a &#96;b&#96; c&#96;&#96;"),
+            // Mermaid, dataviewjs, math and plugin blocks live in fences of
+            // either kind, at any indent and in any container.
+            (
+                "```mermaid\nA@{ img: \"u\" }\n```",
+                "&#96;&#96;&#96;mermaid\nA@{ img: \"u\" }\n&#96;&#96;&#96;",
+            ),
+            (
+                "~~~dataviewjs\nx\n~~~",
+                "&#126;&#126;&#126;dataviewjs\nx\n&#126;&#126;&#126;",
+            ),
+            (
+                "- a\n  ~~~~ {.x}\n  y",
+                "- a\n  &#126;&#126;&#126;&#126; {.x}\n  y",
+            ),
+            ("a ~~~ b", "a &#126;&#126;&#126; b"),
+            // Strikethrough runs of one or two are kept.
+            ("~~s~~ and ~t~ x", "~~s~~ and ~t~ x"),
+            // Math.
+            ("$x$", "&#36;x&#36;"),
+            ("$$\\href{u}{x}$$\n", "&#36;&#36;\\href{u}{x}&#36;&#36;\n"),
+            // A backslash escaping one of these is dropped, since the entity
+            // already renders as the plain character; an escaped backslash
+            // before one stays.
+            ("\\`x\\`", "&#96;x&#96;"),
+            ("\\$5", "&#36;5"),
+            ("\\~~~", "&#126;&#126;&#126;"),
+            ("\\\\$x", "\\\\&#36;x"),
+            ("\\\\\\`x", "\\\\&#96;x"),
+            ("\\~~ x", "\\~~ x"),
+            // Indented code: no tab and no run of four spaces is left.
+            ("    = this.file.name", "   &#32;= this.file.name"),
+            ("\t$= x", "&#9;&#36;= x"),
+            ("-     x", "-   &#32;&#32;x"),
+            ("- a\n\n      = x", "- a\n\n   &#32;&#32;&#32;= x"),
+            (">     = x", ">   &#32;&#32;= x"),
+            ("a\t b", "a&#9; b"),
+            ("- a\n  - b\n   - c", "- a\n  - b\n   - c"),
         ] {
             assert_eq!(neutralize_remote(input), expected, "{input:?}");
         }
@@ -336,6 +465,13 @@ mod tests {
             "[[https://e.example/x.png]]",
             "\\![y](u)",
             "plain",
+            "x~~",
+            "~~",
+            "~y",
+            "x\n  ",
+            "  ",
+            "  y",
+            "x\t",
         ];
         for left in fragments {
             for right in fragments {
@@ -346,6 +482,10 @@ mod tests {
                         "{left:?} + {right:?} gives {joined:?}"
                     );
                 }
+                assert!(
+                    !joined.contains("~~~") && !joined.contains("    "),
+                    "{left:?} + {right:?} gives {joined:?}"
+                );
             }
         }
     }
@@ -369,12 +509,12 @@ mod tests {
     fn ordinary_markdown_is_left_alone() {
         for text in [
             "[a](https://x.example)",
-            "[a](https://x.example \"t\") and `code`",
-            "# T\n\n*e* **s** ~~d~~ `c`\n\n- one\n1. two\n\n> q\n\n---",
+            "[a](https://x.example \"t\") and code",
+            "# T\n\n*e* **s** ~~d~~ c\n\n- one\n1. two\n  - nested\n\n> q\n\n---",
             "| a | b |\n|---|---|\n| 1 | 2 |",
             "- [ ] open\n- [x] done",
             "[^1]: a note",
-            "```rust\nlet x = 1 > 0;\n```",
+            "a  \nhard break",
             "Hello! [a](u) ! [b] !\n",
             "&lt;already an entity",
             "",
@@ -434,11 +574,32 @@ mod tests {
             "<a>".repeat(262_144),
             format!("[a](u \"\n{}", "<a>".repeat(262_144)),
             "\\".repeat(262_144) + "![",
+            "~".repeat(262_144),
+            " ".repeat(262_144) + "x",
+            "\\`".repeat(131_072),
         ] {
             let output = neutralize_remote(&input);
-            assert!(!output.contains('<'));
+            assert!(!output.contains('<') && !output.contains('`'));
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn inline_text_cannot_form_code_fences_or_math() {
+        assert_eq!(
+            inline("`$= dv.current()` $x$ ~~~ ~~s~~", 200),
+            "&#96;&#36;\\= dv.current()&#96; &#36;x&#36; &#126;&#126;&#126; &#126;&#126;s&#126;&#126;"
+        );
+        // An agent backslash stays a visible backslash.
+        assert_eq!(inline("\\` \\$", 200), "\\\\&#96; \\\\&#36;");
+        assert_eq!(inline("~~~mermaid", 200), "&#126;&#126;&#126;mermaid");
+        for value in ["`= this.file.name`", "$$x$$", "~~~", "\\`a`", "a ` b"] {
+            let line = inline(value, 200);
+            assert!(
+                !line.contains('`') && !line.contains('$') && !line.contains('~'),
+                "{line}"
+            );
+        }
     }
 
     #[test]
