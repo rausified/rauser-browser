@@ -23,15 +23,44 @@ jobs:
       os: windows-latest
 
   # GitHub's hosted macos-15 pool is sometimes starved: the job is never
-  # acquired by a runner and GitHub cancels it with zero steps run. That
-  # shows up as result 'cancelled', so only then rerun the same build on
-  # macos-14. A real macos-15 failure (result 'failure') does not fall back.
+  # acquired by a runner and GitHub cancels it with zero steps run. Its result
+  # is then 'cancelled', but so is a job that timed out or was interrupted
+  # after it started, so this job asks the API whether the macos-15 job ever
+  # ran a step. Only a zero-step cancellation counts as starvation. A real
+  # macos-15 failure (result 'failure') never falls back.
   # GitHub has no queue timeout for hosted jobs (job timeout-minutes only
   # counts time on a runner), so this waits for GitHub's own cancellation.
-  build-macos-fallback:
-    name: macOS fallback
+  macos-starvation-check:
+    name: Detect macOS runner starvation
     needs: build-macos
     if: always() && needs.build-macos.result == 'cancelled'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    outputs:
+      starved: ${{ steps.check.outputs.starved }}
+    steps:
+      - name: Check whether the macos-15 job ran any step
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOBS_URL: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
+          # "<caller job name> / <reusable workflow job name>"
+          JOB_NAME: macOS / Build and check (macos-15)
+        run: |
+          steps=$(gh api --paginate "$JOBS_URL" \
+            --jq '.jobs[] | select(.name == env.JOB_NAME) | .steps | length')
+          echo "$JOB_NAME steps run: ${steps:-not found}"
+          if [ "$steps" = 0 ]; then
+            echo "starved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "starved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-macos-fallback:
+    name: macOS fallback
+    needs: macos-starvation-check
+    if: always() && needs.macos-starvation-check.outputs.starved == 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-14
@@ -39,10 +68,11 @@ jobs:
   # Branch protection requires a check named exactly "Build and check"; the
   # per-OS jobs report under their own names, so this job stands for all of
   # them. Pass needs Windows plus macOS, where macOS is either the macos-15
-  # build or, only when that build was cancelled, the macos-14 fallback.
+  # build or, only when that job was starved of a runner, the macos-14
+  # fallback.
   build-gate:
     name: Build and check
-    needs: [build-macos, build-windows, build-macos-fallback]
+    needs: [build-macos, build-windows, macos-starvation-check, build-macos-fallback]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -50,12 +80,13 @@ jobs:
         env:
           MACOS: ${{ needs.build-macos.result }}
           WINDOWS: ${{ needs.build-windows.result }}
+          STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
-          echo "macos-15: $MACOS; windows: $WINDOWS; macos-14 fallback: $FALLBACK"
+          echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-14 fallback: $FALLBACK"
           test "$WINDOWS" = success
           if [ "$MACOS" = success ]; then exit 0; fi
-          test "$MACOS" = cancelled && test "$FALLBACK" = success
+          test "$MACOS" = cancelled && test "$STARVED" = true && test "$FALLBACK" = success
 
   cargo-deny:
     name: Rust dependency policy
