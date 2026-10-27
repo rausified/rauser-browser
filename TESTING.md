@@ -111,6 +111,7 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-26: Branch `test/smoke-pause-resume`. The headless smoke run now pauses from the panel and resumes from settings: it checks that pausing shows the "Capture off" strip and a status pointing to Resume in settings with no setup warning (DESIGN.md §5.7), keeps the site's adapter, and measures nothing, that **Resume capture** turns capture back on without opening a native dialog (rebased onto #69, which removed its confirmation), and that a later visit reaches the daily log. The panel's pause button sits inside the collapsed capture strip (`<details>`), so a real click on it does nothing until the runner opens the strip; check the host state after a click rather than trusting it.
 - 2026-10-27: Independent review reproduced an older URL note disappearing
   from a recovered context-only route when the shared note's creation route
   had no delivered activity. Older-note discovery now uses the shared note's
