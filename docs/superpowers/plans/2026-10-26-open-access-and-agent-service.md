@@ -1973,15 +1973,29 @@ PR 4 makes a succeeded run durable. The service writes the §7.1 summary file an
 
 Assumes PRs 1-3 are merged. PR 4 uses PR 3's `crate::answer::{SummaryAnswer, Entities, Importance}` and the generated `brauser_protocol::ImportanceLevel`, and it defines no second answer or importance type. `RunStatusFile.requested_at` exists from Task 16. Opening files goes through `crate::open` (Task 36).
 
+**Built on PR #59.** PR #59 (merge `fbdf7e2`, brought into this branch by `5273817`) already shipped the storage layer for summaries, and PR 4 reuses it rather than building a second one:
+- `host/src/summary.rs`: `PageSummary`, `SummaryEvent`, `validate_page_summary`, `validate_summary_event` and `web_page_artifact_id`.
+- `host/src/capture.rs`: `CaptureStore::record_summary`, the `summary` marker kind, `EntryGate::AnyHttpPage` (a summary is logged on any HTTP(S) page and while capture is paused), the `Summarized:` log line and `relative_log_link`.
+- `host/src/index.rs`: `CachedEvent::Summary`, the `summary` arm of `fn parse_marker_event`, the Summary arm of `fn derive`, `ArtifactRow.summaries`, `VisitRow.summary`, `ArtifactIndex::record_summary`, `STATE_VERSION = 3`, the artifact file's `Summary:` line and Timeline lines through `fn relative_artifact_link`, the 20-line summary cap, and the worklog's `Summarized:` wording.
+
+PR #59 has no production caller, so no daily log holds a #59-shape summary line. Its commit message lists four known gaps, and PR 4 closes each one in the task named:
+1. **No harness field.** `SummaryEvent` has no `harness` and no record key (Task 46).
+2. **A raw summary link.** Both link sites concatenate `../` with the raw `summary_path` instead of building an encoded relative link (Task 43).
+3. **Timeline ordering.** Summary lines are printed above all activity rollups instead of interleaved by date (Task 47).
+4. **Summaries on a page an adapter already recognizes.** `validate_summary_event` and `fn record_entry` force every summary onto the URL's `web.page` identity, so spec §7.2's "attaches to that adapter's artifact" cannot happen (Tasks 46 and 47).
+
 Identity decision: the spec's `brauser.record_key` is written with the encoding that note.rs and DESIGN §6.6 already use. The `brauser:` block holds `kind: summary`, then `canonical_url`, then either `url_id` or `artifact_id`. Ownership checks read only that block.
 
 ---
 
-### Task 43: Shared Markdown safety helpers and the remote-resource neutralizer
+### Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links
 
 **Files:**
 - Create: `host/src/markdown.rs`
-- Modify: `host/src/lib.rs` (`pub(crate) mod markdown;`); `host/src/index.rs` (move `yaml_string` and `safe_markdown` into `markdown.rs`; `render_artifact` calls `markdown::inline(.., 2048)`)
+- Modify:
+  - `host/src/lib.rs` (`pub(crate) mod markdown;`)
+  - `host/src/index.rs`: move `yaml_string` and `safe_markdown` into `markdown.rs`; `render_artifact` calls `markdown::inline(.., 2048)`; `fn relative_artifact_link` builds its link with `markdown::relative_link`.
+  - `host/src/capture.rs`: `fn relative_log_link` is deleted, and `record_summary` calls `markdown::relative_link(&day_dir, ..)`.
 
 **Interfaces:**
 - `pub(crate) fn yaml_string(value: &str) -> String`
@@ -1991,6 +2005,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 - `pub(crate) fn relative_link(from_dir: &Path, to: &Path) -> String`: percent-encodes each segment except unreserved characters. No new crate.
 - `pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String`: strips `[ ] | # ^` and control characters.
 - The neutralizer is a **hand-written scanner over chars**. The host has no `regex` crate, and none is added.
+- The daily-log line and the artifact file's `Summary:` line keep #59's bracketed `[..](<link>)` form. Only the destination changes: it is now encoded, so a `summaries_dir` with a space gives `%20`. `validate_page_summary` keeps rejecting `<`, `>`, `#`, `?` and control characters.
 
 - [ ] Write the failing tests:
   ```rust
@@ -2017,16 +2032,17 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
   }
   #[test] fn wikilinks_cannot_break_out() { assert_eq!(wikilink("a]]|b#^", None), "[[ab]]"); }
   ```
-- [ ] Run `cargo test --locked -p brauser markdown::`. Expect FAIL.
+- [ ] Change the expectation of `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link` in `capture.rs` to `[summary](<../../../My%20Summaries/hn-item.summary.md>)`. Add `the_artifact_summary_link_is_percent_encoded` in `index.rs`, modeled on `summary_event_appends_once_on_a_page_no_adapter_covers`, with a `summary_path` of `My Summaries/hn-item.summary.md`.
+- [ ] Run `cargo test --locked -p brauser -- markdown:: summary_path_with_a_space artifact_summary_link`. Expect FAIL.
 - [ ] Implement `neutralize_remote` line by line:
   - Lines inside a ``` or ~~~ fence pass through unchanged.
   - A link reference definition (up to 3 spaces, `[label]:`, whitespace, then non-space) is wrapped whole.
   - Otherwise, outside existing inline code spans, wrap each `![…](…)`, `![…][…]` or `![…]`, and each `<` followed by an ASCII letter, `/` or `!`, up to the next `>` on the line.
   - The fence is one backtick longer than the longest backtick run inside, padded with a space when the content starts or ends with a backtick.
 
-  Move `yaml_string` and `safe_markdown` (as `inline`) unchanged.
-- [ ] Run `cargo test --locked -p brauser markdown:: && cargo test --locked -p brauser index::`. Expect PASS.
-- [ ] Commit: `git add host/src/markdown.rs host/src/lib.rs host/src/index.rs && git commit -m "feat(host): shared markdown escaping and remote-resource neutralizer"`
+  Move `yaml_string` and `safe_markdown` (as `inline`) unchanged. Switch both #59 link sites to `relative_link`.
+- [ ] Run `cargo test --locked -p brauser markdown:: && cargo test --locked -p brauser index:: && cargo test --locked -p brauser capture::`. Expect PASS, including #59's `summary_event_appends_once_on_a_page_no_adapter_covers` unchanged (its path has no reserved characters).
+- [ ] Commit: `git add host/src/markdown.rs host/src/lib.rs host/src/index.rs host/src/capture.rs && git commit -m "feat(host): shared markdown escaping, remote-resource neutralizer, encoded summary links"`
 
 ### Task 44: Lift the owned-file writer out of index.rs
 
@@ -2049,7 +2065,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 ### Task 45: Summary file rendering and the checked summary write
 
 **Files:**
-- Create: `host/src/summary.rs` (`pub(crate) mod summary;`)
+- Modify: `host/src/summary.rs`. It already exists from #59; add the file rendering and ownership check beside #59's event types, and rewrite its module comment, which says this module "never writes a summary file".
 - Modify: `host/src/vault.rs` (`Vault` gains `summaries_dir: Option<PathBuf>`, set in `open_checked`; `sweep_stale_temporaries` also sweeps the summaries dir)
 
 **Interfaces:**
@@ -2074,6 +2090,7 @@ impl Vault {
   - Single-line agent text goes through `inline(.., 200)`. In the `Wikilink` style, entities and related notes use `wikilink` instead.
   - `description` and `assessment` go through `neutralize_remote`.
   - Empty entity groups are omitted. The Entities line goes when all groups are empty, and Related goes when the list is empty.
+- `summary_relative_path` always yields a path that #59's `validate_page_summary` accepts: relative, ending `.summary.md`, and free of `..`, `<`, `>`, `#`, `?` and control characters.
 
 - [ ] Write the failing tests:
   - `summary_file_has_the_exact_layout`, with the exact expected string:
@@ -2088,99 +2105,112 @@ impl Vault {
   - `obsidian_style_uses_wikilinks`
   - `agent_text_cannot_forge_identity_or_fetch_remote_resources`
   - `summary_name_never_equals_the_note_name`
+  - `summary_paths_pass_the_summary_event_path_check`: for a URL key, an artifact key and a page title with `#`, `?` and `<`, `validate_page_summary` accepts the `summary_relative_path`.
   - `write_summary_never_adopts_a_note_or_foreign_summary`
   - `stale_summary_temporaries_are_swept`
 - [ ] Run `cargo test --locked -p brauser summary::`. Expect FAIL.
 - [ ] Implement. `write_summary` calls `replace_owned_file(root, path, markdown, "summary", &|b| owned_summary(b, key))`.
 - [ ] Run `cargo test --locked -p brauser summary:: && cargo test --locked -p brauser note::`. Expect PASS, including `a_summary_file_at_the_same_name_is_a_conflict_not_a_note`.
-- [ ] Commit: `git add host/src/summary.rs host/src/lib.rs host/src/vault.rs && git commit -m "feat(host): render and write Brauser-owned summary files"`
+- [ ] Commit: `git add host/src/summary.rs host/src/vault.rs && git commit -m "feat(host): render and write Brauser-owned summary files"`
 
-### Task 46: The `summary` daily-log event
+### Task 46: Extend #59's summary event: record key, harness, and adapter artifacts
 
 **Files:**
-- Modify: `host/src/summary.rs` (`SummaryEvent`, `validate_summary_event`)
-- Modify `host/src/capture.rs`:
-  - Add `record_summary` beside `record_why`.
-  - `fn record_entry` gains a `Gate` parameter.
-  - `log_parts` becomes `pub(crate)`. `parse_event_time` is already `pub(crate)` from Task 23.
+- Modify: `host/src/summary.rs` (`PageSummary`, `SummaryEvent`, `validate_page_summary`, `validate_summary_event`)
+- Modify: `host/src/capture.rs` (`record_summary`; the `kind == "summary"` branch of `fn record_entry`; the `page_summary` test helper; every `store.record_summary(..)` call in its tests)
+- Modify: `host/src/index.rs` (the `SummaryEvent` literals in its tests; the `page_summary` test helper; every `capture.record_summary(..)` call in its tests)
 
 **Interfaces:**
 ```rust
+pub struct PageSummary {             // #59's fields, plus:
+    pub record_key: RecordKey,       // resolved by the caller under lock_current (Task 49)
+    pub artifact_type: String,       // "web.page" for a Url key; the adapter's type for an Artifact key
+    pub harness: HarnessId,
+    pub importance: ImportanceLevel, // was String
+    /* event_id, url, title, occurred_at, document_type, category, summary_path unchanged */
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)] #[serde(deny_unknown_fields)]
-pub struct SummaryEvent {           // no field named `kind`
-    pub event_id: String,           // run_id
-    pub occurred_at: String,        // RFC 3339 with the user's offset
-    pub url: String, pub title: String, pub record_key: RecordKey, pub artifact_id: String, pub artifact_type: String,
+pub struct SummaryEvent {            // #59's fields, plus record_key and harness; importance: ImportanceLevel
+    pub event_id: String, pub artifact_id: String, pub artifact_type: String, pub record_key: RecordKey,
+    pub url: String, pub title: String, pub occurred_at: String,
     pub document_type: String, pub category: String, pub importance: ImportanceLevel,
     pub summary_path: String, pub harness: HarnessId,
 }
-pub(crate) fn validate_summary_event(event: &SummaryEvent) -> Result<(), &'static str>;
-impl CaptureStore { pub fn record_summary(&self, strip_params: &[String], event: &SummaryEvent) -> CaptureOutcome; }
-enum Gate<'a> { Origins(&'a [String]), AnyHttpPage }
+impl CaptureStore {
+    pub fn record_summary(&self, policy: CapturePolicy<'_>, summary: &PageSummary) -> (CaptureOutcome, Option<SummaryEvent>);
+}
 ```
-- `validate_summary_event` checks:
-  - the event ID is a UUID;
-  - `artifact_id` is 1-512 bytes and `artifact_type` 1-64;
-  - `document_type` and `category` are 1-64 chars with no control characters;
-  - the title is at most `MAX_TITLE_BYTES`;
-  - `summary_path` is relative, at most 1024 bytes, has no `..`, and ends `.summary.md`;
-  - `web.page` is used exactly when `artifact_id` starts with `web:`;
-  - a `Url` key requires `artifact_id == "web:{host}/{key.value}"`, and an `Artifact` key requires `key.value == artifact_id`.
+- The new fields are required, not `#[serde(default)]`: #59 has no caller, so no log holds a #59-shape line. `ImportanceLevel` serializes as #59's `"high" | "medium" | "low"` strings, so `validate_page_summary` drops its string match.
+- Identity, in the `kind == "summary"` branch of `fn record_entry`, replacing the unconditional `web_page_artifact_id`:
+  - A `Url` key: `artifact_id = web_page_artifact_id(normalized)`, `artifact_type` must be `web.page`, and `artifact_id` must equal `web:{host}/{record_key.value}`. A mismatch means the caller's key and the host's normalization disagree, and is `Rejected { reason: "invalid_summary_key" }`.
+  - An `Artifact` key: `artifact_id = record_key.value`. It must not start with `web:`, `artifact_type` must be 1-64 bytes and not `web.page`, and the reason on failure is the same.
+- `validate_summary_event` (log replay) checks the same invariants. It still accepts a `web.page` event only for the `web_page_artifact_id` of its own `url`.
+- `record_summary` returns the `SummaryEvent` exactly as written in the marker payload, so the caller indexes it with `ArtifactIndex::record_summary` without deriving it a second time. The event is `Some` only for `Persisted`.
+- Unchanged from #59: the `EntryGate::AnyHttpPage` gate, logging while capture is paused, the `Summarized:` line, the 1-64 type and category bounds, the `summary_path` checks and UUID canonicalization.
 
-  A failure is `Rejected { reason: "invalid_summary" }`.
-- A summary is written on any HTTP(S) page and while capture is paused. Credential and non-HTTP URLs are still refused by `parse_page_url`.
-- The log line is `{occurred_at} — Summarized: {safe_title} — {inline(document_type)}, {importance} importance — [summary](<{relative_link(log day dir, summary_path)}>)`, followed by ` — <url>`.
+- [ ] Write the failing tests:
+  - `a_summary_on_an_adapter_page_attaches_to_that_artifact` (an `Artifact` key with `artifact_type: "jira.issue"`; the marker payload has that ID and type, not a `web:` one)
+  - `a_url_key_that_disagrees_with_the_normalized_url_is_rejected`
+  - `an_artifact_key_cannot_claim_web_page_or_a_web_id`
+  - `the_event_records_the_harness_and_record_key`
+  - `record_summary_returns_the_event_it_wrote` (equal to the event `parse_marker_event` replays from the file)
+  - `a_replayed_adapter_summary_with_a_web_page_type_is_ignored`
+- [ ] Run `cargo test --locked -p brauser -- summary:: capture::tests::`. Expect FAIL.
+- [ ] Implement, and update #59's `PageSummary`/`SummaryEvent` test literals to the new fields.
+- [ ] Update #59's `record_summary` call sites to the tuple return. They match on a bare `CaptureOutcome` and stop compiling otherwise:
+  - In `capture.rs` tests, destructure `(outcome, event)` and match on `outcome` in `a_summary_persists_on_a_page_no_site_rule_covers`, `a_summary_persists_while_capture_is_paused`, `a_malformed_summary_is_rejected`, `a_credential_url_is_rejected_for_a_summary`, `a_noncanonical_uuid_summary_hashes_and_serializes_the_same_spelling` and `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link`. The two `Rejected` tests also assert `event.is_none()`.
+  - `a_malformed_summary_is_rejected` in `capture.rs` and `an_unknown_importance_is_rejected` in `summary.rs` set `importance = "urgent"`, which no longer compiles once `importance` is an `ImportanceLevel`. Make the capture test set `category` to an empty string and expect `invalid_summary_category`. Rewrite the summary test to assert that a `SummaryEvent` JSON with `"importance":"urgent"` fails to deserialize, so a forged log line with that value is still skipped on replay.
+  - In `index.rs` tests, `summary_event_appends_once_on_a_page_no_adapter_covers` matches `capture.record_summary(policy, &summary).0` and `capture.record_summary(policy, &again).0` against `CaptureOutcome::Persisted { .. }`.
+- [ ] Run `cargo test --locked -p brauser -- summary:: capture:: index::`. Expect PASS, including all of #59's summary tests.
+- [ ] Commit: `git add host/src/summary.rs host/src/capture.rs host/src/index.rs && git commit -m "feat(host): summary events carry the record key and harness and attach to adapter artifacts"`
 
-- [ ] Write the failing tests: `summary_event_appends_once_on_a_page_no_adapter_covers`, `summary_event_appends_while_capture_is_paused`, `agent_supplied_type_is_escaped_in_the_line`, `malformed_summary_events_are_rejected`, `credential_url_is_rejected` and `origin_gate_still_applies_to_activity`.
-- [ ] Run `cargo test --locked -p brauser capture::tests::summary`. Expect FAIL.
-- [ ] Implement. `record_summary` validates, builds the `VisitEvent` shim (`incognito: false`), and calls `record_entry(Gate::AnyHttpPage, enabled = true, .., Some(("summary", serde_json::to_value(event))))`.
-- [ ] Run `cargo test --locked -p brauser capture::`. Expect PASS.
-- [ ] Commit: `git add host/src/summary.rs host/src/capture.rs && git commit -m "feat(host): append-only summary log event on any HTTP(S) page"`
-
-### Task 47: Index summaries, rebuild them on reindex, and link them from artifact files
+### Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache
 
 **Files:**
-- Modify `host/src/index.rs`: `enum CachedEvent`, `fn event_identity`, `fn parse_marker_event` (an arm beside `why`), `fn derive` (a Summary arm modeled on Legacy), `ArtifactRow`, `VisitRow`, `fn artifact_candidates_for_url`, `STATE_VERSION`, `fn render_artifact`, and `record_summary` beside `record_why`.
+- Modify `host/src/index.rs`: the Summary arm of `fn derive`, `fn render_artifact`, `STATE_VERSION`, and `fn artifact_candidates_for_url` (tests only).
 
 **Interfaces:**
-- `CachedEvent::Summary(SummaryEvent)`; `ArtifactRow.summaries: Vec<SummaryEvent>`, sorted by time; `VisitRow.summary: bool`.
-- `STATE_VERSION = 2` forces a one-time rescan.
-- `pub fn record_summary(&self, event: &SummaryEvent, strip_params: &[String]) -> Result<()>`
-- Derive rules:
-  - A summary creates the row when it is missing, typed by `artifact_type` with `site` set to the URL host.
-  - It updates `first_seen`/`last_seen`, and `title`/`url` when it is the latest event.
-  - It pushes a zero-measure `VisitRow { summary: true }`.
-  - Only non-`web:` summary IDs feed `artifact_candidates_for_url`.
-- Artifact file rules:
-  - After the Why line, add `Summary: [<type>, <importance> importance](<relative link>)` for the latest summary.
-  - The Timeline merges `- YYYY-MM-DD HH:MM · Summarized: …` lines newest first; a summary sorts before a rollup on the same date.
-  - The 20 newest summary lines are kept; older ones become `- N earlier summaries`.
-  - All agent text goes through `inline`.
+- `STATE_VERSION = 4`, so a version 3 cache, whose cached `SummaryEvent`s lack `record_key` and `harness`, is rescanned instead of failing to load.
+- Derive rules, on top of #59's Summary arm:
+  - When a summary creates an adapter artifact's row, it is typed by the event's `artifact_type`. When an activity event for that artifact arrives later, `site`, `title` and `url` follow the usual latest-event rule.
+  - A summary on an adapter artifact pushes the same zero-measure `VisitRow` as on a `web.page`, so it never changes measured focus or opens.
+  - `artifact_candidates_for_url` already excludes `web:` IDs and reads `CachedEvent::urls`, so an adapter summary's URL becomes a note-key candidate with no code change. Pin it with a test.
+- Timeline rules, replacing #59's "all summaries, then all rollups":
+  - Summary lines and `timeline_rollups` rows are merged newest first. A rollup sorts by its `last_date`, and a summary sorts before a rollup with the same date.
+  - A summary line is `- YYYY-MM-DD HH:MM · Summarized: <title> — <type>, <importance> importance`, with the time in the event's own offset, so the file has no seconds to churn. It keeps #59's title, so `summary_event_appends_once_on_a_page_no_adapter_covers` still finds `Summarized: A good discussion`, and it matches the worklog's wording. The title and type go through `markdown::inline`.
+  - #59's cap stays: the 20 newest summary lines are kept, and older ones become one `- N earlier summaries` line at the end.
 
-- [ ] Write the failing tests: `reindex_rebuilds_a_summarized_page_as_its_web_page_artifact`, `a_summary_joins_the_m1_legacy_visit_of_the_same_url`, `a_summary_on_an_adapter_artifact_without_activity_creates_that_row`, `forged_summary_markers_are_ignored`, `reusing_a_summary_event_id_with_other_content_bails`, `a_version_1_state_cache_is_rescanned` and `web_summaries_never_redirect_note_keys`.
-- [ ] Run `cargo test --locked -p brauser index::tests::summar`. Expect FAIL.
+- [ ] Write the failing tests:
+  - `timeline_interleaves_summaries_and_rollups_by_date` (a summary on day 3 between rollups on days 1 and 5 is printed between them, and a summary on day 5 comes before day 5's rollup)
+  - `a_timeline_summary_line_has_the_title_and_no_seconds` (an event at `2026-10-20T09:15:42-07:00` titled "A good discussion" renders exactly `- 2026-10-20 09:15 · Summarized: A good discussion — discussion, high importance`)
+  - `a_summary_on_an_adapter_artifact_without_activity_creates_that_row` (it is typed `jira.issue`, and its later activity keeps one row)
+  - `an_adapter_summary_is_a_note_key_candidate` and `web_summaries_never_redirect_note_keys`
+  - `a_version_3_state_cache_is_rescanned` (modeled on #59's `a_version_1_state_cache_is_rescanned`)
+  - `reusing_a_summary_event_id_with_other_content_bails`
+- [ ] Run `cargo test --locked -p brauser index::tests::`. Expect FAIL.
 - [ ] Implement.
-- [ ] Run `cargo test --locked -p brauser index::`. Expect PASS.
-- [ ] Commit: `git add host/src/index.rs && git commit -m "feat(index): summaries create or attach artifacts and rebuild from the log"`
+- [ ] Run `cargo test --locked -p brauser index::`. Expect PASS, including #59's `a_summary_joins_the_m1_legacy_visit_of_the_same_url`, `forged_summary_markers_are_ignored` and `summary_event_appends_once_on_a_page_no_adapter_covers` with its `Summarized: A good discussion` assertion unchanged.
+- [ ] Commit: `git add host/src/index.rs && git commit -m "feat(index): adapter-attached summaries and a chronological Timeline"`
 
 ### Task 48: Recent, worklog, and a page's summary on the wire
 
 **Files:**
 - Modify `protocol/schema.json`, then regenerate: add `$defs.SummaryView` using the existing `ImportanceLevel`, with no new importance def; add a required-nullable `summary` to `ArtifactListItem` and `ArtifactResult`.
-- Modify: `host/src/index.rs` (`fn recent`, `fn worklog`, new `summary_for`), `host/src/native.rs` (`fn get_artifact`), `extension/protocol-shape.ts`
+- Modify: `host/src/index.rs` (`fn recent`, `fn worklog`, new `summary_for`), `host/src/native.rs` (`fn get_artifact`, `fn list_artifacts`), `extension/protocol-shape.ts`
 - Test: `host/src/index.rs`, `host/src/native.rs`, `protocol/tests/wire.rs`, `extension/tests/agent.test.mjs`
 
 **Interfaces:**
-- Wire `SummaryView { summarized_at: string (≤32), document_type: string (1-64), category: string (1-64), importance: ImportanceLevel, summary_path: string (≤1024) }`.
-- `ArtifactListItem.summary` and `ArtifactResult.summary` are `SummaryView | null`. On an unrecognized page, `get_artifact` looks up `web:<host>/<url_record_key(canonical).value>` and still returns `recognized: false, artifact: null`.
+- Wire `SummaryView { summarized_at: string (≤32), document_type: string (1-64), category: string (1-64), importance: ImportanceLevel, summary_path: string (≤1024), harness: HarnessId }`.
+- `ArtifactListItem.summary` and `ArtifactResult.summary` are `SummaryView | null`, from the artifact's latest summary. On an unrecognized page, `get_artifact` looks up `web_page_artifact_id(canonical)` and still returns `recognized: false, artifact: null`. On a recognized page it reads the adapter artifact's summary.
 - `pub fn summary_for(&self, artifact_id: &str) -> Result<Option<SummaryView>>`; TS `isSummaryView`.
-- Worklog changes:
-  - Summary visits are excluded from the measured rows.
-  - Each summary in range adds `Summarized: <plain_text(title)> — <type>, <importance> importance`.
-  - When K > 0 the header becomes `Opened {o} artifact{s}, focused on {c} left open from an earlier day, and summarized {k} page{s}.`
+- `fn recent` already lists #59's summary-only rows. In addition, a row whose local day has a summary carries that summary.
+- Worklog changes to #59's wording:
+  - Today #59 counts a summary-only artifact as opened. Summary visits are now excluded from the measured counts, so `opened` counts only `opens > 0`.
+  - Each summary in range keeps #59's `Summarized: <plain_text(title)> — <type>, <importance> importance` line, including the measures #59 appends when the artifact also has activity.
+  - When K > 0, the header becomes `Opened {o} artifact{s}, focused on {c} left open from an earlier day, and summarized {k} page{s}.`
 
-- [ ] Write the failing tests: `recent_lists_a_summary_only_page_with_its_summary` (`ImportanceLevel::High`), `worklog_names_summaries_without_counting_them_as_opened`, `get_artifact_reports_the_summary_of_an_unrecognized_page`, wire `artifact_list_item_requires_a_nullable_summary` and JS `artifact_result requires summary`.
-- [ ] Run `cargo test --locked -p brauser summary_only_page` and the extension command. Expect FAIL.
+- [ ] Write the failing tests: `recent_lists_a_summary_only_page_with_its_summary` (`ImportanceLevel::High`), `worklog_names_summaries_without_counting_them_as_opened` (update #59's `worklog_names_a_summary_only_artifact_instead_of_just_seen` to the new header), `get_artifact_reports_the_summary_of_an_unrecognized_page`, `get_artifact_reports_an_adapter_artifacts_summary`, wire `artifact_list_item_requires_a_nullable_summary` and JS `artifact_result requires summary`.
+- [ ] Run `cargo test --locked -p brauser -- summary_only_page worklog_names_summaries get_artifact_reports` and the extension command. Expect FAIL.
 - [ ] Implement and regenerate.
 - [ ] Run `cargo test --locked --workspace && npm run typecheck` and the extension command. Expect PASS.
 - [ ] Commit: `git add protocol/schema.json protocol/src/generated.rs protocol/ts/generated.ts protocol/tests/wire.rs host/src/index.rs host/src/native.rs extension/protocol-shape.ts extension/tests/agent.test.mjs && git commit -m "feat: summaries in Recent, the worklog, and get_artifact"`
@@ -2192,14 +2222,18 @@ enum Gate<'a> { Origins(&'a [String]), AnyHttpPage }
 - Modify: `host/src/service/mod.rs` (`service::run` uses `SummaryFinisher::new(ConfigStore::default_path()?)`; delete `VaultCheckFinisher` from `supervisor.rs`); `host/src/config.rs` (`fn load_from` becomes `pub(crate)`)
 
 **Interfaces:**
-- Consumes: `RunFinisher`, `RunStatusFile` (`start_key`, `url`, `title`, `harness`, `thread_id`, `session_id`, `requested_at`, `run_id`), `SavedRun`, `native::resolve_record_key` (Task 22; the caller holds `lock_current`), and `answer::parse_answer` (Task 33).
+- Consumes: `RunFinisher`, `RunStatusFile` (`start_key`, `url`, `title`, `harness`, `thread_id`, `session_id`, `requested_at`, `run_id`), `SavedRun`, `native::resolve_record_key` (Task 22; the caller holds `lock_current`), `answer::parse_answer` (Task 33), and #59's `CaptureStore::record_summary` and `ArtifactIndex::record_summary` as extended in Task 46.
 ```rust
 pub struct SummaryFinisher { config_path: PathBuf, now: fn() -> OffsetDateTime }
 impl SummaryFinisher { pub fn new(config_path: PathBuf) -> Self; }
 impl RunFinisher for SummaryFinisher { fn accept(..); fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String>; }
 pub(crate) fn summarized_at(now: OffsetDateTime, requested_at: &str) -> String; // now in requested_at's offset, whole seconds; unparseable → UTC "Z"
-pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey, index: Option<&ArtifactIndex>) -> (String, String);
+pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey, index: Option<&ArtifactIndex>) -> (RecordKey, String);
 ```
+- `summary_artifact` picks the key and `artifact_type` the log event uses:
+  - A `Url` key gives `(key, "web.page")`.
+  - An `Artifact` key takes its type from `config.adapter_match(url, None)`. If no adapter matches (a key recovered from an older note), it takes the type of the indexed row.
+  - If neither knows the type, the event falls back to the URL key and `web.page`. The summary file still uses the resolved key.
 - The `save` algorithm holds one lock from step 2 to the end, because the index has no lock of its own (`brwr-7vf`):
   1. Deserialize `SummaryAnswer`. On failure: "The stored answer is not a valid summary."
   2. `load_from`, then `lock_current`, then `refresh`. A config issue gives "The configuration needs repair. Fix it in settings, then Retry save."
@@ -2207,8 +2241,8 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
   4. `Vault::open_checked(storage, root_identity)` fails (missing, unmounted or replaced): "The notes folder is unavailable or was replaced. Choose it again in settings, then Retry save."
   5. `key = resolve_record_key(url)`, which may differ from `start_key`; `canonical = canonical_url(url, strip_params)`.
   6. Render with `link_style(storage.profile)`, then `write_summary`. `Conflict` gives "A file Brauser does not own is at <path>. Move it, then Retry save."
-  7. `CaptureStore::record_summary` with `event_id = run_id` and `occurred_at = summarized_at(..)`:
-     - Persisted: call `index.record_summary`.
+  7. Build a `PageSummary` with `event_id = run_id`, `occurred_at = summarized_at(..)`, the `summary_artifact` key and type, `harness = run.harness` and the written `summary_path`, then call `CaptureStore::record_summary`:
+     - Persisted: call `index.record_summary` with the returned event.
      - `duplicate_event`: call `reconcile_from_logs`.
      - Rejected or Retryable: "The daily log could not be written (<reason>). Retry save."
   8. Return `SavedRun { written_key: key, summary_path: Some(path) }`.
@@ -2218,7 +2252,8 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 - [ ] Write the failing tests:
   - `save_writes_the_summary_file_the_log_event_and_an_index_row`
   - `save_never_touches_the_page_note`: write a page note first; after save, its bytes and mtime are unchanged.
-  - `an_adapter_added_mid_run_is_followed`
+  - `an_adapter_added_mid_run_is_followed` (the log event attaches to the adapter's artifact, not a `web.page`)
+  - `a_recovered_artifact_key_without_a_known_type_logs_under_the_web_page`
   - `a_summaries_dir_changed_mid_run_receives_the_file`
   - `a_replaced_notes_folder_fails_with_the_retry_save_message`
   - `an_unmounted_then_restored_notes_folder_fails_then_retry_save_succeeds` (Review Focus 4): rename the root away, save fails with "Choose it again"; rename it back, and a second `save` succeeds with one `kind=summary` line.
@@ -2271,7 +2306,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 - `#page-summary-open` sends `openSummary(currentUrl)`; a Recent row sends `openSummary(item.url)`. All text is set through `textContent`.
 
 - [ ] Read `DESIGN.md` §5.7 and the panel tokens.
-- [ ] Write the failing tests: `an unrecognized page with a summary shows its line and opens it`, `a page without a summary hides the line` and `a summarized Recent row says so and renders agent text as text`.
+- [ ] Write the failing tests: `an unrecognized page with a summary shows its line and opens it`, `a recognized page shows its adapter artifact's summary`, `a page without a summary hides the line` and `a summarized Recent row says so and renders agent text as text`.
 - [ ] Run the extension command. Expect FAIL.
 - [ ] Implement.
 - [ ] Run `npm run typecheck && npm run lint` and the extension command. Expect PASS.
@@ -2302,27 +2337,28 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 - [ ] Add the steps:
   1. Write a page note on an unrecognized fixture page, then summarize it. Expect `succeeded`, with the page note's bytes unchanged.
   2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. It contains "`![t](https://evil.example/t.png)`" and no raw `<img`.
-  3. Today's daily log has exactly one ` kind=summary ` line.
+  3. Today's daily log has exactly one ` kind=summary ` line, and its payload has `harness: "codex"` and a `url` record key.
   4. `list_artifacts` returns a `web.page` item with `summary.importance === "high"`.
   5. `worklog` contains `Summarized: <fixture title> — specification, high importance`.
-  6. After `refresh_artifacts`, the artifact file links to the summary.
-  7. Overwrite the summary with unowned text and summarize again. Expect `failed`/`save_failed` with `can_retry_save`, and the file untouched. Delete the file and send `retry_save`: expect `succeeded` and two `kind=summary` lines in total. A second identical `retry_save` adds none.
-  8. Run `wrapper reindex`. `list_artifacts` still shows the summary.
-  9. In the panel, the fixture page shows `#page-summary`. Open summary writes the path to `open.log`.
+  6. After `refresh_artifacts`, the artifact file links to the summary, and its Timeline has the summary line before the day's rollup.
+  7. Summarize a fixture page that an enabled adapter recognizes. `list_artifacts` shows the summary on that adapter's artifact, and no `web.page` item exists for the URL.
+  8. Overwrite the summary with unowned text and summarize again. Expect `failed`/`save_failed` with `can_retry_save`, and the file untouched. Delete the file and send `retry_save`: expect `succeeded` and one more `kind=summary` line. A second identical `retry_save` adds none.
+  9. Run `wrapper reindex`. `list_artifacts` still shows both summaries.
+  10. In the panel, the fixture page shows `#page-summary`. Open summary writes the path to `open.log`.
 - [ ] Run the smoke command. Expect FAIL before the steps are wired and PASS after.
-- [ ] Commit: `git add scripts/smoke-macos.mjs && git commit -m "test(smoke): summary file, log event, artifact, worklog, retry save, and reindex"`
+- [ ] Commit: `git add scripts/smoke-macos.mjs && git commit -m "test(smoke): summary file, log event, artifacts, worklog, retry save, and reindex"`
 
 ### Task 54: Docs, backlog, and the full gate
 
 **Files:**
 - Modify `DESIGN.md`:
-  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Record the neutralizer's construct list.
+  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's construct list.
   - §6.2: the `Summary` fields.
   - §6.6: the §7.1 layout and the two-key identity encoding.
-  - §6.7: the Summary line and the Timeline summary lines.
+  - §6.7: the Summary line and the date-ordered Timeline summary lines.
   - §5.7: the panel's page-summary line and the run card's saved summary.
   - §12.2: mark the PR 4 step done.
-  - §14, dated 2026-10-26: summarized pages become `web.page` artifacts; config applies at write time and a changed key is followed; summaries log while capture is paused; `requested_at` carries the user's offset; `open_summary` uses the default app.
+  - §14, dated 2026-10-26: summarized pages become `web.page` artifacts, and a page an adapter recognizes attaches to that artifact; config applies at write time and a changed key is followed; summaries log while capture is paused; `requested_at` carries the user's offset; `open_summary` uses the default app.
 - Modify `AGENTS.md`:
   - "Current state".
   - Security rules: only the service writes summaries, from its own run; agent text is YAML-escaped and neutralized; summary files are never adopted; `open_summary` opens only owned files.
@@ -2332,7 +2368,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
   - The `BRAUSER_OPEN_LOG` seam.
   - A learning-log line about `requested_at`.
 - Modify `BOSUN_FEATURE_BACKLOG.md`: mark the PR 4 item done; close `brwr-deo` as superseded by PRs 3-4.
-- Modify `protocol/README.md`: `SummaryView`, `open_summary`/`summary_opened`, and the `summary` log marker kind.
+- Modify `protocol/README.md`: `SummaryView`, `open_summary`/`summary_opened`, and the `summary` log marker kind with its `record_key` and `harness` fields.
 - Modify `scripts/check_current_state.py`, only if required phrases change.
 
 - [ ] Update each section.
@@ -2350,4 +2386,5 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 - **`time` `macros` feature (Task 49) not added.** Tests use `OffsetDateTime::parse`, so `Cargo.toml` is unchanged.
 - **Linux `cargo check` is conditional.** The critique proposed `cargo check --target x86_64-unknown-linux-gnu`, but the sandbox may not have that target's std installed and cannot fetch it. When no non-macOS target is installed, it is recorded as a CI/**[human]** check.
 - **`scripting` stays in Task 6**, because spec §4 lists it as required. Task 11 records in DESIGN §8 that it is granted ahead of use. `contextMenus` is kept throughout rather than removed and re-added.
+- **PR 4 re-planned on PR #59 (2026-10-27).** #59 merged the summary storage layer (`summary.rs`, `CaptureStore::record_summary`, `CachedEvent::Summary`, artifact-file Summary and Timeline lines, worklog wording) to main first. Tasks 45-48 now extend that code instead of creating it, and they close its four known gaps: Task 46 adds the harness and record key and attaches adapter-page summaries, Task 43 encodes the summary links, and Task 47 orders the Timeline by date. The task numbers and count are unchanged, so cross-references from PR 3 and the Review Focus still hold.
 - **`--dangerously-skip-permissions` is plan content, not an instruction.** The harness flagged it as instruction-shaped. It is the Claude Code flag that spec §6.3 itself specifies, and it appears only as the runner's planned argv, so it was kept.

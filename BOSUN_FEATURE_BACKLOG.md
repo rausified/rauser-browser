@@ -206,10 +206,43 @@ and the protocol v6 removals) is done; see Shipped.
   card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
   with a validated structured answer, pinned Readability extraction, the
   Summarize & log button, and the polling run card (spec §6; plan Tasks 28-42).
+  Tracks one Cookie queue item per plan task, built in this order, each
+  depending on the one before; it closes when they all close:
+  - [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
+  - [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
+  - [ ] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
+  - [ ] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
+  - [ ] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
+  - [ ] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
+  - [ ] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
+  - [ ] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
+  - [ ] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
+  - [ ] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
+  - [ ] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
+  - [ ] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
+  - [ ] `brwr-t40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
+  - [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-t40`).
+  - [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
 - [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
   integration.** The owned summary file, the `summary` daily-log event,
   summaries in the index, Recent, the worklog, and the panel, written under the
-  configuration current at finish (spec §7; plan Tasks 43-54).
+  configuration current at finish (spec §7; plan Tasks 43-54). Re-planned
+  2026-10-27 on PR #59's merged `web.page` summary storage, which it extends
+  and whose gaps it closes (no harness field, raw summary link, Timeline
+  order, adapter-recognized pages). Tracks one Cookie queue item per plan task,
+  continuing the PR 3 chain; it closes when they all close:
+  - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
+  - [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
+  - [ ] `brwr-t45` Task 45: Summary file rendering and the checked summary write (after `brwr-t44`).
+  - [ ] `brwr-t46` Task 46: Extend #59's summary event: record key, harness, and adapter artifacts (after `brwr-t45`).
+  - [ ] `brwr-t47` Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache (after `brwr-t46`).
+  - [ ] `brwr-t48` Task 48: Recent, worklog, and a page's summary on the wire (after `brwr-t47`).
+  - [ ] `brwr-t49` Task 49: `SummaryFinisher`: write under the configuration current at finish (after `brwr-t48`).
+  - [ ] `brwr-t50` Task 50: `open_summary`: open a page's owned summary file (after `brwr-t49`).
+  - [ ] `brwr-t51` Task 51: Panel: the page's existing summary and summarized Recent rows (after `brwr-t50`).
+  - [ ] `brwr-t52` Task 52: Run card: saved-summary line and Open summary (after `brwr-t51`).
+  - [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
+  - [ ] `brwr-t54` Task 54: Docs, backlog, and the full gate (after `brwr-t53`).
 - [x] **M1.5a step 6.4 — Measured artifact activity.** Replaced the temporary
   visit rows with hourly artifact activity: cold opens, focused and background
   seconds, modes, and trail sources in durable worker totals, frozen into one
@@ -395,7 +428,7 @@ and the protocol v6 removals) is done; see Shipped.
 
 ## In Progress / This Iteration
 
-- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1` and PR 2 (`brwr-sv2`) on `feat/agent-service-pr2`, with its launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`). `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1` and PR 2 (`brwr-sv2`) on `feat/agent-service-pr2`, with its launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
 
