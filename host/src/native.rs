@@ -6987,8 +6987,17 @@ id = "work:{host}/{id}"
             ] {
                 assert_eq!(storage[key].as_str(), Some(value), "{key}");
             }
-            // Every other setting, including the harness and adapters, is kept.
-            assert_eq!(without_layout(after), without_layout(before));
+            // Every other setting, including the adapters, is kept. The v5
+            // `[agent]` and `[harness_record]` tables load as not set up and
+            // are dropped by this first save, which also writes the default
+            // summary vocabulary (open access PR 3).
+            let mut before = without_layout(before);
+            assert!(before.remove("agent").is_some());
+            assert!(before.remove("harness_record").is_some());
+            let mut after = without_layout(after);
+            assert!(!after.contains_key("agent") && !after.contains_key("harness_record"));
+            assert!(after.remove("summary_vocabulary").is_some());
+            assert_eq!(after, before);
 
             match install.load(&mut config, NEWS_URL) {
                 Response::NoteLoaded(value) => {
