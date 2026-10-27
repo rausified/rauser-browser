@@ -79,6 +79,25 @@ smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
 claim that it passed here. Structural drafting and unknown-site enabling are
 still unbuilt, so these tests do not certify any machine-drafted rule.
 
+## Dialog reply fixture and restricted runners
+
+`dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
+child that reads the length line and exactly that many body bytes before
+printing its reply. It exercises 60 exchanges across empty, short and 64 KiB
+UTF-8 bodies. Do not replace the reader with an immediate `printf`: that
+closes stdin before the parent finishes writing and races into `EPIPE`. Do
+not read until EOF either: the parent keeps stdin open until the child exits.
+The fixture uses the same `head -c` tool as the neighboring timeout fixture.
+
+A restricted runner can deny Unix socket creation and connection with EPERM,
+even under a temporary directory. On 2026-10-27 this caused 32 host service
+test failures, confirmed with an independent Unix-socket bind. The same
+runner denied Node `spawnSync`, preventing `test:scripts` from running its
+win32 path simulation. Keep these tests enabled; run the full gate outside
+that restriction. An explicitly filtered local run can diagnose the remaining
+tests, but is not a passing full gate. The dialog repair remains in progress
+until that external gate passes.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
