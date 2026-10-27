@@ -554,6 +554,17 @@ fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
             "The Brauser service cannot be reached from this configuration folder.",
         );
     };
+    // The service reads frames under the same cap as the extension's, but a
+    // forwarded request can be larger than the one received: start_run gains
+    // its record_key here. Refuse it now, before connecting (which can start
+    // the service), rather than failing the write as a protocol error.
+    if !crate::frame::request_fits(request) {
+        let message = match request {
+            Request::StartRun(_) => "This page is too large to send to the Brauser service.",
+            _ => "This request is too large to send to the Brauser service.",
+        };
+        return error(id, ErrorCode::MessageTooLarge, message);
+    }
     match service.request(request) {
         Ok(response) => response,
         Err(ServiceError::Unavailable(message)) => {
@@ -6685,7 +6696,20 @@ id = "work:{host}/{id}"
             let mut config = configured_store(notes.path());
             let dir = fake::short_dir();
             let link = link(fake::socket_in(&dir), never);
-            for requested_at in ["yesterday", "2026-10-26 00:00:00Z", "2001-01-01T00:00:00Z"] {
+            // A current time with fractional seconds, as new Date().toISOString()
+            // gives, is refused too: the schema's pattern admits whole seconds only.
+            let fractional = time::OffsetDateTime::now_utc()
+                .replace_millisecond(452)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            assert!(fractional.ends_with(".452Z"), "{fractional}");
+            for requested_at in [
+                "yesterday",
+                "2026-10-26 00:00:00Z",
+                "2001-01-01T00:00:00Z",
+                fractional.as_str(),
+            ] {
                 let response = call(
                     &mut config,
                     &link,
@@ -6728,6 +6752,76 @@ id = "work:{host}/{id}"
                     "{response:?}"
                 );
             }
+        }
+
+        /// A start_run whose content brings its serialized size, as the
+        /// forwarded request (with `record_key` set to `key`), to `target`.
+        /// Content uses four-byte characters so a frame-sized request stays
+        /// within MAX_CONTENT_CHARS.
+        fn start_run_sized(url: &str, key: Option<RecordKey>, target: usize) -> StartRunRequest {
+            let Request::StartRun(mut value) = start_run(url, None, &now()) else {
+                unreachable!()
+            };
+            value.content = String::new();
+            let mut measured = value.clone();
+            measured.record_key = key;
+            let base = serde_json::to_vec(&Request::StartRun(measured))
+                .unwrap()
+                .len();
+            let bytes = target - base;
+            value.content = format!("{}{}", "😀".repeat(bytes / 4), "x".repeat(bytes % 4));
+            assert!(
+                value.content.chars().count() <= crate::service::record::MAX_CONTENT_CHARS,
+                "the content must pass check_start_run"
+            );
+            value
+        }
+
+        /// A start_run that fits the extension's frame but not the service's
+        /// once the host adds `record_key` is refused as too large before the
+        /// service is contacted (or started), not reported as a broken reply.
+        #[test]
+        fn start_run_too_large_once_keyed_is_refused_without_connecting() {
+            use crate::frame::MAX_INBOUND_BYTES;
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a";
+            let key = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+
+            let inbound = start_run_sized(url, None, MAX_INBOUND_BYTES - 20);
+            assert_eq!(
+                serde_json::to_vec(&Request::StartRun(inbound.clone()))
+                    .unwrap()
+                    .len(),
+                MAX_INBOUND_BYTES - 20
+            );
+            let one_over = start_run_sized(url, Some(key.clone()), MAX_INBOUND_BYTES + 1);
+            for request in [inbound, one_over] {
+                let response = call(&mut config, &link, Request::StartRun(request));
+                let (code, message) = refused(&response);
+                assert_eq!(code, ErrorCode::MessageTooLarge, "{message}");
+                assert!(message.contains("too large"), "{message}");
+                assert_eq!(response.request_id(), "run-1");
+            }
+            assert!(
+                service.requests().is_empty(),
+                "the service was contacted: {:?}",
+                service.requests().len()
+            );
+
+            // Exactly at the cap once keyed, it is forwarded.
+            let at_cap = start_run_sized(url, Some(key.clone()), MAX_INBOUND_BYTES);
+            match call(&mut config, &link, Request::StartRun(at_cap)) {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, key),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(requests[0], Request::ServiceHello(_)));
+            assert!(matches!(requests[1], Request::StartRun(_)));
         }
 
         #[test]

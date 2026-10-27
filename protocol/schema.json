@@ -1827,7 +1827,7 @@
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
-        "requested_at": { "description": "The user's local click time with its UTC offset.", "type": "string", "minLength": 1, "maxLength": 32 }
+        "requested_at": { "description": "The user's local click time with its UTC offset: RFC 3339 in whole seconds, ending in Z or +HH:MM/-HH:MM, as occurred_at is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
       }
     },
     "RunStarted": {
