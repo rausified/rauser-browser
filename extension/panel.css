@@ -67,6 +67,14 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 .run-area { display: grid; gap: 8px; margin-top: 10px; }
 .run-area .setup-warning { margin: 0; }
 .run-line { margin: 0; overflow-wrap: anywhere; }
+.run-card { display: grid; gap: 4px; border: 1px solid #8885; border-radius: 6px; padding: 9px; overflow-wrap: anywhere; }
+.run-card p { margin: 0; }
+.run-card [hidden] { display: none; }
+.run-card-title { font-weight: 650; }
+.run-card-state { color: #767676; font-size: .85rem; }
+.run-card-stream { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; margin: 2px 0; border: 1px solid #8885; border-radius: 5px; padding: 8px; font: .85rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.run-card-actions:empty { display: none; }
+.run-card-actions button { margin: 2px 4px 0 0; }
 .note-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .note-header h2 { margin: 0; }
 .note-status { font-size: .85rem; color: #767676; }

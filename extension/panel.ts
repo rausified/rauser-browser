@@ -13,6 +13,7 @@ import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
 import { SETUP_WARNING, serviceSetupText } from "./agent.js";
 import { summarizeTab } from "./summarize.js";
+import { RunCards } from "./run-card.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
@@ -82,6 +83,14 @@ const summarizeButton = element<HTMLButtonElement>("summarize");
 const runArea = element<HTMLDivElement>("run-area");
 
 const session = new ConfigSession(render);
+const runCards = new RunCards(runArea, {
+  host: session.host,
+  now: () => Date.now(),
+  copy: (text) => navigator.clipboard.writeText(text),
+  visible: () => document.visibilityState !== "hidden",
+  storage: chrome.storage.local,
+  openSettings,
+});
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
 // Once the post-save reload starts, tab events must reach NoteEditor's token
@@ -620,14 +629,13 @@ function showRunLine(tabId: number, text: string, warning = false): void {
 }
 
 function clearRunLineUnlessFor(tabId: number | undefined): void {
-  if (!runLine || runLine.tabId === tabId) return;
-  runArea.replaceChildren(...withoutRunAreaChild(runLine.element));
-  runLine = null;
+  if (runLine?.tabId !== tabId) clearRunLine();
 }
 
-// Plan Task 40 replaces this line with the polling run card for the run.
-function showRunStarted(tabId: number, existing: boolean): void {
-  showRunLine(tabId, existing ? "Already summarizing this page…" : "Summarizing this page…");
+function clearRunLine(): void {
+  if (!runLine) return;
+  runArea.replaceChildren(...withoutRunAreaChild(runLine.element));
+  runLine = null;
 }
 
 /** Shows SETUP_WARNING (spec §6.1) before the first summary ever. It does not
@@ -668,11 +676,14 @@ async function summarize(): Promise<void> {
   showRunLine(tabId, "Reading this page…");
   try {
     await showSetupWarningOnce();
-    const { existing } = await summarizeTab(
+    // A page already being summarized answers with its run, which shows
+    // (or keeps) the same card.
+    const { run } = await summarizeTab(
       { id: tabId, url: page.url, title: page.title },
       { scripting: chrome.scripting, host: session.host, now: () => new Date() },
     );
-    showRunStarted(tabId, existing);
+    clearRunLine();
+    runCards.show(run);
   } catch (error) {
     showRunLine(tabId, summarizeFailure(error), true);
   } finally {
@@ -688,8 +699,14 @@ function showNotice(notice: PanelNotice): boolean {
   const id = `${notice.kind}:${notice.tab_id}:${notice.at}`;
   if (id === shownNotice) return true;
   shownNotice = id;
-  if (notice.kind === "summarize_failed") showRunLine(notice.tab_id, notice.message, true);
-  else showRunStarted(notice.tab_id, false);
+  if (notice.kind === "summarize_failed") {
+    showRunLine(notice.tab_id, notice.message, true);
+  } else {
+    // The notice names only the run; list_runs brings its card, as it does
+    // for any unfinished run.
+    clearRunLine();
+    void runCards.restore();
+  }
   return true;
 }
 
@@ -1047,6 +1064,7 @@ window.addEventListener("pagehide", () => {
   clearInterval(pollTimer);
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   if (recentTimer !== null) clearTimeout(recentTimer);
+  runCards.dispose();
   // Best effort: MV3 gives no guarantee this completes before teardown.
   void notes.flush();
   session.host.disconnect();
@@ -1075,6 +1093,7 @@ void (async () => {
     updateControls();
   }
   await refreshActiveTab();
+  await runCards.restore();
   await showStoredNotice();
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();

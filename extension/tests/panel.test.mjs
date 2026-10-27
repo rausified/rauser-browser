@@ -142,6 +142,8 @@ function hostReply(request, config = CONFIG) {
       };
     case "get_artifact":
       return { type: "artifact_result", recognized: false, artifact: null };
+    case "list_runs":
+      return { type: "runs_listed", runs: [] };
     case "record_why":
       return {
         type: "why_recorded", event_id: request.event.event_id, outcome: "persisted", reason: null,
@@ -481,7 +483,8 @@ test("Capture Site previews Jira and installs the host-returned policy in one sa
   assert.deepEqual(installed.lease.adapters, update.config.adapters);
   assert.equal(page.calls("permissions.request"), 0);
   assert.equal(page.calls("permissions.remove"), 0);
-  assert.deepEqual([...new Set(page.state.requests.map((r) => r.type))].sort(),
+  // The panel's opening list_runs restores run cards; it is not part of the save.
+  assert.deepEqual([...new Set(page.state.requests.map((r) => r.type).filter((type) => type !== "list_runs"))].sort(),
     ["get_artifact", "get_config", "hello", "load_note", "update_config"]);
 });
 
@@ -982,7 +985,9 @@ async function readablePage(injection) {
 }
 
 function startsRun(request) {
-  return request.type === "start_run" ? { type: "run_started", run: RUN_VIEW, existing: false } : null;
+  if (request.type === "start_run") return { type: "run_started", run: RUN_VIEW, existing: false };
+  if (request.type === "get_run") return { type: "run_fetched", run: RUN_VIEW, stream_text: "", next_offset: 0, more: false };
+  return null;
 }
 
 function buttonIn(root, text) {
@@ -1043,7 +1048,7 @@ test("clicking Summarize extracts in the top frame then sends start_run with no 
   assert.equal(request.harness, null);
   assert.equal(request.record_key, null);
   assert.match(request.requested_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
-  await until(() => /Summariz/.test(page.el("run-area").textContent), "the run to show");
+  await until(() => /Readable title.*Queued/.test(page.el("run-area").textContent), "the run card");
 });
 
 test("an executeScript failure shows \"can't read this page\"", async () => {
@@ -1087,7 +1092,7 @@ test("the setup warning shows once", async () => {
   await until(() => second.el("summarize").disabled === false, "the button to enable");
   second.el("summarize").click();
   await until(() => second.sent("start_run").length === 1, "start_run");
-  await until(() => /Summariz/.test(second.el("run-area").textContent), "the run to show");
+  await until(() => /Queued/.test(second.el("run-area").textContent), "the run card");
   assert.ok(!second.el("run-area").textContent.includes(SETUP_WARNING));
 });
 
@@ -1115,4 +1120,24 @@ test("a summarize failure sent before the panel loads is shown when it opens", a
   const open = await summarizePanel();
   open.notify({ kind: "summarize_failed", message: "Summaries work on http(s) pages.", tab_id: 1, at: Date.now() });
   await until(() => open.el("run-area").textContent.includes("Summaries work on http(s) pages."), "the live notice");
+});
+
+test("the panel restores run cards on load and shows a run the shortcut started", async () => {
+  const restored = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000040", title: "Restored run", state: "running" };
+  const started = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000041", title: "Shortcut run" };
+  let runs = [restored];
+  const page = await summarizePanel({
+    intercept: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs };
+      if (request.type === "get_run") {
+        return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false };
+      }
+      return null;
+    },
+  });
+  await until(() => page.el("run-area").textContent.includes("Restored run"), "the restored card");
+  runs = [started, restored];
+  page.notify({ kind: "run_started", run_id: started.run_id, tab_id: 1, at: Date.now() });
+  await until(() => page.el("run-area").textContent.includes("Shortcut run"), "the shortcut's card");
+  assert.equal(page.el("run-area").textContent.split("Restored run").length, 2, "each run shows once");
 });
