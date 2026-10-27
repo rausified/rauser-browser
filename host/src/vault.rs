@@ -625,6 +625,7 @@ pub(crate) mod tests {
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: None,
+            knowledge_base_dir: None,
         }
     }
 

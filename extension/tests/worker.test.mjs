@@ -11,10 +11,7 @@ const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 // which catches accidental reliance on mutating an object returned by get().
 const values = new Map();
 const sessionValues = new Map();
-const grants = new Map();
 const tabs = new Map();
-let permissionCheckError = false;
-let permissionChecks = 0;
 let tabReads = 0;
 let onMessage;
 let onCommitted;
@@ -30,10 +27,13 @@ let frameGate = null;
 let frameEntered = null;
 let onAlarm;
 let onStartup;
+let onInstalled;
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
 let badgeText = "";
+// When set, a storage.local.set whose items this returns true for rejects.
+let rejectLocalSet = null;
 
 function storageArea(entries) {
   return {
@@ -45,7 +45,11 @@ function storageArea(entries) {
       return result;
     },
     async set(items) {
+      if (entries === values && rejectLocalSet?.(items)) throw new Error("QUOTA_BYTES quota exceeded");
       for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
+    },
+    async remove(keys) {
+      for (const name of Array.isArray(keys) ? keys : [keys]) entries.delete(name);
     },
     async setAccessLevel() {},
   };
@@ -85,7 +89,7 @@ globalThis.chrome = {
     id: "test-extension",
     getURL: (path) => `chrome-extension://test-extension/${path}`,
     onMessage: { addListener(listener) { onMessage = listener; } },
-    onInstalled: { addListener() {} },
+    onInstalled: { addListener(listener) { onInstalled = listener; } },
     onStartup: { addListener(listener) { onStartup = listener; } },
     connectNative: () => fakePort(),
   },
@@ -94,7 +98,6 @@ globalThis.chrome = {
     async get(name) { return alarms.get(name); },
     onAlarm: { addListener(listener) { onAlarm = listener; } },
   },
-  commands: { onCommand: { addListener() {} } },
   contextMenus: {
     create() {},
     removeAll(callback) { callback?.(); },
@@ -104,14 +107,10 @@ globalThis.chrome = {
     local: storageArea(values),
     session: storageArea(sessionValues),
   },
+  // Chrome grants every HTTP(S) site at install. The worker never asks
+  // Chrome about a permission and never listens for permission changes.
   permissions: {
-    async contains({ origins }) {
-      permissionChecks += 1;
-      if (permissionCheckError) throw new Error("permissions API unavailable");
-      return origins?.every((origin) => grants.get(origin) === true) ?? true;
-    },
-    onAdded: { addListener() {} },
-    onRemoved: { addListener() {} },
+    async contains() { throw new Error("the worker must not check Chrome permissions"); },
   },
   tabs: {
     async get(tabId) {
@@ -187,7 +186,6 @@ function lease(origin) {
     revision: `host-revision:${origin}`,
     expires_at: Date.now() + 60_000,
     capture_enabled: true,
-    sites: [{ origin, path_prefix: "/" }],
     adapters: { format: 1, artifacts: [artifact(origin)] },
   };
 }
@@ -257,14 +255,11 @@ function activityVisit(id, url, extra = {}) {
   };
 }
 
-test("config repair suspends capture without losing visits, while confirmed revocation purges", async () => {
+test("config repair suspends capture without losing visits, and discard drops only the chosen ones", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   const firstOrigin = "https://first.example";
   const secondOrigin = "https://second.example";
-  grants.set("https://first.example:443/*", true);
-  grants.set("https://second.example:443/*", true);
   values.set(storageKey("queue_v1"), {
     version: 1,
     items: [visit("first", `${firstOrigin}/items/a`), visit("second", `${secondOrigin}/items/b`)],
@@ -289,20 +284,12 @@ test("config repair suspends capture without losing visits, while confirmed revo
   assert.equal(values.get(storageKey("policy_v1")), null);
   assert.deepEqual(await send({ kind: "get_pending" }), []);
 
-  permissionCheckError = true;
-  const uncertain = await send({ kind: "get_status" });
-  assert.equal(uncertain.queued, 2);
+  const kept = await send({ kind: "get_status" });
+  assert.equal(kept.queued, 2);
   assert.equal(values.get(storageKey("queue_v1")).items.length, 2);
 
-  permissionCheckError = false;
-  grants.set("https://first.example:443/*", false);
-  const revoked = await send({ kind: "get_status" });
-  assert.equal(revoked.queued, 1);
-  assert.deepEqual(revoked.revoked_origins, [firstOrigin]);
-  assert.equal(values.get(storageKey("queue_v1")).items[0].event.event_id, "second");
-
   const ids = await send({ kind: "get_pending_ids" });
-  assert.deepEqual(ids, ["second"]);
+  assert.deepEqual(ids, ["first", "second"]);
   const nextQueue = values.get(storageKey("queue_v1"));
   nextQueue.items.push(visit("later", `${secondOrigin}/items/later`));
   values.set(storageKey("queue_v1"), nextQueue);
@@ -316,8 +303,6 @@ test("config repair suspends capture without losing visits, while confirmed revo
 test("a newer local pause cannot be resumed by an older enable confirmation", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
-  grants.set("https://first.example:443/*", true);
   const candidateLease = lease("https://first.example");
 
   const previous = await send({ kind: "get_status" });
@@ -421,41 +406,362 @@ test("pause can disable capture while adapter policy is invalid", async () => {
   assert.equal(saved, true);
 });
 
-test("a re-enabled origin clears only its old revocation after a matching lease and live grant", async () => {
+test("a matching adapter is captured without any permission check", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
-  const origin = "https://again.example";
-  const pattern = "https://again.example:443/*";
-  values.set(storageKey("policy_v1"), {
-    revision: "r2",
-    expires_at: Date.now() + 60_000,
-    capture_enabled: true,
-    sites: [{ origin, path_prefix: "/" }],
-    adapters: { format: 1, artifacts: [artifact(origin)] },
+  tabs.clear();
+  const origin = "https://no-check.example";
+  chrome.permissions.contains = () => { throw new Error("no permission checks"); };
+  values.set(storageKey("policy_v1"), lease(origin));
+  tabs.set(41, { id: 41, url: `${origin}/items/open`, title: "Open", incognito: false });
+  onCommitted({
+    tabId: 41, frameId: 0, documentId: "doc-no-check", documentLifecycle: "active",
+    url: `${origin}/items/open`, timeStamp: Date.now() - 2 * 60 * 60_000,
   });
-  values.set(storageKey("revocations_v1"), [origin]);
-  grants.set(pattern, true);
+  await flush();
+  assert.equal((await send({ kind: "get_status" })).queued, 1);
+});
 
-  const stale = await send({ kind: "ack_reenabled_origin", origin, revision: "r1" });
-  assert.deepEqual(stale.revoked_origins, [origin]);
+test("a stored v5 lease that still has sites captures its adapters", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://v5-lease.example";
+  values.set(storageKey("policy_v1"), { ...lease(origin), sites: [{ origin, path_prefix: "/" }] });
+  tabs.set(45, { id: 45, url: `${origin}/items/open`, title: "Open", incognito: false });
+  onCommitted({
+    tabId: 45, frameId: 0, documentId: "doc-v5-lease", documentLifecycle: "active",
+    url: `${origin}/items/open`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.queued, 1);
+});
 
-  grants.set(pattern, false);
-  const removedAgain = await send({ kind: "ack_reenabled_origin", origin, revision: "r2" });
-  assert.deepEqual(removedAgain.revoked_origins, [origin]);
+test("an expired lease blocks capture", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://expired-lease.example";
+  values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() - 1 });
+  tabs.set(46, { id: 46, url: `${origin}/items/open`, title: "Open", incognito: false });
+  onCommitted({
+    tabId: 46, frameId: 0, documentId: "doc-expired-lease", documentLifecycle: "active",
+    url: `${origin}/items/open`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  // The navigation asks the host to renew the lapsed lease. With no renewal,
+  // the expired lease still captures nothing.
+  const port = await until(() => ports[0], "the worker to ask for a renewal");
+  assert.equal((await sentOn(port, 1)).type, "get_config");
+  port.drop();
+  const status = await until(async () => {
+    const current = await send({ kind: "get_status" });
+    return current.host_error && current;
+  }, "the failed renewal");
+  assert.equal(status.queued, 0);
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  ports.length = 0;
+});
 
-  grants.set(pattern, true);
-  const confirmed = await send({ kind: "ack_reenabled_origin", origin, revision: "r2" });
-  assert.deepEqual(confirmed.revoked_origins, []);
+test("a capture-disabled lease clears the queue and blocks capture", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://disabled.example";
+  values.set(storageKey("policy_v1"), { ...lease(origin), capture_enabled: false });
+  values.set(storageKey("queue_v1"), {
+    version: 1, items: [visit("old", `${origin}/items/old`)],
+    overflow_count: 0, rejected_count: 0, last_error: null,
+  });
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.queued, 0);
+  tabs.set(42, { id: 42, url: `${origin}/items/new`, title: "New", incognito: false });
+  onCommitted({
+    tabId: 42, frameId: 0, documentId: "doc-disabled", documentLifecycle: "active",
+    url: `${origin}/items/new`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
+  assert.equal((await send({ kind: "get_status" })).queued, 0);
+});
+
+test("worker status carries no revocation fields", async () => {
+  values.clear();
+  sessionValues.clear();
+  const s = await send({ kind: "get_status" });
+  for (const k of ["revoked_origins", "locally_removed_sites", "navigation_ready"]) assert.equal(k in s, false);
+  assert.deepEqual(s.pending_removals, []);
+});
+
+test("retired revocation requests are refused", async () => {
+  for (const kind of ["remove_site", "ack_reenabled_origin", "ack_revocations"]) {
+    await assert.rejects(send({ kind, origin: "https://a.example", origins: [], revision: "r1" }),
+      /Unknown worker request/);
+  }
+});
+
+test("pending local removals survive upgrade until the host drops those adapters", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://a.example";
+  const revokedOrigin = "https://b.example";
+  const keptOrigin = "https://c.example";
+  values.set(storageKey("locally_removed_sites_v1"), [{ origin: removedOrigin, path_prefix: "/" }]);
+  values.set(storageKey("revocations_v1"), [revokedOrigin, removedOrigin]);
+  values.set(storageKey("note_origins_v1"), [removedOrigin]);
+  values.set(storageKey("policy_v1"), {
+    ...lease(removedOrigin),
+    sites: [{ origin: removedOrigin, path_prefix: "/" }, { origin: keptOrigin, path_prefix: "/" }],
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.equal(values.has(storageKey("note_origins_v1")), false);
+  assert.equal(values.has(storageKey("locally_removed_sites_v1")), false);
+  assert.equal(values.has(storageKey("revocations_v1")), false);
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin, revokedOrigin]);
+
+  tabs.set(43, { id: 43, url: `${removedOrigin}/items/blocked`, title: "Blocked", incognito: false });
+  onCommitted({
+    tabId: 43, frameId: 0, documentId: "doc-pending", documentLifecycle: "active",
+    url: `${removedOrigin}/items/blocked`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const blocked = await send({ kind: "get_status" });
+  assert.equal(blocked.queued, 0);
+  assert.equal(blocked.live_activity, 0);
+  assert.deepEqual(blocked.pending_removals, [removedOrigin, revokedOrigin]);
+
+  // Unrelated adapters in the same lease keep capturing.
+  tabs.set(44, { id: 44, url: `${keptOrigin}/items/kept`, title: "Kept", incognito: false });
+  onCommitted({
+    tabId: 44, frameId: 0, documentId: "doc-kept", documentLifecycle: "active",
+    url: `${keptOrigin}/items/kept`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  assert.equal((await send({ kind: "get_status" })).queued, 1);
+
+  await send({ kind: "clear_pending_removals" });
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin, revokedOrigin]);
+
+  // An earlier build narrowed its stored lease locally, so a stored lease the
+  // host never sent proves nothing about the host config.
+  values.set(storageKey("policy_v1"), { ...lease(keptOrigin), revision: "narrowed-locally" });
+  await send({ kind: "clear_pending_removals" });
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin, revokedOrigin]);
+
+  // An install of the old lease still holds the removed origin back.
+  await send({
+    kind: "install_policy", lease: { ...lease(removedOrigin), revision: "still-there" },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  await send({ kind: "clear_pending_removals" });
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin, revokedOrigin]);
+  assert.equal(values.get(storageKey("policy_v1")).adapters.artifacts.length, 1,
+    "the received lease is stored as the host sent it");
+
+  await send({
+    kind: "install_policy", lease: lease(keptOrigin),
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  const cleared = await send({ kind: "clear_pending_removals" });
+  assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
+  assert.deepEqual(cleared.pending_removals, []);
+});
+
+test("a tracked tab that navigates to a pending-removal origin stops gaining time", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const activeOrigin = "https://still-on.example";
+  const removedOrigin = "https://going-away.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(activeOrigin),
+    adapters: { format: 1, artifacts: [artifact(activeOrigin), artifact(removedOrigin)] },
+  });
+  values.set(storageKey("pending_site_removals_v1"), [removedOrigin]);
+
+  tabs.set(50, { id: 50, windowId: 1, url: `${activeOrigin}/items/a`, title: "A", incognito: false });
+  onCommitted({
+    tabId: 50, frameId: 0, documentId: "tracked", documentLifecycle: "active",
+    url: `${activeOrigin}/items/a`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[50].artifact_id,
+    "test:still-on.example/a");
+
+  tabs.set(50, { id: 50, windowId: 1, url: `${removedOrigin}/items/b`, title: "B", incognito: false });
+  onCommitted({
+    tabId: 50, frameId: 0, documentId: "pending", documentLifecycle: "active",
+    url: `${removedOrigin}/items/b`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[50], undefined,
+    "the previous page's entry ends even though the stored lease still holds the origin");
+});
+
+test("a pending local pause does not keep pending removals from clearing", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://paused-removal.example";
+  const keptOrigin = "https://paused-kept.example";
+  values.set(storageKey("revocations_v1"), [removedOrigin]);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin),
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin]);
+
+  const paused = await send({ kind: "pause_capture" });
+  assert.equal(paused.pause_pending, true);
+  // applyPendingRemovals saved the removal; its reinstall comes back while
+  // the pause is still pending.
+  const installed = await send({
+    kind: "install_policy", lease: { ...lease(keptOrigin), revision: "removal-saved" },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  assert.equal(installed.pause_pending, true, "capture stays blocked");
+  const cleared = await send({ kind: "clear_pending_removals" });
+  assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
+  assert.deepEqual(cleared.pending_removals, []);
+  assert.equal(cleared.pause_pending, true);
+});
+
+test("malformed legacy site removal state is kept and keeps capture paused", async () => {
+  const removedOrigin = "https://malformed-removal.example";
+  const keptOrigin = "https://malformed-kept.example";
+  const malformed = [
+    "not-a-list",
+    [{ origin: removedOrigin, path_prefix: "/" }, { origin: 42, path_prefix: "/" }],
+    [{ origin: removedOrigin, path_prefix: "/" }, { origin: `${keptOrigin}/path`, path_prefix: "/" }],
+    [{ origin: removedOrigin }],
+    Array.from({ length: 257 }, (_, index) => ({ origin: `https://r${index}.example`, path_prefix: "/" })),
+  ];
+  for (const [index, legacy] of malformed.entries()) {
+    values.clear();
+    sessionValues.clear();
+    tabs.clear();
+    values.set(storageKey("locally_removed_sites_v1"), legacy);
+    values.set(storageKey("policy_v1"), {
+      ...lease(keptOrigin),
+      adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+    });
+    onInstalled({ reason: "update" });
+    await flush();
+    assert.deepEqual(values.get(storageKey("locally_removed_sites_v1")), legacy,
+      `case ${index}: the legacy evidence is not deleted`);
+    assert.equal(values.has(storageKey("pending_site_removals_v1")), false, `case ${index}`);
+
+    for (const [tabId, origin] of [[60, removedOrigin], [61, keptOrigin]]) {
+      tabs.set(tabId, { id: tabId, url: `${origin}/items/x`, title: "X", incognito: false });
+      onCommitted({
+        tabId, frameId: 0, documentId: `doc-malformed-${index}-${tabId}`, documentLifecycle: "active",
+        url: `${origin}/items/x`, timeStamp: Date.now() - 2 * 60 * 60_000,
+      });
+    }
+    await flush();
+    assert.equal(values.get(storageKey("queue_v1"))?.items.length ?? 0, 0,
+      `case ${index}: capture stays paused`);
+    await assert.rejects(send({ kind: "get_status" }), /unreadable/);
+  }
+  values.clear();
+});
+
+test("migration keeps every origin when both full legacy lists are merged", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const pad = (index) => String(index).padStart(3, "0");
+  const revoked = Array.from({ length: 256 }, (_, index) => `https://rev-${pad(index)}.example`);
+  const removed = Array.from({ length: 256 }, (_, index) => `https://site-${pad(index)}.example`);
+  const lastRemoved = removed.at(-1);
+  values.set(storageKey("revocations_v1"), revoked);
+  values.set(storageKey("locally_removed_sites_v1"),
+    removed.map((origin) => ({ origin, path_prefix: "/" })));
+  values.set(storageKey("policy_v1"), {
+    ...lease(lastRemoved),
+    adapters: { format: 1, artifacts: [artifact(lastRemoved)] },
+  });
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [...revoked, ...removed]);
+  assert.equal(values.has(storageKey("revocations_v1")), false);
+  assert.equal(values.has(storageKey("locally_removed_sites_v1")), false);
+
+  tabs.set(62, { id: 62, url: `${lastRemoved}/items/x`, title: "X", incognito: false });
+  onCommitted({
+    tabId: 62, frameId: 0, documentId: "doc-full-union", documentLifecycle: "active",
+    url: `${lastRemoved}/items/x`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.queued, 0);
+  assert.equal(status.pending_removals.length, 512);
+});
+
+test("a failed pending-removal migration write keeps honoring the legacy removal state", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://failed-migration.example";
+  const keptOrigin = "https://failed-migration-kept.example";
+  values.set(storageKey("revocations_v1"), [removedOrigin]);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin),
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  rejectLocalSet = (items) => storageKey("pending_site_removals_v1") in items;
+  try {
+    onInstalled({ reason: "update" });
+    await flush();
+  } finally {
+    rejectLocalSet = null;
+  }
+  assert.deepEqual(values.get(storageKey("revocations_v1")), [removedOrigin],
+    "the legacy evidence survives a failed write");
+  assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
+
+  // A later renewal that still carries the removed origin must not reinstall it.
+  await send({
+    kind: "install_policy",
+    lease: {
+      ...lease(keptOrigin), revision: "renewed",
+      adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+    },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  tabs.set(45, { id: 45, url: `${removedOrigin}/items/blocked`, title: "Blocked", incognito: false });
+  onCommitted({
+    tabId: 45, frameId: 0, documentId: "doc-failed-migration", documentLifecycle: "active",
+    url: `${removedOrigin}/items/blocked`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const blocked = await send({ kind: "get_status" });
+  assert.equal(blocked.queued, 0);
+  assert.equal(blocked.live_activity, 0);
+  assert.deepEqual(blocked.pending_removals, [removedOrigin]);
+
+  // Once the host drops the adapter, clearing also retires the legacy key.
+  await send({
+    kind: "install_policy", lease: lease(keptOrigin),
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  const cleared = await send({ kind: "clear_pending_removals" });
+  assert.deepEqual(cleared.pending_removals, []);
+  assert.equal(values.has(storageKey("revocations_v1")), false);
 });
 
 test("a committed page updates the live hourly activity title before freezing", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://title.example";
-  grants.set("https://title.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   tabs.set(7, { id: 7, url: `${origin}/items/a`, title: "Previous page", incognito: false });
 
@@ -486,9 +792,7 @@ test("a committed page updates the live hourly activity title before freezing", 
 test("a stored visit without a dispatch flag is never patched", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   const origin = "https://legacy.example";
-  grants.set("https://legacy.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   values.set(storageKey("queue_v1"), {
     version: 1,
@@ -504,22 +808,18 @@ test("a stored visit without a dispatch flag is never patched", async () => {
   assert.equal(status.retry_error, null);
 });
 
-test("a navigation outside every enabled site skips grant checks and tab reads", async () => {
+test("a navigation outside every enabled site skips tab reads", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
-  grants.set("https://enabled.example:443/*", true);
   values.set(storageKey("policy_v1"), lease("https://enabled.example"));
   tabs.set(4, { id: 4, url: "https://other.example/items/x", title: "Other", incognito: false });
-  const checks = permissionChecks;
   const reads = tabReads;
   onCommitted({
     tabId: 4, frameId: 0, documentId: "doc-2", documentLifecycle: "active",
     url: "https://other.example/items/x", timeStamp: Date.now(),
   });
   await flush();
-  assert.equal(permissionChecks, checks);
   assert.equal(tabReads, reads);
   assert.equal(values.get(storageKey("queue_v1")), undefined);
 
@@ -529,17 +829,14 @@ test("a navigation outside every enabled site skips grant checks and tab reads",
     url: "https://enabled.example/items/y", timeStamp: Date.now(),
   });
   await flush();
-  assert.ok(permissionChecks > checks);
   assert.equal((await send({ kind: "get_activity" })).length, 1);
 });
 
 test("matching navigations never serialize the adapter document", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://cached-policy.example";
-  grants.set("https://cached-policy.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   tabs.set(31, { id: 31, url: `${origin}/items/first`, title: "First", incognito: false });
   tabs.set(32, { id: 32, url: `${origin}/items/second`, title: "Second", incognito: false });
@@ -574,10 +871,8 @@ test("matching navigations never serialize the adapter document", async () => {
 test("an expired policy install cannot replace the active revision's compiled adapter", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://expired-install.example";
-  grants.set("https://expired-install.example:443/*", true);
   const active = lease(origin);
   values.set(storageKey("policy_v1"), active);
   await send({ kind: "get_status" });
@@ -608,10 +903,9 @@ test("an expired policy install cannot replace the active revision's compiled ad
   assert.deepEqual(values.get(storageKey("policy_v1")), active);
 });
 
-test("adapter rules, scope, and Chrome grants all fail closed before buffering", async () => {
+test("adapter rules and scope fail closed before buffering", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://scoped.example";
   values.set(storageKey("policy_v1"), {
@@ -626,7 +920,6 @@ test("adapter rules, scope, and Chrome grants all fail closed before buffering",
       }],
     },
   });
-  const initialChecks = permissionChecks;
   const initialReads = tabReads;
 
   tabs.set(20, { id: 20, url: `${origin}/search`, title: "Search", incognito: false });
@@ -640,38 +933,13 @@ test("adapter rules, scope, and Chrome grants all fail closed before buffering",
     url: `${origin}/teams/personal/items/7`, timeStamp: Date.now(),
   });
   await flush();
-  assert.equal(permissionChecks, initialChecks, "unrecognized URLs never prompt a grant check");
   assert.equal(tabReads, initialReads, "unrecognized URLs never expose tab metadata");
   assert.equal(values.get(storageKey("queue_v1")), undefined);
+  assert.equal((await send({ kind: "get_activity" })).length, 0);
 
   tabs.set(22, { id: 22, url: `${origin}/teams/acme/items/7`, title: "Work", incognito: false });
   onCommitted({
-    tabId: 22, frameId: 0, documentId: "recognized-but-ungranted", documentLifecycle: "active",
-    url: `${origin}/teams/acme/items/7`, timeStamp: Date.now(),
-  });
-  await flush();
-  assert.ok(permissionChecks > initialChecks, "a recognized URL reaches the live grant gate");
-  assert.equal(tabReads, initialReads, "a missing grant is refused before reading the tab");
-  assert.equal(values.get(storageKey("queue_v1"))?.items.length ?? 0, 0);
-  assert.deepEqual(values.get(storageKey("policy_v1")).sites, []);
-  assert.deepEqual(values.get(storageKey("policy_v1")).adapters.artifacts, []);
-  assert.notEqual((await send({ kind: "get_status" })).policy_expires_at, null);
-
-  grants.set("https://scoped.example:443/*", true);
-  values.set(storageKey("policy_v1"), {
-    ...lease(origin),
-    adapters: {
-      format: 1,
-      artifacts: [{
-        type: "test.item", origin,
-        match: [{ path: "/teams/{owner:name|lower}/items/{id:token}" }],
-        id: "test:{host}/{owner}/{id}",
-        scope: { owner: ["acme"] },
-      }],
-    },
-  });
-  onCommitted({
-    tabId: 22, frameId: 0, documentId: "recognized-and-granted", documentLifecycle: "active",
+    tabId: 22, frameId: 0, documentId: "recognized", documentLifecycle: "active",
     url: `${origin}/teams/acme/items/7`, timeStamp: Date.now(),
   });
   await flush();
@@ -681,10 +949,8 @@ test("adapter rules, scope, and Chrome grants all fail closed before buffering",
 test("worker-start map rebuild restores recognized tabs without counting opens", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://rebuild.example";
-  grants.set("https://rebuild.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   tabs.set(30, {
     id: 30, windowId: 1, active: true, status: "loading",
@@ -723,22 +989,20 @@ test("worker-start map rebuild restores recognized tabs without counting opens",
   assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].artifact_id,
     "test:rebuild.example/committed", "a queued commit overwrites the rebuilt entry");
 
-  grants.set("https://rebuild.example:443/*", false);
+  values.set(storageKey("pending_site_removals_v1"), [origin]);
   sessionValues.clear();
   await rebuildActivityMap();
   assert.deepEqual(sessionValues.get(storageKey("activity_session_v1"))?.tabs ?? {}, {},
-    "getFrame URLs without a live Chrome grant are never mapped");
+    "an origin with a pending site removal is never mapped");
 });
 
 test("worker-start map rebuild settles activity restored from storage.session", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://worker-wake.example";
   const start = new Date("2026-10-16T10:15:00Z").getTime();
   const now = start + 15_000;
-  grants.set("https://worker-wake.example:443/*", true);
   values.set(storageKey("policy_v1"), {
     ...lease(origin), expires_at: now + 60_000,
   });
@@ -786,9 +1050,7 @@ test("worker-start map rebuild settles activity restored from storage.session", 
 test("a successful ack clears retry state but keeps notices until dismissed", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   const origin = "https://ack.example";
-  grants.set("https://ack.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   values.set(storageKey("queue_v1"), {
     version: 1,
@@ -863,10 +1125,8 @@ test("worker accepts messages only from the side panel and settings page", async
 test("an SPA route change accepts the title update into its live hour", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   const origin = "https://spa.example";
-  grants.set("https://spa.example:443/*", true);
   values.set(storageKey("policy_v1"), lease(origin));
   // pushState has run, but the app has not set the new route's title yet.
   tabs.set(9, { id: 9, url: `${origin}/items/b`, title: "Route A", incognito: false });
@@ -903,9 +1163,7 @@ test("an SPA route change accepts the title update into its live hour", async ()
 test("a retry notice clears once nothing is left to retry, and on dismissal", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   const origin = "https://retry.example";
-  grants.set("https://retry.example:443/*", true);
   const setUp = (ids) => {
     values.set(storageKey("policy_v1"), lease(origin));
     values.set(storageKey("queue_v1"), {
@@ -928,11 +1186,6 @@ test("a retry notice clears once nothing is left to retry, and on dismissal", as
   await retry("two");
   assert.equal((await send({ kind: "discard_pending", event_ids: ["two"] })).retry_error, null);
 
-  setUp(["three"]);
-  await retry("three");
-  assert.equal((await send({ kind: "remove_site", site: { origin, path_prefix: "/" } })).retry_error, null);
-
-  values.delete(storageKey("locally_removed_sites_v1"));
   setUp(["four"]);
   await retry("four");
   assert.equal((await send({ kind: "pause_capture" })).retry_error, null);
@@ -997,7 +1250,7 @@ test("a host that cannot be started reports the session disconnected", async () 
   let changes = 0;
   const session = new ConfigSession(() => { changes += 1; });
   session.config = {
-    storage: null, capture_enabled: false, sites: [], strip_params: [],
+    storage: null, capture_enabled: false, strip_params: [],
   };
   session.revision = "r1";
   assert.equal(session.connected, true);
@@ -1021,10 +1274,8 @@ test("a host that cannot be started reports the session disconnected", async () 
 test("a post-save folder issue suspends policy instead of installing a lease", async () => {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   ports.length = 0;
   const origin = "https://changed-folder.example";
-  grants.set(exactPattern(origin), true);
   const saved = configResult({ request_id: "fixture" }, origin).config;
   const session = new ConfigSession(() => undefined);
   session.config = structuredClone(saved);
@@ -1036,18 +1287,13 @@ test("a post-save folder issue suspends policy instead of installing a lease", a
     const saving = session.saveConfig(structuredClone(saved), null);
     const port = ports[0];
     let request = await sentOn(port, 1);
-    assert.equal(request.type, "confirm_config");
-    port.reply({
-      type: "config_confirmed", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
-      consent_token: "consent", summary: "No additional capture access is requested.",
-    });
-    request = await sentOn(port, 2);
     assert.equal(request.type, "update_config");
+    assert.equal("consent_token" in request, false);
     port.reply({
       type: "config_updated", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
       revision: "r2", config: saved,
     });
-    request = await sentOn(port, 3);
+    request = await sentOn(port, 2);
     assert.equal(request.type, "get_config");
     port.reply(configResult(request, origin, {
       revision: "r2",
@@ -1095,14 +1341,13 @@ test("unaddressed host errors and version mismatches reach the caller", async ()
   client.disconnect();
 });
 
-test("host config shape requires every v5 privacy, agent, and adapter key", () => {
+test("host config shape requires every v6 agent and adapter key and no retired privacy key", () => {
   const config = {
     storage: {
       root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-      summaries_dir: null,
+      summaries_dir: null, knowledge_base_dir: null,
     },
-    capture_enabled: false, sites: [], strip_params: [],
-    agent_denylist: ["bank.example"], agent_denylist_confirmed: false, log_incognito: false,
+    capture_enabled: false, strip_params: [],
     agent: null,
     adapters: { format: 1, artifacts: [] },
   };
@@ -1112,17 +1357,24 @@ test("host config shape requires every v5 privacy, agent, and adapter key", () =
     args: ["-p", "{prompt}"], env_allow: [], timeout_secs: 120,
   };
   assert.equal(isConfig({ ...config, agent }), true);
-  for (const key of ["agent_denylist", "agent_denylist_confirmed", "log_incognito", "agent", "adapters"]) {
+  for (const key of ["agent", "adapters"]) {
     const without = { ...config };
     delete without[key];
     assert.equal(isConfig(without), false, key);
   }
-  assert.equal(isConfig({ ...config, log_incognito: true }), false);
+  assert.equal(isConfig({ ...config, agent_denylist: ["bank.example"] }), false);
+  assert.equal(isConfig({ ...config, agent_denylist_confirmed: false }), false);
+  assert.equal(isConfig({ ...config, log_incognito: false }), false);
   assert.equal(isConfig({ ...config, agent: { ...agent, adapter: "claude-code" } }), false);
   // The host always sends summaries_dir, as null until a folder is chosen.
   const { summaries_dir: _omitted, ...m1Storage } = config.storage;
   assert.equal(isConfig({ ...config, storage: m1Storage }), false);
   assert.equal(isConfig({ ...config, storage: { ...m1Storage, summaries_dir: 7 } }), false);
+  // knowledge_base_dir is required too, as null while it follows the root.
+  const { knowledge_base_dir: _kb, ...v5Storage } = config.storage;
+  assert.equal(isConfig({ ...config, storage: v5Storage }), false);
+  assert.equal(isConfig({ ...config, storage: { ...config.storage, knowledge_base_dir: "/kb" } }), true);
+  assert.equal(isConfig({ ...config, storage: { ...config.storage, knowledge_base_dir: 7 } }), false);
 
   const result = {
     type: "config_result", revision: "missing", config, config_issue: null,
@@ -1133,18 +1385,18 @@ test("host config shape requires every v5 privacy, agent, and adapter key", () =
   assert.equal(isResponseShape({ ...result, agent_status: agentStatus }), true);
   assert.equal(isResponseShape({ ...result, agent_status: { ...agentStatus, state: "on" } }), false);
   assert.equal(isResponseShape({
-    type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0", url_allowed: null,
+    type: "agent_checked", harness_id: "claude-code", harness_version: "2.1.0",
   }), true);
 
   // Harness setup: every offer key is present, nullable ones as null.
   const offer = {
-    offer_id: "offer-1", adapter: "claude_code", harness_id: "claude-code",
+    adapter: "claude_code", harness_id: "claude-code",
     binary: "/usr/local/bin/claude", real_path: "/opt/claude/bin/claude", version: "2.1.284",
     args: ["-p", "{prompt}"], env_required: ["HOME", "PATH"],
     env_optional: [{ name: "ANTHROPIC_API_KEY", present: true }], refusal: null,
   };
   const refused = {
-    ...offer, offer_id: null, adapter: "codex", harness_id: "codex", real_path: null,
+    ...offer, adapter: "codex", harness_id: "codex", real_path: null,
     version: null, env_optional: [], refusal: "codex --version output was not recognized",
   };
   const discovered = { type: "harnesses_discovered", offers: [offer, refused] };
@@ -1164,13 +1416,9 @@ test("host config shape requires every v5 privacy, agent, and adapter key", () =
     ...discovered, offers: [{ ...offer, env_optional: [{ name: "X", present: "yes" }] }],
   }), false);
 
+  // Harness setup answers config_updated; the v5 token response is gone.
   const setUp = { type: "harness_setup_confirmed", harness_token: "t", config, summary: "Harness" };
-  assert.equal(isResponseShape(setUp), true);
-  for (const key of ["harness_token", "config", "summary"]) {
-    const without = { ...setUp };
-    delete without[key];
-    assert.equal(isResponseShape(without), false, key);
-  }
+  assert.equal(isResponseShape(setUp), false);
 });
 
 // --- Background sync: the worker, not the panel, starts the host -----------
@@ -1209,10 +1457,10 @@ function configResult(request, origin, overrides = {}) {
     config: {
       storage: {
         root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-        summaries_dir: null,
+        summaries_dir: null, knowledge_base_dir: null,
       },
-      capture_enabled: true, sites: [{ origin, path_prefix: "/" }], strip_params: [],
-      agent_denylist: [], agent_denylist_confirmed: false, log_incognito: false, agent: null,
+      capture_enabled: true, strip_params: [],
+      agent: null,
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,
@@ -1226,12 +1474,10 @@ function configResult(request, origin, overrides = {}) {
 function resetSync(origin, expiresIn) {
   values.clear();
   sessionValues.clear();
-  grants.clear();
   tabs.clear();
   alarms.clear();
   ports.length = 0;
   badgeText = "";
-  grants.set(exactPattern(origin), true);
   values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() + expiresIn });
 }
 
@@ -1312,7 +1558,8 @@ test("the worker renews a lease near expiry from the host config", async () => {
     const policy = values.get(storageKey("policy_v1"));
     return policy.expires_at > Date.now() + 23 * HOUR_MS && policy;
   }, "a renewed lease");
-  assert.deepEqual(renewed.sites, [{ origin, path_prefix: "/" }]);
+  assert.equal("sites" in renewed, false);
+  assert.deepEqual(renewed.adapters.artifacts.map((adapter) => adapter.origin), [origin]);
   await until(() => port.closed, "the host connection to close");
 });
 
@@ -1418,6 +1665,7 @@ test("an older cached lease renews once instead of permanently disabling backgro
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   values.set(storageKey("policy_v1"), legacy);
   tabs.set(13, { id: 13, url: `${origin}/items/migrated`, title: "Migrated", incognito: false });
 
@@ -1442,6 +1690,7 @@ test("an older cached lease does not start the host for an unrelated navigation"
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   values.set(storageKey("policy_v1"), legacy);
   tabs.set(14, { id: 14, url: "https://elsewhere.example/", title: "Elsewhere", incognito: false });
 
@@ -1458,6 +1707,7 @@ test("disabled or malformed cached policy does not cause background host wakeups
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   legacy.capture_enabled = false;
   values.set(storageKey("policy_v1"), legacy);
   onAlarm({ name: SYNC_ALARM });
@@ -1475,6 +1725,7 @@ test("a local pause still blocks migration of an older cached lease", async () =
   resetSync(origin, 2 * HOUR_MS);
   const legacy = values.get(storageKey("policy_v1"));
   delete legacy.adapters;
+  legacy.sites = [{ origin, path_prefix: "/" }];
   values.set(storageKey("policy_v1"), legacy);
   values.set(storageKey("pause_pending_v1"), true);
   await send({ kind: "sync_now" });

@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
 // Guided real-Chrome M1 smoke run, plus M2 step 1 harness setup. Native
-// dialogs and Chrome permission prompts are answered by a person, or with
-// --auto through UI scripting; all host and vault state is kept in a temp
-// home. --headless runs the same flow with nothing on screen: headless Chrome,
-// a scripted-dialogs host build, and Chrome access granted ahead of time
-// instead of through Chrome's prompt. Only --headless runs harness setup, with
-// fake harnesses on a pinned PATH and a cleared host environment.
+// dialogs are answered by a person, or with --auto through UI scripting; all
+// host and vault state is kept in a temp home. The extension holds HTTP(S)
+// access from install, so Chrome shows no permission prompt. --headless runs
+// the same flow with nothing on screen: headless Chrome and a scripted-dialogs
+// host build. Only --headless runs harness setup, with fake harnesses on a
+// pinned PATH and a cleared host environment.
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
-  access, chmod, cp, lstat, mkdir, mkdtemp, open, readFile,
+  access, chmod, lstat, mkdir, mkdtemp, open, readFile,
   readdir, realpath, rename, symlink, unlink, writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -21,6 +21,7 @@ import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { APP_NAME, BINARY_NAME, NATIVE_HOST_NAME, storageKey } from "../extension/brand.ts";
+import { SETUP_WARNING } from "../extension/agent.ts";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DIST = path.join(REPO, "extension", "dist");
@@ -35,7 +36,7 @@ const SCRIPTED_DIALOGS_ENV = `${BINARY_NAME.toUpperCase()}_SCRIPTED_DIALOGS`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
-const PROTOCOL_VERSION = 5;
+const PROTOCOL_VERSION = 6;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const EXTENSION_ID = /^[a-p]{32}$/;
@@ -217,19 +218,6 @@ async function choosePickerFolder(folder) {
       if (attempt === 3) throw error;
     }
   }
-}
-
-async function answerAlert(button) {
-  await waitFor(() => osascript(`tell application "System Events"
-    click button ${JSON.stringify(button)} of (first window of process "UserNotificationCenter" whose subrole is "AXSystemDialog")
-  end tell`), { timeout: 20_000 });
-}
-
-// Chrome's permission prompt is a sheet on the settings window.
-async function allowInChrome(press, pid) {
-  await waitFor(() => commandOutput(press, [String(pid), "Allow"]).catch((error) => {
-    throw new Error(error.message.includes("exited 2") ? "Chrome's Allow button is not showing" : error.message);
-  }), { timeout: 20_000 });
 }
 
 // Fake harnesses for AI setup. Each logs one tab-separated line per run: its
@@ -585,7 +573,8 @@ async function nativeHostPreflight(cdp, extensionId) {
 function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
-    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/after-removal"]);
+    const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/while-paused", "/allowed/after-resume",
+      "/allowed/after-removal", "/fresh/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (!known.has(pathname)) {
@@ -725,13 +714,10 @@ async function run() {
   const testHome = path.join(runDir, "home");
   const profile = path.join(runDir, "chrome-profile");
   const notes = path.join(runDir, "notes");
+  const knowledgeBase = path.join(runDir, "knowledge-base");
   const wrapper = path.join(runDir, `${BINARY_NAME}-host-wrapper`);
-  const press = path.join(runDir, "smoke-macos-press");
   const windowCheck = path.join(runDir, "smoke-macos-windows");
   const dialogs = path.join(runDir, "dialogs");
-  // Headless Chrome loads a copy whose first load carries webNavigation; see
-  // preGrantChromeAccess.
-  const extensionCopy = path.join(runDir, "extension");
   const manifest = path.join(profile, "NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`);
   const caseId = randomUUID().slice(0, 8);
   const server = fixtureServer(caseId);
@@ -761,8 +747,8 @@ async function run() {
     console.log(`PASS: ${title}`);
   }
 
-  // Only Chrome's permission prompt and the host's native dialogs need a
-  // person, or with --auto, the given automation.
+  // Only the host's native dialogs need a person, or with --auto, the given
+  // automation.
   async function userAction(instruction, check, automate) {
     if ((options.auto || options.headless) && automate) {
       console.log(`  ${options.headless ? "SCRIPTED" : "AUTO"}: ${instruction}`);
@@ -895,29 +881,6 @@ async function run() {
     return onSettings((page) => page.text("#status"));
   }
 
-  async function chromeGrants(pattern) {
-    return onSettings((page) => page.evaluate(`Promise.all([
-      chrome.permissions.contains({ origins: [${JSON.stringify(pattern)}] }),
-      chrome.permissions.contains({ permissions: ["webNavigation"] }),
-    ]).then(([origin, api]) => ({ origin, api }))`));
-  }
-
-  // Chrome skips its prompt when it already holds the requested access, so a
-  // missing prompt is reported, and the step's own checks decide the result.
-  async function chromePrompt() {
-    if (options.headless) {
-      console.log("  No Chrome prompt in --headless: its access was granted before the run.");
-      return;
-    }
-    try {
-      await allowInChrome(press, chrome.pid);
-      console.log("  Clicked Allow in Chrome's prompt.");
-    } catch (error) {
-      const status = await settingsStatus().catch(() => "(settings page unavailable)");
-      console.log(`  No Chrome prompt was clicked: ${error.message}. Settings page says: ${status}`);
-    }
-  }
-
   // --headless: every Chrome and host process must stay invisible, with no
   // on-screen window (menu-bar items included) and no Dock presence.
   async function nothingOnScreen() {
@@ -935,10 +898,11 @@ async function run() {
   // --headless: the host's dialog child records each dialog in shown.jsonl
   // and waits for an answer file. Answer only the dialog the step expects.
   let dialogsShown = 0;
+  const dialogLogLines = async () => (await readFile(path.join(dialogs, "shown.jsonl"), "utf8").catch(() => ""))
+    .split("\n").filter(Boolean);
   async function scriptedDialog(dialog, reply) {
     const shown = await waitFor(async () => {
-      const lines = (await readFile(path.join(dialogs, "shown.jsonl"), "utf8").catch(() => ""))
-        .split("\n").filter(Boolean);
+      const lines = await dialogLogLines();
       requireCondition(lines.length > dialogsShown, `The ${dialog} dialog has not opened`);
       return JSON.parse(lines[dialogsShown]);
     }, { timeout: 20_000, signal: abort.signal });
@@ -954,59 +918,6 @@ async function run() {
   const dismissPicker = () => options.headless ? scriptedDialog("pick-folder", "canceled") : cancelPicker();
   const pickFolder = (folder) => options.headless
     ? scriptedDialog("pick-folder", `picked:${folder}`) : choosePickerFolder(folder);
-  async function answerConfirmation(button, site) {
-    if (!options.headless) return answerAlert(button);
-    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
-    // The host writes this text from the policy change itself.
-    requireCondition(text.includes(`Allow visit logging for ${JSON.stringify(site)}`) &&
-      text.includes("Turn on automatic visit logging."),
-    `The confirmation does not describe the change: ${JSON.stringify(text)}`);
-  }
-  // The confirmation for saving a newly chosen folder on its own.
-  async function answerFolderConfirmation(button) {
-    if (!options.headless) return answerAlert(button);
-    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
-    requireCondition(text.includes('Set visit log folder to "log".') &&
-      !text.includes("Allow visit logging") && !text.includes("Turn on automatic visit logging."),
-    `The folder confirmation does not describe only the folder: ${JSON.stringify(text)}`);
-  }
-  async function answerAdapterConfirmation(button) {
-    if (!options.headless) return answerAlert(button);
-    const text = await scriptedDialog("confirm", button === "Yes" ? "confirmed" : "canceled");
-    requireCondition(text.includes('Enable or change the "smoke.page" artifact adapter'),
-      `The adapter confirmation does not name the fixture adapter: ${JSON.stringify(text)}`);
-  }
-
-  // --headless: Chrome's permission prompt is browser UI that no command-line
-  // switch or DevTools method can answer, so grant the access ahead of time
-  // through Chrome's own mechanisms. webNavigation stays active when an
-  // extension version that required it is replaced by one that makes it
-  // optional, and chrome://extensions grants a site as a user would under
-  // Site access. permissions.request then resolves without a prompt, and
-  // permissions.remove still revokes both.
-  async function loadExtension(directory) {
-    if (!options.headless) return cdp.send("Extensions.loadUnpacked", { path: directory });
-    const manifestFile = path.join(directory, "manifest.json");
-    const shipped = await readFile(manifestFile, "utf8");
-    const earlier = JSON.parse(shipped);
-    earlier.permissions = [...earlier.permissions, "webNavigation"];
-    await writeFile(manifestFile, JSON.stringify(earlier, null, 2));
-    await cdp.send("Extensions.loadUnpacked", { path: directory });
-    await writeFile(manifestFile, shipped);
-    return cdp.send("Extensions.loadUnpacked", { path: directory });
-  }
-
-  async function preGrantSite(pattern) {
-    const { targetId } = await cdp.send("Target.createTarget", { url: "chrome://extensions", background: true });
-    try {
-      await cdp.withTarget(targetId, async (page) => {
-        await waitFor(() => page.evaluate("typeof chrome.developerPrivate?.addHostPermission === 'function' || Promise.reject(new Error('loading'))"));
-        await page.evaluate(`chrome.developerPrivate.addHostPermission(${JSON.stringify(extensionId)}, ${JSON.stringify(pattern)})`);
-      });
-    } finally {
-      await cdp.send("Target.closeTarget", { targetId }).catch(() => undefined);
-    }
-  }
 
   async function typeNote(text) {
     await waitFor(() => onPanel(async (page) =>
@@ -1026,10 +937,7 @@ async function run() {
   }
 
   try {
-    await Promise.all([mkdir(testHome), mkdir(notes), mkdir(profile)]);
-    if (options.auto) {
-      await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-press.swift"), "-o", press]);
-    }
+    await Promise.all([mkdir(testHome), mkdir(notes), mkdir(knowledgeBase), mkdir(profile)]);
     if (options.headless) {
       await mkdir(dialogs, { mode: 0o700 });
       await commandOutput("/usr/bin/swiftc", ["-O", path.join(REPO, "scripts", "smoke-macos-windows.swift"), "-o", windowCheck]);
@@ -1053,8 +961,7 @@ async function run() {
     requireCondition(path.isAbsolute(configPath) &&
       (inside(testHome, configPath) || inside(actualHome, configPath)),
     `Host config would escape the temporary home: ${configPath}`);
-    if (options.headless) await cp(DIST, extensionCopy, { recursive: true });
-    const dist = await realpath(options.headless ? extensionCopy : DIST);
+    const dist = await realpath(DIST);
     extensionId = unpackedExtensionId(dist);
     const hostManifest = Buffer.from(`${JSON.stringify({
       name: NATIVE_HOST_NAME,
@@ -1073,7 +980,11 @@ async function run() {
     const siteInput = options.defaultPort ? `${origin}:80` : origin;
     const allowed = `${origin}/allowed/page?case=${caseId}`;
     const blocked = `${origin}/blocked/page?case=${caseId}`;
+    const whilePaused = `${origin}/allowed/while-paused?case=${caseId}`;
+    const afterResume = `${origin}/allowed/after-resume?case=${caseId}`;
     const afterRemoval = `${origin}/allowed/after-removal?case=${caseId}`;
+    const freshPage = `${origin}/fresh/page?case=${caseId}`;
+    const freshTitle = `${APP_NAME} smoke /fresh/page`;
     // The panel titles a page note from the tab, so this is the fixture page title.
     const title = `${APP_NAME} smoke /allowed/page`;
     const firstBody = `First note ${caseId}`;
@@ -1100,7 +1011,7 @@ async function run() {
     });
 
     cdp = new Cdp(chrome);
-    const loaded = await loadExtension(dist);
+    const loaded = await cdp.send("Extensions.loadUnpacked", { path: dist });
     const loadedId = loaded?.id;
     requireCondition(loadedId === extensionId,
       `Chrome loaded extension ID ${loadedId ?? "none"}; expected ${extensionId}`);
@@ -1114,15 +1025,7 @@ async function run() {
     console.log("Chrome-to-native-host hello passed.");
     console.log(`The runner drives ${APP_NAME}'s pages itself. Answer only the prompts it names; press Ctrl+C to stop.`);
 
-    // The grant the settings page requests: always an explicit port, never
-    // Chrome's any-port form, which the run checks is not granted.
-    const pattern = `${origin}${options.defaultPort ? ":80" : ""}/*`;
-    const anyPortPattern = `${new URL(origin).protocol}//${new URL(origin).hostname}/*`;
-    if (options.headless) {
-      await preGrantSite(pattern);
-      await nothingOnScreen();
-      console.log(`Granted ${pattern} and webNavigation ahead of time; nothing is on screen.`);
-    }
+    if (options.headless) await nothingOnScreen();
     // Any empty folder will do; the suggested one is only a convenience.
     // Later checks count files, so the chosen folder must start empty.
     let notesRoot = null;
@@ -1151,134 +1054,129 @@ async function run() {
         if (await onSettings((page) => page.text("#folder-path")) !== "None selected") {
           throw Object.assign(new Error("A folder was chosen, but this step needs Cancel. Rerun the smoke test."), { fatal: true });
         }
-        requireCondition(status?.startsWith("Canceled"), `Settings page says: ${status}`);
+        requireCondition(status === "Folder selection was canceled. No settings were changed.", `Settings page says: ${status}`);
         await onSettings(async (page) => {
           requireCondition(await page.text("#folder-path") === "None selected", "A folder is shown as selected");
           requireCondition(await page.enabled("#choose-folder"), "Picker is still open");
         });
       }, dismissPicker);
       const reply = await hostConfig(wrapper);
-      requireCondition(reply.config.storage === null && !reply.config.capture_enabled && reply.config.sites.length === 0,
+      requireCondition(reply.config.storage === null && !reply.config.capture_enabled &&
+        reply.config.adapters.artifacts.length === 0 && !("sites" in reply.config),
         "The isolated host configuration changed after picker cancellation");
       requireCondition(!(await maybeLstat(configPath)), "A config file appeared after picker cancellation");
     });
 
-    await step("Canceled native consent", async () => {
+    await step("Choosing a folder saves it before any adapter", async () => {
       // The clipboard is the user's; only a person choosing by hand needs it.
       if (!options.headless) await commandOutput("/bin/sh", ["-c", `printf %s ${shellQuote(notes)} | pbcopy`]);
       await inSettings((page) => page.click("#choose-folder"));
-      await userAction(`In the folder picker, choose any empty folder. The suggested one's path is on the clipboard: press Cmd+Shift+G, clear the box, paste, press Return, then click Open. Then click No in ${APP_NAME}'s confirmation dialog.\n  Path: ${notes}`,
-        () => onSettings(async (page) => {
-          const shown = await page.text("#folder-path");
-          requireCondition(shown && shown !== "None selected", "No folder is selected yet");
-          const chosen = await realpath(shown);
-          const entries = (await readdir(chosen)).filter((name) => name !== ".DS_Store");
-          if (entries.length) {
-            throw Object.assign(new Error(`${chosen} is not empty; rerun and choose an empty folder`), { fatal: true });
-          }
-          const status = await page.text("#status");
-          requireCondition(status?.startsWith("Canceled.") && status.includes("was not saved"),
-            `Settings page says: ${status}`);
-          notesRoot = chosen;
-        }), async () => {
-          await pickFolder(notes);
-          await answerFolderConfirmation("No");
-        });
-      console.log(`  Using notes folder ${notesRoot}`);
-      const declined = await hostConfig(wrapper);
-      requireCondition(declined.config.storage === null && !(await maybeLstat(configPath)),
-        "The folder was saved even though its confirmation was declined");
-      await onSettings(async (page) => {
-        await page.fill("#site-url", siteInput);
-      });
-      await waitFor(() => onSettings(async (page) =>
-        requireCondition(await page.enabled("#enable-site"), "Enable this site is disabled")));
-      await inSettings((page) => page.click("#enable-site"));
-      await userAction(`In Chrome's prompt, click Allow. Then click No in ${APP_NAME}'s confirmation dialog.`, async () => {
-        const status = await settingsStatus();
-        if (status?.includes("Chrome access was declined")) {
-          throw Object.assign(new Error(`Chrome access was declined; this step needs Allow in Chrome and No in ${APP_NAME}`), { fatal: true });
-        }
-        requireCondition(status?.includes("Canceled"), `Settings page says: ${status}`);
-        await onSettings(async (page) => requireCondition(await page.enabled("#enable-site"), "Setup is still running"));
-      }, async () => {
-        await chromePrompt();
-        await answerConfirmation("No", `${origin}/`);
-      });
-      const reply = await hostConfig(wrapper);
-      requireCondition(reply.config.storage === null && !reply.config.capture_enabled && reply.config.sites.length === 0,
-        "Capture was saved even though native consent was declined");
-      const grants = await chromeGrants(pattern);
-      // Headless Chrome already held webNavigation, so the declined change
-      // correctly keeps it; site removal later must revoke it.
-      requireCondition(!grants.origin && grants.api === options.headless,
-        "Chrome access granted for the declined change was not removed");
-    });
-
-    await step("Choosing a folder saves it before any site", async () => {
-      await inSettings((page) => page.click("#choose-folder"));
-      await userAction(`In the folder picker, choose ${notesRoot} again, then click Yes in ${APP_NAME}'s confirmation dialog.`,
+      await userAction(`In the folder picker, choose any empty folder. The suggested one's path is on the clipboard: press Cmd+Shift+G, clear the box, paste, press Return, then click Open.\n  Path: ${notes}`,
         async () => {
           const reply = await hostConfig(wrapper);
-          requireCondition(await sameFolder(reply.config.storage?.root),
-            `Expected ${notesRoot}; host has ${reply.config.storage?.root ?? "none"}`);
-          requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,
-            "Saving the folder changed sites or the capture switch");
+          const saved = reply.config.storage?.root;
+          requireCondition(saved, "The host has no notes folder yet");
+          const chosen = await realpath(saved);
+          const entries = (await readdir(chosen)).filter((name) => name !== ".DS_Store");
+          if (notesRoot === null && entries.length) {
+            throw Object.assign(new Error(`${chosen} is not empty; rerun and choose an empty folder`), { fatal: true });
+          }
+          notesRoot = chosen;
+          requireCondition(!reply.config.capture_enabled && reply.config.adapters.artifacts.length === 0,
+            "Saving the folder changed adapters or the capture switch");
           const status = await settingsStatus();
-          requireCondition(status?.startsWith("No sites are enabled for capture."), `Settings page says: ${status}`);
-        }, async () => {
-          await pickFolder(notesRoot);
-          await answerFolderConfirmation("Yes");
-        });
+          requireCondition(status?.startsWith("No site has an adapter yet."), `Settings page says: ${status}`);
+        }, () => pickFolder(notes));
+      console.log(`  Using notes folder ${notesRoot}`);
+      // Having no adapters is a choice, not a setup problem.
+      await waitFor(() => onPanel(async (page) =>
+        requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")));
+    });
+
+    await step("Knowledge base folder is chosen with the native picker", async () => {
+      if (!options.headless) await commandOutput("/bin/sh", ["-c", `printf %s ${shellQuote(knowledgeBase)} | pbcopy`]);
+      const expected = await realpath(knowledgeBase);
+      let title = null;
+      await inSettings(async (page) => {
+        await page.evaluate('document.getElementById("status").textContent = ""');
+        await page.click("#choose-kb");
+      });
+      await userAction(`In the folder picker titled "Choose ${APP_NAME} knowledge base folder", choose the suggested folder. Its path is on the clipboard: press Cmd+Shift+G, clear the box, paste, press Return, then click Open.\n  Path: ${knowledgeBase}`,
+        async () => {
+          const reply = await hostConfig(wrapper);
+          const saved = reply.config.storage?.knowledge_base_dir;
+          requireCondition(saved, "The host has no knowledge base folder yet");
+          requireCondition(await realpath(saved) === expected, `The host saved ${saved} as the knowledge base`);
+          requireCondition(await sameFolder(reply.config.storage.root), "Choosing the knowledge base changed the notes folder");
+          const status = await settingsStatus();
+          requireCondition(status?.startsWith("Knowledge base folder saved."), `Settings page says: ${status}`);
+          const shown = await onSettings((page) => page.text("#kb-path"));
+          requireCondition(shown === saved, `The settings page shows the knowledge base as ${shown}`);
+        }, async () => { title = await pickFolder(knowledgeBase); });
+      if (options.headless) {
+        requireCondition(title === `Choose ${APP_NAME} knowledge base folder`, `The picker was titled ${title}`);
+      }
+      const written = (await readdir(knowledgeBase)).filter((name) => name !== ".DS_Store");
+      requireCondition(written.length === 0, `The host wrote into the knowledge base folder: ${written.join(", ")}`);
+    });
+
+    // Standing HTTP(S) access: with no site enabled and nothing granted during
+    // the run, the panel still sees a page it has never shown before.
+    await step("Panel shows URL and title on a never-visited page", async () => {
+      await navigate(origin, freshPage);
+      await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+      await openPanel();
       await waitFor(() => onPanel(async (page) => {
-        const reason = await page.text("#setup-reason");
-        requireCondition(reason === "No sites are enabled for capture.", `Setup warning says: ${reason}`);
-      }));
+        const [shownUrl, shownTitle] = await Promise.all([page.text("#page-url"), page.text("#page-title")]);
+        requireCondition(shownUrl === freshPage, `Panel shows the URL: ${shownUrl || "(none)"}`);
+        requireCondition(shownTitle === freshTitle, `Panel shows the title: ${shownTitle || "(none)"}`);
+        requireCondition(await page.hidden("#site-access-warning") === true, "Panel shows the site-access banner");
+        requireCondition(await page.hidden("#page-unusable") === true, "Panel says it cannot use this tab");
+        requireCondition(await page.hidden("#note-editor") === false, "The note editor is hidden");
+        requireCondition(await page.enabled("#note-body"), "The note editor is disabled");
+      }), { timeout: 20_000 });
+      const pages = await markdownFiles(path.join(notesRoot, "pages"));
+      requireCondition(pages.length === 0, "Showing a page's note editor wrote a note");
     });
 
     await step("Confirmed setup", async () => {
+      // A site is on once it has an adapter. The fixture origin has no starter
+      // draft, so this saves Add adapter's template for the typed address.
+      await onSettings(async (page) => {
+        await page.fill("#site-origin", siteInput);
+      });
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.enabled("#new-adapter"), "Add adapter is disabled")));
+      await inSettings((page) => page.click("#new-adapter"));
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.enabled("#save-adapter"), "The adapter draft cannot be saved")));
       await inSettings(async (page) => {
         // Clear the previous step's result so only a new failure stops the run.
         await page.evaluate('document.getElementById("status").textContent = ""');
-        await page.click("#enable-site");
+        await page.click("#save-adapter");
       });
-      await userAction(`If Chrome prompts, click Allow; it may re-grant the access it just removed without asking. Then click Yes in ${APP_NAME}'s confirmation dialog.`, async () => {
+      // Saving an adapter asks Chrome for nothing: the extension already holds
+      // HTTP(S) access, so the setting is saved straight to the host.
+      await waitFor(async () => {
         const status = await settingsStatus().catch(() => null);
-        if (status?.startsWith("Setup failed")) {
-          throw Object.assign(new Error(`${status} Rerun the smoke test; a folder selection expires after five minutes.`), { fatal: true });
+        if (status?.startsWith("Could not save artifact adapters")) {
+          throw Object.assign(new Error(`${status} Rerun the smoke test.`), { fatal: true });
         }
         const reply = await hostConfig(wrapper);
         const selectedRoot = reply.config.storage?.root;
         requireCondition(await sameFolder(selectedRoot),
           `Expected ${notesRoot}; host has ${selectedRoot ?? "none"}`);
         requireCondition(reply.config.capture_enabled === true, "Capture is not enabled in the host");
-        requireCondition(reply.config.sites.length === 1 &&
-          reply.config.sites[0].origin === origin && reply.config.sites[0].path_prefix === "/",
-        "Host site rule does not match the fixture origin");
-      }, async () => {
-        await chromePrompt();
-        await answerConfirmation("Yes", `${origin}/`);
-      });
-      // A first navigation grant makes the settings page restart the extension,
-      // which closes every extension page.
-      const outcome = await waitFor(async () => {
-        const target = await cdp.targetFor(settingsUrl());
-        if (!target) return "restarted";
-        const status = await settingsStatus().catch(() => null);
-        if (status?.startsWith("Capture enabled for")) return "enabled";
-        if (status?.startsWith("Chrome is restarting")) throw new Error("Waiting for the extension restart");
-        throw new Error(`Settings page says: ${status}`);
+        requireCondition(!("sites" in reply.config), "The host still sends a v5 site list");
+        requireCondition(reply.config.adapters.artifacts.length === 1 &&
+          reply.config.adapters.artifacts[0].origin === origin, "The host has no adapter for the fixture origin");
+      }, { timeout: 30_000, interval: 500, signal: abort.signal });
+      await waitFor(async () => {
+        const status = await settingsStatus();
+        requireCondition(status?.endsWith("adapter added."), `Settings page says: ${status}`);
+        const sites = await onSettings((page) => page.text("#sites-list"));
+        requireCondition(sites?.includes(origin), `The site list says: ${sites}`);
       }, { timeout: 20_000 });
-      if (outcome === "restarted") {
-        console.log("  The extension restarted to activate navigation access; reopening its pages.");
-        await delay(1_000);
-        await openSettingsTab();
-        await settingsConnected();
-      }
-      const granted = await chromeGrants(pattern);
-      requireCondition(granted.origin && granted.api, `Chrome did not grant ${pattern} and webNavigation`);
-      requireCondition(!(await chromeGrants(anyPortPattern)).origin,
-        `Chrome granted every port (${anyPortPattern}), not just ${pattern}`);
       await openPanel();
       await waitFor(() => onPanel(async (page) =>
         requireCondition(await page.hidden("#setup-warning") === true, "Panel still shows the setup warning")),
@@ -1297,44 +1195,34 @@ async function run() {
           id: "smoke:{host}/{page}",
         }],
       };
-      // The product editor is a later step, so the smoke runner drives the
-      // existing native confirmation/update protocol directly from the
-      // extension page. The same page then reloads and publishes the new
-      // revision into the worker's lease.
+      // The smoke runner sends the revision-checked update_config directly
+      // from the extension page. The same page then reloads and publishes
+      // the new revision into the worker's lease.
       const saving = inSettings((page) => page.evaluate(`(() => new Promise((resolve, reject) => {
         const port = chrome.runtime.connectNative(${JSON.stringify(NATIVE_HOST_NAME)});
         const expectedRevision = ${JSON.stringify(current.revision)};
         const config = ${JSON.stringify(next)};
-        const confirmId = crypto.randomUUID();
         const updateId = crypto.randomUUID();
         port.onDisconnect.addListener(() => reject(new Error(chrome.runtime.lastError?.message ?? "Native host disconnected")));
         port.onMessage.addListener((message) => {
           if (message.type === "error") {
             reject(new Error(message.message));
             port.disconnect();
-          } else if (message.type === "config_confirmed" && message.request_id === confirmId) {
-            port.postMessage({
-              type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
-              expected_revision: expectedRevision, config, picker_token: null,
-              consent_token: message.consent_token, harness_token: null,
-            });
           } else if (message.type === "config_updated" && message.request_id === updateId) {
             resolve(message.revision);
             port.disconnect();
           }
         });
         port.postMessage({
-          type: "confirm_config", protocol_version: ${PROTOCOL_VERSION}, request_id: confirmId,
-          expected_revision: expectedRevision, config, picker_token: null,
+          type: "update_config", protocol_version: ${PROTOCOL_VERSION}, request_id: updateId,
+          expected_revision: expectedRevision, config, picker_token: null, knowledge_base_token: null,
         });
       }))()`));
-      await userAction(`In ${APP_NAME}'s confirmation dialog, review and enable the smoke.page fixture adapter, then click Yes.`, async () => {
-        const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.adapters.artifacts.length === 1 &&
-          reply.config.adapters.artifacts[0].type === "smoke.page",
-        "The fixture adapter was not saved");
-      }, async () => answerAdapterConfirmation("Yes"));
       await saving;
+      const reply = await hostConfig(wrapper);
+      requireCondition(reply.config.adapters.artifacts.length === 1 &&
+        reply.config.adapters.artifacts[0].type === "smoke.page",
+      "The fixture adapter was not saved");
       await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
       await settingsConnected();
     });
@@ -1489,9 +1377,91 @@ async function run() {
         "The recovered edit was not saved after the conflict");
     });
 
-    // AI harness setup (§7.1-§7.3) runs only the fakes under fake-install.
-    // Guided runs skip it: their dialogs would need a person for five more
-    // prompts, and the headless run already covers the host's side.
+    await step("Pausing from the panel turns capture off and offers Resume in settings", async () => {
+      await openPanel();
+      await waitFor(() => onPanel(async (page) =>
+        requireCondition(await page.enabled("#pause-capture"), "The panel's pause button is disabled")));
+      // The pause button sits in the collapsed capture strip, as a user finds it.
+      await onPanel(async (page) => {
+        if (!(await page.evaluate('document.getElementById("capture-strip").open'))) {
+          await page.click("#capture-strip-summary");
+        }
+        await page.click("#pause-capture");
+      });
+      await waitFor(async () => requireCondition((await hostConfig(wrapper)).config.capture_enabled === false,
+        "Host still has capture enabled"), { timeout: 20_000, interval: 1_000 });
+      // A paused setup is complete, so no setup warning (DESIGN.md §5.7).
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.hidden("#setup-warning") === true, "Panel shows a setup warning while paused");
+        const strip = await page.text("#capture-strip-summary");
+        requireCondition(strip?.includes("Capture off"), `Capture strip says: ${strip}`);
+        const status = await page.text("#status");
+        requireCondition(/Resume (capture|it) in settings/.test(status ?? ""), `Panel status says: ${status}`);
+      }), { timeout: 20_000 });
+      await openSettingsTab();
+      await settingsConnected();
+      await waitFor(() => onSettings(async (page) => {
+        requireCondition(await page.hidden("#resume-capture") === false, "Settings does not show Resume capture");
+        requireCondition(await page.enabled("#resume-capture"), "Resume capture is disabled");
+      }), { timeout: 20_000 });
+      // Pausing keeps the site's adapter; only the capture switch is off.
+      requireCondition((await hostConfig(wrapper)).config.adapters.artifacts.length > 0,
+        "Pausing removed the site's adapter");
+      await closePanel();
+      await navigate(origin, whilePaused);
+      await openSettingsTab();
+      await delay(1_000);
+      requireCondition(!(await activityTotals()).some((total) => total.url === whilePaused),
+        "Activity was measured while capture was paused");
+    });
+
+    await step("Resume capture turns capture on with no dialog, and captures again", async () => {
+      const dialogsBefore = (await dialogLogLines()).length;
+      await inSettings(async (page) => {
+        await page.evaluate('document.getElementById("status").textContent = ""');
+        await page.click("#resume-capture");
+      });
+      await waitFor(async () => {
+        requireCondition((await hostConfig(wrapper)).config.capture_enabled === true,
+          "Capture is not enabled in the host");
+        const status = await settingsStatus();
+        requireCondition(status?.startsWith("Capturing on sites with adapters."), `Settings page says: ${status}`);
+      }, { timeout: 20_000, interval: 1_000 });
+      // From protocol v6, resuming saves capture back on with no native confirmation.
+      requireCondition((await dialogLogLines()).length === dialogsBefore, "Resume capture opened a native dialog");
+      await waitFor(() => onSettings(async (page) =>
+        requireCondition(await page.hidden("#resume-capture"), "Settings still shows Resume capture")));
+      await openPanel();
+      await waitFor(() => onPanel(async (page) => {
+        const strip = await page.text("#capture-strip-summary");
+        requireCondition(strip?.includes("Capture on"), `Capture strip says: ${strip}`);
+      }), { timeout: 20_000 });
+      await closePanel();
+      await navigate(origin, afterResume);
+      await openSettingsTab();
+      await waitFor(async () => {
+        const forResumed = (await activityTotals()).filter((total) => total.url === afterResume);
+        requireCondition(forResumed.length === 1 && forResumed[0].opens === 1,
+          `Expected one open of the resumed page in the hourly totals; found ${JSON.stringify(forResumed)}`);
+      }, { timeout: 20_000, interval: 1_000 });
+      await openPanel();
+      await waitFor(async () => {
+        if (activityRows((await logRows()).rows, afterResume).length === 0) {
+          await rewindActivityHour();
+          await onPanel((page) => page.evaluate(`chrome.runtime.sendMessage({ kind: "sync_now" })`));
+        }
+        const { files, rows } = await logRows();
+        requireCondition(activityRows(rows, afterResume).length === 1,
+          "Expected exactly one activity entry for the resumed page in the daily log");
+        requireCondition(!files.some((file) => file.text.includes(whilePaused)),
+          "Activity from while capture was paused reached the daily log");
+      }, { timeout: 60_000, interval: 2_000 });
+      await pendingVisitsCleared();
+    });
+
+    // AI harness setup runs only the fakes under fake-install. It shows no
+    // dialog: the host detects the harness again, runs one test prompt, and
+    // commits it. Guided runs skip it; the headless run covers the host's side.
     const probeArgv = PROBE_ARGV.map((arg) => `[${arg}]`).join("");
     const agentRequest = (fields) => hostRequest(wrapper, {
       protocol_version: PROTOCOL_VERSION, request_id: randomUUID(), ...fields,
@@ -1534,52 +1504,23 @@ async function run() {
       requireCondition(status?.startsWith(prefix), `Settings page says: ${status}`);
       return status;
     }, { timeout: 60_000 });
-    function describesSetup(text, denylist) {
-      for (const expected of [`${fakeInstallReal}/`, `"${fakeBin}/claude"`, "--disallowedTools", "{prompt}",
-        "HOME", "PATH", "ANTHROPIC_API_KEY", "\"summaries\""]) {
-        requireCondition(text.includes(expected), `The setup dialog does not show ${expected}: ${JSON.stringify(text)}`);
-      }
-      requireCondition(!text.includes(secret) && !text.includes("SMOKE_NOT_ALLOWED"),
-        "The setup dialog shows an environment value or a name it must not pass");
-      requireCondition(denylist.length ? denylist.every((entry) => text.includes(JSON.stringify(entry))) &&
-        !text.includes("No domains excluded.") : text.includes("No domains excluded."),
-      `The setup dialog does not list the exclusions ${JSON.stringify(denylist)}: ${JSON.stringify(text)}`);
-    }
+    const noNewDialog = async (before) => requireCondition((await dialogLogLines()).length === before,
+      "Harness setup opened a native dialog");
 
     if (!options.headless) {
       console.log("\nAI harness setup steps skipped: they run with --headless only.");
     } else {
-      await step("AI commands refused until privacy list is confirmed", async () => {
-        const refused = await agentRequest({ type: "check_agent", url: null });
-        requireCondition(refused.type === "error" && refused.code === "not_configured" &&
-          refused.message.includes("settings"), `check_agent answered ${JSON.stringify(refused)}`);
-        const before = await hostConfig(wrapper);
-        const forged = { ...before.config, agent_denylist_confirmed: true };
-        for (const harnessToken of [null, randomUUID()]) {
-          const reply = await agentRequest({
-            type: "update_config", expected_revision: before.revision, config: forged,
-            picker_token: null, consent_token: null, harness_token: harnessToken,
-          });
-          requireCondition(reply.type === "error" && reply.code === "unauthorized",
-            `Confirming the privacy list without setup answered ${reply.type} ${reply.code ?? ""}`);
-        }
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && !after.config.agent_denylist_confirmed &&
-          after.config.agent === null && after.agent_status.state === "not_set_up",
-        `The refused updates changed the config: ${JSON.stringify(after.agent_status)}`);
-      });
-
       await step("Detect harnesses", async () => {
         const rows = await detect();
         const claude = rows.find((row) => row.adapter === "claude_code");
         const codex = rows.find((row) => row.adapter === "codex");
         requireCondition(claude?.ready && claude.text.includes("Claude Code 2.1.284"),
           `Claude Code offer: ${JSON.stringify(claude)}`);
-        // Codex passes its checks, and the page says it shares the user's
-        // own Codex instructions and skills (DESIGN §14).
-        requireCondition(codex?.ready && codex.text.includes("Codex 0.144.4") &&
-          codex.text.includes("your AGENTS.md and skills can shape answers"),
-        `Codex offer: ${JSON.stringify(codex)}`);
+        requireCondition(codex?.ready && codex.text.includes("Codex 0.144.4"),
+          `Codex offer: ${JSON.stringify(codex)}`);
+        // The full-access warning sits above Set up harness.
+        const warning = await onSettings((page) => page.text("#harness-warning"));
+        requireCondition(warning === SETUP_WARNING, `The setup warning says: ${warning}`);
         const runs = await harnessRuns(argvLog);
         requireCondition(runs.length > 0 && runs.every((run) => ["claude-good", "codex"].includes(run.program) &&
           isCheckRun(run) && run.env.join(",") ===
@@ -1597,28 +1538,18 @@ async function run() {
           "The settings page shows an environment name or value it must not");
       });
 
-      await step("Harness setup canceled", async () => {
-        const before = await hostConfig(wrapper);
-        await startSetup();
-        describesSetup(await scriptedDialog("confirm", "canceled"), []);
-        await settledStatus("Harness setup did not finish: Canceled");
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && after.config.agent === null,
-          "A canceled setup changed the config");
-        requireCondition((await probeRuns()).length === 0, "A canceled setup ran the harness");
-      });
-
       await step("Failing harness refused", async () => {
         await pointFakeClaude(fakeBin, fakeInstall, "bad");
         const before = await hostConfig(wrapper);
         await detect();
+        const dialogsBefore = (await dialogLogLines()).length;
         await startSetup();
-        await scriptedDialog("confirm", "confirmed");
         const status = await settledStatus("Harness setup did not finish");
+        await noNewDialog(dialogsBefore);
         requireCondition(status.includes("failed its test run"), `Settings page says: ${status}`);
         const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision && !after.config.agent_denylist_confirmed &&
-          after.config.agent === null, "A failed test run changed the config");
+        requireCondition(after.revision === before.revision && after.config.agent === null,
+          "A failed test run changed the config");
         const probes = await probeRuns();
         requireCondition(probes.length === 1 && probes[0].program === "claude-bad" && probes[0].argv === probeArgv,
           `Expected one test run with the template argv; got ${JSON.stringify(probes)}`);
@@ -1626,23 +1557,15 @@ async function run() {
 
       await step("Harness setup confirmed", async () => {
         await pointFakeClaude(fakeBin, fakeInstall, "good");
-        await onSettings((page) => page.fill("#denylist-input", "Bank.Example"));
-        await inSettings((page) => page.click("#denylist-add"));
-        await waitFor(async () => requireCondition(
-          await onSettings((page) => page.evaluate('!!document.querySelector(\'#denylist-list button[aria-label="Remove bank.example"]\')')),
-          "bank.example is not in the pending list"));
-        requireCondition((await hostConfig(wrapper)).config.agent_denylist.length === 0,
-          "A pending exclusion was saved before setup");
         await detect();
+        const dialogsBefore = (await dialogLogLines()).length;
         await startSetup();
-        describesSetup(await scriptedDialog("confirm", "confirmed"), ["bank.example"]);
         await settledStatus("Claude Code is set up.");
+        await noNewDialog(dialogsBefore);
         const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.agent_denylist_confirmed &&
-          reply.config.agent?.binary === `${fakeBin}/claude` &&
-          reply.config.agent_denylist.join(",") === "bank.example" &&
+        requireCondition(reply.config.agent?.binary === `${fakeBin}/claude` &&
           reply.config.storage?.summaries_dir === "summaries",
-        `The host config after setup: ${JSON.stringify({ ...reply.config, sites: undefined })}`);
+        `The host config after setup: ${JSON.stringify(reply.config)}`);
         requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "2.1.284",
           `Agent status: ${JSON.stringify(reply.agent_status)}`);
         const probes = await probeRuns();
@@ -1651,87 +1574,25 @@ async function run() {
           good[0].env.join(",") === "ANTHROPIC_API_KEY,HOME,PATH",
         `Expected one passing test run with the chosen env names; got ${JSON.stringify(probes)}`);
         requireCondition(!(await readFile(configPath, "utf8")).includes(secret), "config.toml holds an environment value");
-        for (const [url, allowedUrl] of [["https://www.bank.example/x", false], ["https://example.org/", true]]) {
-          const checked = await agentRequest({ type: "check_agent", url });
-          requireCondition(checked.type === "agent_checked" && checked.url_allowed === allowedUrl,
-            `check_agent for ${url} answered ${JSON.stringify(checked)}`);
-        }
+        const checked = await agentRequest({ type: "check_agent" });
+        requireCondition(checked.type === "agent_checked" && checked.harness_version === "2.1.284" &&
+          !("url_allowed" in checked), `check_agent answered ${JSON.stringify(checked)}`);
       });
 
-      // Run while edits are live, so an auto-add would save at once (§7.3).
-      await step("Suggestion only fills the box", async () => {
-        const shownEntries = () => onSettings((page) => page.evaluate(
-          '[...document.querySelectorAll("#denylist-list button[aria-label^=\\"Remove \\"]")].map((b) => b.getAttribute("aria-label"))'));
-        const before = await hostConfig(wrapper);
-        const listBefore = await shownEntries();
-        await onSettings((page) => page.fill("#denylist-input", ""));
-        // The second suggestion (Email) is mail.example, not yet excluded.
-        await inSettings((page) => page.click("#denylist-suggestions button:nth-of-type(2)"));
-        const value = await onSettings((page) => page.evaluate('document.getElementById("denylist-input").value'));
-        requireCondition(value === "mail.example", `The suggestion filled the box with ${JSON.stringify(value)}`);
-        await delay(500);
-        const after = await hostConfig(wrapper);
-        requireCondition(after.revision === before.revision &&
-          after.config.agent_denylist.join(",") === before.config.agent_denylist.join(","),
-        `Choosing a suggestion changed the host denylist: ${JSON.stringify(after.config.agent_denylist)}`);
-        requireCondition(JSON.stringify(await shownEntries()) === JSON.stringify(listBefore),
-          `Choosing a suggestion changed the shown list: ${JSON.stringify(await shownEntries())}`);
-      });
-
-      await step("Denylist add is immediate, removal asks", async () => {
-        const hasEntry = (entry) => onSettings((page) => page.evaluate(
-          `!!document.querySelector('#denylist-list button[aria-label="Remove ${entry}"]')`));
-        const shownCount = async () => (await readFile(path.join(dialogs, "shown.jsonl"), "utf8"))
-          .split("\n").filter(Boolean).length;
-        const shownBefore = await shownCount();
-        await onSettings((page) => page.fill("#denylist-input", "mail.example"));
-        await inSettings((page) => page.click("#denylist-add"));
-        await settledStatus("AI commands now exclude mail.example");
-        requireCondition(await shownCount() === shownBefore, "Adding an exclusion opened a dialog");
-        requireCondition((await hostConfig(wrapper)).config.agent_denylist.includes("mail.example"),
-          "mail.example was not saved");
-
-        await inSettings((page) => page.click('#denylist-list button[aria-label="Remove bank.example"]'));
-        await scriptedDialog("confirm", "canceled");
-        await settledStatus("Could not change AI privacy exclusions: Canceled");
-        requireCondition(await hasEntry("bank.example") &&
-          (await hostConfig(wrapper)).config.agent_denylist.includes("bank.example"),
-        "A canceled removal still removed bank.example");
-
-        await inSettings((page) => page.click('#denylist-list button[aria-label="Remove bank.example"]'));
-        const text = await scriptedDialog("confirm", "confirmed");
-        requireCondition(text.includes('Allow AI commands to read pages on "bank.example"'),
-          `The removal dialog does not describe the change: ${JSON.stringify(text)}`);
-        await settledStatus("AI commands may now read pages on bank.example");
-        const reply = await hostConfig(wrapper);
-        requireCondition(reply.config.agent_denylist.join(",") === "mail.example" &&
-          reply.config.agent_denylist_confirmed && !(await hasEntry("bank.example")),
-        `The denylist after removal: ${JSON.stringify(reply.config.agent_denylist)}`);
-      });
-
-      // Codex runs under the user's own HOME (and CODEX_HOME when set), so
-      // its confirmation must say so and still recommend Claude Code (§14).
+      // Codex runs under the user's own HOME (and CODEX_HOME when set).
       await step("Codex setup confirmed", async () => {
         const probesBefore = (await probeRuns()).length;
         const rows = await detect();
         requireCondition(rows.find((row) => row.adapter === "codex")?.ready, "Codex is not offered");
         await inSettings((page) => page.click('#harness-offers li[data-adapter="codex"] input[type="radio"]'));
+        const dialogsBefore = (await dialogLogLines()).length;
         await startSetup();
-        const text = await scriptedDialog("confirm", "confirmed");
-        for (const expected of ["Codex uses your own Codex home and login",
-          "your AGENTS.md and skills can shape answers", "Claude Code is recommended",
-          `"${fakeBin}/codex"`, "--sandbox", "read-only", "Also --disable each of: shell_tool,", "{prompt}",
-          "mail.example"]) {
-          requireCondition(text.includes(expected), `The Codex dialog does not show ${expected}: ${JSON.stringify(text)}`);
-        }
-        requireCondition(!text.includes(secret) && !text.includes("ANTHROPIC_API_KEY"),
-          "The Codex dialog shows an environment value or a Claude Code name");
         await settledStatus("Codex is set up.");
+        await noNewDialog(dialogsBefore);
         const reply = await hostConfig(wrapper);
         const agent = reply.config.agent;
-        requireCondition(agent?.binary === `${fakeBin}/codex` && reply.config.agent_denylist_confirmed &&
-          agent.env_allow.join(",") === "HOME,PATH" && reply.config.agent_denylist.join(",") === "mail.example",
-        `The host config after Codex setup: ${JSON.stringify({ ...reply.config, sites: undefined })}`);
+        requireCondition(agent?.binary === `${fakeBin}/codex` && agent.env_allow.join(",") === "HOME,PATH",
+        `The host config after Codex setup: ${JSON.stringify(reply.config)}`);
         requireCondition(reply.agent_status.state === "ready" && reply.agent_status.harness_version === "0.144.4",
           `Agent status: ${JSON.stringify(reply.agent_status)}`);
         const expectedArgv = agent.args.map((arg) => `[${arg === "{prompt}" ? PROBE_ARGV[1] : arg}]`).join("");
@@ -1744,43 +1605,22 @@ async function run() {
     }
 
     await step("Site removal", async () => {
-      await inSettings((page) => page.click(`button[aria-label="Remove ${origin}/"]`));
+      await inSettings((page) => page.click(`button[aria-label="Remove site ${origin}"]`));
       await waitFor(async () => {
         const reply = await hostConfig(wrapper);
-        requireCondition(!reply.config.capture_enabled && reply.config.sites.length === 0,
-          "Host still has capture enabled or the site rule");
-        // A capture change echoes the harness and its confirmation unchanged.
+        requireCondition(!reply.config.capture_enabled && reply.config.adapters.artifacts.length === 0,
+          "Host still has capture enabled or the site's adapter");
+        // A capture change echoes the harness unchanged.
         if (options.headless) {
-          requireCondition(reply.config.agent !== null && reply.config.agent_denylist_confirmed,
-            "Site removal dropped the AI harness or its privacy-list confirmation");
+          requireCondition(reply.config.agent !== null, "Site removal dropped the AI harness");
         }
       }, { timeout: 20_000, interval: 1_000 });
-      await waitFor(async () => {
-        const grants = await chromeGrants(pattern);
-        requireCondition(!grants.origin && !grants.api, `Chrome still grants ${grants.origin ? origin : "webNavigation"}`);
-      });
       await waitFor(() => onPanel(async (page) => {
-        requireCondition(await page.hidden("#setup-warning") === false, "Panel does not show the setup warning");
-        const reason = await page.text("#setup-reason");
-        requireCondition(reason === "No sites are enabled for capture.", `Setup warning says: ${reason}`);
+        requireCondition(await page.hidden("#setup-warning") === true, "Panel shows a setup warning");
+        const strip = await page.text("#capture-strip-summary");
+        requireCondition(strip?.includes("Capture off"), `Capture strip says: ${strip}`);
       }), { timeout: 20_000 });
     });
-
-    if (options.headless) {
-      await step("Denylist stays live after harness removal", async () => {
-        await inSettings((page) => page.click("#remove-harness"));
-        await settledStatus("Harness removed.");
-        const removed = await hostConfig(wrapper);
-        requireCondition(removed.config.agent === null && removed.config.agent_denylist_confirmed,
-          `Removing the harness changed the confirmation: ${JSON.stringify(removed.agent_status)}`);
-        // With no harness the list still saves at once, not on the next setup.
-        await onSettings((page) => page.fill("#denylist-input", "hr.example"));
-        await inSettings((page) => page.click("#denylist-add"));
-        await settledStatus("AI commands now exclude hr.example");
-        requireCondition((await hostConfig(wrapper)).config.agent_denylist.includes("hr.example"),
-          "hr.example was not saved after the harness was removed");
-      });
-    }
 
     await step("No capture after removal", async () => {
       await closePanel();
@@ -1802,7 +1642,9 @@ async function run() {
         const pids = (await commandOutput("/usr/bin/pgrep", ["-f", `${options.host} __dialog-`]).catch(() => ""))
           .split("\n").filter(Boolean);
         requireCondition(pids.length === 0, "A dialog process is still running");
-        requireCondition(dialogsShown === 14, `Expected fourteen scripted dialogs; answered ${dialogsShown}`);
+        const logged = (await dialogLogLines()).length;
+        requireCondition(dialogsShown === logged,
+          `The host opened ${logged} dialogs; the smoke answered ${dialogsShown}`);
         requireCondition(!(await maybeLstat(path.join(dialogs, "answer"))), "An unused scripted answer remains");
         await nothingOnScreen();
       });

@@ -3,7 +3,7 @@
 // across every open page, and the worker's policy lease tells a page when
 // another page has saved a different revision.
 import type {
-  AdapterWarning, AgentStatus, ConfigSnapshot, HarnessOffer, SiteConfig,
+  AdapterDocument, AdapterWarning, AgentStatus, ConfigSnapshot, HarnessOffer,
 } from "../protocol/ts/generated.js";
 import {
   POLICY_LEASE_MS,
@@ -28,25 +28,19 @@ export function element<T extends HTMLElement>(id: string): T {
 
 export function describe(error: unknown): string {
   if (error instanceof HostError && error.code === "cancelled") {
-    return "Canceled. No settings were changed.";
+    return "Folder selection was canceled. No settings were changed.";
   }
   return error instanceof Error ? error.message : String(error);
 }
 
-export function sameSite(left: SiteConfig, right: SiteConfig): boolean {
-  return left.origin === right.origin && left.path_prefix === right.path_prefix;
-}
-
-/** Keep host configuration valid when an origin loses its final enabled site.
- * A site rule can narrow one origin by path, while adapters are origin-wide,
- * so adapters remain until every site entry for that origin is gone. */
-export function adaptersForSites(config: ConfigSnapshot, sites: SiteConfig[]): ConfigSnapshot["adapters"] {
-  const origins = new Set(sites.map((site) => site.origin));
-  return {
-    format: config.adapters.format,
-    artifacts: config.adapters.artifacts.filter((adapter) =>
-      typeof adapter.origin === "string" && origins.has(adapter.origin)),
-  };
+/** The sites capture is on for: the sorted, distinct adapter origins. A site
+ * is on exactly when it has an adapter. */
+export function siteOrigins(adapters: AdapterDocument): string[] {
+  const origins = new Set<string>();
+  for (const adapter of adapters.artifacts) {
+    if (typeof adapter.origin === "string") origins.add(adapter.origin);
+  }
+  return [...origins].sort();
 }
 
 export async function withConfigMutationLock<T>(action: () => Promise<T>): Promise<T> {
@@ -69,18 +63,16 @@ export function leaseFor(config: ConfigSnapshot, currentRevision: string): Polic
     revision: currentRevision,
     expires_at: Date.now() + POLICY_LEASE_MS,
     capture_enabled: config.capture_enabled,
-    sites: config.sites,
     adapters: config.adapters,
   };
 }
 
-/** Why capture cannot run yet, or null once setup is complete. */
+/** Why Brauser cannot work yet, or null once setup is complete. Having no
+ * adapters, or capture paused, is a choice rather than a setup problem. */
 export function setupProblem(config: ConfigSnapshot | null, issue: string | null): string | null {
   if (issue) return `The host configuration needs repair: ${issue}`;
   if (!config) return null;
   if (!config.storage) return "No notes folder is chosen.";
-  if (!config.sites.length) return "No sites are enabled for capture.";
-  if (!config.capture_enabled) return "Capture is paused.";
   return null;
 }
 
@@ -89,7 +81,11 @@ export function setupProblem(config: ConfigSnapshot | null, issue: string | null
  * resumes capture instead of setting anything up.
  */
 export function capturePaused(config: ConfigSnapshot | null, issue: string | null): boolean {
-  return !issue && !!config?.storage && config.sites.length > 0 && !config.capture_enabled;
+  return !issue && !!config?.storage && !config.capture_enabled;
+}
+
+export function captureStateText(config: ConfigSnapshot): string {
+  return config.capture_enabled ? "Capturing on sites with adapters." : "Capture is paused.";
 }
 
 export class ConfigSession {
@@ -201,13 +197,12 @@ export class ConfigSession {
     return this.status;
   }
 
-  /** Read the host and publish its policy, then settle Chrome revocations. */
+  /** Read the host and publish its policy. */
   async reload(): Promise<Awaited<ReturnType<ConfigSession["readHostConfig"]>>> {
     // Keep the host read and worker lease update together. Otherwise an older
     // page can reinstall a site after another page has removed it.
     const response = await withLatestHostState(
       withConfigMutationLock, () => this.readHostConfig(), (state) => this.applyHostConfig(state));
-    await this.reconcileRevocations();
     await this.refreshStatus();
     return response;
   }
@@ -215,31 +210,21 @@ export class ConfigSession {
   async saveConfig(
     next: ConfigSnapshot,
     pickerToken: string | null,
+    knowledgeBaseToken: string | null = null,
     onCommitted?: () => void,
     resumeAfterConfirmation = false,
     resumeAfterPauseToken: string | null = null,
   ): Promise<void> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
-    const expectedRevision = this.revision;
-    // The host shows the exact expansion. Its token binds this snapshot and revision.
-    const confirmed = await this.host.call({
-      type: "confirm_config",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      expected_revision: expectedRevision,
-      config: next,
-      picker_token: pickerToken,
-    }, "config_confirmed", 5 * 60_000);
+    // The revision check is the only gate on an ordinary settings change.
     const updated = await this.host.call({
       type: "update_config",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
-      expected_revision: expectedRevision,
+      expected_revision: this.revision,
       config: next,
       picker_token: pickerToken,
-      consent_token: confirmed.consent_token,
-      // Only native harness setup mints a harness grant (§7.3).
-      harness_token: null,
+      knowledge_base_token: knowledgeBaseToken,
     }, "config_updated");
     this.config = updated.config;
     this.setRevision(updated.revision);
@@ -254,56 +239,38 @@ export class ConfigSession {
     await this.refreshStatus();
   }
 
-  /** The harnesses the host found, each offer bound to this revision. */
+  /** The harnesses the host found on its own search path. */
   async discoverHarnesses(): Promise<HarnessOffer[]> {
-    if (!this.revision) throw new Error("Host configuration has not loaded");
     const reply = await this.host.call({
       type: "discover_harnesses",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
-      expected_revision: this.revision,
     }, "harnesses_discovered", 60_000);
     return reply.offers;
   }
 
   /**
-   * Native harness setup (§7.3). The host builds the whole new config from
-   * the offer, shows its own confirmation, and runs one test prompt; its
-   * single-use token authorizes exactly that config. The extension never
-   * sends a harness path or arguments. Call while holding the config
-   * mutation lock.
+   * Harness setup. The host rediscovers `harnessId` on its own search path,
+   * runs one test prompt through it, and commits the harness only when the
+   * test passes. The extension never sends a harness path or arguments.
+   * Call while holding the config mutation lock.
    */
   async setupHarness(
-    offerId: string,
+    harnessId: string,
     envNames: string[],
-    denylist: string[],
     summariesDir: string | null,
   ): Promise<void> {
     if (!this.revision) throw new Error("Host configuration has not loaded");
-    const expectedRevision = this.revision;
-    // The host closes its dialog at 270 seconds (host/src/dialog.rs), then
-    // runs a test prompt of up to 60 seconds, so wait past both.
-    const confirmed = await this.host.call({
-      type: "confirm_harness_setup",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      expected_revision: expectedRevision,
-      offer_id: offerId,
-      env_names: envNames,
-      agent_denylist: denylist,
-      summaries_dir: summariesDir,
-    }, "harness_setup_confirmed", 6 * 60_000);
-    // The harness dialog was this change's consent, so no confirm_config.
+    // Discovery plus a test prompt of up to the harness timeout.
     const updated = await this.host.call({
-      type: "update_config",
+      type: "set_up_harness",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
-      expected_revision: expectedRevision,
-      config: confirmed.config,
-      picker_token: null,
-      consent_token: null,
-      harness_token: confirmed.harness_token,
-    }, "config_updated");
+      expected_revision: this.revision,
+      harness_id: harnessId,
+      env_names: envNames,
+      summaries_dir: summariesDir,
+    }, "config_updated", 6 * 60_000);
     this.config = updated.config;
     this.setRevision(updated.revision);
     this.onChange();
@@ -315,48 +282,42 @@ export class ConfigSession {
     await this.refreshStatus();
   }
 
-  async reconcileRevocations(): Promise<void> {
-    if (!this.config || !this.revision) return;
+  /**
+   * Write the adapters for sites an earlier build removed or saw revoked out
+   * of the host config, in one update_config, then let the worker lift its
+   * capture block once the host's lease no longer holds them. `config` and
+   * `revision` are what this page last read. Returns whether it saved.
+   */
+  async applyPendingRemovals(config: ConfigSnapshot, revision: string): Promise<boolean> {
     const observed = await worker<WorkerStatus>({ kind: "get_status" });
-    if (!observed.revoked_origins.length) return;
+    if (!observed.pending_removals.length) return false;
+    let saved = false;
     await withConfigMutationLock(async () => {
-      // An origin may have been explicitly re-enabled by another page while
-      // this page waited for the lock. That flow acknowledges its old marker
-      // under this same lock, so never act on the snapshot taken above.
+      // Another page may have saved while this one waited for the lock.
+      if (this.revision !== revision) return;
       const state = await worker<WorkerStatus>({ kind: "get_status" });
-      if (!state.revoked_origins.length) return;
-      const revoked = new Set(state.revoked_origins);
-      // A different page may have committed since our previous read. Recompute
-      // from the host's current revision while holding the same mutation lock.
-      const latest = await this.readHostConfig();
-      this.setHostConfig(latest);
-      if (latest.config_issue) {
-        await worker<WorkerStatus>({ kind: "suspend_policy" });
-        throw new Error(latest.config_issue);
-      }
-      const sites = latest.config.sites.filter((site) => !revoked.has(site.origin));
-      if (sites.length !== latest.config.sites.length) {
+      if (!state.pending_removals.length) return;
+      const removed = new Set(state.pending_removals);
+      // An invalid or future adapter document can only pass the host's
+      // narrow repair exception when echoed without structural changes, so
+      // it stays as it is; the worker keeps its block until a later fix.
+      const adapters = this.adapterIssue ? config.adapters : {
+        format: config.adapters.format,
+        artifacts: config.adapters.artifacts.filter((adapter) =>
+          typeof adapter.origin !== "string" || !removed.has(adapter.origin)),
+      };
+      if (adapters.artifacts.length !== config.adapters.artifacts.length) {
         await this.saveConfig({
-          ...latest.config,
-          sites,
-          // An invalid or future adapter document can only pass the host's
-          // narrow repair exception when echoed without structural changes. Keep it inert
-          // while still writing the revoked Chrome origins out of host policy.
-          adapters: latest.adapter_issue
-            ? latest.config.adapters
-            : adaptersForSites(latest.config, sites),
-          capture_enabled: latest.config.capture_enabled && sites.length > 0,
+          ...config,
+          adapters,
+          capture_enabled: config.capture_enabled && siteOrigins(adapters).length > 0,
         }, null);
-      } else if (latest.adapter_issue) {
-        // The revocation was already absent from host policy. Keep the bad
-        // adapter document inert rather than reinstalling it as a lease.
-        await worker<WorkerStatus>({ kind: "suspend_policy" });
-      } else {
-        await this.installHostPolicy();
+        saved = true;
       }
-      await worker<WorkerStatus>({ kind: "ack_revocations", origins: state.revoked_origins });
+      await worker<WorkerStatus>({ kind: "clear_pending_removals" });
     });
-    this.onChange();
+    await this.refreshStatus();
+    return saved;
   }
 
   /** Call while holding the config mutation lock. */
