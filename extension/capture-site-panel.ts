@@ -110,6 +110,46 @@ function child<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** Plain words for a host check refusal code. */
+function checkReason(reason: string | null): string {
+  return (reason !== null && Object.hasOwn(DROP_REASONS, reason) ? DROP_REASONS[reason as DraftDropReason] : null) ??
+    FAILED_CHECKS;
+}
+
+/**
+ * The save-time re-check of a drafted selection (`check_site_draft`). It
+ * sends `plan.checked` alone: the Tier 0 tables after unchecking and
+ * renaming, all-drafted provenance and the separate scope choices. The scope,
+ * `unscoped` and title overlays exist only in `plan.document` and never
+ * cross. Any dropped rule, any scope verdict with a reason, a reply for
+ * another revision or one that does not answer every checked rule refuses
+ * with plain words. It writes nothing.
+ */
+export async function checkDraftedSave(
+  session: ConfigSession, plan: DraftPlan, revision: string, input: DraftRequest,
+): Promise<void> {
+  const { checked } = plan;
+  const reply = await session.checkSiteDraft(plan.origin, revision, checked, input.visited, input.links);
+  if (reply.revision !== revision) throw new Error(STALE);
+  if (reply.rules.length !== checked.adapters.length || reply.scope.length !== checked.adapters.length ||
+      reply.rules.some((rules, a) => rules.length !== checked.provenance[a]!.length)) {
+    throw new Error("Brauser's host did not check every chosen rule. Nothing was saved; open Capture Site again.");
+  }
+  for (const [a, table] of checked.adapters.entries()) {
+    const type = String(table.type);
+    const match = Array.isArray(table.match) ? table.match as unknown[] : [];
+    for (const [r, verdict] of reply.rules[a]!.entries()) {
+      if (verdict.verdict === "dropped") {
+        throw new Error(`${type} pages like ${describeRule(match[r])} can no longer be saved: ${checkReason(verdict.reason)}. Nothing was saved; open Capture Site again.`);
+      }
+    }
+    const scope = reply.scope[a]!;
+    if (scope.reason !== null) {
+      throw new Error(`The accounts chosen for ${type} were not accepted: ${checkReason(scope.reason)}. Nothing was saved; open Capture Site again.`);
+    }
+  }
+}
+
 interface DraftKindView {
   heading: HTMLElement;
   type: HTMLInputElement;
@@ -516,10 +556,11 @@ export class CaptureSitePanel {
 
   private async commit(): Promise<void> {
     const target = this.target;
-    const plan = this.plan;
-    // A drafted site is saved only after the host re-checks the selection
-    // (check_site_draft); until that path exists, nothing is saved here.
-    if (!target || target.mode !== "starter" || !plan || this.save.disabled || this.actions.isBusy()) return;
+    // A drafted site is saved only after the host re-checks the selection.
+    const drafted = target?.mode === "draft" ? this.draftPlan : null;
+    const input = this.draftInput;
+    const plan: CapturePlan | DraftPlan | null = target?.mode === "draft" ? drafted : this.plan;
+    if (!target || !plan || (target.mode === "draft" && !input) || this.save.disabled || this.actions.isBusy()) return;
     this.saving = true;
     this.actions.changed();
     let committed = false;
@@ -537,6 +578,13 @@ export class CaptureSitePanel {
         const state = await worker<WorkerStatus>({ kind: "get_status" });
         if (state.pause_pending || state.pending_removals.includes(plan.origin)) {
           throw new Error("A pause or site removal is pending. Finish it in settings first.");
+        }
+        // The host re-checks the reviewed selection against the config it
+        // holds now, for this revision. A dropped rule or refused scope saves
+        // nothing; only plan.document carries the overlays.
+        if (drafted && input) {
+          await checkDraftedSave(this.session, drafted, target.revision, input);
+          if (this.target !== target || !this.samePage(this.page, target)) throw new Error("The active page changed. Open Capture Site again.");
         }
         // Finish old URL-note edits before enabling artifact identity. The
         // editor keeps a copy-out if saving fails, then reloads under the new
