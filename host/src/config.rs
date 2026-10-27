@@ -1859,6 +1859,11 @@ fn note_key_rules(
                     .get("origin")
                     .and_then(serde_json::Value::as_str)
                     .and_then(|origin| url::Url::parse(origin).ok())
+                    // Only a page origin can localize the damage; any other
+                    // scheme serializes to an origin no page has.
+                    .filter(|origin| {
+                        matches!(origin.scheme(), "http" | "https") && origin.host().is_some()
+                    })
                     .map(|origin| origin.origin().ascii_serialization())
                 else {
                     return false;
@@ -3127,15 +3132,29 @@ mod tests {
             assert_eq!(store.note_key_rule(ITEM_7), NoteKeyRule::Unavailable);
             assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Uncovered);
 
-            // An entry that names no origin cannot be attributed to one.
-            fs::write(
-                state_path(folder.path()),
-                serde_json::to_vec(&json!({"format": 1, "contracts": [{"type": "work.other"}]}))
-                    .unwrap(),
-            )
-            .unwrap();
-            let store = loaded(&path);
-            assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Unavailable);
+            // An entry that names no HTTP(S) origin cannot be attributed to
+            // a page's origin.
+            for origin in [
+                None,
+                Some("mailto:x@work.example"),
+                Some("ftp://work.example"),
+            ] {
+                let mut entry = json!({"type": "work.other"});
+                if let Some(origin) = origin {
+                    entry["origin"] = json!(origin);
+                }
+                fs::write(
+                    state_path(folder.path()),
+                    serde_json::to_vec(&json!({"format": 1, "contracts": [entry]})).unwrap(),
+                )
+                .unwrap();
+                let store = loaded(&path);
+                assert_eq!(
+                    store.note_key_rule(ELSEWHERE),
+                    NoteKeyRule::Unavailable,
+                    "{origin:?}"
+                );
+            }
         }
 
         #[test]

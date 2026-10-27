@@ -633,8 +633,8 @@ file the host cannot use (unreadable, not a regular file, over a bound,
 malformed, or from a newer host) is never rewritten, and every URL the current
 policy does not recognize has unavailable identity: loads and saves refuse,
 because any origin's deciding contract may be in it. A damaged entry with a
-readable origin makes only that origin unavailable, as a damaged history entry
-does; one with no readable origin counts as an unusable file. Removing the
+readable HTTP(S) origin makes only that origin unavailable, as a damaged
+history entry does; one with no such origin counts as an unusable file. Removing the
 file forgets its contracts, like a config repair.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing (§5.2 step 4); a changed key discards the output, like any other config change during a run.
