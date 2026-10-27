@@ -3,7 +3,9 @@
 // scripts/register-dev-host.mjs.
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import path from "node:path";
+// The LaunchAgent is macOS-only, so every path here is a POSIX path, even
+// when the script tests run on Windows.
+import { posix as path } from "node:path";
 import { APP_NAME } from "../extension/brand.ts";
 
 const DEV_MARKER = `<!-- ${APP_NAME} development service -->`;

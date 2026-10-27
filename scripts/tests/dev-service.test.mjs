@@ -9,6 +9,9 @@ import { isDevPlist, plistPath, servicePlist } from "../dev-service.mjs";
 import { main } from "../register-dev-host.mjs";
 
 const EXTENSION_ID = "a".repeat(32);
+// These tests install the LaunchAgent into a temp home, and its paths are
+// POSIX paths; a Windows temp directory is not one, so they run off Windows.
+const NEEDS_POSIX_HOME = process.platform === "win32" && "the LaunchAgent needs a POSIX home; Windows temp directories are not POSIX paths";
 
 async function world(t) {
   const home = await mkdtemp(path.join(os.tmpdir(), "bds-"));
@@ -56,7 +59,39 @@ test("paths are escaped and must be absolute", () => {
   assert.throws(() => plistPath("relative", SERVICE_LABEL), /absolute/);
 });
 
-test("plist lints", { skip: process.platform !== "darwin" }, async (t) => {
+// The LaunchAgent is macOS-only, so its paths must stay POSIX even when the
+// script tests run on Windows CI. A child process loads dev-service.mjs with
+// node:path resolved to path.win32, which is what a Windows runner gives it.
+test("plist paths stay POSIX when node:path is win32", () => {
+  const module = new URL("../dev-service.mjs", import.meta.url).href;
+  const script = `
+    import { registerHooks } from "node:module";
+    let hooked = false;
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (context.parentURL === ${JSON.stringify(module)} && (specifier === "node:path" || specifier === "path")) {
+          hooked = true;
+          return { url: "node:path/win32", shortCircuit: true };
+        }
+        return next(specifier, context);
+      },
+    });
+    const { logPath, plistPath, servicePlist } = await import(${JSON.stringify(module)});
+    const xml = servicePlist({ label: "l", binary: "/a/brauser", home: "/Users/u", user: "u" });
+    console.log(JSON.stringify({ hooked, xml, plist: plistPath("/Users/u", "l"), log: logPath("/Users/u") }));
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const { hooked, xml, plist, log } = JSON.parse(result.stdout);
+  assert.ok(hooked, "dev-service.mjs no longer imports node:path; update this test");
+  assert.equal(plist, "/Users/u/Library/LaunchAgents/l.plist");
+  assert.equal(log, "/Users/u/Library/Logs/Brauser/service.log");
+  assert.ok(xml.includes("/opt/homebrew/bin:/usr/local/bin:/Users/u/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"));
+  assert.ok(!xml.includes("\\"));
+  assert.throws(() => plistPath("C:\\Users\\u", "l"), /absolute/);
+});
+
+test("plist lints",{ skip: process.platform !== "darwin" }, async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bdl-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "service.plist");
@@ -65,7 +100,7 @@ test("plist lints", { skip: process.platform !== "darwin" }, async (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
 
-test("registration always boots out before bootstrapping", async (t) => {
+test("registration always boots out before bootstrapping", { skip: NEEDS_POSIX_HOME }, async (t) => {
   const { home, binary, calls, deps } = await world(t);
   await main([EXTENSION_ID, binary], deps);
   const plist = plistPath(home, SERVICE_LABEL);
@@ -86,13 +121,13 @@ test("registration always boots out before bootstrapping", async (t) => {
   assert.deepEqual(calls.slice(2).map((argv) => argv[0]), ["bootout", "bootstrap"]);
 });
 
-test("a failed bootstrap is an error", async (t) => {
+test("a failed bootstrap is an error", { skip: NEEDS_POSIX_HOME }, async (t) => {
   const { binary, deps } = await world(t);
   const run = (argv) => argv[0] === "bootstrap" ? { status: 5, stdout: "", stderr: "Bootstrap failed: 5" } : { status: 0, stdout: "", stderr: "" };
   await assert.rejects(main([EXTENSION_ID, binary], { ...deps, run }), /Bootstrap failed: 5/);
 });
 
-test("a non-development plist is never replaced or booted out", async (t) => {
+test("a non-development plist is never replaced or booted out", { skip: NEEDS_POSIX_HOME }, async (t) => {
   const { home, binary, calls, deps } = await world(t);
   const plist = plistPath(home, SERVICE_LABEL);
   await mkdir(path.dirname(plist), { recursive: true });
@@ -103,14 +138,14 @@ test("a non-development plist is never replaced or booted out", async (t) => {
   assert.equal(await readFile(plist, "utf8"), "<plist>release</plist>");
 });
 
-test("--no-service skips the service steps", async (t) => {
+test("--no-service skips the service steps", { skip: NEEDS_POSIX_HOME }, async (t) => {
   const { home, binary, calls, deps } = await world(t);
   await main([EXTENSION_ID, binary, "--no-service"], deps);
   assert.deepEqual(calls, []);
   await assert.rejects(stat(plistPath(home, SERVICE_LABEL)), { code: "ENOENT" });
 });
 
-test("--unregister-service boots out and removes the dev plist", async (t) => {
+test("--unregister-service boots out and removes the dev plist", { skip: NEEDS_POSIX_HOME }, async (t) => {
   const { home, binary, calls, deps } = await world(t);
   await main([EXTENSION_ID, binary], deps);
   calls.length = 0;
