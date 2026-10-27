@@ -6,7 +6,7 @@ import { isResponseShape } from "./protocol-shape.js";
 
 // A value import would pull the generated module out of the flat dist layout;
 // this annotation fails typecheck whenever the generated version changes.
-export const PROTOCOL_VERSION: typeof GENERATED_PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION: typeof GENERATED_PROTOCOL_VERSION = 7;
 
 export function newRequestId(): string {
   return crypto.randomUUID();

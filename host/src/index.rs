@@ -17,7 +17,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{ActivityEvent, ArtifactListItem, ArtifactView, StorageConfig, WhyEvent};
+use brauser_protocol::{
+    ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
+    StorageConfig, WhyEvent,
+};
 use cap_std::fs::{Dir, OpenOptions};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -1140,12 +1143,10 @@ impl ArtifactIndex {
     /// append-only log remains authoritative; this never trusts index.db.
     pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>> {
         let derived = self.derive(&self.load_or_rebuild()?);
-        Ok(derived.artifacts.get(artifact_id).map(|row| {
-            artifact_view(
-                row,
-                linked_count(&derived.edges, &derived.artifacts, artifact_id),
-            )
-        }))
+        Ok(derived
+            .artifacts
+            .get(artifact_id)
+            .map(|row| artifact_view(row, &derived)))
     }
 
     /// Canonical URLs previously recorded for an artifact, including mode
@@ -1394,7 +1395,51 @@ fn saturating_u32(value: u64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-fn artifact_view(row: &ArtifactRow, linked: usize) -> ArtifactView {
+/// The most artifacts an artifact view lists as contained in it.
+const MAX_CONTAINED: usize = 20;
+
+fn artifact_view(row: &ArtifactRow, derived: &Derived) -> ArtifactView {
+    let id = row.artifact_id.as_str();
+    let linked = linked_count(&derived.edges, &derived.artifacts, id);
+    // A child normally has one container; if an adapter change left more
+    // than one, the most-used edge wins, then the lowest ID.
+    let within = derived
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == "within" && edge.source == id && edge.target != id)
+        .filter_map(|edge| Some((edge, derived.artifacts.get(&edge.target)?)))
+        .max_by(|(a, _), (b, _)| a.weight.cmp(&b.weight).then(b.target.cmp(&a.target)))
+        .map(|(_, container)| ArtifactRefView {
+            artifact_id: container.artifact_id.clone(),
+            artifact_type: container.artifact_type.clone(),
+            title: container.title.clone(),
+            url: container.url.clone(),
+        });
+    let mut contained = derived
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == "within" && edge.target == id && edge.source != id)
+        .map(|edge| edge.source.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|source| derived.artifacts.get(source))
+        .collect::<Vec<_>>();
+    contained.sort_by(|a, b| {
+        b.focused_secs
+            .cmp(&a.focused_secs)
+            .then_with(|| a.artifact_id.cmp(&b.artifact_id))
+    });
+    let contained = contained
+        .into_iter()
+        .take(MAX_CONTAINED)
+        .map(|child| ContainedArtifactView {
+            artifact_id: child.artifact_id.clone(),
+            artifact_type: child.artifact_type.clone(),
+            title: child.title.clone(),
+            url: child.url.clone(),
+            focused_seconds: saturating_u32(child.focused_secs),
+        })
+        .collect();
     ArtifactView {
         artifact_id: row.artifact_id.clone(),
         artifact_type: row.artifact_type.clone(),
@@ -1409,6 +1454,8 @@ fn artifact_view(row: &ArtifactRow, linked: usize) -> ArtifactView {
         last_mode: row.last_mode.clone(),
         why: row.why.clone(),
         linked_count: saturating_u32(linked as u64),
+        within,
+        contained,
     }
 }
 
@@ -1857,6 +1904,28 @@ fn container_title(id: &str) -> String {
 
 fn container_url(origin: &str, id: &str) -> String {
     format!("{}/{}", origin.trim_end_matches('/'), container_title(id))
+}
+
+/// The title and URL for an artifact with no record yet, when some adapter
+/// declares its type as a container: container rows are always named from
+/// their ID, never from whichever sub-page happened to be open.
+pub(crate) fn unvisited_container(
+    document: &Document,
+    found: &adapter_templates::Match,
+) -> Option<(String, String)> {
+    let is_container = document
+        .adapters()
+        .iter()
+        .filter_map(|adapter| adapter.within())
+        .any(|within| within.artifact_type() == found.artifact_type);
+    if !is_container {
+        return None;
+    }
+    let origin = document.adapters().get(found.adapter)?.origin();
+    Some((
+        container_title(&found.artifact_id),
+        container_url(origin, &found.artifact_id),
+    ))
 }
 
 /// A container's (type, ID, adapter origin), as `container_for` finds it.
@@ -5026,6 +5095,77 @@ print(json.dumps([tables,row]))"#;
         let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
         assert_eq!(repo.title, "acme-corp/widgets");
         assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
+    }
+
+    #[test]
+    fn artifact_view_names_its_container_and_contents() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let seven = github_pr(1, 7, "2026-10-15T10:00:00Z");
+        let mut eight = github_pr(2, 8, "2026-10-15T11:00:00Z");
+        eight.focused_seconds = 300;
+        let mut nine = github_pr(3, 9, "2026-10-15T12:00:00Z");
+        nine.focused_seconds = 125;
+        let blob = github_blob(4, "2026-10-15T13:00:00Z");
+        index
+            .record_activities([&seven, &eight, &nine, &blob], &[])
+            .unwrap();
+
+        let pull = index.artifact(GITHUB_PR_ID).unwrap().unwrap();
+        assert_eq!(
+            pull.within,
+            Some(ArtifactRefView {
+                artifact_id: GITHUB_REPO_ID.into(),
+                artifact_type: "github.repo".into(),
+                title: "acme-corp/widgets".into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+            })
+        );
+        assert!(pull.contained.is_empty());
+
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(repo.within, None);
+        // Most focused first; equal focus breaks by artifact ID.
+        let contained = repo
+            .contained
+            .iter()
+            .map(|item| (item.artifact_id.as_str(), item.focused_seconds))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            contained,
+            [
+                ("github.pr:github.com/acme-corp/widgets/8", 300),
+                (GITHUB_PR_ID, 125),
+                ("github.pr:github.com/acme-corp/widgets/9", 125),
+            ]
+        );
+        assert_eq!(repo.contained[0].artifact_type, "github.pr");
+        assert_eq!(
+            repo.contained[0].url,
+            "https://github.com/acme-corp/widgets/pull/8"
+        );
+    }
+
+    #[test]
+    fn artifact_view_lists_at_most_twenty_contained_artifacts() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let events = (1..=25)
+            .map(|n| {
+                let mut event = github_pr(n, n, "2026-10-15T10:00:00Z");
+                event.focused_seconds = n;
+                event
+            })
+            .collect::<Vec<_>>();
+        index.record_activities(&events, &[]).unwrap();
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(repo.contained.len(), 20);
+        assert_eq!(repo.contained[0].focused_seconds, 25);
+        assert_eq!(repo.contained[19].focused_seconds, 6);
     }
 
     #[test]

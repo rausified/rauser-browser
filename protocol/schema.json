@@ -156,7 +156,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -179,7 +179,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -206,7 +206,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -265,7 +265,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -310,7 +310,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -373,7 +373,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -407,7 +407,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -717,7 +717,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -752,7 +752,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -770,7 +770,7 @@
       "required": ["type", "protocol_version", "request_id", "event"],
       "properties": {
         "type": { "const": "record_activity" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "event": { "$ref": "#/$defs/ActivityEvent" }
       }
@@ -781,7 +781,7 @@
       "required": ["type", "protocol_version", "request_id", "batch_id", "events", "overflow"],
       "properties": {
         "type": { "const": "record_batch" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "batch_id": { "type": "string", "minLength": 1, "maxLength": 64 },
         "events": {
@@ -801,7 +801,7 @@
       "required": ["type", "protocol_version", "request_id", "event"],
       "properties": {
         "type": { "const": "record_why" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "event": { "$ref": "#/$defs/WhyEvent" }
       }
@@ -821,7 +821,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -854,7 +854,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -889,7 +889,7 @@
       "required": ["type", "protocol_version", "request_id", "url", "source_url", "expected_revision"],
       "properties": {
         "type": { "const": "use_artifact_note" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 },
@@ -902,7 +902,7 @@
       "required": ["type", "protocol_version", "request_id", "url", "source_url"],
       "properties": {
         "type": { "const": "view_older_note" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 }
@@ -914,7 +914,7 @@
       "required": ["type", "protocol_version", "request_id", "url", "title"],
       "properties": {
         "type": { "const": "get_artifact" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] }
@@ -926,7 +926,7 @@
       "required": ["type", "protocol_version", "request_id", "artifact_type", "title_query", "limit"],
       "properties": {
         "type": { "const": "list_artifacts" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "artifact_type": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
         "title_query": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
@@ -939,7 +939,7 @@
       "required": ["type", "protocol_version", "request_id", "start_date", "end_date"],
       "properties": {
         "type": { "const": "worklog" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "start_date": { "type": "string", "minLength": 10, "maxLength": 10 },
         "end_date": { "type": "string", "minLength": 10, "maxLength": 10 }
@@ -951,7 +951,7 @@
       "required": ["type", "protocol_version", "request_id"],
       "properties": {
         "type": { "const": "refresh_artifacts" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
@@ -970,7 +970,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -995,7 +995,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1031,7 +1031,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1074,7 +1074,7 @@
       "required": ["type", "protocol_version", "request_id", "event_id", "outcome", "reason", "relative_path"],
       "properties": {
         "type": { "const": "activity_recorded" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "outcome": { "$ref": "#/$defs/VisitOutcome" },
@@ -1088,7 +1088,7 @@
       "required": ["type", "protocol_version", "request_id", "batch_id", "results", "overflow_recorded"],
       "properties": {
         "type": { "const": "batch_recorded" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "batch_id": { "type": "string", "minLength": 1, "maxLength": 64 },
         "results": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/BatchEventResult" } },
@@ -1101,7 +1101,7 @@
       "required": ["type", "protocol_version", "request_id", "event_id", "outcome", "reason", "relative_path"],
       "properties": {
         "type": { "const": "why_recorded" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "outcome": { "$ref": "#/$defs/VisitOutcome" },
@@ -1153,7 +1153,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1204,7 +1204,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1248,7 +1248,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1283,7 +1283,7 @@
     "ArtifactView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["artifact_id", "artifact_type", "title", "url", "first_seen", "last_seen", "focused_seconds", "background_seconds", "opens", "days_opened", "last_mode", "why", "linked_count"],
+      "required": ["artifact_id", "artifact_type", "title", "url", "first_seen", "last_seen", "focused_seconds", "background_seconds", "opens", "days_opened", "last_mode", "why", "linked_count", "within", "contained"],
       "properties": {
         "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
         "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -1297,7 +1297,32 @@
         "days_opened": { "type": "integer", "minimum": 0 },
         "last_mode": { "oneOf": [{ "type": "string", "enum": ["view", "edit", "review"] }, { "type": "null" }] },
         "why": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
-        "linked_count": { "type": "integer", "minimum": 0 }
+        "linked_count": { "type": "integer", "minimum": 0 },
+        "within": { "oneOf": [{ "$ref": "#/$defs/ArtifactRefView" }, { "type": "null" }] },
+        "contained": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/ContainedArtifactView" } }
+      }
+    },
+    "ArtifactRefView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_type", "title", "url"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 }
+      }
+    },
+    "ContainedArtifactView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_type", "title", "url", "focused_seconds"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "artifact_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "focused_seconds": { "type": "integer", "minimum": 0 }
       }
     },
     "ArtifactListItem": {
@@ -1322,7 +1347,7 @@
       "required": ["type", "protocol_version", "request_id", "recognized", "artifact"],
       "properties": {
         "type": { "const": "artifact_result" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "recognized": { "type": "boolean" },
         "artifact": { "oneOf": [{ "$ref": "#/$defs/ArtifactView" }, { "type": "null" }] }
@@ -1334,7 +1359,7 @@
       "required": ["type", "protocol_version", "request_id", "items", "artifact_types", "truncated"],
       "properties": {
         "type": { "const": "artifact_list_result" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "items": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/ArtifactListItem" } },
         "artifact_types": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
@@ -1347,7 +1372,7 @@
       "required": ["type", "protocol_version", "request_id", "start_date", "end_date", "text", "artifact_count"],
       "properties": {
         "type": { "const": "worklog_result" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "start_date": { "type": "string", "minLength": 10, "maxLength": 10 },
         "end_date": { "type": "string", "minLength": 10, "maxLength": 10 },
@@ -1361,7 +1386,7 @@
       "required": ["type", "protocol_version", "request_id", "written", "unchanged", "conflicts", "conflict_paths"],
       "properties": {
         "type": { "const": "artifacts_refreshed" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "written": { "type": "integer", "minimum": 0 },
         "unchanged": { "type": "integer", "minimum": 0 },
@@ -1385,7 +1410,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1574,7 +1599,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1602,7 +1627,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1657,7 +1682,7 @@
         },
         "protocol_version": {
           "type": "integer",
-          "const": 6
+          "const": 7
         },
         "request_id": {
           "type": "string",
@@ -1827,7 +1852,7 @@
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "harness", "record_key", "requested_at"],
       "properties": {
         "type": { "const": "start_run" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 2048 },
@@ -1845,7 +1870,7 @@
       "required": ["type", "protocol_version", "request_id", "run", "existing"],
       "properties": {
         "type": { "const": "run_started" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run": { "$ref": "#/$defs/RunView" },
         "existing": { "type": "boolean" }
@@ -1858,7 +1883,7 @@
       "required": ["type", "protocol_version", "request_id", "run_id", "since_offset"],
       "properties": {
         "type": { "const": "get_run" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
         "since_offset": { "type": "integer", "minimum": 0 }
@@ -1871,7 +1896,7 @@
       "required": ["type", "protocol_version", "request_id", "run", "stream_text", "next_offset", "more"],
       "properties": {
         "type": { "const": "run_fetched" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run": { "$ref": "#/$defs/RunView" },
         "stream_text": { "type": "string", "maxLength": 196608 },
@@ -1885,7 +1910,7 @@
       "required": ["type", "protocol_version", "request_id"],
       "properties": {
         "type": { "const": "list_runs" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
@@ -1896,7 +1921,7 @@
       "required": ["type", "protocol_version", "request_id", "runs"],
       "properties": {
         "type": { "const": "runs_listed" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "runs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/RunView" } }
       }
@@ -1907,7 +1932,7 @@
       "required": ["type", "protocol_version", "request_id", "run_id"],
       "properties": {
         "type": { "const": "cancel_run" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 }
       }
@@ -1919,7 +1944,7 @@
       "required": ["type", "protocol_version", "request_id", "run_id"],
       "properties": {
         "type": { "const": "retry_save" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 }
       }
@@ -1930,7 +1955,7 @@
       "required": ["type", "protocol_version", "request_id", "run"],
       "properties": {
         "type": { "const": "run_updated" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "run": { "$ref": "#/$defs/RunView" }
       }
@@ -1942,7 +1967,7 @@
       "required": ["type", "protocol_version", "request_id"],
       "properties": {
         "type": { "const": "service_hello" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
@@ -1953,7 +1978,7 @@
       "required": ["type", "protocol_version", "request_id", "build_id"],
       "properties": {
         "type": { "const": "service_ready" },
-        "protocol_version": { "type": "integer", "const": 6 },
+        "protocol_version": { "type": "integer", "const": 7 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "build_id": { "type": "string", "minLength": 1, "maxLength": 256 }
       }

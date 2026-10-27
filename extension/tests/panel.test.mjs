@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { isResponseShape } = await import("../dist/protocol-shape.js");
 
 // Run after build:extension. Each test loads a fresh copy of the side panel
 // against a fake DOM built from the shipped panel.html, a scripted native
@@ -829,8 +830,27 @@ function artifact(id, title, why = null) {
     artifact_id: id, artifact_type: "doc", title, url: `https://docs.example/${id}`,
     first_seen: "2026-10-01", last_seen: "2026-10-27", focused_seconds: 60,
     background_seconds: 0, opens: 1, days_opened: 1, last_mode: null, why, linked_count: 0,
+    within: null, contained: [],
   };
 }
+
+test("artifact shape validation requires the container fields", () => {
+  const result = (value) => isResponseShape(recognized(value));
+  const repo = { artifact_id: "github.repo:github.com/acme/widgets", artifact_type: "github.repo",
+    title: "acme/widgets", url: "https://github.com/acme/widgets" };
+  const child = { artifact_id: "github.pr:github.com/acme/widgets/7", artifact_type: "github.pr",
+    title: "Fix", url: "https://github.com/acme/widgets/pull/7", focused_seconds: 60 };
+  assert.equal(result(artifact("doc:a", "A")), true);
+  assert.equal(result({ ...artifact("doc:a", "A"), within: repo }), true);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: [child] }), true);
+  const { contained: _contained, ...missingContained } = artifact("doc:a", "A");
+  assert.equal(result(missingContained), false);
+  const { within: _within, ...missingWithin } = artifact("doc:a", "A");
+  assert.equal(result(missingWithin), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), within: { ...repo, url: 7 } }), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: [{ ...child, focused_seconds: -1 }] }), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: Array(21).fill(child) }), false);
+});
 
 const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value });
 const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));

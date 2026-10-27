@@ -42,7 +42,7 @@ const FAKE_HARNESS_ENV = `${BINARY_NAME.toUpperCase()}_FAKE_HARNESS`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
-const PROTOCOL_VERSION = 6;
+const PROTOCOL_VERSION = 7;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 const EXTENSION_ID = /^[a-p]{32}$/;
