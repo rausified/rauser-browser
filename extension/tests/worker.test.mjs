@@ -32,6 +32,8 @@ const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
 let badgeText = "";
+// When set, a storage.local.set whose items this returns true for rejects.
+let rejectLocalSet = null;
 
 function storageArea(entries) {
   return {
@@ -43,6 +45,7 @@ function storageArea(entries) {
       return result;
     },
     async set(items) {
+      if (entries === values && rejectLocalSet?.(items)) throw new Error("QUOTA_BYTES quota exceeded");
       for (const [name, value] of Object.entries(items)) entries.set(name, structuredClone(value));
     },
     async remove(keys) {
@@ -567,6 +570,191 @@ test("pending local removals survive upgrade until the host drops those adapters
   const cleared = await send({ kind: "clear_pending_removals" });
   assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
   assert.deepEqual(cleared.pending_removals, []);
+});
+
+test("a tracked tab that navigates to a pending-removal origin stops gaining time", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const activeOrigin = "https://still-on.example";
+  const removedOrigin = "https://going-away.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(activeOrigin),
+    adapters: { format: 1, artifacts: [artifact(activeOrigin), artifact(removedOrigin)] },
+  });
+  values.set(storageKey("pending_site_removals_v1"), [removedOrigin]);
+
+  tabs.set(50, { id: 50, windowId: 1, url: `${activeOrigin}/items/a`, title: "A", incognito: false });
+  onCommitted({
+    tabId: 50, frameId: 0, documentId: "tracked", documentLifecycle: "active",
+    url: `${activeOrigin}/items/a`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[50].artifact_id,
+    "test:still-on.example/a");
+
+  tabs.set(50, { id: 50, windowId: 1, url: `${removedOrigin}/items/b`, title: "B", incognito: false });
+  onCommitted({
+    tabId: 50, frameId: 0, documentId: "pending", documentLifecycle: "active",
+    url: `${removedOrigin}/items/b`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[50], undefined,
+    "the previous page's entry ends even though the stored lease still holds the origin");
+});
+
+test("a pending local pause does not keep pending removals from clearing", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://paused-removal.example";
+  const keptOrigin = "https://paused-kept.example";
+  values.set(storageKey("revocations_v1"), [removedOrigin]);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin),
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin]);
+
+  const paused = await send({ kind: "pause_capture" });
+  assert.equal(paused.pause_pending, true);
+  // applyPendingRemovals saved the removal; its reinstall comes back while
+  // the pause is still pending.
+  const installed = await send({
+    kind: "install_policy", lease: { ...lease(keptOrigin), revision: "removal-saved" },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  assert.equal(installed.pause_pending, true, "capture stays blocked");
+  const cleared = await send({ kind: "clear_pending_removals" });
+  assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
+  assert.deepEqual(cleared.pending_removals, []);
+  assert.equal(cleared.pause_pending, true);
+});
+
+test("malformed legacy site removal state is kept and keeps capture paused", async () => {
+  const removedOrigin = "https://malformed-removal.example";
+  const keptOrigin = "https://malformed-kept.example";
+  const malformed = [
+    "not-a-list",
+    [{ origin: removedOrigin, path_prefix: "/" }, { origin: 42, path_prefix: "/" }],
+    [{ origin: removedOrigin, path_prefix: "/" }, { origin: `${keptOrigin}/path`, path_prefix: "/" }],
+    [{ origin: removedOrigin }],
+    Array.from({ length: 257 }, (_, index) => ({ origin: `https://r${index}.example`, path_prefix: "/" })),
+  ];
+  for (const [index, legacy] of malformed.entries()) {
+    values.clear();
+    sessionValues.clear();
+    tabs.clear();
+    values.set(storageKey("locally_removed_sites_v1"), legacy);
+    values.set(storageKey("policy_v1"), {
+      ...lease(keptOrigin),
+      adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+    });
+    onInstalled({ reason: "update" });
+    await flush();
+    assert.deepEqual(values.get(storageKey("locally_removed_sites_v1")), legacy,
+      `case ${index}: the legacy evidence is not deleted`);
+    assert.equal(values.has(storageKey("pending_site_removals_v1")), false, `case ${index}`);
+
+    for (const [tabId, origin] of [[60, removedOrigin], [61, keptOrigin]]) {
+      tabs.set(tabId, { id: tabId, url: `${origin}/items/x`, title: "X", incognito: false });
+      onCommitted({
+        tabId, frameId: 0, documentId: `doc-malformed-${index}-${tabId}`, documentLifecycle: "active",
+        url: `${origin}/items/x`, timeStamp: Date.now() - 2 * 60 * 60_000,
+      });
+    }
+    await flush();
+    assert.equal(values.get(storageKey("queue_v1"))?.items.length ?? 0, 0,
+      `case ${index}: capture stays paused`);
+    await assert.rejects(send({ kind: "get_status" }), /unreadable/);
+  }
+  values.clear();
+});
+
+test("migration keeps every origin when both full legacy lists are merged", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const pad = (index) => String(index).padStart(3, "0");
+  const revoked = Array.from({ length: 256 }, (_, index) => `https://rev-${pad(index)}.example`);
+  const removed = Array.from({ length: 256 }, (_, index) => `https://site-${pad(index)}.example`);
+  const lastRemoved = removed.at(-1);
+  values.set(storageKey("revocations_v1"), revoked);
+  values.set(storageKey("locally_removed_sites_v1"),
+    removed.map((origin) => ({ origin, path_prefix: "/" })));
+  values.set(storageKey("policy_v1"), {
+    ...lease(lastRemoved),
+    adapters: { format: 1, artifacts: [artifact(lastRemoved)] },
+  });
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [...revoked, ...removed]);
+  assert.equal(values.has(storageKey("revocations_v1")), false);
+  assert.equal(values.has(storageKey("locally_removed_sites_v1")), false);
+
+  tabs.set(62, { id: 62, url: `${lastRemoved}/items/x`, title: "X", incognito: false });
+  onCommitted({
+    tabId: 62, frameId: 0, documentId: "doc-full-union", documentLifecycle: "active",
+    url: `${lastRemoved}/items/x`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const status = await send({ kind: "get_status" });
+  assert.equal(status.queued, 0);
+  assert.equal(status.pending_removals.length, 512);
+});
+
+test("a failed pending-removal migration write keeps honoring the legacy removal state", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://failed-migration.example";
+  const keptOrigin = "https://failed-migration-kept.example";
+  values.set(storageKey("revocations_v1"), [removedOrigin]);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin),
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  rejectLocalSet = (items) => storageKey("pending_site_removals_v1") in items;
+  try {
+    onInstalled({ reason: "update" });
+    await flush();
+  } finally {
+    rejectLocalSet = null;
+  }
+  assert.deepEqual(values.get(storageKey("revocations_v1")), [removedOrigin],
+    "the legacy evidence survives a failed write");
+  assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
+
+  // A later renewal that still carries the removed origin must not reinstall it.
+  await send({
+    kind: "install_policy",
+    lease: {
+      ...lease(keptOrigin), revision: "renewed",
+      adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+    },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  tabs.set(45, { id: 45, url: `${removedOrigin}/items/blocked`, title: "Blocked", incognito: false });
+  onCommitted({
+    tabId: 45, frameId: 0, documentId: "doc-failed-migration", documentLifecycle: "active",
+    url: `${removedOrigin}/items/blocked`, timeStamp: Date.now() - 2 * 60 * 60_000,
+  });
+  await flush();
+  const blocked = await send({ kind: "get_status" });
+  assert.equal(blocked.queued, 0);
+  assert.equal(blocked.live_activity, 0);
+  assert.deepEqual(blocked.pending_removals, [removedOrigin]);
+
+  // Once the host drops the adapter, clearing also retires the legacy key.
+  await send({
+    kind: "install_policy", lease: lease(keptOrigin),
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  const cleared = await send({ kind: "clear_pending_removals" });
+  assert.deepEqual(cleared.pending_removals, []);
+  assert.equal(values.has(storageKey("revocations_v1")), false);
 });
 
 test("a committed page updates the live hourly activity title before freezing", async () => {

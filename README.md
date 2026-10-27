@@ -61,6 +61,13 @@ The host binds the chosen folder to its filesystem identity. If that folder is m
 
 Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Automatic capture still checks the original URL against the host's adapters before normalizing or logging it, but notes work on any HTTP(S) page whether or not an adapter covers it. See [protocol/README.md](protocol/README.md) for the message contract.
 
+Removing a site or changing its capture rules keeps existing shared notes
+reachable from their recorded URLs, including alternate routes remembered in
+activity or explicit context. Older URL notes stay separate and viewable. If
+historical identity is ambiguous, the host uses the URL note; if history or
+the bounded note scan is unavailable, it refuses the save and preserves the
+existing files. Notes alone do not turn capture back on.
+
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. macOS is the only supported platform (DESIGN.md §13); the public package remains a later release milestone.
 
 ## License

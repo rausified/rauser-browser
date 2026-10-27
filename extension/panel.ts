@@ -384,7 +384,7 @@ async function reloadConfig(): Promise<void> {
   }
   else show(session.config!.capture_enabled
     ? "Capture is enabled for the listed sites."
-    : "Capture is off.");
+    : "Capture is paused. Resume it in settings.");
   if (session.status?.pause_pending && session.config?.capture_enabled &&
       !session.configIssue && !session.adapterIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
@@ -451,7 +451,7 @@ async function pauseCapture(): Promise<void> {
   updateControls();
   try {
     await session.pauseCapture();
-    show("Capture paused. Pending capture records cleared. Enable a site in settings to resume.");
+    show("Capture paused. Pending capture records cleared. Use Resume capture in settings to turn it back on.");
   } catch (error) {
     show(`Could not pause capture: ${describe(error)}`, true);
   } finally {

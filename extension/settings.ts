@@ -76,6 +76,14 @@ export function setupProblem(config: ConfigSnapshot | null, issue: string | null
   return null;
 }
 
+/**
+ * Whether setup is complete and only the capture switch is off, so the user
+ * resumes capture instead of setting anything up.
+ */
+export function capturePaused(config: ConfigSnapshot | null, issue: string | null): boolean {
+  return !issue && !!config?.storage && !config.capture_enabled;
+}
+
 export function captureStateText(config: ConfigSnapshot): string {
   return config.capture_enabled ? "Capturing on sites with adapters." : "Capture is paused.";
 }

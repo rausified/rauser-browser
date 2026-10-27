@@ -350,6 +350,43 @@ test("resume capture saves capture_enabled true", async () => {
   assert.equal(env.elements.get("resume-capture").disabled, true);
 });
 
+test("Resume capture is shown only while a finished setup is paused", async () => {
+  install({ adapters: [artifactFor(SITE.origin)], captureEnabled: false });
+  await openSettings();
+  assert.equal(env.elements.get("resume-capture").hidden, false);
+  assert.match(statusText(), /Click Resume capture to turn it back on\./);
+
+  install({ adapters: [artifactFor(SITE.origin)], captureEnabled: true });
+  await openSettings();
+  assert.equal(env.elements.get("resume-capture").hidden, true);
+});
+
+test("Resume capture waits for an invalid adapter policy to be repaired", async () => {
+  install({
+    captureEnabled: false,
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision), config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
+        adapter_warnings: [],
+      }),
+    },
+  });
+  await openSettings();
+  assert.equal(env.elements.get("resume-capture").hidden, true);
+  assert.match(statusText(), /unsupported adapter format 2/);
+});
+
+test("capturePaused tells a paused setup apart from an unfinished one", async () => {
+  const { capturePaused } = await import("../dist/settings.js");
+  const paused = configWith([artifactFor(SITE.origin)], false);
+  assert.equal(capturePaused(paused, null), true);
+  assert.equal(capturePaused({ ...paused, capture_enabled: true }, null), false);
+  assert.equal(capturePaused({ ...paused, storage: null }, null), false);
+  assert.equal(capturePaused(paused, "config.toml is unreadable"), false);
+  assert.equal(capturePaused(null, null), false);
+});
+
 test("setupProblem ignores sites and pause", async () => {
   const { setupProblem, captureStateText } = await import("../dist/settings.js");
   const configured = configWith([artifactFor(SITE.origin)]);
@@ -513,6 +550,63 @@ test("an unsupported adapter document can be removed without blocking unrelated 
   await until(() => state.config.adapters.format === 1 && idle(), "the adapter reset");
   assert.deepEqual(state.config.adapters, { format: 1, artifacts: [] });
   assert.match(statusText(), /adapter rules removed/);
+});
+
+test("resetting a host-only adapter key on an empty document clears the key before reporting success", async () => {
+  // Models the host: an unknown [adapters] key never reaches the wire, and a
+  // remove-all reset of an already empty document clears it only when the
+  // update is an exact no-op.
+  let hostOnlyKey = true;
+  const issue = () => hostOnlyKey ? "unsupported adapter-table key future_mode" : null;
+  const state = install({
+    captureEnabled: true,
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision), config: current.config,
+        config_issue: null, agent_status: AGENT_STATUS, adapter_issue: issue(),
+        adapter_warnings: [],
+      }),
+      update_config: (request, current) => {
+        const empty = request.config.adapters.format === 1 && request.config.adapters.artifacts.length === 0;
+        const adaptersChanged = JSON.stringify(request.config.adapters) !== JSON.stringify(current.config.adapters);
+        const noOp = JSON.stringify(request.config) === JSON.stringify(current.config);
+        if (hostOnlyKey && empty && (adaptersChanged || noOp)) hostOnlyKey = false;
+        current.config = request.config;
+        current.revision += 1;
+        return { type: "config_updated", revision: String(current.revision), config: current.config };
+      },
+    },
+  });
+  await openSettings();
+  assert.equal(state.config.capture_enabled, true);
+  assert.equal(env.elements.get("reset-adapters").disabled, false);
+
+  env.elements.get("reset-adapters").click();
+  await until(() => idle() && state.requests.some((request) => request.type === "update_config"),
+    "the adapter reset");
+
+  assert.equal(hostOnlyKey, false, "the reset actually clears the host-only key");
+  assert.equal(state.config.capture_enabled, false);
+  assert.deepEqual(state.config.adapters, { format: 1, artifacts: [] });
+  assert.match(statusText(), /adapter rules removed/);
+});
+
+test("an adapter reset that leaves the issue in place does not report success", async () => {
+  const state = install({
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: String(current.revision), config: current.config,
+        config_issue: null, agent_status: AGENT_STATUS,
+        adapter_issue: "unsupported adapter-table key future_mode", adapter_warnings: [],
+      }),
+    },
+  });
+  await openSettings();
+  env.elements.get("reset-adapters").click();
+  await until(() => idle() && state.requests.some((request) => request.type === "update_config"),
+    "the adapter reset");
+  assert.doesNotMatch(statusText(), /adapter rules removed/);
+  assert.match(statusText(), /future_mode/);
 });
 
 test("adapter workspace previews and saves a new adapter with one update", async () => {

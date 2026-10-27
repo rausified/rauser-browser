@@ -131,17 +131,6 @@ export function localTimestamp(date: Date): string {
     `${sign}${pad(Math.floor(magnitude / 60))}:${pad(magnitude % 60)}`;
 }
 
-export function exactOriginPattern(origin: string): string {
-  const url = new URL(origin);
-  if (!isHttpUrl(url) || url.username || url.password || url.origin !== origin) {
-    throw new Error("Enter an exact HTTP(S) site origin");
-  }
-  // Chrome treats an omitted port as a wildcard. Spell out default ports too,
-  // so the browser grant matches the host's exact origin policy.
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
-  return `${url.protocol}//${url.hostname}:${port}/*`;
-}
-
 export function isHttpUrl(url: URL): boolean {
   return url.protocol === "http:" || url.protocol === "https:";
 }

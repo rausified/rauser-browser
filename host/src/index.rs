@@ -6,7 +6,7 @@
 //! readers. Either file may be deleted; `brauser reindex` recreates both.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions as StdOpenOptions};
+use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -22,19 +22,32 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::brand::{APP_NAME, NAMESPACE};
-use crate::capture::{activity_shape_is_valid, canonical_url};
+use crate::capture::{
+    activity_shape_is_bounded, activity_shape_is_valid, canonical_url, trail_transition_is_valid,
+};
+use crate::summary::SummaryEvent;
 use crate::vault::{
     TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
 };
 
-const STATE_VERSION: u8 = 1;
+// v2 (main, independently) forces a rescan for the artifact-history
+// recovery fix. v3 adds `CachedEvent::Summary` on top of it; bumping again
+// forces a v1 *or* v2 cache to rescan rather than silently omit summaries
+// already durable in the log.
+const STATE_VERSION: u8 = 3;
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SCAN_FILES: usize = 100_000;
 const MAX_WORKLOG_BYTES: usize = 96 * 1024;
 const SQLITE_PAGE_SIZE: usize = 65_536;
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
 const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
+
+#[cfg(test)]
+thread_local! {
+    static LOG_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Clone)]
 pub struct ArtifactIndex {
@@ -61,6 +74,30 @@ struct IndexState {
     artifacts_dir: String,
     events: BTreeMap<String, CachedEvent>,
     dirty: BTreeSet<String>,
+    logs: BTreeMap<PathBuf, LogCheckpoint>,
+}
+
+/// Metadata is only an ingestion checkpoint, never capture authorization.
+/// Reparse a changed file in full so partial trailing markers and legacy
+/// markers (which use the preceding prose line) are handled identically.
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogCheckpoint {
+    bytes: u64,
+    modified: (u64, u32),
+}
+
+impl LogCheckpoint {
+    fn read(metadata: &cap_std::fs::Metadata) -> Result<Self> {
+        let modified = metadata
+            .modified()?
+            .into_std()
+            .duration_since(std::time::UNIX_EPOCH)?;
+        Ok(Self {
+            bytes: metadata.len(),
+            modified: (modified.as_secs(), modified.subsec_nanos()),
+        })
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +106,31 @@ enum CachedEvent {
     Activity(ActivityEvent),
     Why(WhyEvent),
     Legacy(LegacyVisit),
+    Summary(SummaryEvent),
+}
+
+impl CachedEvent {
+    fn artifact_id(&self) -> &str {
+        match self {
+            Self::Activity(event) => &event.artifact_id,
+            Self::Why(event) => &event.artifact_id,
+            Self::Legacy(event) => &event.artifact_id,
+            Self::Summary(event) => &event.artifact_id,
+        }
+    }
+
+    /// Only URLs durably attributed to this artifact, never trail sources
+    /// (which belong to another artifact). Share this evidence in both note
+    /// lookup directions so primary recovery and older-note discovery agree.
+    fn urls(&self) -> impl Iterator<Item = &str> {
+        let (url, modes): (&str, &[brauser_protocol::ActivityMode]) = match self {
+            Self::Activity(event) => (&event.url, &event.modes),
+            Self::Why(event) => (&event.url, &[]),
+            Self::Legacy(event) => (&event.url, &[]),
+            Self::Summary(event) => (&event.url, &[]),
+        };
+        std::iter::once(url).chain(modes.iter().map(|mode| mode.url.as_str()))
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +159,7 @@ struct ArtifactRow {
     last_mode: Option<String>,
     why: Option<String>,
     activities: Vec<ActivityEvent>,
+    summaries: Vec<SummaryEvent>,
     latest_at: OffsetDateTime,
 }
 
@@ -112,6 +175,10 @@ struct VisitRow {
     mode: Option<String>,
     title: String,
     url: String,
+    /// Set only for a visit derived from a `CachedEvent::Summary`, so
+    /// `worklog` can report it distinctly instead of as a zero-measure,
+    /// merely-"seen" artifact.
+    summary: Option<SummaryEvent>,
 }
 
 #[derive(Clone)]
@@ -127,6 +194,16 @@ struct Derived {
     artifacts: BTreeMap<String, ArtifactRow>,
     visits: Vec<VisitRow>,
     edges: Vec<EdgeRow>,
+}
+
+#[derive(Default)]
+struct WorklogRow {
+    focused: u64,
+    background: u64,
+    opens: u64,
+    /// The latest summary (by `occurred_at`) among this artifact's visits
+    /// within the worklog's date range, if any.
+    summary: Option<SummaryEvent>,
 }
 
 impl ArtifactIndex {
@@ -162,6 +239,14 @@ impl ArtifactIndex {
         self.record_events([CachedEvent::Why(event)])
     }
 
+    /// Index a "Summarize & log" result already durable in the daily log
+    /// (`crate::capture::CaptureStore::record_summary` wrote it). `event.url`
+    /// and `event.artifact_id` must already be normalized/derived, exactly as
+    /// that writer leaves them.
+    pub fn record_summary(&self, event: &SummaryEvent) -> Result<()> {
+        self.record_events([CachedEvent::Summary(event.clone())])
+    }
+
     pub fn record_activities<'a>(
         &self,
         events: impl IntoIterator<Item = &'a ActivityEvent>,
@@ -175,7 +260,7 @@ impl ArtifactIndex {
     }
 
     fn record_events(&self, events: impl IntoIterator<Item = CachedEvent>) -> Result<()> {
-        let mut state = self.load_or_rebuild()?;
+        let (mut state, _) = self.load_current_state()?;
         for event in events {
             let (event_id, artifact_id) = event_identity(&event);
             if let Some(previous) = state.events.get(&event_id) {
@@ -212,7 +297,7 @@ impl ArtifactIndex {
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.
     pub fn regenerate_dirty(&self) -> Result<RegenerationReport> {
-        let state = self.load_or_rebuild()?;
+        let (state, _) = self.load_current_state()?;
         self.regenerate_state(state)
     }
 
@@ -227,7 +312,7 @@ impl ArtifactIndex {
                 state.dirty.remove(&id);
                 continue;
             };
-            let markdown = render_artifact(artifact);
+            let markdown = render_artifact(&self.storage.artifacts_dir, artifact);
             match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown)? {
                 ArtifactWrite::Written => {
                     report.written += 1;
@@ -254,10 +339,23 @@ impl ArtifactIndex {
     }
 
     fn load_or_rebuild(&self) -> Result<IndexState> {
-        match read_state(&self.state_path()) {
-            Ok(Some(state)) if self.state_matches(&state) => Ok(state),
-            Ok(_) | Err(_) => self.scan_logs(),
+        let (state, publish) = self.load_current_state()?;
+        if publish {
+            // Queries publish repaired checkpoints too. Publication failure
+            // makes derived history unavailable, never silently complete.
+            self.publish_state_and_database(&state)?;
         }
+        Ok(state)
+    }
+
+    fn load_current_state(&self) -> Result<(IndexState, bool)> {
+        let (mut state, rebuild) = match read_state(&self.state_path()) {
+            Ok(Some(state)) if self.state_matches(&state) => (state, false),
+            Ok(_) | Err(_) => (self.empty_state(), true),
+        };
+        let changed = self.catch_up_logs(&mut state)?;
+        let publish = rebuild || changed || !self.database_path().is_file();
+        Ok((state, publish))
     }
 
     fn state_matches(&self, state: &IndexState) -> bool {
@@ -277,42 +375,82 @@ impl ArtifactIndex {
             artifacts_dir: self.storage.artifacts_dir.clone(),
             events: BTreeMap::new(),
             dirty: BTreeSet::new(),
+            logs: BTreeMap::new(),
         }
     }
 
     fn scan_logs(&self) -> Result<IndexState> {
+        let mut state = self.empty_state();
+        self.catch_up_logs(&mut state)?;
+        Ok(state)
+    }
+
+    /// Called under the native host's configuration/write lock. Limit the
+    /// total bytes read in one pass as well as individual files and file count.
+    /// No checkpoint is published unless the entire pass succeeds.
+    fn catch_up_logs(&self, state: &mut IndexState) -> Result<bool> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let log_dir = checked_relative_dir(&self.storage.log_dir)?;
-        let mut state = self.empty_state();
-        let Ok(logs) = root.open_dir(&log_dir) else {
-            return Ok(state);
+        let logs = match root.open_dir(&log_dir) {
+            Ok(logs) => logs,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && state.logs.is_empty() => {
+                return Ok(false);
+            }
+            Err(error) => {
+                return Err(error).context("artifact history is unavailable: opening logs");
+            }
         };
         let mut files = Vec::new();
         collect_markdown(&logs, Path::new(""), 0, &mut files)?;
-        if files.len() > MAX_SCAN_FILES {
-            bail!("artifact log contains too many files to index");
-        }
         files.sort();
+        let mut checkpoints = BTreeMap::new();
         for relative in files {
             let metadata = logs
                 .symlink_metadata(&relative)
                 .context("checking artifact log file")?;
-            if !metadata.is_file() || metadata.len() > MAX_LOG_BYTES {
+            if !metadata.is_file() {
+                bail!("artifact history is unavailable: log is not a regular file");
+            }
+            checkpoints.insert(relative, LogCheckpoint::read(&metadata)?);
+        }
+        // A removed/truncated file invalidates the old ingestion snapshot.
+        // Rebuild from remaining authoritative logs instead of retaining ghosts.
+        let reset = state.logs.iter().any(|(path, old)| {
+            checkpoints
+                .get(path)
+                .is_none_or(|new| new.bytes < old.bytes)
+        });
+        if reset {
+            *state = self.empty_state();
+        }
+        let changed = reset || state.logs != checkpoints;
+        let mut scanned = 0;
+        for (relative, checkpoint) in &checkpoints {
+            if state.logs.get(relative) == Some(checkpoint) {
                 continue;
             }
-            let mut file = logs.open(&relative).context("opening artifact log file")?;
+            if checkpoint.bytes > MAX_LOG_BYTES {
+                bail!("artifact history is unavailable: log exceeds its 32 MiB limit");
+            }
+            scanned += checkpoint.bytes;
+            if scanned > MAX_SCAN_BYTES {
+                bail!("artifact history is unavailable: catch-up exceeds its 64 MiB limit");
+            }
+            let mut file = logs.open(relative).context("opening artifact log file")?;
             let mut bytes = Vec::new();
             Read::by_ref(&mut file)
-                .take(MAX_LOG_BYTES + 1)
+                .take(checkpoint.bytes + 1)
                 .read_to_end(&mut bytes)
                 .context("reading artifact log file")?;
-            if bytes.len() as u64 > MAX_LOG_BYTES {
-                continue;
+            if bytes.len() as u64 != checkpoint.bytes
+                || LogCheckpoint::read(&file.metadata()?)? != *checkpoint
+            {
+                bail!("artifact history is unavailable: log changed during catch-up");
             }
-            let Ok(text) = std::str::from_utf8(&bytes) else {
-                continue;
-            };
+            #[cfg(test)]
+            LOG_BYTES_READ.with(|count| count.set(count.get() + bytes.len() as u64));
+            let text = std::str::from_utf8(&bytes).context("artifact log is not UTF-8")?;
             if !text.starts_with(LOG_HEADER) {
                 continue;
             }
@@ -332,7 +470,8 @@ impl ArtifactIndex {
                 }
             }
         }
-        Ok(state)
+        state.logs = checkpoints;
+        Ok(changed)
     }
 
     fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
@@ -341,9 +480,11 @@ impl ArtifactIndex {
         if bytes.len() as u64 > MAX_STATE_BYTES {
             bail!("artifact index state exceeds its 64 MiB limit");
         }
-        atomic_write(&self.state_path(), &bytes)?;
         let database = sqlite_snapshot(&derive(&state.events), &state.dirty)?;
-        atomic_write(&self.database_path(), &database)
+        atomic_write(&self.database_path(), &database)?;
+        // Publish the checkpoint last. If either write fails, a subsequent
+        // read still sees the older checkpoint and retries the catch-up.
+        atomic_write(&self.state_path(), &bytes)
     }
 
     /// Return the current derived record for one recognized artifact. The
@@ -358,25 +499,25 @@ impl ArtifactIndex {
         }))
     }
 
-    /// Canonical URLs previously recorded for an artifact. Note lookup uses
-    /// these to discover URL-keyed M1 notes without scanning arbitrary files.
+    /// Canonical URLs previously recorded for an artifact, including mode
+    /// evidence and explicit context before any measured activity. Note
+    /// lookup uses these to discover URL-keyed M1 notes.
     pub fn artifact_urls(&self, artifact_id: &str) -> Result<Vec<String>> {
-        let derived = derive(&self.load_or_rebuild()?.events);
-        let mut urls = derived
-            .visits
-            .iter()
-            .filter(|visit| visit.artifact_id == artifact_id)
-            .map(|visit| visit.url.clone())
-            .collect::<BTreeSet<_>>();
-        if let Some(row) = derived.artifacts.get(artifact_id) {
-            urls.insert(row.url.clone());
-        }
-        Ok(urls.into_iter().collect())
+        Ok(self
+            .load_or_rebuild()?
+            .events
+            .values()
+            .filter(|event| event.artifact_id() == artifact_id)
+            .flat_map(CachedEvent::urls)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
     }
 
     /// Every distinct artifact previously recorded for a canonical URL,
-    /// checking both an activity's own URL and any mode-evidence URL hourly
-    /// coalescing may have folded into a later event's primary URL (so an
+    /// checking explicit context, an activity's own URL and any mode-evidence
+    /// URL hourly coalescing may have folded into a later event's primary URL (so an
     /// alternate route such as `/edit` is not lost once a visit's primary
     /// URL settles on `/view`). Note lookup falls back to this when no
     /// adapter currently recognizes the URL (for example, the adapter that
@@ -391,25 +532,15 @@ impl ArtifactIndex {
     /// (`web.page`, a reserved synthetic scheme no real adapter may use) is
     /// always excluded from the candidates.
     pub fn artifact_candidates_for_url(&self, url: &str) -> Result<BTreeSet<String>> {
-        let events = &self.load_or_rebuild()?.events;
-        let is_legacy = |id: &str| id.starts_with("web:");
-        let mut candidates = BTreeSet::new();
-        for event in events.values() {
-            match event {
-                CachedEvent::Activity(activity) if !is_legacy(&activity.artifact_id) => {
-                    if activity.url == url || activity.modes.iter().any(|mode| mode.url == url) {
-                        candidates.insert(activity.artifact_id.clone());
-                    }
-                }
-                CachedEvent::Legacy(legacy)
-                    if !is_legacy(&legacy.artifact_id) && legacy.url == url =>
-                {
-                    candidates.insert(legacy.artifact_id.clone());
-                }
-                _ => {}
-            }
-        }
-        Ok(candidates)
+        Ok(self
+            .load_or_rebuild()?
+            .events
+            .values()
+            .filter(|event| {
+                !event.artifact_id().starts_with("web:") && event.urls().any(|seen| seen == url)
+            })
+            .map(|event| event.artifact_id().to_owned())
+            .collect())
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of
@@ -504,7 +635,7 @@ impl ArtifactIndex {
     /// dates. Callers validate and bound the range before reaching here.
     pub fn worklog(&self, start: Date, end: Date) -> Result<(String, usize)> {
         let derived = derive(&self.load_or_rebuild()?.events);
-        let mut rows = BTreeMap::<String, (u64, u64, u64)>::new();
+        let mut rows = BTreeMap::<String, WorklogRow>::new();
         for visit in &derived.visits {
             let Ok(date) = parse_date(&visit.local_date) else {
                 continue;
@@ -513,12 +644,25 @@ impl ArtifactIndex {
                 continue;
             }
             let row = rows.entry(visit.artifact_id.clone()).or_default();
-            row.0 = row.0.saturating_add(visit.focused_secs);
-            row.1 = row.1.saturating_add(visit.background_secs);
-            row.2 = row.2.saturating_add(visit.opens);
+            row.focused = row.focused.saturating_add(visit.focused_secs);
+            row.background = row.background.saturating_add(visit.background_secs);
+            row.opens = row.opens.saturating_add(visit.opens);
+            if let Some(summary) = &visit.summary
+                && row.summary.as_ref().is_none_or(|current| {
+                    timestamp_order(&summary.occurred_at, &current.occurred_at).is_ge()
+                })
+            {
+                row.summary = Some(summary.clone());
+            }
         }
-        let opened = rows.values().filter(|row| row.2 > 0).count();
-        let carried = rows.values().filter(|row| row.2 == 0 && row.0 > 0).count();
+        let opened = rows
+            .values()
+            .filter(|row| row.opens > 0 || row.summary.is_some())
+            .count();
+        let carried = rows
+            .values()
+            .filter(|row| row.opens == 0 && row.summary.is_none() && row.focused > 0)
+            .count();
         let mut text = format!(
             "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
             if opened == 1 { "" } else { "s" }
@@ -527,23 +671,47 @@ impl ArtifactIndex {
         ordered.sort_by(|left, right| {
             right
                 .1
-                .0
-                .cmp(&left.1.0)
-                .then(right.1.2.cmp(&left.1.2))
+                .focused
+                .cmp(&left.1.focused)
+                .then(right.1.opens.cmp(&left.1.opens))
                 .then(left.0.cmp(&right.0))
         });
         let mut shown = 0usize;
-        for (id, (focused, background, opens)) in &ordered {
+        for (id, row) in &ordered {
             let Some(artifact) = derived.artifacts.get(id) else {
                 continue;
             };
-            let mut line = format!(
-                "{} {}: {}",
-                artifact.artifact_type,
-                id,
-                plain_text(&artifact.title)
-            );
-            line.push_str(&format!(" — {}", measures(*focused, *background, *opens)));
+            let mut line = if let Some(summary) = &row.summary {
+                let mut line = format!(
+                    "Summarized: {} — {}, {} importance",
+                    plain_text(&summary.title),
+                    plain_text(&summary.document_type),
+                    summary.importance
+                );
+                // A future adapter-attached summary (spec §7.2's "the
+                // adapter does recognize the page" branch) can land on an
+                // artifact that also has real measured activity; keep both
+                // instead of silently dropping the measures.
+                if row.focused > 0 || row.background > 0 || row.opens > 0 {
+                    line.push_str(&format!(
+                        " — {}",
+                        measures(row.focused, row.background, row.opens)
+                    ));
+                }
+                line
+            } else {
+                let mut line = format!(
+                    "{} {}: {}",
+                    artifact.artifact_type,
+                    id,
+                    plain_text(&artifact.title)
+                );
+                line.push_str(&format!(
+                    " — {}",
+                    measures(row.focused, row.background, row.opens)
+                ));
+                line
+            };
             if let Some(why) = &artifact.why {
                 line.push_str(&format!(". Why: {}", plain_text(why)));
             }
@@ -624,13 +792,7 @@ fn parse_date(value: &str) -> Result<Date> {
 }
 
 fn plain_text(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(500)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+    crate::presentation::plain_line(value, 500)
 }
 
 fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result<ActivityEvent> {
@@ -655,6 +817,7 @@ fn event_identity(event: &CachedEvent) -> (String, String) {
         CachedEvent::Activity(event) => (event.event_id.clone(), event.artifact_id.clone()),
         CachedEvent::Why(event) => (event.event_id.clone(), event.artifact_id.clone()),
         CachedEvent::Legacy(event) => (event.marker_id.clone(), event.artifact_id.clone()),
+        CachedEvent::Summary(event) => (event.event_id.clone(), event.artifact_id.clone()),
     }
 }
 
@@ -690,6 +853,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         last_mode: None,
                         why: None,
                         activities: Vec::new(),
+                        summaries: Vec::new(),
                         latest_at: at,
                     });
                 row.focused_secs = row
@@ -730,9 +894,12 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     mode: event.modes.last().map(|mode| mode.mode.clone()),
                     title,
                     url: event.url.clone(),
+                    summary: None,
                 });
                 for trail in &event.trails {
-                    if let Some(source) = &trail.from_artifact_id {
+                    if trail_transition_is_valid(&trail.transition)
+                        && let Some(source) = &trail.from_artifact_id
+                    {
                         add_edge(
                             &mut edges,
                             source,
@@ -783,6 +950,7 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                         last_mode: None,
                         why: None,
                         activities: Vec::new(),
+                        summaries: Vec::new(),
                         latest_at: at,
                     });
                 row.days.insert(day.clone());
@@ -808,6 +976,61 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
                     mode: None,
                     title: event.title.clone(),
                     url: event.url.clone(),
+                    summary: None,
+                });
+            }
+            CachedEvent::Summary(event) => {
+                let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let day = at.date().to_string();
+                let site = Url::parse(&event.url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .unwrap_or_default();
+                let row = artifacts
+                    .entry(event.artifact_id.clone())
+                    .or_insert_with(|| ArtifactRow {
+                        artifact_id: event.artifact_id.clone(),
+                        artifact_type: event.artifact_type.clone(),
+                        site,
+                        title: event.title.clone(),
+                        url: event.url.clone(),
+                        first_seen: day.clone(),
+                        last_seen: day.clone(),
+                        focused_secs: 0,
+                        background_secs: 0,
+                        opens: 0,
+                        days: BTreeSet::new(),
+                        last_mode: None,
+                        why: None,
+                        activities: Vec::new(),
+                        summaries: Vec::new(),
+                        latest_at: at,
+                    });
+                row.days.insert(day.clone());
+                if day < row.first_seen {
+                    row.first_seen = day.clone();
+                }
+                if day > row.last_seen {
+                    row.last_seen = day.clone();
+                }
+                if at >= row.latest_at {
+                    row.latest_at = at;
+                    row.title = event.title.clone();
+                    row.url = event.url.clone();
+                }
+                row.summaries.push(event.clone());
+                visits.push(VisitRow {
+                    event_id: event.event_id.clone(),
+                    artifact_id: event.artifact_id.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    local_date: day,
+                    focused_secs: 0,
+                    background_secs: 0,
+                    opens: 0,
+                    mode: None,
+                    title: event.title.clone(),
+                    url: event.url.clone(),
+                    summary: Some(event.clone()),
                 });
             }
         }
@@ -817,6 +1040,9 @@ fn derive(events: &BTreeMap<String, CachedEvent>) -> Derived {
     });
     for row in artifacts.values_mut() {
         row.activities.sort_by(|a, b| {
+            timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
+        });
+        row.summaries.sort_by(|a, b| {
             timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
         });
         row.why = whys.remove(&row.artifact_id).map(|(_, text)| text);
@@ -932,7 +1158,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 return None;
             }
             let event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
-            if !activity_shape_is_valid(&event)
+            if !activity_shape_is_bounded(&event)
                 || Uuid::parse_str(&event.event_id).is_err()
                 || event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
@@ -971,6 +1197,24 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
                 return None;
             }
             Some(CachedEvent::Why(event))
+        }
+        (Some("summary"), Some(data)) => {
+            let bytes = hex::decode(data).ok()?;
+            if bytes.len() > 256 * 1024 {
+                return None;
+            }
+            let event: SummaryEvent = serde_json::from_slice(&bytes).ok()?;
+            if event.event_id.is_empty()
+                || event.event_id.len() > 512
+                || !safe_page_url(&event.url)
+                || sha256_hex(event.event_id.as_bytes()) != id_hash
+                || sha256_hex(event.url.as_bytes()) != url_hash
+                || event.occurred_at != at
+                || !crate::summary::validate_summary_event(&event)
+            {
+                return None;
+            }
+            Some(CachedEvent::Summary(event))
         }
         (None, None) => parse_legacy(previous, id_hash, url_hash, at).map(CachedEvent::Legacy),
         _ => None,
@@ -1085,7 +1329,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(unix)]
 fn sync_host_directory(path: &Path) -> std::io::Result<()> {
-    File::open(path)?.sync_all()
+    fs::File::open(path)?.sync_all()
 }
 
 #[cfg(not(unix))]
@@ -1242,10 +1486,23 @@ fn slug(value: &str, fallback: &str) -> String {
     if out.is_empty() { fallback.into() } else { out }
 }
 
-fn render_artifact(artifact: &ArtifactRow) -> String {
+/// A link from the rendered artifact file (nested under
+/// `artifacts_dir/<type>/<site>/...md`) to a vault-root-relative target,
+/// e.g. a summary file.
+fn relative_artifact_link(artifacts_dir: &str, artifact: &ArtifactRow, target: &str) -> String {
+    let ups = artifact_path(artifacts_dir, artifact)
+        .parent()
+        .map_or(0, |dir| dir.components().count());
+    format!("{}{target}", "../".repeat(ups))
+}
+
+fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     let mut out = String::new();
     out.push_str("---\n");
-    out.push_str(&format!("title: {}\n", yaml_string(&artifact.title)));
+    out.push_str(&format!(
+        "title: {}\n",
+        yaml_string(&crate::presentation::plain_line(&artifact.title, 2048))
+    ));
     out.push_str(&format!("url: {}\n", yaml_string(&artifact.url)));
     out.push_str("brauser:\n  kind: artifact\n");
     out.push_str(&format!(
@@ -1275,7 +1532,31 @@ fn render_artifact(artifact: &ArtifactRow) -> String {
     if let Some(why) = &artifact.why {
         out.push_str(&format!("Why: {}\n\n", safe_markdown(why)));
     }
+    if let Some(summary) = artifact.summaries.last() {
+        let link = relative_artifact_link(artifacts_dir, artifact, &summary.summary_path);
+        out.push_str(&format!(
+            "Summary: [{}, {} importance](<{link}>)\n\n",
+            safe_markdown(&summary.document_type),
+            safe_markdown(&summary.importance),
+        ));
+    }
     out.push_str("## Timeline\n\n");
+    const MAX_SUMMARY_LINES: usize = 20;
+    let total_summaries = artifact.summaries.len();
+    let shown_summaries = total_summaries.min(MAX_SUMMARY_LINES);
+    for summary in artifact.summaries.iter().rev().take(shown_summaries) {
+        out.push_str(&format!(
+            "- {} · Summarized: {}\n",
+            summary.occurred_at,
+            safe_markdown(&summary.title)
+        ));
+    }
+    if total_summaries > shown_summaries {
+        out.push_str(&format!(
+            "- {} earlier summaries\n",
+            total_summaries - shown_summaries
+        ));
+    }
     for period in timeline_rollups(&artifact.activities) {
         out.push_str(&format!(
             "- {} · {}\n",
@@ -1294,25 +1575,7 @@ fn whole_minutes(seconds: u64) -> u64 {
 }
 
 fn safe_markdown(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars().take(2048) {
-        if ch.is_control() {
-            out.push(' ');
-        } else {
-            if matches!(
-                ch,
-                '\\' | '!' | '[' | ']' | '<' | '>' | '*' | '_' | '`' | '|'
-            ) {
-                out.push('\\');
-            }
-            out.push(ch);
-        }
-    }
-    if out.trim().is_empty() {
-        "Untitled".into()
-    } else {
-        out
-    }
+    crate::presentation::markdown_line(value, 2048)
 }
 
 #[derive(Clone)]
@@ -1742,6 +2005,7 @@ fn read_sqlite_varint(bytes: &[u8]) -> Result<(u64, usize)> {
 mod tests {
     use super::*;
     use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
+    use std::fs::File;
     use std::process::Command;
     use tempfile::TempDir;
 
@@ -1781,6 +2045,168 @@ mod tests {
 
     fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
         ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
+    }
+
+    #[test]
+    fn hostile_presentation_is_safe_in_logs_and_rebuilt_artifacts_without_changing_payloads() {
+        use crate::capture::{CaptureBatchEvent, CaptureOutcome, CapturePolicy, CaptureStore};
+        use brauser_protocol::VisitEvent;
+
+        let hostile = "Report\u{202e}evil\u{202c}\u{200b}\u{200f}\u{2066}hidden\u{2069}\u{feff} %%comment%% ==marked== #tag ![embed](https://bad.invalid)";
+        for batched in [false, true] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let config = storage(root.path());
+            let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
+            let origins = ["https://example.com".to_owned()];
+            let policy = || CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let event = activity(
+                "00000000-0000-4000-8000-000000000001",
+                "ABC",
+                hostile,
+                &time::OffsetDateTime::now_utc()
+                    .replace_minute(0)
+                    .unwrap()
+                    .replace_second(0)
+                    .unwrap()
+                    .replace_nanosecond(0)
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+            );
+            let visit = VisitEvent {
+                event_id: "00000000-0000-4000-8000-000000000002".into(),
+                url: "https://example.com/old".into(),
+                title: Some(hostile.into()),
+                occurred_at: event.occurred_at.clone(),
+                incognito: false,
+            };
+            if batched {
+                let outcome = capture.record_batch(
+                    policy(),
+                    "00000000-0000-4000-8000-000000000004",
+                    &[
+                        CaptureBatchEvent::Activity(&event),
+                        CaptureBatchEvent::Visit(&visit),
+                    ],
+                    None,
+                );
+                assert_eq!(outcome.events.len(), 2);
+                assert!(
+                    outcome
+                        .events
+                        .iter()
+                        .all(|(_, result)| matches!(result, CaptureOutcome::Persisted { .. }))
+                );
+            } else {
+                assert!(matches!(
+                    capture.record_activity(policy(), &event),
+                    CaptureOutcome::Persisted { .. }
+                ));
+                assert!(matches!(
+                    capture.record(policy(), &visit),
+                    CaptureOutcome::Persisted { .. }
+                ));
+            }
+            let why = WhyEvent {
+                event_id: "00000000-0000-4000-8000-000000000003".into(),
+                artifact_id: event.artifact_id.clone(),
+                url: event.url.clone(),
+                occurred_at: event.occurred_at.clone(),
+                incognito: false,
+                text: hostile.into(),
+            };
+            assert!(matches!(
+                capture.record_why(policy(), &why),
+                CaptureOutcome::Persisted { .. }
+            ));
+            let day = &event.occurred_at[..10];
+            let log = root
+                .path()
+                .join(format!("log/{}/{}/{day}.md", &day[..4], &day[5..7]));
+            let original = fs::read_to_string(&log).unwrap();
+            for (kind, payload) in [
+                ("activity", serde_json::to_value(&event).unwrap()),
+                ("why", serde_json::to_value(&why).unwrap()),
+            ] {
+                let expected = hex::encode(serde_json::to_vec(&payload).unwrap());
+                assert!(original.contains(&format!(" kind={kind} data={expected} -->")));
+            }
+            let rows = original.lines().filter(|line| line.starts_with("- "));
+            assert_eq!(rows.clone().count(), 3);
+            for row in rows {
+                assert!(
+                    !row.contains(['\u{202e}', '\u{200b}', '\u{200f}', '\u{2066}', '\u{feff}'])
+                );
+                assert!(row.contains(r"\%\%comment\%\% \=\=marked\=\= \#tag \!\[embed\]"));
+            }
+
+            // Rebuild from the actual markers, not a second sanitized event.
+            let decoded = parse_log(&original);
+            assert_eq!(decoded.len(), 3);
+            assert!(decoded.iter().any(|stored| matches!(stored,
+                CachedEvent::Activity(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&event).unwrap()
+            )));
+            assert!(decoded.iter().any(|stored| matches!(stored,
+                CachedEvent::Why(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&why).unwrap()
+            )));
+            let index = index(&root, &cache);
+            assert_eq!(index.reindex().unwrap().written, 2);
+            for path in artifact_files(root.path()) {
+                let markdown = fs::read_to_string(path).unwrap();
+                assert!(
+                    !markdown
+                        .contains(['\u{202e}', '\u{200b}', '\u{200f}', '\u{2066}', '\u{feff}'])
+                );
+                assert!(markdown.contains("Report"));
+            }
+            assert_eq!(fs::read_to_string(&log).unwrap(), original);
+            assert_eq!(index.reindex().unwrap().unchanged, 2);
+        }
+    }
+
+    #[test]
+    fn artifact_files_and_worklogs_neutralize_unicode_formatting() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let hostile = "Visible\u{202e}spoof\u{202c}\u{200b}\u{2069}\u{feff} end";
+        let event = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "ABC",
+            hostile,
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&event, &[]).unwrap();
+        index
+            .record_why(
+                &WhyEvent {
+                    event_id: "00000000-0000-4000-8000-000000000002".into(),
+                    artifact_id: event.artifact_id.clone(),
+                    url: event.url.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    incognito: false,
+                    text: format!("{hostile} %%hidden%% ==mark== #tag"),
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(!markdown.contains(['\u{202e}', '\u{202c}', '\u{200b}', '\u{2069}', '\u{feff}']));
+        assert!(markdown.contains(r"\%\%hidden\%\% \=\=mark\=\= \#tag"));
+        let (worklog, _) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-15").unwrap(),
+            )
+            .unwrap();
+        assert!(!worklog.contains(['\u{202e}', '\u{202c}', '\u{200b}', '\u{2069}', '\u{feff}']));
+        assert!(worklog.contains("Visible spoof"));
     }
 
     #[test]
@@ -2311,6 +2737,227 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
+    fn old_unknown_trail_transitions_preserve_activity_but_never_become_edges() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let source = activity(
+            "00000000-0000-4000-8000-000000000021",
+            "SOURCE",
+            "Source",
+            "2026-10-15T12:00:00Z",
+        );
+        let mut target = activity(
+            "00000000-0000-4000-8000-000000000022",
+            "TARGET",
+            "Target",
+            "2026-10-15T13:00:00Z",
+        );
+        target.trails = ["link", "\u{202e}unknown"]
+            .into_iter()
+            .map(|transition| ActivityTrail {
+                from_artifact_id: Some(source.artifact_id.clone()),
+                from_url: Some(source.url.clone()),
+                transition: transition.into(),
+            })
+            .collect();
+        let marker = |event: &ActivityEvent| {
+            format!(
+                "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
+                sha256_hex(event.event_id.as_bytes()),
+                sha256_hex(event.url.as_bytes()),
+                event.occurred_at,
+                hex::encode(serde_json::to_vec(event).unwrap()),
+            )
+        };
+        let log = format!("{LOG_HEADER}\n{}{}", marker(&source), marker(&target));
+        let logs = root.path().join("log/2026/10");
+        fs::create_dir_all(&logs).unwrap();
+        let log_path = logs.join("2026-10-15.md");
+        fs::write(&log_path, &log).unwrap();
+
+        // Simulate an ingestion cache from before transition validation.
+        let mut state = index.empty_state();
+        for event in [&source, &target] {
+            state
+                .events
+                .insert(event.event_id.clone(), CachedEvent::Activity(event.clone()));
+            state.dirty.insert(event.artifact_id.clone());
+        }
+        index.publish_state_and_database(&state).unwrap();
+        let check = || {
+            let artifact = index.artifact(&target.artifact_id).unwrap().unwrap();
+            assert_eq!(artifact.opens, 1);
+            assert_eq!(artifact.focused_seconds, 125);
+            assert_eq!(artifact.background_seconds, 61);
+            assert_eq!(artifact.linked_count, 1);
+            let output = Command::new("python3")
+                .args([
+                    "-c",
+                    "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from visits').fetchone()[0]); print([r[0] for r in c.execute('select kind from edges')])",
+                ])
+                .arg(index.database_path())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{:?}", output.stderr);
+            // Python writes \r\n on Windows.
+            assert_eq!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
+                "2\n['link']\n"
+            );
+            // Do not rewrite historical payloads: their exact content detects
+            // conflicting reuse of an event ID during replay and rebuilding.
+            assert!(
+                index.load_or_rebuild().unwrap().events[&target.event_id]
+                    == CachedEvent::Activity(target.clone())
+            );
+        };
+        check();
+        assert_eq!(index.reindex().unwrap().written, 2);
+        check();
+        assert_eq!(fs::read_to_string(log_path).unwrap(), log);
+
+        // Legacy tolerance must keep the original size and paired-source caps.
+        let mut malformed = target.clone();
+        malformed.trails[0].transition = "x".repeat(65);
+        assert!(parse_log(&marker(&malformed)).is_empty());
+        malformed = target.clone();
+        malformed.trails[0].from_url = None;
+        assert!(parse_log(&marker(&malformed)).is_empty());
+        malformed = target.clone();
+        malformed.trails = vec![target.trails[0].clone(); 11];
+        assert!(parse_log(&marker(&malformed)).is_empty());
+    }
+
+    fn activity_marker(event: &ActivityEvent) -> String {
+        format!(
+            "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            sha256_hex(event.url.as_bytes()),
+            event.occurred_at,
+            hex::encode(serde_json::to_vec(event).unwrap())
+        )
+    }
+
+    #[test]
+    fn checkpoints_skip_unchanged_logs_and_recover_completed_trailing_markers() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let first = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "FIRST",
+            "First",
+            "2026-10-15T12:00:00Z",
+        );
+        let second = activity(
+            "00000000-0000-4000-8000-000000000002",
+            "SECOND",
+            "Second",
+            "2026-10-16T12:00:00Z",
+        );
+        let dir = root.path().join("log");
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("first.md"),
+            format!("{LOG_HEADER}\n{}", activity_marker(&first)),
+        )
+        .unwrap();
+        assert!(index.artifact(&first.artifact_id).unwrap().is_some());
+        // A partial trailing marker is not lost when its completion arrives;
+        // the entire changed file (including the previous prose) is reparsed.
+        let marker = activity_marker(&second);
+        let cut = marker.len() / 2;
+        let path = dir.join("second.md");
+        fs::write(&path, format!("{LOG_HEADER}\n{}", &marker[..cut])).unwrap();
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert!(index.artifact(&second.artifact_id).unwrap().is_none());
+        assert_eq!(
+            LOG_BYTES_READ.with(|count| count.get()),
+            fs::metadata(&path).unwrap().len()
+        );
+        StdOpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&marker.as_bytes()[cut..])
+            .unwrap();
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(
+            index.artifact(&second.artifact_id).unwrap().unwrap().opens,
+            1
+        );
+        assert_eq!(
+            LOG_BYTES_READ.with(|count| count.get()),
+            fs::metadata(&path).unwrap().len()
+        );
+        assert!(
+            read_state(&index.state_path())
+                .unwrap()
+                .unwrap()
+                .dirty
+                .contains(&second.artifact_id)
+        );
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(
+            index.artifact(&second.artifact_id).unwrap().unwrap().opens,
+            1
+        );
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        // The old format has no ingestion checkpoints. Treat it as a cache
+        // miss and rebuild every event, even if its old events map is valid.
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        old["version"] = 1.into();
+        old["events"].as_object_mut().unwrap().clear();
+        old.as_object_mut().unwrap().remove("logs");
+        fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 2);
+        assert_eq!(
+            read_state(&index.state_path()).unwrap().unwrap().version,
+            STATE_VERSION
+        );
+    }
+
+    #[test]
+    fn catch_up_bounds_aggregate_reads_without_publishing_partial_history() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        index
+            .record_activity(
+                &activity(
+                    "00000000-0000-4000-8000-000000000001",
+                    "FIRST",
+                    "First",
+                    "2026-10-15T12:00:00Z",
+                ),
+                &[],
+            )
+            .unwrap();
+        let old_state = fs::read(index.state_path()).unwrap();
+        let old_db = fs::read(index.database_path()).unwrap();
+        fs::create_dir(root.path().join("log")).unwrap();
+        for day in 1..=3 {
+            let mut file = File::create(root.path().join(format!("log/{day}.md"))).unwrap();
+            file.write_all(format!("{LOG_HEADER}\n").as_bytes())
+                .unwrap();
+            file.set_len(24 * 1024 * 1024).unwrap();
+        }
+        LOG_BYTES_READ.with(|count| count.set(0));
+        let error = index.recent(None, None, 32).unwrap_err().to_string();
+        assert!(
+            error.contains("catch-up exceeds its 64 MiB limit"),
+            "{error}"
+        );
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 48 * 1024 * 1024);
+        assert_eq!(fs::read(index.state_path()).unwrap(), old_state);
+        assert_eq!(fs::read(index.database_path()).unwrap(), old_db);
+    }
+
+    #[test]
     fn reindex_rebuilds_database_and_files_from_log_markers() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
@@ -2377,6 +3024,310 @@ print(json.dumps([tables,row]))"#;
 
         let error = index.reindex().unwrap_err().to_string();
         assert!(error.contains("reuses an event ID"), "{error}");
+    }
+
+    fn page_summary(url: &str, occurred_at: &str) -> crate::summary::PageSummary {
+        crate::summary::PageSummary {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: occurred_at.into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        }
+    }
+
+    fn rfc3339_seconds_ago(seconds: i64) -> String {
+        (OffsetDateTime::now_utc() - time::Duration::seconds(seconds))
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap()
+    }
+
+    #[test]
+    fn summary_event_appends_once_on_a_page_no_adapter_covers() {
+        use crate::capture::{CapturePolicy, CaptureStore};
+
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let config = storage(root.path());
+        let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
+        let index = index(&root, &cache);
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let summary = page_summary(url, &rfc3339_seconds_ago(5));
+
+        assert!(matches!(
+            capture.record_summary(policy, &summary),
+            crate::capture::CaptureOutcome::Persisted { .. }
+        ));
+
+        let report = index.reindex().unwrap();
+        assert_eq!(report.written, 1);
+        let expected_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let artifact = index.artifact(&expected_id).unwrap().expect("indexed");
+        assert_eq!(artifact.artifact_type, "web.page");
+        assert_eq!(artifact.title, "A good discussion");
+
+        let path = artifact_files(root.path()).pop().unwrap();
+        let file = fs::read_to_string(&path).unwrap();
+        assert!(file.contains("type: \"web.page\""));
+        // The artifact file is nested 3 directories under the vault root
+        // (artifacts/<type>/<site>/<file>.md); a root-relative summary_path
+        // must resolve back up through all of them, or the Markdown link is
+        // broken from the artifact file's own location.
+        assert!(
+            path.strip_prefix(root.path()).unwrap().components().count() == 4,
+            "expected artifacts/<type>/<site>/<file>.md, got {path:?}"
+        );
+        assert!(file.contains(
+            "Summary: [discussion, high importance](<../../../pages/hn-item.summary.md>)"
+        ));
+        assert!(file.contains("Summarized: A good discussion"));
+
+        // Re-summarizing the same URL updates the one artifact, not a second.
+        let mut again = page_summary(url, &rfc3339_seconds_ago(0));
+        again.title = "An even better discussion".into();
+        assert!(matches!(
+            capture.record_summary(policy, &again),
+            crate::capture::CaptureOutcome::Persisted { .. }
+        ));
+        index.reindex().unwrap();
+        assert_eq!(artifact_files(root.path()).len(), 1);
+        let updated = index.artifact(&expected_id).unwrap().expect("indexed");
+        assert_eq!(updated.title, "An even better discussion");
+    }
+
+    #[test]
+    fn a_summary_joins_the_m1_legacy_visit_of_the_same_url() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        let url_hash = sha256_hex(url.as_bytes());
+
+        let legacy_line = format!(
+            "\n- 2026-10-20T10:00:00Z — A good discussion — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
+            sha256_hex("legacy-marker".as_bytes()),
+        );
+
+        let event = SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: artifact_id.clone(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: "2026-10-26T18:00:00Z".into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        };
+        let payload = hex::encode(serde_json::to_vec(&event).unwrap());
+        let summary_line = format!(
+            "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            event.occurred_at,
+        );
+
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-20.md"),
+            format!("{LOG_HEADER}\n{legacy_line}"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2026-10-26.md"),
+            format!("{LOG_HEADER}\n{summary_line}"),
+        )
+        .unwrap();
+
+        index.reindex().unwrap();
+        assert_eq!(artifact_files(root.path()).len(), 1, "one shared artifact");
+        let artifact = index.artifact(&artifact_id).unwrap().expect("indexed");
+        assert_eq!(artifact.artifact_type, "web.page");
+    }
+
+    #[test]
+    fn forged_summary_markers_are_ignored() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let url_hash = sha256_hex(url.as_bytes());
+        let event = SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id:
+                "web:evil.example/0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: "2026-10-26T18:00:00Z".into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        };
+        let payload = hex::encode(serde_json::to_vec(&event).unwrap());
+        let line = format!(
+            "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            event.occurred_at,
+        );
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-10-26.md"), format!("{LOG_HEADER}\n{line}")).unwrap();
+
+        let report = index.reindex().unwrap();
+        assert_eq!(report.written, 0);
+        assert!(!root.path().join("artifacts").exists());
+    }
+
+    #[test]
+    fn worklog_names_a_summary_only_artifact_instead_of_just_seen() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let artifact_id = crate::summary::web_page_artifact_id(url).unwrap();
+        index
+            .record_summary(&SummaryEvent {
+                event_id: uuid::Uuid::new_v4().to_string(),
+                artifact_id: artifact_id.clone(),
+                artifact_type: "web.page".into(),
+                url: url.into(),
+                title: "A good discussion".into(),
+                occurred_at: "2026-10-15T12:00:00Z".into(),
+                document_type: "discussion".into(),
+                category: "reading".into(),
+                importance: "high".into(),
+                summary_path: "pages/hn-item.summary.md".into(),
+            })
+            .unwrap();
+
+        let (text, count) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-15").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        // Zero focused/background/opens must not collapse this into the
+        // generic "seen" wording a bare-activity artifact with no measured
+        // time would get: a summary is a distinct, named action.
+        assert!(text.starts_with("Opened 1 artifact,"));
+        assert!(text.contains("Summarized: A good discussion — discussion, high importance"));
+        assert!(!text.contains("seen"));
+    }
+
+    #[test]
+    fn worklog_keeps_measures_when_a_summary_lands_on_an_already_measured_artifact() {
+        // Exercises the future adapter-attached-summary case (spec §7.2's
+        // "the adapter does recognize the page" branch, not wired by any
+        // caller yet): the summary wording must not silently drop real
+        // measured activity on the same artifact.
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000020",
+            "PROJ-1",
+            "Ticket",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activity(&event, &[]).unwrap();
+        index
+            .record_summary(&SummaryEvent {
+                event_id: uuid::Uuid::new_v4().to_string(),
+                artifact_id: event.artifact_id.clone(),
+                artifact_type: event.artifact_type.clone(),
+                url: event.url.clone(),
+                title: "Ticket".into(),
+                occurred_at: "2026-10-15T13:00:00Z".into(),
+                document_type: "ticket".into(),
+                category: "work".into(),
+                importance: "high".into(),
+                summary_path: "pages/proj-1.summary.md".into(),
+            })
+            .unwrap();
+
+        let (text, count) = index
+            .worklog(
+                parse_date("2026-10-15").unwrap(),
+                parse_date("2026-10-15").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(text.contains("Summarized: Ticket — ticket, high importance"));
+        assert!(text.contains("focused 2 min"), "{text}");
+    }
+
+    #[test]
+    fn a_version_1_state_cache_is_rescanned() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let url_hash = sha256_hex(url.as_bytes());
+        let event = SummaryEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
+            artifact_type: "web.page".into(),
+            url: url.into(),
+            title: "A good discussion".into(),
+            occurred_at: "2026-10-26T18:00:00Z".into(),
+            document_type: "discussion".into(),
+            category: "reading".into(),
+            importance: "high".into(),
+            summary_path: "pages/hn-item.summary.md".into(),
+        };
+        let payload = hex::encode(serde_json::to_vec(&event).unwrap());
+        let line = format!(
+            "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
+            sha256_hex(event.event_id.as_bytes()),
+            event.occurred_at,
+        );
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-10-26.md"), format!("{LOG_HEADER}\n{line}")).unwrap();
+
+        // A cache written by a build that predates `CachedEvent::Summary`
+        // (version 1) must never be trusted as-is: it cannot contain this
+        // summary, so loading it unchanged would hide it until a manual
+        // reindex. Write one by hand and confirm it is rescanned instead.
+        let stale_cache_dir = cache.path();
+        fs::create_dir_all(stale_cache_dir).unwrap();
+        let stale_state = serde_json::json!({
+            "version": 1,
+            "root": root.path().to_string_lossy(),
+            "root_identity": open_selected_root(root.path(), None).unwrap().1,
+            "log_dir": "log",
+            "artifacts_dir": "artifacts",
+            "events": {},
+            "dirty": [],
+        });
+        fs::write(
+            stale_cache_dir.join("index-state.json"),
+            serde_json::to_vec(&stale_state).unwrap(),
+        )
+        .unwrap();
+
+        let index = index(&root, &cache);
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!(
+            report.written, 1,
+            "a v1 cache must be rescanned, not trusted"
+        );
+        assert_eq!(artifact_files(root.path()).len(), 1);
     }
 
     fn artifact_files(root: &Path) -> Vec<PathBuf> {

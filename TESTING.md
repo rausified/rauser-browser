@@ -117,6 +117,76 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced an older URL note disappearing
+  from a recovered context-only route when the shared note's creation route
+  had no delivered activity. Older-note discovery now uses the shared note's
+  ownership-checked creation URL as well as log evidence. The failing-first
+  native regression covers adapter removal, rule narrowing, site removal,
+  cache deletion/reindex, read-only viewing and unchanged note revisions.
+  No browser or native dialog is involved. Full workspace and scripted-dialogs
+  suites pass, as do extension checks. The Node differential runner stalled in
+  this sandbox; the same 5,000 generated requests, with its U+2028/U+2029
+  escaping and generator-health checks, passed through separate bounded Python
+  subprocess calls to the Rust and TypeScript engines (2,355 matches, 426
+  invalid documents). macOS smoke cannot run on Linux, and offline fuzz
+  compilation lacks the cached `libfuzzer-sys` dependency.
+- 2026-10-27: The note-removal matrix uses framed native requests with a fresh
+  host store per request for save/load, adapter and site removal, older-note
+  viewing, migration refusal and capture suppression. Since protocol v6
+  (2026-10-26) rule narrowing, like every removal, is a plain framed
+  `update_config` with real revision checks and no native confirmation; site
+  removal is adapter removal, because sites derive from adapters. It covers edit/view
+  routes, mode-only evidence, context without measured activity, notes without
+  delivered history, occupied URL notes, ambiguous mappings, stale keys and
+  versions, deleted caches and reindex. Separate file-count, per-file byte,
+  aggregate-byte and non-UTF-8 fixtures prove incomplete primary scans refuse
+  loads and autosaves without changing notes; optional older-note scans stay
+  best effort. Three regressions failed before their fixes (initial fixture
+  errors used invalid adapter syntax and a future timestamp and were corrected
+  first). The existing unavailable-history test now exercises both activity
+  and `why` evidence hiding a conflicting identity. No real browser or native
+  dialog is involved; for the macOS smoke, the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
+- 2026-10-27: Independent review reproduced a wrong-note load and overwrite
+  when log catch-up failed and note recovery silently ignored the missing
+  historical candidates. The regression creates two artifacts sharing a
+  stripped canonical URL, with the second note on an alternate route, removes
+  the adapter, and injects both an oversized log and a SQLite publication
+  failure. Loads and saves now report unavailable identity, both note files
+  remain byte-exact, and clearing either fault restores ambiguity handling
+  and the stale-key refusal. No browser or real dialog is involved.
+- 2026-10-27: Index catch-up is tested through the native handlers by restoring
+  valid older cache files after a durable append, reopening configuration, then
+  querying or delivering another single/batched event without replaying the
+  missing one. Assertions cover Recent, worklog, and the actual SQLite rows.
+  Separate faults replace index.db with a directory or add a sparse oversized
+  log: capture stays acknowledged, all three history APIs return unavailable,
+  and clearing the fault restores history without duplicate log bytes. Index
+  tests cover checkpoint migration, changed-file-only reads, a completed
+  trailing marker, dirty tracking, and the aggregate read cap without partial
+  publication. These are local filesystem fixtures; no macOS browser run is
+  claimed; for the macOS smoke, the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
+
+- 2026-10-27: The single/batch activity parity test covers 13 scenarios through
+  both native handlers with separate stores, explicit expected outcomes and
+  reasons, correlated event IDs, no log/index writes on refusal, and decoded
+  durable payloads for accepted activity (including mode, trail and title-ref
+  evidence). It passes before and after consolidating authorization: duplication
+  was confirmed, but no existing behavioral divergence was reproduced. Initial
+  test-only failures assumed markers contained plain event IDs or struct field
+  order; decoding their hex JSON checks the actual contract. No macOS run is
+  claimed; for the macOS smoke, the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
+- 2026-10-27: Independent review reproduced a sanitizer-upgrade recovery failure with a pre-upgrade v1 intent and a log torn inside a Unicode format character. Exact-hash compatibility now resumes that original entry through both single and batch delivery, preserves unrelated bytes, refuses changed payloads and edited tails, and deduplicates a complete marker. A second regression covers activity and context payloads. Future renderer-independent single-entry intent storage remains tracked as `brwr-3cc`; no macOS execution is claimed.
+- 2026-10-27: Unicode-spoofing regressions first failed in daily rows and
+  generated artifact files, then passed with the shared host presentation
+  sanitizer. Tests exercise single and batch activity/legacy delivery, explicit
+  context, exact encoded marker payloads, reindexing into owned files, unchanged
+  source logs, plain worklogs, character caps, and readable non-ASCII text.
+  The format-character table was exhaustively compared with the local Node
+  Unicode 17 `General_Category=Cf` property (170 scalars); no dependency or
+  network fetch is needed. These are host filesystem tests, not evidence of
+  an Obsidian/VS Code preview or a macOS Chrome run. For the macOS smoke,
+  the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
+- 2026-10-27: Trail-transition validation uses a strict allowlist for new activity and the original bounded shape checks for historical markers. The regressions test terminal refusal through both native delivery paths, all browser values plus `forward_back`, and a pre-validation ingestion cache followed by reindexing an owned marker. They verify actual SQLite edge kinds, retained activity totals and exact payloads, unchanged source logs, and continued rejection of oversized or unpaired legacy trails. No browser or native dialog is involved.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.
 - 2026-09-28: Branch `m2-harness-setup`. Chrome passes the runner's environment to the native host, so AI harness setup would have seen the real `PATH` and credentials. The headless wrapper now clears the environment with `env -i` and pins `PATH` to fake harnesses; added the external-programs section. The headless run with fake harnesses passed with nine scripted dialogs.

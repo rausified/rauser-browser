@@ -117,13 +117,21 @@ to host-derived artifact keys (with guarded migration of older URL-keyed
 notes), and settings can regenerate artifact files while reporting every
 unowned-path conflict it leaves untouched.
 
+After adapter/site removal or recognition narrowing, notes recover their
+artifact key from complete note identities and recorded activity, mode URLs,
+or explicit context; separate older URL notes remain viewable. Ambiguous
+history falls back to the URL key, while unavailable history or an incomplete
+bounded note scan refuses loads and saves instead of guessing an autosave target.
+
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
 opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the
 worker to sync now. The rest of the agent integration, search index, signed
 installers, Chrome Web Store listing, and public release do not exist yet. M1
-still needs interactive Chrome checks on macOS, the only supported platform
-(DESIGN.md §13; Windows support was dropped, §14).
+still needs interactive Chrome checks on macOS, the primary platform. Windows
+support was reinstated on 2026-10-16 (DESIGN.md §13, §14): Windows code must
+keep compiling and passing CI, and its interactive checks are separate
+[human] work.
 
 DESIGN.md's principle 9 (standalone product) governs this repo: no file, build
 step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or Astrolabe
@@ -143,7 +151,7 @@ changes a contract.
 - `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading.
 - Product naming (app name, native host ID, storage key, marker, and temp-file prefixes) lives in `extension/brand.ts` (also used by the build and dev scripts) and `host/src/brand.rs`. Page and manifest text use `{{APP_NAME}}`/`{{FULL_NAME}}`, filled in by `extension/build.mjs`. Crate, package, and binary names in `Cargo.toml` and `package.json` still change separately.
 - `scripts/register-dev-host.mjs` registers a per-user development native host for one unpacked extension ID; installers own release registration.
-- `.github/workflows/ci.yml` runs build and quality checks on macOS, the only supported platform, including the headless smoke run (`npm run smoke:macos:headless`).
+- `.github/workflows/ci.yml` runs the build and quality checks on a `macos-15` and `windows-latest` matrix, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only; a `Build and check` gate job, the check branch protection requires, passes only when every platform build passes.
 - `TESTING.md` is this repo's own testing strategy (headless end-to-end recipe, dialog seams, what headless cannot prove). It is self-contained; nothing in this repo should point outside it for testing guidance.
 
 ## Local checks
@@ -157,7 +165,7 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - Treat all extension messages and page-derived content as untrusted.
 - Keep vault paths rooted in a user-selected directory; never accept a raw file path from a page or extension request.
 - Preserve existing user files. Page notes and generated artifact files are the two implemented file kinds the host replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`). An unrelated or unowned file at either path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
-- Keep capture off until a notes folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose notes folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder follows the same rule, and a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs).
+- Keep capture off until a notes folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose notes folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The summary agent must re-check that identity before it reads the folder (PR 3).
 - The host re-checks every delivered event against its own adapters with the Rust engine before any vault I/O; a worker can only narrow what is recorded, never widen it. Never let a Chrome permission, a worker claim, or extension state substitute for that check.
 - Carry pending site removals across upgrades. Origins an earlier build removed or saw revoked are migrated into the worker's one pending-removal list (`migratePendingRemovals` in extension/worker.ts), their adapters stay out of every capture lease, and the list clears only when a lease the host actually sent holds no adapter on those origins. An unreadable list pauses capture (fail closed).
 - Only native harness setup (`set_up_harness`, host/src/harness_setup.rs) may set the harness entry; it names a detected `harness_id`, never a path or arguments, and the host rediscovers and probes that harness before committing. `update_config` may only echo the harness entry unchanged or remove it (host/src/consent.rs `check_agent_fields`).

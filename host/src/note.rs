@@ -476,6 +476,19 @@ pub fn artifact_keyed_note_identity(contents: &str, url: &str) -> Option<String>
     (canonical.as_deref() == Some(url)).then_some(artifact_id)
 }
 
+/// The creation URL is durable evidence for older-note discovery even when
+/// no activity was ever delivered on that route and its adapter is gone.
+pub fn artifact_keyed_note_url(contents: &str, key: &RecordKey) -> Option<String> {
+    if key.kind != RecordKeyKind::Artifact {
+        return None;
+    }
+    // Artifact ownership is checked by ID; the supplied URL is deliberately
+    // unused by parse_owned_note for this key kind.
+    let parsed = parse_owned_note(key, "", contents)?;
+    crate::vault::url_record_key(&parsed.canonical_url).ok()?;
+    Some(parsed.canonical_url)
+}
+
 /// Return a verified URL-keyed identity from a legacy page note. This is used
 /// only on bounded files from `Vault::note_candidates`; malformed, artifact-
 /// keyed, summary, and unrelated Markdown are ignored.
