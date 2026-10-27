@@ -423,6 +423,14 @@ fn start_run(
             "record_key is chosen by the host",
         );
     }
+    if let Err(message) = crate::service::record::check_start_run(
+        &value.url,
+        &value.title,
+        &value.content,
+        value.selection.as_deref(),
+    ) {
+        return error(&value.request_id, ErrorCode::InvalidRequest, message);
+    }
     if crate::capture::parse_event_time(&value.requested_at)
         .and_then(crate::capture::check_event_window)
         .is_err()
@@ -4292,6 +4300,37 @@ id = "work:{host}/{id}"
                     refused(&response).0,
                     ErrorCode::InvalidRequest,
                     "{requested_at}"
+                );
+            }
+        }
+
+        #[test]
+        fn start_run_over_the_schema_bounds_is_invalid_request_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let oversized = |change: &dyn Fn(&mut StartRunRequest)| {
+                let Request::StartRun(mut value) = start_run("https://example.com/", None, &now())
+                else {
+                    unreachable!()
+                };
+                change(&mut value);
+                Request::StartRun(value)
+            };
+            for request in [
+                oversized(&|value| value.title = "t".repeat(2049)),
+                oversized(&|value| {
+                    value.url = format!("https://example.com/{}", "a".repeat(8192));
+                }),
+                oversized(&|value| value.content = "c".repeat(1024 * 1024 + 1)),
+                oversized(&|value| value.selection = Some("s".repeat(64 * 1024 + 1))),
+            ] {
+                let response = call(&mut config, &link, request);
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{response:?}"
                 );
             }
         }

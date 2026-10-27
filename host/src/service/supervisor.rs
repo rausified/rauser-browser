@@ -34,7 +34,9 @@ use super::harness_api::{
 };
 use super::maintenance;
 use super::queue::{Scheduler, Submit};
-use super::record::{RunStatusFile, RunStore, StreamError, StreamPage, page_markdown};
+use super::record::{
+    MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, page_markdown,
+};
 use crate::config::ConfigStore;
 use crate::vault::Vault;
 
@@ -321,8 +323,9 @@ impl Supervisor {
 
     /// Queue a run, or return the queued-or-running run for the same record
     /// key (`true` = existing).
-    pub fn start_run(&self, req: StartRun) -> Result<(RunView, bool), (ErrorCode, String)> {
+    pub fn start_run(&self, mut req: StartRun) -> Result<(RunView, bool), (ErrorCode, String)> {
         let inner = &self.inner;
+        cap_bytes(&mut req.title, MAX_TITLE_BYTES);
         inner.touch();
         let Some(runner) = inner.registry.get(req.harness) else {
             return Err((

@@ -22,6 +22,69 @@ pub const STREAM_PAGE_BYTES: usize = 128 * 1024;
 /// The largest `run.log`; output past it is dropped.
 pub const LOG_CAP: usize = 1024 * 1024;
 
+/// `start_run` bounds from `protocol/schema.json`. The url is measured in
+/// bytes (as capture does); content and selection in characters, as the
+/// schema counts them.
+pub const MAX_URL_BYTES: usize = 8192;
+pub const MAX_TITLE_CHARS: usize = 2048;
+pub const MAX_CONTENT_CHARS: usize = 1024 * 1024;
+pub const MAX_SELECTION_CHARS: usize = 64 * 1024;
+/// A stored title is also cut to this many bytes, as notes cut theirs, so
+/// twenty run views always fit one outbound frame.
+pub const MAX_TITLE_BYTES: usize = 2048;
+/// `RunView.error` is at most this long.
+pub const MAX_ERROR_BYTES: usize = 2048;
+
+/// Refuse a `start_run` whose fields pass the schema's bounds. A url with a
+/// control character is refused too: a browser-serialized URL never has one,
+/// and each would grow six-fold in every JSON view of the run.
+pub fn check_start_run(
+    url: &str,
+    title: &str,
+    content: &str,
+    selection: Option<&str>,
+) -> Result<(), &'static str> {
+    if url.len() > MAX_URL_BYTES {
+        return Err("url is longer than 8192 bytes");
+    }
+    if url.chars().any(char::is_control) {
+        return Err("url contains a control character");
+    }
+    if title.chars().count() > MAX_TITLE_CHARS {
+        return Err("title is longer than 2048 characters");
+    }
+    if content.chars().count() > MAX_CONTENT_CHARS {
+        return Err("content is longer than 1048576 characters");
+    }
+    if selection.is_some_and(|selection| selection.chars().count() > MAX_SELECTION_CHARS) {
+        return Err("selection is longer than 65536 characters");
+    }
+    Ok(())
+}
+
+/// Cut `text` to at most `max` bytes on a character boundary.
+pub fn cap_bytes(text: &mut String, max: usize) {
+    if text.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+}
+
+/// Control characters become spaces, then the text is cut to `max` bytes.
+fn fit_for_view(text: &mut String, max: usize) {
+    if text.chars().any(char::is_control) {
+        *text = text
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+    }
+    cap_bytes(text, max);
+}
+
 const STATUS_VERSION: u32 = 1;
 const STATUS_FILE: &str = "status.json";
 const PAGE_FILE: &str = "page.md";
@@ -190,8 +253,29 @@ impl RunStore {
     }
 
     /// Replace `status.json` atomically: temp file, fsync, rename, dir fsync.
+    /// The title and error are made fit for every view first: control
+    /// characters (an ANSI colour code, a newline) become spaces, and each is
+    /// cut to its byte limit on a character boundary.
     pub fn write_status(&self, status: &RunStatusFile) -> Result<()> {
         let id = status.id()?;
+        let unfit = |text: &str, max: usize| text.len() > max || text.chars().any(char::is_control);
+        let capped;
+        let status = if unfit(&status.title, MAX_TITLE_BYTES)
+            || status
+                .error
+                .as_deref()
+                .is_some_and(|error| unfit(error, MAX_ERROR_BYTES))
+        {
+            let mut copy = status.clone();
+            fit_for_view(&mut copy.title, MAX_TITLE_BYTES);
+            if let Some(error) = copy.error.as_mut() {
+                fit_for_view(error, MAX_ERROR_BYTES);
+            }
+            capped = copy;
+            &capped
+        } else {
+            status
+        };
         let bytes = serde_json::to_vec_pretty(status).context("encoding status.json")?;
         atomic_write(&self.run_dir(id), STATUS_FILE, &bytes).context("writing status.json")
     }
@@ -438,6 +522,73 @@ mod tests {
             summary_path: None,
             stream_truncated: false,
         }
+    }
+
+    #[test]
+    fn start_run_bounds_follow_the_schema() {
+        let ok = |url: &str, title: &str, content: &str, selection: Option<&str>| {
+            check_start_run(url, title, content, selection)
+        };
+        let url = format!("https://e.com/{}", "a".repeat(MAX_URL_BYTES - 14));
+        assert_eq!(url.len(), MAX_URL_BYTES);
+        assert!(ok(&url, "", "", None).is_ok());
+        assert!(ok(&format!("{url}a"), "", "", None).is_err());
+        assert!(ok("https://e.com/\u{1}", "", "", None).is_err());
+        let title = "界".repeat(MAX_TITLE_CHARS);
+        assert!(ok("https://e.com/", &title, "", None).is_ok());
+        assert!(ok("https://e.com/", &format!("{title}x"), "", None).is_err());
+        let content = "é".repeat(MAX_CONTENT_CHARS);
+        assert!(ok("https://e.com/", "", &content, None).is_ok());
+        assert!(ok("https://e.com/", "", &format!("{content}x"), None).is_err());
+        let selection = "x".repeat(MAX_SELECTION_CHARS);
+        assert!(ok("https://e.com/", "", "", Some(&selection)).is_ok());
+        assert!(ok("https://e.com/", "", "", Some(&format!("{selection}x"))).is_err());
+    }
+
+    #[test]
+    fn written_title_and_error_fit_their_view_limits() {
+        let (_dir, store) = store();
+        let id = Uuid::new_v4();
+        let mut status = sample(id);
+        status.title = "界".repeat(MAX_TITLE_CHARS);
+        status.error = Some(format!("\u{1b}[31mfailed\n{}", "é".repeat(MAX_ERROR_BYTES)));
+        store.create(&status, "# A\n").unwrap();
+        let stored = store.status(id).unwrap();
+        assert!(stored.title.len() <= MAX_TITLE_BYTES);
+        assert!(stored.title.len() > MAX_TITLE_BYTES - 3);
+        let error = stored.error.unwrap();
+        assert!(error.len() <= MAX_ERROR_BYTES);
+        assert!(error.starts_with(" [31mfailed "), "{error}");
+        assert!(!error.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn twenty_largest_views_fit_one_outbound_frame() {
+        // The largest fields a start_run can leave behind, each escaped as
+        // much as JSON allows once stored.
+        let mut status = sample(Uuid::new_v4());
+        status.url = format!("https://e.com/{}", "\\".repeat(MAX_URL_BYTES - 14));
+        status.url.truncate(MAX_URL_BYTES);
+        let key = RecordKey {
+            kind: RecordKeyKind::Url,
+            value: "k".repeat(MAX_URL_BYTES),
+        };
+        status.start_key = key.clone();
+        status.written_key = Some(key);
+        status.title = "\"".repeat(MAX_TITLE_BYTES);
+        status.error = Some("\\".repeat(MAX_ERROR_BYTES));
+        status.error_kind = Some(RunErrorKind::SaveFailed);
+        status.state = RunState::Failed;
+        status.cwd = Some("/".repeat(1024));
+        status.summary_path = Some("s".repeat(1024));
+        let view = status.view(u32::MAX, true);
+        let listed = brauser_protocol::Response::RunsListed(brauser_protocol::RunsListed {
+            protocol_version: brauser_protocol::PROTOCOL_VERSION,
+            request_id: "r".repeat(128),
+            runs: vec![view; crate::service::supervisor::LIST_LIMIT],
+        });
+        let bytes = serde_json::to_vec(&listed).unwrap().len();
+        assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
     }
 
     fn created(store: &RunStore) -> Uuid {

@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use super::agent_env::{AgentEnv, AgentEnvError};
 use super::paths::{self, ServicePaths};
+use super::record::check_start_run;
 use super::supervisor::{ServiceOptions, StartRun, Supervisor};
 use crate::brand::NAMESPACE;
 use crate::config::ConfigStore;
@@ -246,6 +247,16 @@ impl Server {
                 let Some(record_key) = value.record_key else {
                     return error(&id, ErrorCode::InvalidRequest, "record_key is required");
                 };
+                // The host checks these too; a direct socket peer is bounded
+                // the same way.
+                if let Err(message) = check_start_run(
+                    &value.url,
+                    &value.title,
+                    &value.content,
+                    value.selection.as_deref(),
+                ) {
+                    return error(&id, ErrorCode::InvalidRequest, message);
+                }
                 let cwd = match self.run_cwd() {
                     Ok(cwd) => cwd,
                     Err((code, message)) => return error(&id, code, message),
@@ -665,6 +676,32 @@ mod tests {
         world.start(Duration::from_secs(600));
         let (code, _) = error_of(world.start_run(None));
         assert_eq!(code, ErrorCode::InvalidRequest);
+        assert!(
+            !world.paths.runs().exists()
+                || std::fs::read_dir(world.paths.runs())
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
+    }
+
+    #[test]
+    fn start_run_over_the_schema_bounds_from_a_socket_peer_is_invalid_request() {
+        let world = World::new(ANSWER);
+        world.start(Duration::from_secs(600));
+        let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "big".into(),
+            url: "https://example.com/a".into(),
+            title: "t".repeat(64 * 1024),
+            content: "Body text".into(),
+            selection: None,
+            harness: None,
+            record_key: Some(url_key()),
+            requested_at: "2026-10-26T10:00:00Z".into(),
+        })));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert!(message.contains("title"), "{message}");
         assert!(
             !world.paths.runs().exists()
                 || std::fs::read_dir(world.paths.runs())
