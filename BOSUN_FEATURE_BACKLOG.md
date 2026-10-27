@@ -190,18 +190,6 @@ order. They supersede the denylist, harness-token, `activeTab`, and per-site
 grant parts of the items below wherever those conflict. PR 1 (open access
 and the protocol v6 removals) is done; see Shipped.
 
-- [x] `brwr-sv2` **Open access PR 2: the Brauser service skeleton.** `brauser
-  service` on a 0700 Unix socket under launchd, run records, the queue,
-  timeout, cancel, recovery and retention, the host proxy with build-identity
-  check and `service_unavailable`, dev LaunchAgent registration, and `agent.env`,
-  all against a fake harness (spec §5; plan Tasks 12-27). Done on
-  `feat/agent-service-pr2` (2026-10-26); see Shipped. Still to do, **[human]**
-  (TESTING.md "Real-UI acceptance"): (1) register the dev build and close
-  Chrome; (2) run `start_run` from the panel console; (3) confirm that
-  `launchctl print gui/$UID/com.rauser.brauser.service` shows the service and
-  that it exits after 10 idle minutes; (4) confirm that `agent.env` values
-  reach a run (needs PR 3's real runners); (5) confirm that a rebuild plus a
-  request restarts the service.
 - [ ] `brwr-sr3` **Open access PR 3: real runners, prompt, extraction, run
   card.** Codex app-server and Claude Code stream-json runners, the §6.4 prompt
   with a validated structured answer, pinned Readability extraction, the
@@ -427,6 +415,56 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
+### Confirmed low-severity defects (lane C review, 2026-10-27)
+
+A 2026-10-27 review of main at 1c32114 confirmed each of these with a probe
+test that fails on that commit. None blocks deploy, so they are P3 bugs here
+rather than Known Issues, and they wait behind the plan work above. Line
+numbers are on 1c32114; re-check them against current main. For each one,
+write the regression test described in its bead first, show it fails, then
+fix, and keep each fix to one cycle. If the test does not fail on current
+main, check the item off as "not reproduced" and say why. The last item,
+`brwr-f4s`, is a decided P2 note-identity follow-up rather than a defect fix.
+
+- [ ] `brwr-q7e` **Non-canonical event IDs are captured, then dropped on
+  rescan.** The marker's `id_hash` hashes `parse_event_id()`'s lowercase
+  hyphenated UUID, but the hex payload keeps the raw `event_id`, so
+  `parse_marker_event` (host/src/index.rs ~1403/1422) rejects the line.
+  Canonicalize `event_id` in the payload at capture for single and batch
+  activity and for why (host/src/capture.rs).
+- [ ] `brwr-u8n` **URLs that grow past 8192 bytes when normalized are
+  captured, then dropped on rescan.** Capture bounds the raw URL
+  (host/src/capture.rs ~627/~802, `activity_shape_is_valid` ~154/166) but
+  stores the normalized one, and the index's `safe_page_url` (index.rs ~1483)
+  bounds the stored value. Apply the bound after normalization to the page,
+  mode, and trail URLs and reject with `url_too_long`.
+- [ ] `brwr-d3m` **Under a minute of activity renders as "0 min".** `measures`
+  (host/src/index.rs ~1875) uses `whole_minutes`, so 1-59 seconds shows
+  "focused 0 min" or "0 min in background" in the worklog and the artifact
+  Timeline. Show "<1 min" when 0 < seconds < 60.
+- [ ] `brwr-w4k` **Use as artifact note records the migration route as the
+  note's URL.** `use_as_artifact_note` (host/src/note.rs ~622) renders the new
+  note with `destination_url`, while `save_keyed_note` keeps the note's
+  original URL. Keep the older note's URL. Re-check against #70 (note identity,
+  merged at 7a929ce), which changed which older notes are offered.
+- [ ] `brwr-p9r` **Recent opened before the host answers never loads.**
+  `loadRecent` and `loadWorklog` (extension/panel.ts ~605/~632) return early
+  while not connected, and the startup path (~815-840) never reloads them.
+  Reload when connected if Recent is visible, and show "Waiting for the
+  host…" meanwhile.
+- [ ] `brwr-v5t` **Use as artifact note is offered when it must fail.** The
+  panel adds the Use button for every older note (extension/panel.ts ~222-246)
+  even when the artifact note already exists, where `use_as_artifact_note`
+  (host/src/note.rs ~597) always refuses. Show only View in that case.
+- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
+  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
+  stripping a query key that an adapter rule matches on (Jira's
+  `selectedIssue`) is accepted and collapses artifact identity. Decided
+  2026-10-27: a save that adds or changes such an entry is refused with a clear
+  message; an existing config with the conflict still loads and saves, shows a
+  warning, and offers a one-click "Stop stripping <param>" fix. Also record
+  which params were stripped. P2; depends on `brwr-hrc` (rebase onto it first,
+  both edit config.rs).
 
 ### Cookie's own proposals (only after the plan work above)
 
@@ -493,7 +531,7 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
   remains the separate alias/re-key migration, not a relaxation of frozen IDs.
 
 
-- None. Open access PR 1 (`brwr-oa1`) is done on `feat/open-access-pr1` and PR 2 (`brwr-sv2`) on `feat/agent-service-pr2`, with its launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
+- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work; the next plan item is open access PR 3 (`brwr-sr3`), starting with its first queue item `brwr-t28`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
 
@@ -507,7 +545,7 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
 - **Category:** Reliability. **Share activity authorization across single and batch delivery (2026-10-27).** Single activity delivery now calls the same host policy checker as batches under the existing configuration lock, removing duplicate identity, mode, trail, reference, and shape checks. A 13-scenario parity test verifies explicit outcomes and reasons, refusal before log/index writes, and exact decoded durable payloads for valid activity through both paths. The baseline already agreed, so no existing behavioral bypass is claimed. **Metrics:** 322 Rust tests and 8 extension test files passing; 1 new test covering 26 deliveries; full required build/quality gate and both Clippy configurations green.
 - **Category:** Security & Privacy. **Keep invisible formatting out of generated work history (2026-10-27).** A shared host sanitizer now replaces Unicode format and control characters with spaces in daily row titles/context, regenerated artifact titles/context, and plain worklogs, and escapes Obsidian comments, highlights, and tags in generated Markdown. Both single and batch delivery use it while canonical encoded event payloads stay exact; reindex regenerates safe owned files without changing source logs. The review recorded legacy interrupted-entry recovery across renderer upgrades separately as `brwr-3cc`. **Metrics:** 319 Rust tests (+4) and 8 extension suites passing; two failing-first regressions, all 170 Unicode 17 format scalars verified locally, and full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, and extension build/tests green.
 - **Category:** Security & Privacy. **Reject invented navigation trails while preserving older activity (2026-10-27).** The native host now restricts new trail transitions to Chrome's known values plus the worker's existing back/forward encoding, returning terminal `rejected` before log or index writes through both single and batch delivery. Older bounded log and cache payloads retain their measurements and exact replay identity, while unknown transition kinds cannot become derived edges; reindex keeps the original shape limits and leaves source logs untouched. **Metrics:** 314 Rust tests (+3) and 8 extension suites passing; full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue consistency green.
-- **Category:** New Feature. `brwr-sv2` **Open access PR 2: the Brauser service skeleton (2026-10-26).** `brauser service` runs as an on-demand per-user LaunchAgent on a 0600 Unix socket in the 0700 support directory and exits after 10 idle minutes. The native host forwards the v6 run messages (`start_run`, `get_run`, `list_runs`, `cancel_run`, `retry_save`), resolves the record key itself, starts the service with `launchctl kickstart`, restarts a stale build after a `service_hello` build-identity mismatch, and answers `service_unavailable` otherwise. Run records, a two-run FIFO queue with one run per record key, a 10-minute timeout, process-group cancel, restart recovery, 30-day/200-run retention, and the 0600 `agent.env` overlay are covered against a fake harness only; `scripts/register-dev-host.mjs` registers, replaces, and (`--unregister-service`) removes the dev LaunchAgent. `brwr-9yc` decided (`agent.env`); `brwr-jfe` and `brwr-0cj` superseded by polling. The launchd checks are **[human]**.
+- **Category:** New Feature. `brwr-sv2` **Open access PR 2: the Brauser service skeleton (2026-10-26).** `brauser service` runs as an on-demand per-user LaunchAgent on a 0600 Unix socket in the 0700 support directory and exits after 10 idle minutes. The native host forwards the v6 run messages (`start_run`, `get_run`, `list_runs`, `cancel_run`, `retry_save`), resolves the record key itself, starts the service with `launchctl kickstart`, restarts a stale build after a `service_hello` build-identity mismatch, and answers `service_unavailable` otherwise. Run records, a two-run FIFO queue with one run per record key, a 10-minute timeout, process-group cancel, restart recovery, 30-day/200-run retention, and the 0600 `agent.env` overlay are covered against a fake harness only; `scripts/register-dev-host.mjs` registers, replaces, and (`--unregister-service`) removes the dev LaunchAgent. `brwr-9yc` decided (`agent.env`); `brwr-jfe` and `brwr-0cj` superseded by polling. The launchd checks are **[human]** (TESTING.md "Real-UI acceptance"): register the dev build and close Chrome; run `start_run` from the panel console; confirm `launchctl print gui/$UID/com.rauser.brauser.service` shows the service and that it exits after 10 idle minutes; confirm `agent.env` values reach a run (needs PR 3's real runners); confirm a rebuild plus a request restarts the service. Merged as PR #75 (2026-10-27) with the Codex review fixes.
 - **Category:** Security & Privacy. `brwr-oa1` **Open access PR 1: standing HTTP(S) access and protocol v6 (2026-10-26).** Brauser now holds HTTP(S) access from install, so a note can be typed on any page at once, and a site is on exactly when it has an adapter. The native confirmation, the `macos-alert` crate, the AI denylist, `log_incognito`, grant reconciliation, the sync caution, and the harness token are gone; harness setup detects and probes; a knowledge base folder is chosen with the native picker; v5 config files load unchanged. `brwr-ahb` closed as obsolete: the consent identity it would have unified no longer exists.
 - **Category:** New Feature. `brwr-m40` **Turn artifact history into a daily workspace (2026-10-17).** Recognized pages now show one shared artifact card across alternate routes, including measured focus/background/open totals, mode, links, and append-only “Why I'm here” context. A filtered Recent tab combines artifact-day history across tools and generates copyable today, yesterday, or current-week worklogs without an agent; host-derived record keys make Google Docs and Jira modal routes share notes, preserve pre-adapter notes for explicit no-clobber migration, and copy out edits when adapter identity changes mid-save. Settings can also regenerate artifact files on demand and names every unowned path it refuses to overwrite. **Metrics:** 293 Rust tests and 8 extension suites passing; 9 new Rust and 2 new extension regressions, with full protocol generation, current-state consistency, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
 - **Category:** New Capability. **Turn durable activity into a local index and bounded artifact records (2026-10-16).** Each accepted activity now updates a standard SQLite `index.db` with artifact, visit, edge, and dirty-set tables while leaving the append-only Markdown log authoritative. Brauser lazily regenerates only dirty, owned artifact files at native connection boundaries, preserves unchanged mtimes, gives case-colliding IDs distinct hash-suffixed paths, replaces external edits only after checking ownership, neutralizes hostile presentation text, and bounds long histories with daily, weekly, then monthly Timeline rollups. `brauser reindex` reconstructs the database and files from bounded owned markers, and older configs receive a non-overlapping `artifacts_dir` default without weakening native consent. **Metrics:** 284 Rust tests and 8 extension suites passing; 13 new index, ownership, delivery-integration, migration, replay-integrity, multi-page SQLite, chronology, rollup, and wire regressions, with full protocol generation, build, format, both clippy gates, clean npm install, typecheck, lint, extension build/tests, and queue export green.
