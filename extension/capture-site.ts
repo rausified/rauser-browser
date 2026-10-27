@@ -39,7 +39,7 @@ export function planCaptureSite(
 ): { ok: true; plan: CapturePlan } | { ok: false; message: string } {
   const origin = captureOrigin(url);
   if (!origin) return { ok: false, message: "Automatic setup for this site is still in development. Use settings to configure it." };
-  if (!config.storage) return { ok: false, message: "Choose a notes folder in settings first, then return here." };
+  if (!config.storage) return { ok: false, message: "Choose a home folder in settings first, then return here." };
   // Re-learning a configured site requires explicit aliases/re-keying. Never
   // replace a custom definition or silently add overlapping starter rules.
   if (siteConfigured(config, origin)) return { ok: false, message: "This site already has capture rules. Manage them in settings." };

@@ -262,7 +262,10 @@ fn dispatch(
         // Report that state instead of an error: the extension treats a
         // failed hello as a missing host, and the issue says how to repair.
         Request::Hello(value) => {
+            // The panel and settings ask on every open; that retries a
+            // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
+            config.migrate_layout_or_warn();
             Response::HelloResult(HelloResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -272,7 +275,10 @@ fn dispatch(
             })
         }
         Request::GetConfig(value) => {
+            // The panel and settings ask on every open; that retries a
+            // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
+            config.migrate_layout_or_warn();
             let adapter_warnings = config.adapter_warnings().to_vec();
             Response::ConfigResult(ConfigResult {
                 protocol_version: PROTOCOL_VERSION,
@@ -353,11 +359,16 @@ fn dispatch(
                     ErrorCode::Conflict,
                     "configuration changed; read it again before updating",
                 ),
-                Err(_) => error(
-                    &value.request_id,
-                    ErrorCode::Internal,
-                    "could not save configuration",
-                ),
+                // Saving the same home folder moves its older folders first;
+                // a refusal says which folder is in the way.
+                Err(save_error) => match save_error.downcast_ref::<crate::layout::Refusal>() {
+                    Some(refusal) => error(&value.request_id, ErrorCode::InvalidConfig, &refusal.0),
+                    None => error(
+                        &value.request_id,
+                        ErrorCode::Internal,
+                        "could not save configuration",
+                    ),
+                },
             }
         }
         Request::ChooseFolder(value) => {
@@ -619,14 +630,14 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
         Err(_) => return retryable("adapter policy is unavailable"),
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return retryable("choose a notes folder before capture");
+        return retryable("choose a home folder before capture");
     };
     let store = match config
         .dir()
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => return retryable("notes folder is unavailable"),
+        Err(_) => return retryable("home folder is unavailable"),
     };
     let policy = CapturePolicy {
         enabled: config.snapshot().capture_enabled,
@@ -709,7 +720,7 @@ fn record_activity(
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
             VisitOutcome::Retryable,
-            Some("choose a notes folder before capture".into()),
+            Some("choose a home folder before capture".into()),
             None,
         );
     };
@@ -721,7 +732,7 @@ fn record_activity(
         Err(_) => {
             return answer(
                 VisitOutcome::Retryable,
-                Some("notes folder is unavailable".into()),
+                Some("home folder is unavailable".into()),
                 None,
             );
         }
@@ -902,7 +913,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                 Accepted::Activity(event) => event.event_id.clone(),
             },
             outcome: VisitOutcome::Retryable,
-            reason: Some("choose a notes folder before capture".into()),
+            reason: Some("choose a home folder before capture".into()),
             relative_path: None,
         }));
         return Response::BatchRecorded(BatchRecorded {
@@ -925,7 +936,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                     Accepted::Activity(event) => event.event_id.clone(),
                 },
                 outcome: VisitOutcome::Retryable,
-                reason: Some("notes folder is unavailable".into()),
+                reason: Some("home folder is unavailable".into()),
                 relative_path: None,
             }));
             return Response::BatchRecorded(BatchRecorded {
@@ -1114,7 +1125,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
             VisitOutcome::Retryable,
-            Some("choose a notes folder before capture".into()),
+            Some("choose a home folder before capture".into()),
             None,
         );
     };
@@ -1126,7 +1137,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         Err(_) => {
             return answer(
                 VisitOutcome::Retryable,
-                Some("notes folder is unavailable".into()),
+                Some("home folder is unavailable".into()),
                 None,
             );
         }
@@ -1287,12 +1298,12 @@ fn resolve_key_parts(
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
     };
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
+        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable"))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule
@@ -1712,7 +1723,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         return error(
             &value.request_id,
             ErrorCode::NotConfigured,
-            "choose a notes folder first",
+            "choose a home folder first",
         );
     };
     let cache_dir = match config.cache_dir() {
@@ -1939,7 +1950,7 @@ fn read_index(config: &mut ConfigStore) -> Result<ArtifactIndex, (ErrorCode, &'s
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
     };
     let unavailable = || (ErrorCode::Internal, "artifact index is unavailable");
     let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
@@ -2237,11 +2248,11 @@ mod tests {
                 storage: Some(brauser_protocol::StorageConfig {
                     root: root.to_string_lossy().into_owned(),
                     profile: "neutral".into(),
-                    log_dir: "log".into(),
-                    pages_dir: "pages".into(),
+                    log_dir: "logs".into(),
+                    pages_dir: "notes".into(),
                     later_dir: "later".into(),
                     artifacts_dir: "artifacts".into(),
-                    summaries_dir: None,
+                    summaries_dir: Some("summaries".into()),
                     knowledge_base_dir: None,
                 }),
                 capture_enabled: false,
@@ -2358,11 +2369,11 @@ mod tests {
             storage: Some(brauser_protocol::StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,
@@ -3468,7 +3479,7 @@ id = "jira.board:{host}/{id}"
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the
-    /// notes folder, so its note works however many notes the folder holds.
+    /// home folder, so its note works however many notes the folder holds.
     #[test]
     fn a_large_notes_folder_does_not_block_notes_on_uncovered_pages() {
         let folder = tempfile::tempdir().unwrap();
@@ -3554,7 +3565,7 @@ id = "work:{host}/{id}"
             fn log_path(&self) -> std::path::PathBuf {
                 let date = self.at.date();
                 self.root.join(format!(
-                    "log/{:04}/{:02}/{:04}-{:02}-{:02}.md",
+                    "logs/{:04}/{:02}/{:04}-{:02}-{:02}.md",
                     date.year(),
                     u8::from(date.month()),
                     date.year(),
@@ -3982,7 +3993,7 @@ id = "work:{host}/{id}"
                     Response::NoteConflict(reply) if reply.reason == "stale" && reply.body == "Still editable")
                 );
                 assert!(
-                    !session.root.join("log").exists(),
+                    !session.root.join("logs").exists(),
                     "notes cannot restart capture"
                 );
             }
@@ -4017,7 +4028,7 @@ id = "work:{host}/{id}"
                 assert_eq!(other_route.key, created.key, "{removal}");
                 assert_eq!(other_route.body, "Item 8", "{removal}");
                 assert!(
-                    !session.root.join("log").exists(),
+                    !session.root.join("logs").exists(),
                     "{removal}: note keys never restart capture"
                 );
             }
@@ -4174,7 +4185,7 @@ id = "work:{host}/{id}"
                 session.forget_policy_history();
                 let note_path = session.root.join(saved.relative_path);
                 let original = std::fs::read(&note_path).unwrap();
-                let pages = session.root.join("pages");
+                let pages = session.root.join("notes");
                 let mut faults = Vec::new();
                 match fault {
                     "count" => {
@@ -4815,7 +4826,7 @@ scope = { owner = ["acme"] }
                 other => panic!("expected a suppressed visit for {label}, got {other:?}"),
             }
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
 
         let response = record_visit(
             RecordVisitRequest {
@@ -4938,7 +4949,7 @@ id = "work:{host}/{id}"
                 assert!(relative_path.is_none());
             }
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
         assert!(!config.cache_dir().unwrap().join("index.db").exists());
     }
 
@@ -5138,7 +5149,7 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
                     assert_eq!(stored, event, "{label}, batch={batched}");
                 } else {
                     assert!(relative_path.is_none());
-                    assert!(!root.join("log").exists(), "{label}, batch={batched}");
+                    assert!(!root.join("logs").exists(), "{label}, batch={batched}");
                     assert!(!config.cache_dir().unwrap().join("index.db").exists());
                 }
                 outcomes.push((outcome, reason, relative_path));
@@ -5259,7 +5270,7 @@ id = "work:{host}/{id}"
                 std::fs::create_dir(&fault).unwrap();
                 fault
             } else {
-                let fault = root.join("log/oversized.md");
+                let fault = root.join("logs/oversized.md");
                 std::fs::File::create(&fault)
                     .unwrap()
                     .set_len(32 * 1024 * 1024 + 1)
@@ -5489,7 +5500,7 @@ id = "work:{host}/{id}"
             let cache = config.cache_dir().unwrap();
             let old_state = std::fs::read(cache.join("index-state.json")).unwrap();
             let fault = if oversized_log {
-                let fault = root.join("log/oversized.md");
+                let fault = root.join("logs/oversized.md");
                 let file = std::fs::File::create(&fault).unwrap();
                 file.set_len(32 * 1024 * 1024 + 1).unwrap();
                 fault
@@ -6027,7 +6038,7 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected a rejected trail, got {other:?}"),
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
     }
 
     fn refused(response: &Response) -> (ErrorCode, &str) {
@@ -6373,22 +6384,22 @@ id = "work:{host}/{id}"
         }
 
         #[test]
-        fn summaries_overlap_at_setup_is_recoverable_invalid_config() {
+        fn setup_cannot_choose_a_summaries_folder() {
             let mut session = session(PASSING_BODY);
             let before = std::fs::read(&session.path).unwrap();
             let revision = session.revision();
-            let response = session.set_up_harness(&revision, "claude-code", Some("log"));
+            let response = session.set_up_harness(&revision, "claude-code", Some("ai"));
             let (code, message) = refused(&response);
             assert_eq!(code, ErrorCode::InvalidConfig);
-            assert!(message.contains("must not overlap"), "{message}");
+            assert!(message.contains("content folders are fixed"), "{message}");
             assert_eq!(std::fs::read(&session.path).unwrap(), before);
             assert_eq!(session.fake.log("claude", "stdin.log"), None);
-            // Choose a different folder and set up again.
-            let response = session.set_up_harness(&revision, "claude-code", Some("ai"));
+            // The fixed name, or none, sets up the harness.
+            let response = session.set_up_harness(&revision, "claude-code", Some("summaries"));
             match response {
                 Response::ConfigUpdated(value) => assert_eq!(
                     value.config.storage.unwrap().summaries_dir.as_deref(),
-                    Some("ai")
+                    Some("summaries")
                 ),
                 other => panic!("expected config_updated, got {other:?}"),
             }
@@ -6928,5 +6939,351 @@ id = "work:{host}/{id}"
             refreshed, first,
             "the panel's close regenerates dirty files"
         );
+    }
+
+    /// One-time move of an older install's folders to the fixed layout
+    /// (DESIGN.md §6.1), against a fixture shaped like a real pre-home install.
+    mod home_layout_migration {
+        use super::*;
+        use std::fs;
+        use std::path::{Path, PathBuf};
+
+        const FIXTURE: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/pre-home-layout"
+        );
+        const FORUM_NOTE: &str = "forum-example-com-item-5888e994a837414002b5aa66675dd4546e95a792d52a480a1f1b95ac4fd02c42.md";
+        const NEWS_URL: &str = "https://news.example.org/region/livestory/provincial-election-results-live-updates-2026-9.1234567";
+
+        struct Install {
+            folder: tempfile::TempDir,
+            home: PathBuf,
+            path: PathBuf,
+        }
+
+        impl Install {
+            fn new() -> Self {
+                let folder = tempfile::tempdir().unwrap();
+                let home = folder.path().join("notes-brauser");
+                fs::create_dir_all(home.join("pages")).unwrap();
+                for entry in fs::read_dir(Path::new(FIXTURE).join("home/pages")).unwrap() {
+                    let entry = entry.unwrap();
+                    fs::copy(entry.path(), home.join("pages").join(entry.file_name())).unwrap();
+                }
+                let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
+                let identity = crate::vault::selected_root_identity(&home).unwrap();
+                let config = fs::read_to_string(Path::new(FIXTURE).join("config.toml"))
+                    .unwrap()
+                    .replace("\"@ROOT_IDENTITY@\"", &quoted(&identity))
+                    .replace("\"@ROOT@\"", &quoted(&home.to_string_lossy()));
+                let state = folder.path().join("state");
+                fs::create_dir(&state).unwrap();
+                let path = state.join("config.toml");
+                fs::write(&path, config).unwrap();
+                Self { folder, home, path }
+            }
+
+            fn store(&self) -> ConfigStore {
+                ConfigStore::for_test(self.path.clone())
+            }
+
+            fn call(&self, config: &mut ConfigStore, request: Request) -> Response {
+                dispatch(
+                    request,
+                    config,
+                    &mut ConsentAuthority::new(),
+                    &SetupContext::new(&no_harnesses(self.folder.path())),
+                )
+            }
+
+            fn hello(&self, config: &mut ConfigStore) -> HelloResult {
+                let request = Request::Hello(brauser_protocol::HelloRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "hello".into(),
+                });
+                match self.call(config, request) {
+                    Response::HelloResult(value) => value,
+                    other => panic!("expected hello_result, got {other:?}"),
+                }
+            }
+
+            fn load(&self, config: &mut ConfigStore, url: &str) -> Response {
+                self.call(
+                    config,
+                    Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "load".into(),
+                        url: url.into(),
+                    }),
+                )
+            }
+
+            fn fixture_note(name: &str) -> Vec<u8> {
+                fs::read(Path::new(FIXTURE).join("home/pages").join(name)).unwrap()
+            }
+
+            fn table(&self) -> toml::Table {
+                fs::read_to_string(&self.path).unwrap().parse().unwrap()
+            }
+        }
+
+        fn without_layout(mut table: toml::Table) -> toml::Table {
+            let storage = table["storage"].as_table_mut().unwrap();
+            for key in [
+                "log_dir",
+                "pages_dir",
+                "later_dir",
+                "artifacts_dir",
+                "summaries_dir",
+            ] {
+                storage.remove(key);
+            }
+            table
+        }
+
+        #[test]
+        fn a_real_pre_home_install_moves_pages_to_notes_once() {
+            let install = Install::new();
+            let before = install.table();
+            let mut config = install.store();
+            let hello = install.hello(&mut config);
+            assert_eq!(hello.config_issue, None);
+            assert!(hello.configured);
+
+            assert!(!install.home.join("pages").exists());
+            for entry in fs::read_dir(Path::new(FIXTURE).join("home/pages")).unwrap() {
+                let name = entry.unwrap().file_name();
+                assert_eq!(
+                    fs::read(install.home.join("notes").join(&name)).unwrap(),
+                    Install::fixture_note(name.to_str().unwrap())
+                );
+            }
+            // Only folders that existed are renamed; nothing else is created.
+            let mut names: Vec<_> = fs::read_dir(&install.home)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            assert_eq!(names, ["notes"]);
+
+            let after = install.table();
+            let storage = after["storage"].as_table().unwrap();
+            for (key, value) in [
+                ("log_dir", "logs"),
+                ("pages_dir", "notes"),
+                ("later_dir", "later"),
+                ("artifacts_dir", "artifacts"),
+                ("summaries_dir", "summaries"),
+            ] {
+                assert_eq!(storage[key].as_str(), Some(value), "{key}");
+            }
+            // Every other setting, including the harness and adapters, is kept.
+            assert_eq!(without_layout(after), without_layout(before));
+
+            match install.load(&mut config, NEWS_URL) {
+                Response::NoteLoaded(value) => {
+                    assert!(value.exists);
+                    assert_eq!(value.body.trim(), "Note");
+                }
+                other => panic!("expected note_loaded, got {other:?}"),
+            }
+            // A second connection finds nothing to do.
+            let bytes = fs::read(&install.path).unwrap();
+            let mut second = install.store();
+            assert_eq!(install.hello(&mut second).config_issue, None);
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+        }
+
+        #[test]
+        fn an_existing_notes_folder_refuses_without_changing_anything_until_moved() {
+            let install = Install::new();
+            fs::create_dir(install.home.join("notes")).unwrap();
+            fs::write(install.home.join("notes/mine.md"), "the user's own").unwrap();
+            let bytes = fs::read(&install.path).unwrap();
+            let mut config = install.store();
+            let hello = install.hello(&mut config);
+            assert!(!hello.configured);
+            let issue = hello.config_issue.unwrap();
+            assert!(
+                issue.contains("notes/ already exists beside pages/"),
+                "{issue}"
+            );
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+            assert_eq!(
+                fs::read(install.home.join("pages").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            assert_eq!(
+                fs::read_to_string(install.home.join("notes/mine.md")).unwrap(),
+                "the user's own"
+            );
+            // Notes, capture, and settings saves stay off meanwhile.
+            assert!(matches!(
+                install.load(&mut config, NEWS_URL),
+                Response::Error(_)
+            ));
+            let mut next = config.snapshot().clone();
+            next.storage = Some(crate::layout::fixed(next.storage.as_ref().unwrap()));
+            let revision = config.revision().to_owned();
+            let response = install.call(
+                &mut config,
+                Request::UpdateConfig(brauser_protocol::UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save".into(),
+                    config: next,
+                    expected_revision: revision,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }),
+            );
+            match response {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("notes/ already exists"),
+                        "{}",
+                        value.message
+                    );
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+
+            // The user moves their folder; the next open finishes the move.
+            fs::rename(install.home.join("notes"), install.home.join("my-notes")).unwrap();
+            let hello = install.hello(&mut config);
+            assert_eq!(hello.config_issue, None);
+            assert!(hello.configured);
+            assert_eq!(
+                fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            assert_eq!(
+                fs::read_to_string(install.home.join("my-notes/mine.md")).unwrap(),
+                "the user's own"
+            );
+        }
+
+        #[test]
+        fn a_crash_between_renames_and_the_config_write_resumes() {
+            let install = Install::new();
+            fs::create_dir_all(install.home.join("log/2026/10")).unwrap();
+            fs::write(install.home.join("log/2026/10/2026-10-26.md"), "log").unwrap();
+            // As if a host renamed pages/ and then died.
+            fs::rename(install.home.join("pages"), install.home.join("notes")).unwrap();
+            let mut config = install.store();
+            config.refresh().unwrap();
+            assert!(!config.configured());
+            config.migrate_layout().unwrap();
+            assert!(config.configured());
+            assert!(crate::layout::is_fixed(
+                config.snapshot().storage.as_ref().unwrap()
+            ));
+            assert_eq!(
+                fs::read_to_string(install.home.join("logs/2026/10/2026-10-26.md")).unwrap(),
+                "log"
+            );
+            assert!(!install.home.join("log").exists());
+            assert_eq!(
+                fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            // Intents that name log/ are pointed at logs/ before it moves.
+            let relocations = fs::read_to_string(
+                install
+                    .path
+                    .parent()
+                    .unwrap()
+                    .join("visit-ids/log-relocations.json"),
+            )
+            .unwrap();
+            assert!(
+                relocations.contains("\"from\":\"log\",\"to\":\"logs\""),
+                "{relocations}"
+            );
+
+            // Every folder renamed, config still old: only the config changes.
+            let install = Install::new();
+            fs::rename(install.home.join("pages"), install.home.join("notes")).unwrap();
+            let mut config = install.store();
+            config.migrate_layout().unwrap();
+            assert!(config.configured());
+            assert!(crate::layout::is_fixed(
+                config.snapshot().storage.as_ref().unwrap()
+            ));
+        }
+
+        #[test]
+        fn migration_waits_for_every_writer_and_runs_once_across_hosts() {
+            for hold_capture in [false, true] {
+                let install = Install::new();
+                let state = install.path.parent().unwrap().to_path_buf();
+                // A writer in another host process holds its lock.
+                let writer = install.store();
+                let held = if hold_capture {
+                    crate::capture::lock_capture(&state).unwrap()
+                } else {
+                    writer.lock_current().unwrap()
+                };
+                let hosts: Vec<_> = (0..3)
+                    .map(|_| {
+                        let mut store = install.store();
+                        std::thread::spawn(move || {
+                            store.migrate_layout().unwrap();
+                            store.configured()
+                        })
+                    })
+                    .collect();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                assert!(
+                    install.home.join("pages").is_dir(),
+                    "hold_capture={hold_capture}"
+                );
+                assert!(
+                    !install.home.join("notes").exists(),
+                    "hold_capture={hold_capture}"
+                );
+                drop(held);
+                for host in hosts {
+                    assert!(host.join().unwrap(), "hold_capture={hold_capture}");
+                }
+                assert!(!install.home.join("pages").exists());
+                assert_eq!(
+                    fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                    Install::fixture_note(FORUM_NOTE)
+                );
+            }
+        }
+
+        #[test]
+        fn an_update_cannot_choose_its_own_folder_names() {
+            let install = Install::new();
+            let mut config = install.store();
+            assert!(install.hello(&mut config).configured);
+            let mut next = config.snapshot().clone();
+            next.storage.as_mut().unwrap().pages_dir = "pages".into();
+            let revision = config.revision().to_owned();
+            match install.call(
+                &mut config,
+                Request::UpdateConfig(brauser_protocol::UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save".into(),
+                    config: next,
+                    expected_revision: revision,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }),
+            ) {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("content folders are fixed"),
+                        "{}",
+                        value.message
+                    );
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
     }
 }

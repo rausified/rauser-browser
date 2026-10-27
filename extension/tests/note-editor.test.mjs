@@ -362,7 +362,7 @@ test("a flush with nothing running sends its save before returning", async () =>
 test("a failed load is retried for the same page", async () => {
   const h = harness();
   void h.editor.showPage(page("https://p.test/"));
-  (await h.next("load")).reject(new Error("No notes folder is chosen."));
+  (await h.next("load")).reject(new Error("No home folder is chosen."));
   await h.editor.idle();
   assert.equal(h.view.editable, false);
   // A title update for the same page reloads the failed note.

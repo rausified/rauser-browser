@@ -3078,7 +3078,7 @@ print(json.dumps([tables,row]))"#;
             .assume_offset(time::UtcOffset::from_whole_seconds(-7 * 3600).unwrap());
         assert!(!index.daily_pass_due(local_late));
         assert!(index.daily_pass_due(local_late + time::Duration::hours(1)));
-        // A pass for another notes folder says nothing about this one.
+        // A pass for another home folder says nothing about this one.
         let other_root = TempDir::new().unwrap();
         let other =
             ArtifactIndex::open_in(&storage(other_root.path()), None, cache.path()).unwrap();
@@ -3590,6 +3590,41 @@ print(json.dumps([tables,row]))"#;
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn a_renamed_log_folder_is_rescanned_and_its_artifacts_regenerate_in_place() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let old = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000020",
+            "MOVED",
+            "Moved",
+            "2026-10-15T12:00:00Z",
+        );
+        write_log(root.path(), "2026-10-15.md", &[&event]);
+        assert_eq!(
+            old.artifact(&event.artifact_id).unwrap().unwrap().title,
+            "Moved"
+        );
+        old.regenerate_dirty().unwrap();
+        // The layout migration renames log/ to logs/ and records the new
+        // name; the cache that still names log/ must not hide the history.
+        fs::rename(root.path().join("log"), root.path().join("logs")).unwrap();
+        let mut renamed = storage(root.path());
+        renamed.log_dir = "logs".into();
+        let new = ArtifactIndex::open_in(&renamed, None, cache.path()).unwrap();
+        assert_eq!(
+            new.artifact(&event.artifact_id).unwrap().unwrap().title,
+            "Moved"
+        );
+        let files = artifact_files(root.path());
+        assert_eq!(files.len(), 1);
+        let before = fs::read(&files[0]).unwrap();
+        new.regenerate_dirty().unwrap();
+        assert_eq!(artifact_files(root.path()), files);
+        assert_eq!(fs::read(&files[0]).unwrap(), before);
     }
 
     #[test]

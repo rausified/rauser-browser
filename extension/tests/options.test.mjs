@@ -63,8 +63,8 @@ function statusFor(overrides = {}) {
 function configWith(adapters, captureEnabled) {
   return {
     storage: {
-      root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-      summaries_dir: null, knowledge_base_dir: null,
+      root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
+      summaries_dir: "summaries", knowledge_base_dir: null,
     },
     capture_enabled: captureEnabled ?? adapters.length > 0,
     strip_params: [],
@@ -107,7 +107,7 @@ function install({
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
     ["agent-state", "p"], ["detect-harnesses", "button"], ["harness-offers", "ul"], ["harness-env", "ul"],
-    ["summaries-dir", "input"], ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
+    ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
     ["harness-warning", "p"], ["setup-harness", "button"], ["remove-harness", "button"], ["build-id", "span"], ["host-build", "span"],
   ]) {
     elements.set(id, new FakeElement(tag));
@@ -418,7 +418,7 @@ test("setupProblem ignores sites and pause", async () => {
   const { setupProblem, captureStateText } = await import("../dist/settings.js");
   const configured = configWith([artifactFor(SITE.origin)]);
   assert.equal(setupProblem({ ...configured, capture_enabled: false, adapters: { format: 1, artifacts: [] } }, null), null);
-  assert.equal(setupProblem({ ...configured, storage: null }, null), "No notes folder is chosen.");
+  assert.equal(setupProblem({ ...configured, storage: null }, null), "No home folder is chosen.");
   assert.equal(setupProblem(configured, "bad file"), "The host configuration needs repair: bad file");
   assert.equal(captureStateText({ ...configured, capture_enabled: false }), "Capture is paused.");
   assert.equal(captureStateText(configured), "Capturing on sites with adapters.");
@@ -854,7 +854,7 @@ test("a failed hello reports the host as unavailable", async () => {
   assert.match(statusText(), /^Native host unavailable: host broke\./);
 });
 
-const FOLDER_ISSUE = "The selected notes folder is unavailable or changed. Choose it again.";
+const FOLDER_ISSUE = "The selected home folder is unavailable or changed. Choose it again.";
 
 test("a kept config with a folder issue needs a new folder pick, which repairs it", async () => {
   const state = install({ adapters: [artifactFor(SITE.origin)] });
@@ -909,6 +909,32 @@ test("choosing a folder saves it at once, leaving adapters and capture as they w
   assert.deepEqual(state.config.adapters.artifacts, []);
   assert.equal(env.elements.get("folder-path").textContent, "/vault");
   assert.match(statusText(), /^No site has an adapter yet\./);
+});
+
+test("choosing a home folder saves the fixed layout, never an older one", async () => {
+  const saves = [];
+  const state = install({
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  state.config = {
+    ...state.config,
+    storage: {
+      ...state.config.storage, root: "/old", log_dir: "log", pages_dir: "pages", artifacts_dir: "brauser-artifacts",
+      summaries_dir: null, knowledge_base_dir: "/kb",
+    },
+  };
+  await openSettings();
+  env.elements.get("choose-folder").click();
+  await until(() => saves.length === 1 && idle(), "the home folder to be saved");
+  assert.deepEqual(saves[0].config.storage, {
+    root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
+    artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: "/kb",
+  });
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  for (const folder of ["notes/", "logs/", "artifacts/", "summaries/", "later/"]) {
+    assert.ok(html.includes(`<code>${folder}</code>`), folder);
+  }
+  assert.ok(!html.includes("summaries-dir"));
 });
 
 test("a host restart drops a folder selection only the old host knew", async () => {
@@ -970,7 +996,7 @@ test("choosing a knowledge base folder saves it with its own token", async () =>
     },
   });
   await openSettings();
-  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder (/vault)");
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the home folder (/vault)");
   assert.equal(env.elements.get("kb-use-notes").disabled, true);
   env.elements.get("choose-kb").click();
   await until(() => state.config.storage?.knowledge_base_dir === "/kb" && idle(), "the knowledge base to be saved");
@@ -984,7 +1010,7 @@ test("choosing a knowledge base folder saves it with its own token", async () =>
   assert.match(statusText(), /^Knowledge base folder saved\./);
 });
 
-test("Use notes folder clears the knowledge base folder without a token", async () => {
+test("Use home folder clears the knowledge base folder without a token", async () => {
   const state = install();
   state.config.storage.knowledge_base_dir = "/kb";
   await openSettings();
@@ -992,22 +1018,22 @@ test("Use notes folder clears the knowledge base folder without a token", async 
   const button = env.elements.get("kb-use-notes");
   assert.equal(button.disabled, false);
   button.click();
-  await until(() => state.config.storage?.knowledge_base_dir === null && idle(), "the knowledge base to follow the notes folder");
+  await until(() => state.config.storage?.knowledge_base_dir === null && idle(), "the knowledge base to follow the home folder");
   assert.equal(lastUpdate().knowledge_base_token, null);
   assert.equal(lastUpdate().picker_token, null);
   assert.equal(env.requests.some((request) => request.type === "choose_folder"), false);
 });
 
-test("a knowledge base folder needs a notes folder first", async () => {
+test("a knowledge base folder needs a home folder first", async () => {
   const state = install();
   state.config = { ...state.config, storage: null };
   await openSettings();
   assert.equal(env.elements.get("choose-kb").disabled, true);
   assert.equal(env.elements.get("kb-use-notes").disabled, true);
-  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder");
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the home folder");
 });
 
-test("a notes folder change keeps the chosen knowledge base folder", async () => {
+test("a home folder change keeps the chosen knowledge base folder", async () => {
   const state = install({
     host: {
       choose_folder: () => ({ type: "folder_chosen", path: "/other", picker_token: "notes" }),
@@ -1016,7 +1042,7 @@ test("a notes folder change keeps the chosen knowledge base folder", async () =>
   state.config.storage.knowledge_base_dir = "/kb";
   await openSettings();
   env.elements.get("choose-folder").click();
-  await until(() => state.config.storage?.root === "/other" && idle(), "the notes folder to be saved");
+  await until(() => state.config.storage?.root === "/other" && idle(), "the home folder to be saved");
   assert.equal(lastUpdate().config.storage.knowledge_base_dir, "/kb");
   assert.equal(lastUpdate().knowledge_base_token, null);
   assert.equal(lastUpdate().picker_token, "notes");
@@ -1065,7 +1091,8 @@ test("harness setup sends set_up_harness and no confirmation", async () => {
   assert.equal(setUp.harness_id, "claude-code");
   assert.equal(setUp.expected_revision, "1");
   assert.deepEqual(setUp.env_names, ["ANTHROPIC_API_KEY"]);
-  assert.equal(setUp.summaries_dir, "summaries");
+  // The host keeps summaries in the fixed summaries/ folder.
+  assert.equal(setUp.summaries_dir, null);
   assert.equal(state.config.agent.harness_id, "claude-code");
 });
 

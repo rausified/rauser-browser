@@ -2,7 +2,7 @@
 //!
 //! Authorization uses the original URL. Only then may URL normalization drop
 //! fragments or configured tracking parameters. A stable lock outside the
-//! chosen notes folder covers the event-ID check, append, and file sync.
+//! chosen home folder covers the event-ID check, append, and file sync.
 
 use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -900,19 +900,7 @@ impl CaptureStore {
         event: &VisitEvent,
         rendering: EventRendering<'_>,
     ) -> Result<CaptureOutcome> {
-        let lock_parent = self
-            .lock_path
-            .parent()
-            .context("capture lock path has no parent")?;
-        fs::create_dir_all(lock_parent).context("creating capture lock directory")?;
-        let lock_file = StdOpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&self.lock_path)
-            .context("opening capture lock")?;
-        lock_file.lock().context("locking capture log")?;
+        let _lock_file = lock_capture_file(&self.lock_path)?;
 
         // A previous host may have stopped partway through a compact batch.
         // Finish it before a legacy single-record append can land after the
@@ -1067,18 +1055,17 @@ impl CaptureStore {
             bail!("visit intent is invalid; manual repair is required");
         }
         let relative_log = checked_relative_dir(&intent.relative_log)?;
-        let parent = relative_log
-            .parent()
-            .context("visit intent has no log directory")?;
         let filename = relative_log
             .file_name()
-            .context("visit intent has no log filename")?;
+            .context("visit intent has no log filename")?
+            .to_owned();
+        let filename = filename.as_os_str();
         let (root, _) =
             open_selected_root(Path::new(&intent.root_path), Some(&intent.root_identity)).context(
-                "original notes folder changed; choose it again or discard the queued visit",
+                "original home folder changed; choose it again or discard the queued visit",
             )?;
-        let day_dir = root
-            .open_dir(parent)
+        let (day_dir, relative_log) = self
+            .open_original_day_dir(&root, &intent.root_identity, relative_log)
             .context("original daily log is unavailable; manual repair is required")?;
         let metadata = day_dir
             .symlink_metadata(filename)
@@ -1107,7 +1094,7 @@ impl CaptureStore {
             });
         }
         if self.root_identity != intent.root_identity {
-            bail!("visit belongs to a previously selected notes folder; do not append there");
+            bail!("visit belongs to a previously selected home folder; do not append there");
         }
         // V1 intents hash presentation bytes. For an interrupted pre-sanitizer
         // append, accept only the exact older rendering whose complete hash
@@ -1150,19 +1137,7 @@ impl CaptureStore {
     }
 
     fn append_batch(&self, batch_id: &str, entries: &[BatchEntry]) -> Result<Vec<CaptureOutcome>> {
-        let lock_parent = self
-            .lock_path
-            .parent()
-            .context("capture lock path has no parent")?;
-        fs::create_dir_all(lock_parent).context("creating capture lock directory")?;
-        let lock_file = StdOpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&self.lock_path)
-            .context("opening capture lock")?;
-        lock_file.lock().context("locking capture log")?;
+        let _lock_file = lock_capture_file(&self.lock_path)?;
 
         self.recover_batch_intent()?;
         let (relative_dir, filename) = self.log_parts(entries[0].timestamp);
@@ -1299,6 +1274,41 @@ impl CaptureStore {
         self.journal_dir.join("index-v2.json")
     }
 
+    /// The directory holding an intent's original daily log. Intents keep
+    /// the log path they were written with, so after the home folder's log
+    /// folder was renamed (`record_log_relocation`) they are looked up at
+    /// the new name. Returns that directory and the log's current path.
+    fn open_original_day_dir(
+        &self,
+        root: &Dir,
+        root_identity: &str,
+        relative_log: PathBuf,
+    ) -> Result<(Dir, PathBuf)> {
+        let parent = relative_log
+            .parent()
+            .context("intent has no log directory")?;
+        let error = match root.open_dir(parent) {
+            Ok(dir) => return Ok((dir, relative_log)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => error,
+            Err(error) => return Err(error.into()),
+        };
+        for relocation in read_log_relocations(&self.journal_dir)?.relocations {
+            if relocation.root_identity != root_identity {
+                continue;
+            }
+            let Ok(rest) = relative_log.strip_prefix(&relocation.from) else {
+                continue;
+            };
+            let moved = checked_relative_dir(&relocation.to)?.join(rest);
+            if let Some(parent) = moved.parent()
+                && let Ok(dir) = root.open_dir(parent)
+            {
+                return Ok((dir, moved));
+            }
+        }
+        Err(error.into())
+    }
+
     fn recover_batch_intent(&self) -> Result<()> {
         let path = self.batch_intent_path();
         let Some(intent) = read_batch_intent(&path)? else {
@@ -1319,18 +1329,17 @@ impl CaptureStore {
             bail!("capture batch intent is invalid; manual repair is required");
         }
         let relative_log = checked_relative_dir(&intent.relative_log)?;
-        let parent = relative_log
-            .parent()
-            .context("capture batch intent has no log directory")?;
         let filename = relative_log
             .file_name()
-            .context("capture batch intent has no log filename")?;
+            .context("capture batch intent has no log filename")?
+            .to_owned();
+        let filename = filename.as_os_str();
         let (root, _) =
             open_selected_root(Path::new(&intent.root_path), Some(&intent.root_identity)).context(
-                "original notes folder changed; choose it again or discard the queued batch",
+                "original home folder changed; choose it again or discard the queued batch",
             )?;
-        let day_dir = root
-            .open_dir(parent)
+        let (day_dir, _) = self
+            .open_original_day_dir(&root, &intent.root_identity, relative_log)
             .context("original daily log is unavailable; manual repair is required")?;
         if !existing_log_is_owned(
             &day_dir,
@@ -1357,7 +1366,7 @@ impl CaptureStore {
         }
         if !complete {
             if self.root_identity != intent.root_identity || metadata.len() < intent.offset {
-                bail!("capture batch belongs to a changed notes folder or log");
+                bail!("capture batch belongs to a changed home folder or log");
             }
             file.seek(SeekFrom::Start(intent.offset))?;
             let mut region = Vec::new();
@@ -1664,6 +1673,123 @@ fn clear_batch_intent(path: &Path) -> Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).context("clearing capture batch intent"),
     }
+}
+
+const LOG_RELOCATIONS: &str = "log-relocations.json";
+const MAX_LOG_RELOCATIONS_BYTES: u64 = 64 * 1024;
+
+/// Where logs moved when a home folder's log folder was renamed to the
+/// fixed layout. Intents name their log by its path at write time.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogRelocations {
+    version: u8,
+    relocations: Vec<LogRelocation>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogRelocation {
+    root_identity: String,
+    from: String,
+    to: String,
+}
+
+fn read_log_relocations(journal_dir: &Path) -> Result<LogRelocations> {
+    let path = journal_dir.join(LOG_RELOCATIONS);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LogRelocations::default());
+        }
+        Err(error) => return Err(error).context("checking log relocations"),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_LOG_RELOCATIONS_BYTES
+    {
+        bail!("log relocations are invalid; manual repair is required");
+    }
+    let relocations: LogRelocations =
+        serde_json::from_slice(&fs::read(&path).context("reading log relocations")?)
+            .context("log relocations are malformed; manual repair is required")?;
+    if relocations.version != 1 {
+        bail!("log relocations are from a newer version");
+    }
+    Ok(relocations)
+}
+
+/// Durably record, before renaming `from` to `to` in the home folder with
+/// `root_identity`, that intents naming logs under `from` now find them
+/// under `to`. Call with the capture lock held (`lock_capture`).
+pub(crate) fn record_log_relocation(
+    state_dir: &Path,
+    root_identity: &str,
+    from: &str,
+    to: &str,
+) -> Result<()> {
+    let journal_dir = state_dir.join("visit-ids");
+    let mut relocations = read_log_relocations(&journal_dir)?;
+    relocations.version = 1;
+    let relocation = LogRelocation {
+        root_identity: root_identity.to_owned(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+    };
+    if relocations.relocations.contains(&relocation) {
+        return Ok(());
+    }
+    relocations.relocations.push(relocation);
+    let bytes = serde_json::to_vec(&relocations).context("serializing log relocations")?;
+    if bytes.len() as u64 > MAX_LOG_RELOCATIONS_BYTES {
+        bail!("log relocations exceed their size limit");
+    }
+    fs::create_dir_all(&journal_dir).context("creating visit intent directory")?;
+    sync_state_directory(state_dir)?;
+    let temporary = journal_dir.join(format!(".{NAMESPACE}-relocations-{}.tmp", Uuid::new_v4()));
+    let mut options = StdOpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .context("creating log relocations temporary file")?;
+    let result = (|| -> Result<()> {
+        file.write_all(&bytes).context("writing log relocations")?;
+        file.sync_all().context("syncing log relocations")?;
+        drop(file);
+        fs::rename(&temporary, journal_dir.join(LOG_RELOCATIONS))
+            .context("publishing log relocations")?;
+        sync_state_directory(&journal_dir).context("syncing visit intent directory")
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+/// Every capture process for this user shares this lock (see `open_in`).
+pub(crate) fn lock_capture(state_dir: &Path) -> Result<fs::File> {
+    lock_capture_file(&state_dir.join("locks").join("capture.lock"))
+}
+
+fn lock_capture_file(lock_path: &Path) -> Result<fs::File> {
+    let lock_parent = lock_path
+        .parent()
+        .context("capture lock path has no parent")?;
+    fs::create_dir_all(lock_parent).context("creating capture lock directory")?;
+    let lock_file = StdOpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .context("opening capture lock")?;
+    lock_file.lock().context("locking capture log")?;
+    Ok(lock_file)
 }
 
 #[cfg(not(windows))]
@@ -2405,6 +2531,127 @@ mod tests {
         assert!(repaired.as_bytes().starts_with(&original));
         assert_eq!(repaired.matches("\n- ").count(), 2);
         assert!(!store.batch_intent_path().exists());
+    }
+
+    #[test]
+    fn a_visit_intent_finds_its_log_after_the_log_folder_is_renamed() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let old = CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let visit = event();
+        let CaptureOutcome::Persisted { relative_path } = record(&old, &visit) else {
+            panic!("expected the fixture visit to persist");
+        };
+        fs::rename(root.path().join("log"), root.path().join("logs")).unwrap();
+        let moved_log = root
+            .path()
+            .join("logs")
+            .join(relative_path.strip_prefix("log").unwrap());
+        let before = fs::read(&moved_log).unwrap();
+        let new = CaptureStore::open_at(&storage(root.path(), "logs"), None, state.path()).unwrap();
+        // Without the record, the replay cannot find the original log and
+        // must not append the visit a second time anywhere.
+        assert!(matches!(
+            record(&new, &visit),
+            CaptureOutcome::Retryable { .. }
+        ));
+        record_log_relocation(state.path(), &new.root_identity, "log", "logs").unwrap();
+        // Recording twice is harmless.
+        record_log_relocation(state.path(), &new.root_identity, "log", "logs").unwrap();
+        assert_eq!(
+            record(&new, &visit),
+            CaptureOutcome::Suppressed {
+                reason: "duplicate_event".into()
+            }
+        );
+        assert_eq!(fs::read(&moved_log).unwrap(), before);
+        // Another home folder's relocation never applies here.
+        let other = tempfile::tempdir().unwrap();
+        let other_state = tempfile::tempdir().unwrap();
+        let elsewhere =
+            CaptureStore::open_at(&storage(other.path(), "log"), None, other_state.path()).unwrap();
+        let visit = event();
+        assert!(matches!(
+            record(&elsewhere, &visit),
+            CaptureOutcome::Persisted { .. }
+        ));
+        fs::rename(other.path().join("log"), other.path().join("logs")).unwrap();
+        record_log_relocation(other_state.path(), "unix:0:0", "log", "logs").unwrap();
+        let elsewhere =
+            CaptureStore::open_at(&storage(other.path(), "logs"), None, other_state.path())
+                .unwrap();
+        assert!(matches!(
+            record(&elsewhere, &visit),
+            CaptureOutcome::Retryable { .. }
+        ));
+    }
+
+    #[test]
+    fn a_torn_batch_resumes_in_its_log_after_the_log_folder_is_renamed() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let first = event();
+        let batch_id = Uuid::new_v4().to_string();
+        let origins = ["https://example.com".to_owned()];
+        let outcome = store.record_batch(
+            CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            },
+            &batch_id,
+            &[CaptureBatchEvent::Visit(&first)],
+            None,
+        );
+        let CaptureOutcome::Persisted { relative_path } = &outcome.events[0].1 else {
+            panic!("expected the fixture batch to persist");
+        };
+        let log = root.path().join(relative_path);
+        let original = fs::read(&log).unwrap();
+        let offset = format!("{LOG_HEADER}\n").len();
+        let entry = String::from_utf8(original[offset..].to_vec()).unwrap();
+        publish_batch_intent(
+            &store.batch_intent_path(),
+            &BatchIntent {
+                version: 2,
+                batch_id,
+                root_path: store.root_path.to_string_lossy().into_owned(),
+                root_identity: store.root_identity.clone(),
+                relative_log: relative_path.to_string_lossy().into_owned(),
+                event_hashes: vec![sha256_hex(first.event_id.as_bytes())],
+                entry: entry.clone(),
+                offset: offset as u64,
+            },
+        )
+        .unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len((offset + entry.len() / 2) as u64)
+            .unwrap();
+        record_log_relocation(state.path(), &store.root_identity, "log", "logs").unwrap();
+        fs::rename(root.path().join("log"), root.path().join("logs")).unwrap();
+
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "logs"), None, state.path()).unwrap();
+        let mut second = event();
+        second.occurred_at = first.occurred_at.clone();
+        assert!(matches!(
+            record(&store, &second),
+            CaptureOutcome::Persisted { .. }
+        ));
+        let moved = root
+            .path()
+            .join("logs")
+            .join(relative_path.strip_prefix("log").unwrap());
+        let repaired = fs::read_to_string(&moved).unwrap();
+        assert!(repaired.as_bytes().starts_with(&original));
+        assert_eq!(repaired.matches("\n- ").count(), 2);
+        assert!(!store.batch_intent_path().exists());
+        assert!(!root.path().join("log").exists());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Short-lived, process-local grants for folder selection. Only the native
 //! host can mint these grants; the extension cannot authorize a path or
 //! redirect writes by sending an arbitrary config. Each grant names the
-//! setting it was chosen for, so a notes-folder selection cannot set the
+//! setting it was chosen for, so a home-folder selection cannot set the
 //! knowledge base folder or the reverse. Other config changes need only the
 //! revision check, and only harness setup sets a harness entry.
 
@@ -137,7 +137,7 @@ impl ConsentAuthority {
     }
 
     /// The knowledge base folder needs a grant minted for that purpose,
-    /// unless it is unset (it follows the notes folder) or unchanged.
+    /// unless it is unset (it follows the home folder) or unchanged.
     pub(crate) fn check_knowledge_base(
         &self,
         current: &ConfigSnapshot,
@@ -220,7 +220,7 @@ impl ConsentAuthority {
 
 fn folder_noun(purpose: FolderPurpose) -> &'static str {
     match purpose {
-        FolderPurpose::NotesFolder => "notes folder",
+        FolderPurpose::NotesFolder => "home folder",
         FolderPurpose::KnowledgeBase => "knowledge base folder",
     }
 }
@@ -246,11 +246,11 @@ mod tests {
         let storage = StorageConfig {
             root: folder.path().to_string_lossy().into_owned(),
             profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
-            summaries_dir: None,
+            summaries_dir: Some("summaries".into()),
             knowledge_base_dir: None,
         };
         let snapshot = ConfigSnapshot {
@@ -372,8 +372,8 @@ mod tests {
         StorageConfig {
             root: root.to_string_lossy().into_owned(),
             profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
             summaries_dir: summaries.map(str::to_owned),
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn summaries_dir_change_needs_no_token() {
+    fn the_fixed_summaries_folder_needs_no_token_and_no_other_is_accepted() {
         let folder = tempfile::tempdir().unwrap();
         let with = |summaries: Option<&str>| ConfigSnapshot {
             storage: Some(storage_at(folder.path(), summaries)),
@@ -392,14 +392,15 @@ mod tests {
             authorize(&with(None), &with(Some("summaries"))).unwrap(),
             None
         );
-        assert_eq!(
-            authorize(&with(Some("summaries")), &with(Some("ai"))).unwrap(),
-            None
+        let error = authorize(&with(Some("summaries")), &with(Some("ai"))).unwrap_err();
+        assert!(
+            error.to_string().contains("content folders are fixed"),
+            "{error:#}"
         );
     }
 
     fn with_knowledge_base(root: &Path, knowledge_base: Option<&Path>) -> ConfigSnapshot {
-        let mut storage = storage_at(root, None);
+        let mut storage = storage_at(root, Some("summaries"));
         storage.knowledge_base_dir = knowledge_base.map(|path| path.to_string_lossy().into_owned());
         ConfigSnapshot {
             storage: Some(storage),
@@ -465,7 +466,7 @@ mod tests {
         let error = authority
             .authorize_update(&current, "revision", &next, Some(&token), None)
             .unwrap_err();
-        assert!(error.to_string().contains("notes folder"), "{error:#}");
+        assert!(error.to_string().contains("home folder"), "{error:#}");
         // A knowledge base token sent in its own slot authorizes nothing else.
         assert!(
             authority
