@@ -256,7 +256,7 @@ impl ArtifactIndex {
                 state.dirty.remove(&id);
                 continue;
             };
-            let markdown = render_artifact(artifact);
+            let markdown = render_artifact(&self.storage.artifacts_dir, artifact);
             match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &markdown)? {
                 ArtifactWrite::Written => {
                     report.written += 1;
@@ -1373,7 +1373,17 @@ fn slug(value: &str, fallback: &str) -> String {
     if out.is_empty() { fallback.into() } else { out }
 }
 
-fn render_artifact(artifact: &ArtifactRow) -> String {
+/// A link from the rendered artifact file (nested under
+/// `artifacts_dir/<type>/<site>/...md`) to a vault-root-relative target,
+/// e.g. a summary file.
+fn relative_artifact_link(artifacts_dir: &str, artifact: &ArtifactRow, target: &str) -> String {
+    let ups = artifact_path(artifacts_dir, artifact)
+        .parent()
+        .map_or(0, |dir| dir.components().count());
+    format!("{}{target}", "../".repeat(ups))
+}
+
+fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!(
@@ -1410,11 +1420,11 @@ fn render_artifact(artifact: &ArtifactRow) -> String {
         out.push_str(&format!("Why: {}\n\n", safe_markdown(why)));
     }
     if let Some(summary) = artifact.summaries.last() {
+        let link = relative_artifact_link(artifacts_dir, artifact, &summary.summary_path);
         out.push_str(&format!(
-            "Summary: [{}, {} importance]({})\n\n",
+            "Summary: [{}, {} importance]({link})\n\n",
             safe_markdown(&summary.document_type),
             safe_markdown(&summary.importance),
-            summary.summary_path
         ));
     }
     out.push_str("## Timeline\n\n");
@@ -2811,9 +2821,22 @@ print(json.dumps([tables,row]))"#;
         assert_eq!(artifact.artifact_type, "web.page");
         assert_eq!(artifact.title, "A good discussion");
 
-        let file = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        let path = artifact_files(root.path()).pop().unwrap();
+        let file = fs::read_to_string(&path).unwrap();
         assert!(file.contains("type: \"web.page\""));
-        assert!(file.contains("Summary: [discussion, high importance]"));
+        // The artifact file is nested 3 directories under the vault root
+        // (artifacts/<type>/<site>/<file>.md); a root-relative summary_path
+        // must resolve back up through all of them, or the Markdown link is
+        // broken from the artifact file's own location.
+        assert!(
+            path.strip_prefix(root.path()).unwrap().components().count() == 4,
+            "expected artifacts/<type>/<site>/<file>.md, got {path:?}"
+        );
+        assert!(
+            file.contains(
+                "Summary: [discussion, high importance](../../../pages/hn-item.summary.md)"
+            )
+        );
         assert!(file.contains("Summarized: A good discussion"));
 
         // Re-summarizing the same URL updates the one artifact, not a second.
