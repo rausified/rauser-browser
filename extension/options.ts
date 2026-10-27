@@ -17,7 +17,6 @@ import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
 import { hostBuildText } from "./build-info.js";
-import { APP_NAME } from "./brand.js";
 import {
   SETUP_WARNING,
   agentEnvText,
