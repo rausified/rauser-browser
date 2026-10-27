@@ -246,6 +246,9 @@ impl Drop for Host {
 
 #[test]
 fn service_detects_and_probes_fake_claude() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new(PASSING);
     let mut host = world.serve();
     let revision = host.revision();
@@ -313,6 +316,9 @@ fn service_detects_and_probes_fake_claude() {
 
 #[test]
 fn probe_runs_with_agent_env_overlay() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new(PASSING);
     let agent_env = world.support().join("agent.env");
     fs::write(&agent_env, "BRAUSER_PROBE_MARK=from-agent-env\n").unwrap();
@@ -337,6 +343,9 @@ fn probe_runs_with_agent_env_overlay() {
 
 #[test]
 fn failing_probe_is_refused() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new("echo 'Invalid API key' >&2; exit 3");
     let mut host = world.serve();
     let revision = host.revision();
