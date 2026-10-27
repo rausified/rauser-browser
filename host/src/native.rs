@@ -21,6 +21,8 @@ use crate::harness::HarnessEnv;
 use crate::harness_setup;
 use crate::index::ArtifactIndex;
 use crate::note;
+#[cfg(target_os = "macos")]
+use crate::service::client::{ServiceError, ServiceLink};
 use crate::vault::Vault;
 
 const MAX_REQUEST_ID_CHARS: usize = 128;
@@ -31,16 +33,42 @@ pub fn serve(config: ConfigStore) -> Result<()> {
     serve_with_io(input.lock(), output.lock(), config)
 }
 
-/// What harness setup may use from the host process. Built once per
-/// connection; tests build it by hand with a fake search path.
+/// What harness setup and the run proxy may use from the host process.
+/// Built once per connection; tests build it by hand with a fake search path
+/// and, for run messages, a fake service.
 pub struct SetupContext<'a> {
     pub env: &'a HarnessEnv,
+    /// Where run messages go. `None` answers them `service_unavailable`.
+    #[cfg(target_os = "macos")]
+    pub service: Option<&'a ServiceLink>,
+}
+
+impl<'a> SetupContext<'a> {
+    /// A context with no service link.
+    pub fn new(env: &'a HarnessEnv) -> Self {
+        Self {
+            env,
+            #[cfg(target_os = "macos")]
+            service: None,
+        }
+    }
 }
 
 /// Process requests until the browser closes the native messaging pipe.
 pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore) -> Result<()> {
     let env = HarnessEnv::from_process(config.dir()?);
-    let context = SetupContext { env: &env };
+    // Building the link never connects; only a run message does.
+    #[cfg(target_os = "macos")]
+    let link = ServiceLink::for_config(&config)
+        .inspect_err(|link_error| {
+            eprintln!("{NAMESPACE}: the service cannot be reached: {link_error:#}");
+        })
+        .ok();
+    let context = SetupContext {
+        #[cfg(target_os = "macos")]
+        service: link.as_ref(),
+        ..SetupContext::new(&env)
+    };
     serve_with_context(input, output, config, &context)
 }
 
@@ -353,8 +381,15 @@ fn dispatch(
             offers: harness_setup::offers(context.env),
         }),
         Request::SetUpHarness(value) => set_up_harness(value, config, context),
-        // The service proxy lands with the service itself; until then every
-        // run message answers the specific code the panel keys off.
+        #[cfg(target_os = "macos")]
+        Request::StartRun(value) => start_run(value, config, context.service),
+        // Run ids and offsets are the service's to check.
+        #[cfg(target_os = "macos")]
+        request @ (Request::GetRun(_)
+        | Request::ListRuns(_)
+        | Request::CancelRun(_)
+        | Request::RetrySave(_)) => forward(&request, context.service),
+        #[cfg(not(target_os = "macos"))]
         Request::StartRun(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
@@ -362,7 +397,7 @@ fn dispatch(
         | Request::RetrySave(_) => error(
             id,
             ErrorCode::ServiceUnavailable,
-            "The Brauser service is not installed.",
+            "The Brauser service is only supported on macOS.",
         ),
         // service_hello is host-to-service only.
         Request::ServiceHello(_) => error(
@@ -370,6 +405,65 @@ fn dispatch(
             ErrorCode::InvalidRequest,
             "service_hello is not accepted from the extension",
         ),
+    }
+}
+
+/// Check what only the host may decide, then forward: the record key is
+/// always the one the page's note uses, never the extension's.
+#[cfg(target_os = "macos")]
+fn start_run(
+    mut value: brauser_protocol::StartRunRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    if value.record_key.is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "record_key is chosen by the host",
+        );
+    }
+    if crate::capture::parse_event_time(&value.requested_at)
+        .and_then(crate::capture::check_event_window)
+        .is_err()
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "requested_at must be a current RFC 3339 timestamp",
+        );
+    }
+    match resolve_record_key(config, &value.url) {
+        Ok(key) => value.record_key = Some(key),
+        Err((code, message)) => return error(&value.request_id, code, message),
+    }
+    forward(&Request::StartRun(value), service)
+}
+
+/// Send a run message to the service and return its answer as is.
+#[cfg(target_os = "macos")]
+fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
+    let id = request.request_id();
+    let Some(service) = service else {
+        return error(
+            id,
+            ErrorCode::ServiceUnavailable,
+            "The Brauser service cannot be reached from this configuration folder.",
+        );
+    };
+    match service.request(request) {
+        Ok(response) => response,
+        Err(ServiceError::Unavailable(message)) => {
+            error(id, ErrorCode::ServiceUnavailable, &message)
+        }
+        Err(ServiceError::Protocol(detail)) => {
+            eprintln!("{NAMESPACE}: service protocol error: {detail}");
+            error(
+                id,
+                ErrorCode::Internal,
+                "The Brauser service sent an unexpected reply.",
+            )
+        }
     }
 }
 
@@ -1158,8 +1252,8 @@ struct NoteContext {
 /// The key-only part of `note_context`, shared by notes, the run proxy, and
 /// the run finisher, so a run and the page's note always agree on the record
 /// they belong to. It never lists older notes.
-// The run proxy (Task 23) is the first non-test caller; drop this then.
-#[cfg_attr(not(test), allow(dead_code))]
+// Only the macOS run proxy calls it outside tests.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
@@ -1992,7 +2086,7 @@ mod tests {
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
 
         let updated = dispatch(
             Request::UpdateConfig(UpdateConfigRequest {
@@ -2084,7 +2178,7 @@ mod tests {
         let mut config = ConfigStore::for_test(folder.path().join("config.toml"));
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         for root in [existing.clone(), folder.path().join("absent")] {
             let snapshot = ConfigSnapshot {
                 storage: Some(brauser_protocol::StorageConfig {
@@ -2145,7 +2239,7 @@ mod tests {
         let mut config = configured_store(folder.path());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         let read = dispatch(
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -2192,7 +2286,7 @@ mod tests {
         next.strip_params.push("campaign".into());
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         match dispatch(
             update_request("stale", next),
             &mut config,
@@ -2853,9 +2947,7 @@ id = "work:{host}/{id}"
             }),
             &mut config,
             &mut ConsentAuthority::new(),
-            &SetupContext {
-                env: &no_harnesses(folder.path()),
-            },
+            &SetupContext::new(&no_harnesses(folder.path())),
         );
         match response {
             Response::NoteLoaded(value) => {
@@ -2946,9 +3038,7 @@ id = "work:{host}/{id}"
             save_request("save-1", "small", "missing"),
             &mut config,
             &mut ConsentAuthority::new(),
-            &SetupContext {
-                env: &no_harnesses(folder.path()),
-            },
+            &SetupContext::new(&no_harnesses(folder.path())),
         ) {
             Response::NoteSaved(value) => value,
             other => panic!("expected note_saved, got {other:?}"),
@@ -3015,7 +3105,7 @@ id = "work:{host}/{id}"
         let mut config = configured_store(&notes);
         let mut consent = ConsentAuthority::new();
         let env = no_harnesses(folder.path());
-        let context = SetupContext { env: &env };
+        let context = SetupContext::new(&env);
         let save = |config: &mut ConfigStore,
                     consent: &mut ConsentAuthority,
                     body: &str,
@@ -3081,7 +3171,7 @@ id = "work:{host}/{id}"
     fn served(requests: &[String], config: ConfigStore) -> Vec<Response> {
         let folder = tempfile::tempdir().unwrap();
         let env = no_harnesses(folder.path());
-        served_with(requests, config, &SetupContext { env: &env })
+        served_with(requests, config, &SetupContext::new(&env))
     }
 
     fn served_with(
@@ -3776,7 +3866,7 @@ id = "work:{host}/{id}"
 
         impl Session {
             fn call(&mut self, request: Request) -> Response {
-                let context = SetupContext { env: &self.env };
+                let context = SetupContext::new(&self.env);
                 dispatch(request, &mut self.config, &mut self.consent, &context)
             }
 
@@ -4050,6 +4140,291 @@ id = "work:{host}/{id}"
                 ),
             );
             assert_eq!(session.status().state, AgentState::Ready);
+        }
+    }
+
+    /// The run proxy against a fake service on a short `/tmp` socket. No
+    /// launchd, no real service, and no harness is ever involved.
+    #[cfg(target_os = "macos")]
+    mod run_proxy {
+        use super::*;
+        use crate::service::client::fake::{self, FakeService};
+        use crate::service::client::{Launch, NOT_INSTALLED, ServiceLink};
+        use brauser_protocol::{
+            CancelRunRequest, GetRunRequest, LoadNoteRequest, RunStarted, ServiceHelloRequest,
+            StartRunRequest,
+        };
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        const BUILD: &str = "this-build";
+
+        fn now() -> String {
+            time::OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        }
+
+        fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
+            Request::StartRun(StartRunRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "run-1".into(),
+                url: url.into(),
+                title: "A page".into(),
+                content: "Some text".into(),
+                selection: None,
+                harness: None,
+                record_key,
+                requested_at: requested_at.into(),
+            })
+        }
+
+        fn link(socket: std::path::PathBuf, launch: fn(bool) -> Launch) -> ServiceLink {
+            ServiceLink {
+                socket,
+                launch: Box::new(launch),
+                wait: Duration::from_secs(2),
+                build_id: BUILD.into(),
+            }
+        }
+
+        fn never(_: bool) -> Launch {
+            panic!("the service must not be started")
+        }
+
+        /// Dispatch one request with `link` as the connection's service.
+        fn call(config: &mut ConfigStore, link: &ServiceLink, request: Request) -> Response {
+            let folder = tempfile::tempdir().unwrap();
+            let env = no_harnesses(folder.path());
+            let context = SetupContext {
+                service: Some(link),
+                ..SetupContext::new(&env)
+            };
+            dispatch(request, config, &mut ConsentAuthority::new(), &context)
+        }
+
+        /// A fake service whose start_run answer echoes the forwarded key.
+        fn echoing_service(socket: &std::path::Path) -> FakeService {
+            FakeService::listen(
+                socket,
+                Arc::new(|request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::StartRun(value) => Response::RunStarted(RunStarted {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        run: fake::run_view(value.record_key.clone().unwrap()),
+                        existing: false,
+                    }),
+                    _ => fake::runs_listed(request),
+                }),
+            )
+        }
+
+        #[test]
+        fn start_run_forwards_host_resolved_key() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a?b=1";
+            let expected = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                start_run(url, None, &now()),
+            );
+            match response {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert!(matches!(requests[0], Request::ServiceHello(_)));
+            match &requests[1] {
+                Request::StartRun(forwarded) => {
+                    assert_eq!(forwarded.record_key.as_ref(), Some(&expected));
+                    assert_eq!(forwarded.url, url);
+                    assert_eq!(forwarded.content, "Some text");
+                }
+                other => panic!("expected start_run, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn extension_supplied_record_key_is_rejected_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let key = RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "gdoc:docs.google.com/abc".into(),
+            };
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                start_run("https://example.com/", Some(key), &now()),
+            );
+            assert_eq!(
+                refused(&response),
+                (
+                    ErrorCode::InvalidRequest,
+                    "record_key is chosen by the host"
+                )
+            );
+        }
+
+        #[test]
+        fn start_run_with_an_unparseable_requested_at_is_invalid_request_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            for requested_at in ["yesterday", "2026-10-26 00:00:00Z", "2001-01-01T00:00:00Z"] {
+                let response = call(
+                    &mut config,
+                    &link,
+                    start_run("https://example.com/", None, requested_at),
+                );
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{requested_at}"
+                );
+            }
+        }
+
+        #[test]
+        fn start_run_key_errors_are_reported_without_connecting() {
+            let empty = tempfile::tempdir().unwrap();
+            let mut config = ConfigStore::for_test(empty.path().join("config.toml"));
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                start_run("https://example.com/", None, &now()),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::NotConfigured);
+        }
+
+        #[test]
+        fn not_installed_service_gives_service_unavailable() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), |_| Launch::NotInstalled);
+            for request in [
+                start_run("https://example.com/", None, &now()),
+                Request::GetRun(GetRunRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "get-1".into(),
+                    run_id: "r".into(),
+                    since_offset: 0,
+                }),
+            ] {
+                let id = request.request_id().to_owned();
+                let response = call(&mut config, &link, request);
+                assert_eq!(response.request_id(), id);
+                assert_eq!(
+                    refused(&response),
+                    (ErrorCode::ServiceUnavailable, NOT_INSTALLED)
+                );
+            }
+        }
+
+        #[test]
+        fn run_messages_other_than_start_are_forwarded_verbatim() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+            let cancel = Request::CancelRun(CancelRunRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "cancel-1".into(),
+                run_id: "not-checked-by-the-host".into(),
+            });
+            let response = call(&mut config, &link, cancel.clone());
+            assert_eq!(response.request_id(), "cancel-1");
+            assert_eq!(service.requests()[1], cancel);
+        }
+
+        #[test]
+        fn service_hello_from_the_extension_is_refused() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                Request::ServiceHello(ServiceHelloRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "hello-1".into(),
+                }),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::InvalidRequest);
+        }
+
+        #[test]
+        fn notes_and_capture_do_not_touch_the_service() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+            let url = "https://example.com/page";
+            let loaded = match call(
+                &mut config,
+                &link,
+                Request::LoadNote(LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "load-1".into(),
+                    url: url.into(),
+                }),
+            ) {
+                Response::NoteLoaded(note) => note,
+                other => panic!("expected note_loaded, got {other:?}"),
+            };
+            let saved = call(
+                &mut config,
+                &link,
+                Request::SaveNote(brauser_protocol::SaveNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save-1".into(),
+                    url: url.into(),
+                    title: "Page".into(),
+                    body: "A note".into(),
+                    expected_revision: loaded.revision,
+                    expected_key: loaded.key,
+                }),
+            );
+            assert!(matches!(saved, Response::NoteSaved(_)), "{saved:?}");
+            for request in [
+                hello_request("hello-1"),
+                Request::GetConfig(GetConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "config-1".into(),
+                }),
+                Request::RecordVisit(RecordVisitRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "visit-1".into(),
+                    event: VisitEvent {
+                        event_id: "00000000-0000-4000-8000-0000000000aa".into(),
+                        url: url.into(),
+                        title: Some("Page".into()),
+                        occurred_at: now(),
+                        incognito: false,
+                    },
+                }),
+            ] {
+                assert!(
+                    !matches!(call(&mut config, &link, request), Response::Error(ref e) if e.code == ErrorCode::ServiceUnavailable)
+                );
+            }
+            assert!(service.requests().is_empty());
         }
     }
 }
