@@ -204,19 +204,8 @@ and the protocol v6 removals) is done; see Shipped.
   2026-10-27 on PR #59's merged `web.page` summary storage, which it extends
   and whose gaps it closes (no harness field, raw summary link, Timeline
   order, adapter-recognized pages). Tracks one Cookie queue item per plan task,
-  continuing the PR 3 chain; it closes when they all close:
-  - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
-  - [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
-  - [ ] `brwr-t45` Task 45: Summary file rendering and the checked summary write (after `brwr-t44`).
-  - [ ] `brwr-t46` Task 46: Extend #59's summary event: record key, harness, and adapter artifacts (after `brwr-t45`).
-  - [ ] `brwr-t47` Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache (after `brwr-t46`).
-  - [ ] `brwr-t48` Task 48: Recent, worklog, and a page's summary on the wire (after `brwr-t47`).
-  - [ ] `brwr-t49` Task 49: `SummaryFinisher`: write under the configuration current at finish (after `brwr-t48`).
-  - [ ] `brwr-t50` Task 50: `open_summary`: open a page's owned summary file (after `brwr-t49`).
-  - [ ] `brwr-t51` Task 51: Panel: the page's existing summary and summarized Recent rows (after `brwr-t50`).
-  - [ ] `brwr-t52` Task 52: Run card: saved-summary line and Open summary (after `brwr-t51`).
-  - [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
-  - [ ] `brwr-t54` Task 54: Docs, backlog, and the full gate (after `brwr-t53`).
+  continuing the PR 3 chain; it closes when they all close. All of them are in
+  progress in the Lane E session; see In Progress.
 - [x] **M1.5a step 6.4 — Measured artifact activity.** Replaced the temporary
   visit rows with hourly artifact activity: cold opens, focused and background
   seconds, modes, and trail sources in durable worker totals, frozen into one
@@ -562,6 +551,20 @@ were folded into `brwr-q7e` above rather than given their own item.
 - [ ] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
 - [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
 - [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
+
+- In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
+- [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
+- [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
+- [ ] `brwr-t45` Task 45: Summary file rendering and the checked summary write (after `brwr-t44`).
+- [ ] `brwr-t46` Task 46: Extend #59's summary event: record key, harness, and adapter artifacts (after `brwr-t45`).
+- [ ] `brwr-t47` Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache (after `brwr-t46`).
+- [ ] `brwr-t48` Task 48: Recent, worklog, and a page's summary on the wire (after `brwr-t47`).
+- [ ] `brwr-t49` Task 49: `SummaryFinisher`: write under the configuration current at finish (after `brwr-t48`).
+- [ ] `brwr-t50` Task 50: `open_summary`: open a page's owned summary file (after `brwr-t49`).
+- [ ] `brwr-t51` Task 51: Panel: the page's existing summary and summarized Recent rows (after `brwr-t50`).
+- [ ] `brwr-t52` Task 52: Run card: saved-summary line and Open summary (after `brwr-t51`).
+- [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
+- [ ] `brwr-t54` Task 54: Docs, backlog, and the full gate (after `brwr-t53`).
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   Extend the existing built-page smoke check so it opens the artifact card,
