@@ -116,10 +116,11 @@ struct IndexState {
     next_sequence: u64,
     /// The adapter document index.db's resolved mentions were derived with.
     adapters: String,
-    /// Conflicting bodies seen for an indexed ID during this pass, so a
-    /// rescan can keep the winner a valid cache already recorded.
+    /// Conflicting bodies seen for an indexed ID during this pass, each with
+    /// its earliest log position, so a rebuild can keep the winner (and its
+    /// position) a valid cache already recorded.
     #[serde(skip)]
-    conflicts: BTreeMap<String, Vec<CachedEvent>>,
+    conflicts: BTreeMap<String, Vec<Conflict>>,
     dirty: BTreeSet<String>,
     logs: BTreeMap<PathBuf, LogCheckpoint>,
 }
@@ -145,8 +146,14 @@ impl IndexState {
         };
         if previous != &event {
             let seen = self.conflicts.entry(id).or_default();
-            if seen.len() < 8 && !seen.contains(&event) {
-                seen.push(event);
+            if let Some((_, earliest)) = seen.iter_mut().find(|(body, _)| body == &event) {
+                if let Some(position) = position
+                    && earliest.as_ref().is_none_or(|indexed| &position < indexed)
+                {
+                    *earliest = Some(position);
+                }
+            } else if seen.len() < 8 {
+                seen.push((event, position));
             }
             return false;
         }
@@ -179,7 +186,7 @@ struct PendingCatchUp {
     reconcile: bool,
     state: IndexState,
     /// `IndexState::conflicts`, which the published cache does not keep.
-    conflicts: BTreeMap<String, Vec<CachedEvent>>,
+    conflicts: BTreeMap<String, Vec<Conflict>>,
 }
 
 #[derive(Serialize)]
@@ -187,8 +194,11 @@ struct PendingCatchUpRef<'a> {
     rebuild: bool,
     reconcile: bool,
     state: &'a IndexState,
-    conflicts: &'a BTreeMap<String, Vec<CachedEvent>>,
+    conflicts: &'a BTreeMap<String, Vec<Conflict>>,
 }
+
+/// A rejected body for an indexed event ID and its earliest log position.
+type Conflict = (CachedEvent, Option<(PathBuf, u64)>);
 
 /// What one `catch_up_logs` pass did.
 struct LogPass {
@@ -744,10 +754,19 @@ impl ArtifactIndex {
         };
         if let Some(previous) = &previous {
             for (id, seen) in std::mem::take(&mut state.conflicts) {
-                if let Some(winner) = previous.events.get(&id)
-                    && seen.contains(winner)
-                    && let Some(chosen) = state.events.insert(id, winner.clone())
-                {
+                let Some(winner) = previous.events.get(&id) else {
+                    continue;
+                };
+                let Some((_, position)) = seen.into_iter().find(|(body, _)| body == winner) else {
+                    continue;
+                };
+                // The winner's own position, so same-instant ties order as
+                // in the cache rather than by the rejected body's position.
+                match position {
+                    Some(position) => state.positions.insert(id.clone(), position),
+                    None => state.positions.remove(&id),
+                };
+                if let Some(chosen) = state.events.insert(id, winner.clone()) {
                     state.dirty.insert(chosen.artifact_id().to_owned());
                     state.dirty.insert(winner.artifact_id().to_owned());
                 }
@@ -938,6 +957,9 @@ impl ArtifactIndex {
             LOG_BYTES_READ.with(|count| count.set(count.get() + bytes.len() as u64));
             // Markers are ASCII. A torn multibyte prose line (capture
             // tolerates one and keeps appending) must not drop the whole day.
+            // Checkpoint every file read, a skipped non-log one included, so
+            // the next pass resumes after it.
+            state.logs.insert(relative.clone(), checkpoint.clone());
             let text = String::from_utf8_lossy(&bytes);
             if !text.starts_with(LOG_HEADER) {
                 continue;
@@ -945,7 +967,6 @@ impl ArtifactIndex {
             for (line, event) in parse_log_lines(&text) {
                 state.ingest(event, Some((relative.clone(), line)));
             }
-            state.logs.insert(relative.clone(), checkpoint.clone());
         }
         if complete {
             state.logs = checkpoints;
@@ -3834,6 +3855,37 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
+    fn markdown_without_a_log_header_does_not_stall_a_bounded_rebuild() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let event = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "FIRST",
+            "First",
+            "2026-10-15T12:00:00Z",
+        );
+        let size = fs::metadata(write_log(root.path(), "2026-10-15.md", &[&event]))
+            .unwrap()
+            .len();
+        // Two notes that are not logs fill the first pass and sort first.
+        for name in ["2026-01-01.md", "2026-01-02.md"] {
+            fs::write(
+                root.path().join("log").join(name),
+                "x".repeat(size as usize),
+            )
+            .unwrap();
+        }
+        let limit = size * 5 / 2;
+        SCAN_LIMIT.with(|value| value.set(limit));
+        let (recent, passes) = bounded_passes(limit, || index.recent(None, None, 32));
+        assert_eq!((recent.0.len(), passes), (1, 2));
+        LOG_BYTES_READ.with(|count| count.set(0));
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 1);
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+    }
+
+    #[test]
     fn a_reset_catch_up_keeps_the_conflict_winner_the_cache_chose() {
         let original = activity(
             "00000000-0000-4000-8000-000000000010",
@@ -3849,6 +3901,14 @@ print(json.dumps([tables,row]))"#;
             "Other",
             "2026-09-01T12:00:00Z",
         );
+        // Same artifact and instant, so log position decides the latest
+        // title: the winner's own position, not the rejected body's.
+        let sibling = activity(
+            "00000000-0000-4000-8000-000000000012",
+            "REUSED",
+            "Sibling",
+            "2026-10-20T12:00:00Z",
+        );
         // Whether the rebuild after the reset takes one pass or several.
         for bounded in [false, true] {
             let root = TempDir::new().unwrap();
@@ -3862,6 +3922,7 @@ print(json.dumps([tables,row]))"#;
                     .title
             };
             write_log(root.path(), "2026-09-01.md", &[&unrelated]);
+            write_log(root.path(), "2026-10-18.md", &[&sibling]);
             write_log(root.path(), "2026-10-20.md", &[&original]);
             index.regenerate_dirty().unwrap();
             assert_eq!(title(), "Original");
@@ -3872,7 +3933,7 @@ print(json.dumps([tables,row]))"#;
             index.reindex().unwrap();
             assert_eq!(title(), "Original", "bounded={bounded}");
             // One log per pass, so the two bodies meet in different passes.
-            let limit = fs::metadata(&backdated_log).unwrap().len() + 1;
+            let limit = fs::metadata(&backdated_log).unwrap().len() * 3 / 2;
             if bounded {
                 SCAN_LIMIT.with(|value| value.set(limit));
             }
@@ -3880,7 +3941,7 @@ print(json.dumps([tables,row]))"#;
             fs::remove_file(root.path().join("log/2026-09-01.md")).unwrap();
             let (report, passes) = bounded_passes(MAX_SCAN_BYTES, || index.regenerate_dirty());
             assert_eq!(report.failed, 0);
-            assert_eq!(passes, if bounded { 2 } else { 1 });
+            assert_eq!(passes, if bounded { 3 } else { 1 });
             assert_eq!(title(), "Original", "bounded={bounded}");
             let owned = artifact_files(root.path())
                 .into_iter()
