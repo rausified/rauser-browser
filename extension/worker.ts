@@ -63,10 +63,11 @@ const encoder = new TextEncoder();
 
 let storageReady: Promise<void> | null = null;
 let sequence: Promise<unknown> = Promise.resolve();
-// The revision of the last lease this worker received from a page through
-// install_policy. A lease stored by an earlier build may have been narrowed
-// locally, so only a received lease shows what the host config holds.
-let receivedRevision: string | null = null;
+// The last valid lease this worker received from a page through
+// install_policy, kept even while a local pause holds it out of storage. A
+// lease stored by an earlier build may have been narrowed locally, so only a
+// received lease shows what the host config holds.
+let receivedLease: PolicyLease | null = null;
 const policyLeases = new PolicyLeaseCache();
 
 function activitySessionStorage(): ChromeStorageArea {
@@ -372,6 +373,8 @@ async function migratePendingRemovals(): Promise<void> {
     [PENDING_REMOVALS_KEY]: [...origins].sort().slice(0, MAX_PENDING_REMOVALS),
   });
   await chrome.storage.local.remove([LEGACY_REVOCATIONS_KEY, LEGACY_REMOVED_SITES_KEY]);
+  // Only a lease received after the list changed may clear it.
+  receivedLease = null;
 }
 
 /** The lease capture may use: every adapter on a pending-removal origin is dropped. */
@@ -471,9 +474,9 @@ async function captureNavigation(
   await ensureTrustedStorage();
   // Most navigations are for sites the user never enabled. Check the cached
   // lease first so they cost one storage read.
-  const cached = await readPolicy();
-  const cachedMatch = cached ? matchingArtifact(cached, details.url) : null;
-  if (!cached || !cachedMatch) {
+  // A navigation that does not capture still ends the tab's tracked entry,
+  // so the previous page stops gaining focused time.
+  const navigatedAway = async (): Promise<false> => {
     const activity = await readActivity();
     if (activity.tabs[String(details.tabId)]) {
       recordNavigation(activity, {
@@ -484,10 +487,15 @@ async function captureNavigation(
       await writeActivity(activity);
     }
     return false;
-  }
+  };
+  const cached = await readPolicy();
+  const cachedMatch = cached ? matchingArtifact(cached, details.url) : null;
+  if (!cached || !cachedMatch) return navigatedAway();
+  // The stored lease is the host's as sent, so it can still hold adapters on
+  // pending-removal origins that activeLease() filters out.
   const lease = await activeLease();
   const match = lease ? matchingArtifact(lease, details.url) : null;
-  if (!lease || !match) return false;
+  if (!lease || !match) return navigatedAway();
   if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return false;
 
   let tab: ChromeTab;
@@ -592,6 +600,9 @@ async function installPolicy(
       !policyLeases.install(lease)) {
     throw new Error("Host policy lease is invalid or expired");
   }
+  // Record what the host holds before a pending pause can return early, so a
+  // removal saved during the pause can still clear. Capture stays blocked.
+  receivedLease = lease;
   if (await pausePending()) {
     if (!resumeAfterConfirmation) return currentStatus();
     // A pause requested while a save was in flight must win over an older
@@ -611,7 +622,6 @@ async function installPolicy(
     [PAUSE_KEY]: false,
     [QUEUE_KEY]: queue,
   });
-  receivedRevision = lease.revision;
   await narrowActivity(effectiveLease.capture_enabled ? effectiveLease : null);
   return currentStatus(await activeLease());
 }
@@ -1010,9 +1020,7 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
       // Clear only once the host's lease no longer has an adapter on any
       // pending origin. Until then, capture stays off for those origins.
       const pending = await readPendingRemovals();
-      const lease = await readPolicy();
-      if (pending.length && lease && lease.revision === receivedRevision &&
-          !holdsPendingRemoval(lease, pending)) {
+      if (pending.length && receivedLease && !holdsPendingRemoval(receivedLease, pending)) {
         await chrome.storage.local.remove(PENDING_REMOVALS_KEY);
       }
       return currentStatus();

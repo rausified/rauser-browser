@@ -569,6 +569,67 @@ test("pending local removals survive upgrade until the host drops those adapters
   assert.deepEqual(cleared.pending_removals, []);
 });
 
+test("a tracked tab that navigates to a pending-removal origin stops gaining time", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const activeOrigin = "https://still-on.example";
+  const removedOrigin = "https://going-away.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(activeOrigin),
+    adapters: { format: 1, artifacts: [artifact(activeOrigin), artifact(removedOrigin)] },
+  });
+  values.set(storageKey("pending_site_removals_v1"), [removedOrigin]);
+
+  tabs.set(50, { id: 50, windowId: 1, url: `${activeOrigin}/items/a`, title: "A", incognito: false });
+  onCommitted({
+    tabId: 50, frameId: 0, documentId: "tracked", documentLifecycle: "active",
+    url: `${activeOrigin}/items/a`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[50].artifact_id,
+    "test:still-on.example/a");
+
+  tabs.set(50, { id: 50, windowId: 1, url: `${removedOrigin}/items/b`, title: "B", incognito: false });
+  onCommitted({
+    tabId: 50, frameId: 0, documentId: "pending", documentLifecycle: "active",
+    url: `${removedOrigin}/items/b`, timeStamp: Date.now(),
+  });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[50], undefined,
+    "the previous page's entry ends even though the stored lease still holds the origin");
+});
+
+test("a pending local pause does not keep pending removals from clearing", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const removedOrigin = "https://paused-removal.example";
+  const keptOrigin = "https://paused-kept.example";
+  values.set(storageKey("revocations_v1"), [removedOrigin]);
+  values.set(storageKey("policy_v1"), {
+    ...lease(keptOrigin),
+    adapters: { format: 1, artifacts: [artifact(removedOrigin), artifact(keptOrigin)] },
+  });
+  onInstalled({ reason: "update" });
+  await flush();
+  assert.deepEqual(values.get(storageKey("pending_site_removals_v1")), [removedOrigin]);
+
+  const paused = await send({ kind: "pause_capture" });
+  assert.equal(paused.pause_pending, true);
+  // applyPendingRemovals saved the removal; its reinstall comes back while
+  // the pause is still pending.
+  const installed = await send({
+    kind: "install_policy", lease: { ...lease(keptOrigin), revision: "removal-saved" },
+    resume_after_confirmation: false, resume_after_pause_token: null,
+  });
+  assert.equal(installed.pause_pending, true, "capture stays blocked");
+  const cleared = await send({ kind: "clear_pending_removals" });
+  assert.equal(values.has(storageKey("pending_site_removals_v1")), false);
+  assert.deepEqual(cleared.pending_removals, []);
+  assert.equal(cleared.pause_pending, true);
+});
+
 test("a committed page updates the live hourly activity title before freezing", async () => {
   values.clear();
   sessionValues.clear();
