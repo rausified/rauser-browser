@@ -362,11 +362,36 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
 
 ### Focused quality follow-up
 
-- [ ] `brwr-x0d` **Share list and streaming-text rendering when a consumer needs it.**
-  Recent and worklogs already shipped without the proposed helper. Keep this
-  P3: extract a small framework-free primitive only when Capture Site or
-  streaming demonstrates repeated rendering needs; do not rewrite the panel
-  solely to create an abstraction.
+- [ ] `brwr-hme` **One Brauser home folder (P1, John 2026-10-27).** The user
+  picks one home folder; Brauser creates its notes, artifacts, summaries, logs,
+  config and state inside it. Owned by the Columbus session (design, then a
+  PR); not Cookie work until that design lands. The service's state stays in
+  OS directories behind `service::paths`.
+- [ ] `brwr-hrc` **Note identity: remember contracts removed by hand edits
+  (P1, follow-up to #70).** Record adapter contracts that vanish from
+  `config.toml` outside the settings path, so a hand-deleted board adapter
+  cannot leave its modal rule's notes unrecognized.
+- [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
+  Step 6.7 shipped and Recent, the worklog and the artifact card did so
+  without a shared helper. Open access runs are polled through `get_run`
+  (spec §5.3), not streamed, so any text helper is an append of polled
+  run-card text. Keep this P3: extract a small framework-free primitive only
+  when Capture Site or the open access PR 3 run card repeats rendering the
+  panel already has; do not rewrite shipped views solely to create an
+  abstraction. Close it as not needed if no second consumer appears by PR 3.
+
+- [ ] `brwr-3nq` **Retain unsaved panel notes across close and reopen.**
+  Found while exercising `brwr-9xg` (related): the pagehide flush queues behind
+  an in-flight save and then disconnects, so the newest edits and conflict
+  copy-out live only in memory and are lost on close. Add synchronous local
+  recovery before save dispatch and explicit Copy/Discard after reopening,
+  never silently applying a draft to a changed note. Cookie built this in
+  cycle 8 (closed PR #67, commit `8ae533c`, never merged): a `NoteRecovery`
+  store writes each snapshot under a fresh immutable key in the input
+  handler, so an acknowledgement or another panel's discard removes only the
+  exact snapshot it saw. Reuse or rebase that work rather than redesigning
+  it. The queue had imported this bead as closed from the cycle-8 export;
+  it is reopened because that code never reached `main`.
 
 - [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
   drop that races the last in-flight batch stays counted and visible, but its
@@ -442,6 +467,17 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
   `windows-latest` job green on GitHub, fix any Windows-only test failures
   (Windows `cargo test` and the extension tests have not run yet), and gate
   any test that cannot run on Windows with a stated reason.
+  **Already on main (2026-10-27, later):** open access PR 1 merged as #69, so
+  the `macos-15` + `windows-latest` matrix and the required "Build and check"
+  gate are on `main`, and the `windows-latest` job is green there (CI run
+  40481905465 at `5a80dda`: Rust build, `cargo test`, clippy, scripted-dialogs
+  test and clippy, typecheck, lint, extension build and tests, adapter diff,
+  npm audit; only the headless smoke and fuzz-compile steps are macOS-only).
+  Don't re-add CI or redo that work. The only remainder: confirm main stays
+  green on both platforms, check that each test skipped on Windows (for
+  example `cfg(unix)`-gated tests) states why, add the reason where it is
+  missing, then close this item. `brwr-i1g` stays open for the interactive
+  Windows acceptance.
 
 - [ ] `brwr-1hj` **Capture Site (parent, step 7.6).** The known-site panel
   flow shipped as `brwr-qox`. Keep this parent in progress until `brwr-t40`

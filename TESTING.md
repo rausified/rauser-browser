@@ -148,6 +148,28 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Review reproduced the same stripped-URL collision through the
+  fallback for an origin config.toml no longer covers: after the adapter and
+  `[[adapter_id_history]]` were gone, the bare Jira board and another issue's
+  modal resolved to ABC-123's key and autosaved over its note, and the
+  board's URL note could migrate into it. That fallback also scanned the
+  whole notes folder on every uncovered page and refused notes everywhere
+  once it passed 4,096 files. Failing-first native tests
+  (`without_recorded_contracts_*`,
+  `a_large_notes_folder_does_not_block_notes_on_uncovered_pages`) cover it;
+  uncovered origins now use the URL key, and tests that once asserted
+  history-only recovery assert the artifact note stays untouched instead.
+- 2026-10-27: Review reproduced, against the native handlers, a bare Jira
+  board reading and autosaving into an issue's note because `strip_params`
+  made the modal's stored canonical URL equal the board URL; the board's URL
+  note listed as an "older note" of every modal issue and migratable into
+  one; and site removal or an inert adapter document splitting a note across
+  routes with no recorded activity. Failing-first native tests
+  (`stripped_identity_collisions`, `note_policy_removal`) and a config unit
+  test for `note_key_rule` now cover them. Tests that exercise history-only
+  recovery remove `[[adapter_id_history]]` first, as a config repair would,
+  because recorded contracts otherwise decide the key. Note-removal fixtures
+  are dated from the clock, since capture rejects events older than 30 days.
 - 2026-10-27: Independent review reproduced a tab switch during Capture Site's
   post-save note reload leaving the editor bound to the previous page. The
   composed-panel regression holds that load open, switches pages, then verifies

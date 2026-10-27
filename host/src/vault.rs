@@ -109,19 +109,9 @@ impl Vault {
 
     /// Bounded candidates for reconciling M1 URL-keyed notes with current
     /// adapter keys. Notes are flat in `pages_dir`; symlinks and large files
-    /// are never followed or read.
+    /// are never followed or read. Older-note lists may omit candidates, so
+    /// unreadable or oversized files and anything past the budget are skipped.
     pub fn note_candidates(&self) -> Result<Vec<String>> {
-        self.scan_note_candidates(false)
-    }
-
-    /// Historical key selection must see every possible owned-note identity.
-    /// Optional older-note lists may omit candidates; an autosave target must
-    /// never be chosen from a truncated or unreadable set.
-    pub fn note_identity_candidates(&self) -> Result<Vec<String>> {
-        self.scan_note_candidates(true)
-    }
-
-    fn scan_note_candidates(&self, require_complete: bool) -> Result<Vec<String>> {
         let pages = match self.root.open_dir(&self.pages_dir) {
             Ok(dir) => dir,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -129,19 +119,14 @@ impl Vault {
         };
         let mut names = Vec::new();
         for entry in pages.entries().context("listing page notes directory")? {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) if require_complete => return Err(error.into()),
-                Err(_) => continue,
+            let Ok(entry) = entry else {
+                continue;
             };
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
             if name.ends_with(".md") {
                 names.push(name);
-                if require_complete && names.len() > MAX_NOTE_SCAN_FILES {
-                    bail!("note identity scan exceeds the file limit");
-                }
             }
         }
         names.sort();
@@ -149,36 +134,24 @@ impl Vault {
         let mut total = 0usize;
         let mut contents = Vec::new();
         for name in names {
-            let metadata = match pages.symlink_metadata(&name) {
-                Ok(metadata) => metadata,
-                Err(error) if require_complete => return Err(error.into()),
-                Err(_) => continue,
+            let Ok(metadata) = pages.symlink_metadata(&name) else {
+                continue;
             };
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 continue;
             }
             let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
             if length > MAX_NOTE_BYTES || total.saturating_add(length) > MAX_NOTE_SCAN_BYTES {
-                if require_complete {
-                    bail!("note identity scan exceeds the byte limit");
-                }
                 continue;
             }
-            // Optional older-note discovery skips unreadable candidates so
-            // one bad file cannot hide the primary note. Key recovery needs
-            // a complete scan and refuses the same failure.
-            let text = match self.read_named(&name) {
-                Ok(Some(text)) => text,
-                Ok(None) if require_complete => bail!("note disappeared during identity scan"),
-                Err(error) if require_complete => return Err(error),
-                Ok(None) | Err(_) => continue,
+            // Skip unreadable candidates so one bad file cannot hide the
+            // primary note.
+            let Ok(Some(text)) = self.read_named(&name) else {
+                continue;
             };
             // A file may grow between metadata and read; enforce the budget
             // against the bytes actually read as well.
             if total.saturating_add(text.len()) > MAX_NOTE_SCAN_BYTES {
-                if require_complete {
-                    bail!("note identity scan exceeds the byte limit");
-                }
                 continue;
             }
             total += text.len();
