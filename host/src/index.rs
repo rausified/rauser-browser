@@ -2980,7 +2980,7 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
-    fn a_failed_pass_keeps_the_files_it_already_wrote() {
+    fn an_unwritable_file_stays_dirty_while_the_pass_publishes_the_rest() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -2993,15 +2993,16 @@ print(json.dumps([tables,row]))"#;
         // A file where B's type directory belongs makes B's write fail.
         fs::create_dir_all(root.path().join("artifacts")).unwrap();
         fs::write(root.path().join("artifacts/blocked-item"), "in the way").unwrap();
-        assert!(index.regenerate_dirty().is_err());
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.failed), (2, 1));
         assert_eq!(
             dirty_ids(&index),
-            ["work:example.com/B", "work:example.com/C"],
-            "A's completed write is published even though the pass failed"
+            ["work:example.com/B"],
+            "A's and C's completed writes are published; only B waits"
         );
         fs::remove_file(root.path().join("artifacts/blocked-item")).unwrap();
         let report = index.regenerate_dirty().unwrap();
-        assert_eq!((report.written, report.unchanged), (2, 0));
+        assert_eq!((report.written, report.unchanged, report.failed), (1, 0, 0));
     }
 
     #[test]
