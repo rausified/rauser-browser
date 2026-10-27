@@ -949,6 +949,34 @@ test("adapter rules and scope fail closed before buffering", async () => {
   assert.equal((await send({ kind: "get_activity" })).length, 1);
 });
 
+test("an oversized skipped navigation stops measuring the previous artifact", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://long-navigation.example";
+  const realNow = Date.now;
+  let now = new Date("2026-10-16T10:15:00Z").getTime();
+  Date.now = () => now;
+  try {
+    tabs.set(55, { id: 55, windowId: 1, active: true, status: "complete", url: `${origin}/items/current`, incognito: false });
+    await send({ kind: "install_policy", lease: lease(origin), resume_after_confirmation: false, resume_after_pause_token: null });
+    now += 10_000;
+    const url = `${origin}/search?state=${"x".repeat(8_192)}`;
+    tabs.get(55).url = url;
+    onCommitted({ tabId: 55, frameId: 0, documentLifecycle: "active", url, timeStamp: now });
+    await flush();
+    now += 20_000;
+    await send({ kind: "get_status" });
+    const totals = values.get(storageKey("activity_totals_v1")).totals;
+    assert.equal(totals.reduce((sum, total) => sum + total.focused_ms, 0), 10_000,
+      "time on an oversized non-artifact page must not accrue to the previous artifact");
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[55], undefined);
+    assert.equal(values.get(storageKey("site_patterns_v1"))[origin], undefined);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("private pattern samples include skipped pages but never enter delivery or native messages", async () => {
   values.clear();
   sessionValues.clear();

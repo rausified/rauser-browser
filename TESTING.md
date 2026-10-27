@@ -171,6 +171,13 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Independent review reproduced an oversized same-origin
+  navigation leaving the previous artifact mapped for attention measurement.
+  The worker regression starts on a recognized artifact, navigates to a
+  search URL over the byte limit, and verifies that later focused time is
+  excluded and no pattern is retained. Oversized navigations now end the
+  previous mapping through the normal unrecognized-page path. No browser or
+  native dialog is involved.
 - 2026-10-27: Review reproduced the same stripped-URL collision through the
   fallback for an origin config.toml no longer covers: after the adapter and
   `[[adapter_id_history]]` were gone, the bare Jira board and another issue's

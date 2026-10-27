@@ -562,7 +562,7 @@ async function captureNavigation(
   // pending-removal origins that activeLease() filters out.
   const lease = await activeLease();
   if (!lease || !leaseActive(lease) || !leaseCoversOrigin(lease, url)) return navigatedAway();
-  if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return false;
+  if (encoder.encode(details.url).length > MAX_VISIT_URL_BYTES) return navigatedAway();
 
   let tab: ChromeTab;
   try {
