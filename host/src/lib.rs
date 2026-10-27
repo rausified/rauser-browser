@@ -25,6 +25,8 @@ pub mod harness_setup;
 pub mod index;
 mod layout;
 pub(crate) mod markdown;
+#[cfg(test)]
+mod markdown_corpus;
 pub mod native;
 pub mod note;
 mod presentation;

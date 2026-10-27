@@ -3018,7 +3018,8 @@ print(json.dumps([tables,row]))"#;
             .find(|path| fs::read_to_string(path).unwrap().contains("AbC"))
             .unwrap();
         let original = fs::read_to_string(first_path).unwrap();
-        assert!(original.contains("title: \"![x]"));
+        // The title is YAML-escaped with no raw `![` (markdown::yaml_string).
+        assert!(original.contains("title: \"\\u0021[x]"));
         assert!(!original.contains("\n![x]"));
 
         fs::write(first_path, format!("{original}\nexternal edit\n")).unwrap();
