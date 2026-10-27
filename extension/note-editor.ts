@@ -54,6 +54,8 @@ export interface NoteHost {
   >;
 }
 
+const KEY_CHANGED_STATUS = "Could not save; this page's artifact identity changed.";
+
 export class NoteEditor {
   private queue: Promise<void> = Promise.resolve();
   private pending = 0;
@@ -98,7 +100,18 @@ export class NoteEditor {
   /** Saves pending edits now, after any load or save already running. */
   flush(): Promise<void> {
     this.clearTimer();
-    return this.enqueue(() => this.saveNow());
+    return this.enqueue(async () => {
+      const token = this.token;
+      if (!(await this.saveNow())) return;
+      // The host now maps this page to another key (§6.2). Reload it the way
+      // reload() does, in this same queued step so no edit or autosave can
+      // reach the stale key first. A page change queued meanwhile loads the
+      // newest page itself, so it needs no reload here.
+      if (token !== this.token) return;
+      const reloadToken = ++this.token;
+      await this.switchTo(this.target, reloadToken);
+      if (reloadToken === this.token && this.loaded) this.view.setStatus(KEY_CHANGED_STATUS, true);
+    });
   }
 
   /** Follows the active tab. Saves the note being left before loading the new
@@ -195,9 +208,11 @@ export class NoteEditor {
     }
   }
 
-  private async saveNow(): Promise<void> {
+  /** Saves pending edits. Returns true when the host refused the save because
+   * the page's key changed; the editor is then closed until it reloads. */
+  private async saveNow(): Promise<boolean> {
     this.clearTimer();
-    if (!this.dirty || !this.loaded || this.url === null || this.revision === null || this.key === null) return;
+    if (!this.dirty || !this.loaded || this.url === null || this.revision === null || this.key === null) return false;
     const url = this.url;
     const body = this.view.readBody();
     this.dirty = false;
@@ -211,27 +226,34 @@ export class NoteEditor {
       this.dirty = true; // Retry on the next edit, tab change, or close.
       this.saveError = `Could not save: ${this.describe(error)}`;
       this.view.setStatus(this.saveError, true);
-      return;
+      return false;
     }
     this.revision = response.revision;
     this.key = response.key ?? this.key;
     if (response.type === "note_saved") {
       // Edits typed during the save are still pending; their timer saves them.
       if (!this.dirty) this.view.setStatus("Saved");
-      return;
+      return false;
     }
     // The note changed elsewhere since this panel last loaded it. Nothing was
     // written; show the newer note and keep everything typed, including edits
     // made while this save was in flight (§4.4, §5.3).
     this.clearTimer();
     this.dirty = false;
-    const reason = response.reason === "key_changed"
+    const keyChanged = response.reason === "key_changed";
+    const reason = keyChanged
       ? "This page's artifact identity changed, so your edit was not saved."
       : "This note changed elsewhere, so your edit was not saved.";
     this.keepUnsaved(url, this.view.readBody(), reason);
+    if (keyChanged) {
+      // The note under the old key is gone for this page: stop edits and
+      // autosaves until the caller reloads the note under its new key. The
+      // copy-out box keeps the text; a reload never clears it.
+      this.loaded = false;
+      this.view.setEditable(false);
+    }
     this.view.writeBody(response.body);
-    this.view.setStatus(response.reason === "key_changed"
-      ? "Could not save; this page's artifact identity changed."
-      : "Could not save; this note changed elsewhere.", true);
+    this.view.setStatus(keyChanged ? KEY_CHANGED_STATUS : "Could not save; this note changed elsewhere.", true);
+    return keyChanged;
   }
 }
