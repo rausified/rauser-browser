@@ -11,7 +11,7 @@
       <header class="panel-header">
         <div>
           <h1>{{FULL_NAME}}</h1>
-          <p class="eyebrow">M2 development build · Chrome</p>
+          <p class="eyebrow">M2 development build <span id="build-id">{{BUILD_ID}}</span> · Chrome<span id="host-build"></span></p>
         </div>
         <button id="open-settings" type="button" class="icon-button" aria-label="Open {{APP_NAME}} settings" title="Settings">
           <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20">
@@ -46,6 +46,16 @@
       </nav>
 
       <div id="page-view">
+      <details id="site-pattern-area" hidden>
+        <summary>Page patterns</summary>
+        <p>Review the page address and patterns from up to 500 links on this page. Only same-site links are included. This preview does not change capture.</p>
+        <button id="site-pattern-review" type="button" class="secondary">Review page patterns</button>
+        <div id="site-pattern-result" hidden>
+          <p id="site-pattern-message" role="status" aria-live="polite"></p>
+          <ul id="site-pattern-rows" class="plain-list"></ul>
+          <button id="site-pattern-close" type="button" class="secondary">Close review</button>
+        </div>
+      </details>
       <section id="capture-site-area" aria-label="Site capture" hidden>
         <p id="capture-site-hint"></p>
         <button id="capture-site" type="button">Capture Site</button>

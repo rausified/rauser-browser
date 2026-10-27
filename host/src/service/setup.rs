@@ -160,7 +160,7 @@ pub fn set_up(
     let Some(storage) = &current.storage else {
         return Err(refuse(
             ErrorCode::NotConfigured,
-            "Choose a notes folder first",
+            "Choose a home folder first",
         ));
     };
     let timeout_secs = request.timeout_secs.unwrap_or(DEFAULT_SUMMARY_TIMEOUT_SECS);
@@ -314,7 +314,7 @@ mod tests {
         runner: PathBuf,
     }
 
-    /// A notes folder, fake `codex` and `claude` that answer `--version`,
+    /// A home folder, fake `codex` and `claude` that answer `--version`,
     /// and a fake runner script with `body`.
     fn setup(body: &str) -> Setup {
         let fake = Fake::new();
@@ -475,6 +475,38 @@ mod tests {
             fs::read_to_string(&setup.path)
                 .unwrap()
                 .contains("[summarizer]")
+        );
+    }
+
+    /// The summaries folder is fixed (DESIGN.md §6.1): setup may name it,
+    /// or nothing, but never another folder.
+    #[test]
+    fn setup_cannot_choose_a_summaries_folder() {
+        let mut setup = setup(": > \"$0.ran\"; echo OK");
+        let before = fs::read(&setup.path).unwrap();
+        let mut request = SetUpHarnessRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "r1".into(),
+            expected_revision: setup.config.revision().to_owned(),
+            harness: HarnessId::Claude,
+            timeout_secs: None,
+            summaries_dir: Some("ai".into()),
+        };
+        let registry = setup.registry();
+        let env = setup.run_env();
+        let (code, message) =
+            set_up(&mut setup.config, &registry, &request, env.clone()).unwrap_err();
+        assert_eq!(code, ErrorCode::InvalidConfig);
+        assert!(message.contains("content folders are fixed"), "{message}");
+        assert_eq!(fs::read(&setup.path).unwrap(), before);
+        // Refused before any probe.
+        assert!(!setup.runner.with_extension("ran").exists());
+
+        request.summaries_dir = Some("summaries".into());
+        let (config, _) = set_up(&mut setup.config, &registry, &request, env).unwrap();
+        assert_eq!(
+            config.storage.as_ref().unwrap().summaries_dir.as_deref(),
+            Some("summaries")
         );
     }
 

@@ -1,0 +1,3 @@
+# Test fixtures are byte-exact copies of files Brauser wrote; never convert
+# their line endings on checkout (Windows CI would otherwise see CRLF).
+host/tests/fixtures/** -text

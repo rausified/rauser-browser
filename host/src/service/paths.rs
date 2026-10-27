@@ -100,12 +100,14 @@ impl ServicePaths {
     }
 }
 
-/// `"<version>:<dev>:<ino>:<mtime_ns>"` of the canonical running executable.
-/// The host and the service run the same binary path, so equal ids mean the
-/// same build. When the executable cannot be inspected, the id carries this
-/// process's pid instead, so it never matches another process's id.
+/// `"<build label>:<dev>:<ino>:<mtime_ns>"` of the canonical running
+/// executable, where the label is [`crate::BUILD_LABEL`] (`<version>+<commit>`,
+/// the build the page headers show). The host and the service run the same
+/// binary path, so equal ids mean the same build. When the executable cannot
+/// be inspected, the id carries this process's pid instead, so it never
+/// matches another process's id.
 pub fn build_id() -> String {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::BUILD_LABEL;
     let metadata = std::env::current_exe()
         .and_then(fs::canonicalize)
         .and_then(fs::metadata);
@@ -187,6 +189,8 @@ mod tests {
     fn build_id_is_stable_within_a_process_and_names_the_version() {
         assert_eq!(build_id(), build_id());
         assert!(build_id().starts_with(env!("CARGO_PKG_VERSION")));
+        // One scheme: the service's id names the build hello reports.
+        assert!(build_id().starts_with(&format!("{}:", crate::BUILD_LABEL)));
     }
 
     #[test]

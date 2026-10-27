@@ -110,8 +110,9 @@ printf '%s\n' "$*" > "$log.argv"
         PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
     }
 
-    /// A config with a notes folder chosen and the v5 harness tables, which
-    /// load as not set up and are dropped on the next save.
+    /// A config with a home folder chosen in the fixed layout (so loading it
+    /// moves nothing) and the v5 harness tables, which load as not set up
+    /// and are dropped on the next save.
     fn write_config(&self) {
         let root = fs::canonicalize(self.path("notes")).unwrap();
         let metadata = fs::metadata(&root).unwrap();
@@ -120,7 +121,7 @@ printf '%s\n' "$*" > "$log.argv"
         fs::write(
             &self.config,
             format!(
-                "root_picker_confirmed = true\nroot_identity = {:?}\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n\n{V5_TABLES}",
+                "root_picker_confirmed = true\nroot_identity = {:?}\n\n[storage]\nroot = {:?}\nprofile = \"neutral\"\nlog_dir = \"logs\"\npages_dir = \"notes\"\nlater_dir = \"later\"\nartifacts_dir = \"artifacts\"\nsummaries_dir = \"summaries\"\n\n{V5_TABLES}",
                 identity,
                 root.to_str().unwrap(),
             ),

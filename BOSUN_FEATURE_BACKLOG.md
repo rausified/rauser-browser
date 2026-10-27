@@ -198,23 +198,9 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   Built on `feat/agent-runners-pr3` (2026-10-27); see Shipped. **[human]**
   check still to run (TESTING.md "Real-UI acceptance"): a real Codex and a
   real Claude Code summary from the dev build, and **Open in Codex** opening
-  the thread in Codex Desktop. Tracked one Cookie queue item per plan task,
-  built in this order, each depending on the one before:
-  - [x] `brwr-t28` Task 28: Line-streaming child process primitive (after PR 2).
-  - [x] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
-  - [x] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
-  - [x] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
-  - [x] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
-  - [x] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
-  - [x] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
-  - [x] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
-  - [x] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
-  - [x] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
-  - [x] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
-  - [x] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
-  - [x] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
-  - [x] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
-  - [x] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
+  the thread in Codex Desktop. Tracks one queue item per plan task, built in
+  order; it closes when they all close. All of them are in progress in the
+  Lane A session until the branch merges; see In Progress.
 - [ ] `brwr-so4` **Open access PR 4: summary file, log event, and index
   integration.** The owned summary file, the `summary` daily-log event,
   summaries in the index, Recent, the worklog, and the panel, written under the
@@ -222,19 +208,8 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   2026-10-27 on PR #59's merged `web.page` summary storage, which it extends
   and whose gaps it closes (no harness field, raw summary link, Timeline
   order, adapter-recognized pages). Tracks one Cookie queue item per plan task,
-  continuing the PR 3 chain; it closes when they all close:
-  - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
-  - [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
-  - [ ] `brwr-t45` Task 45: Summary file rendering and the checked summary write (after `brwr-t44`).
-  - [ ] `brwr-t46` Task 46: Extend #59's summary event: record key, harness, and adapter artifacts (after `brwr-t45`).
-  - [ ] `brwr-t47` Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache (after `brwr-t46`).
-  - [ ] `brwr-t48` Task 48: Recent, worklog, and a page's summary on the wire (after `brwr-t47`).
-  - [ ] `brwr-t49` Task 49: `SummaryFinisher`: write under the configuration current at finish (after `brwr-t48`).
-  - [ ] `brwr-t50` Task 50: `open_summary`: open a page's owned summary file (after `brwr-t49`).
-  - [ ] `brwr-t51` Task 51: Panel: the page's existing summary and summarized Recent rows (after `brwr-t50`).
-  - [ ] `brwr-t52` Task 52: Run card: saved-summary line and Open summary (after `brwr-t51`).
-  - [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
-  - [ ] `brwr-t54` Task 54: Docs, backlog, and the full gate (after `brwr-t53`).
+  continuing the PR 3 chain; it closes when they all close. All of them are in
+  progress in the Lane E session; see In Progress.
 - [x] **M1.5a step 6.4 — Measured artifact activity.** Replaced the temporary
   visit rows with hourly artifact activity: cold opens, focused and background
   seconds, modes, and trail sources in durable worker totals, frozen into one
@@ -280,12 +255,21 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
   panel review; all named planted-link, shared-origin and identity tests remain
   required. This is the remaining portion of Capture Site after known sites.
+  **Cycle split (2026-10-27):** the private input layer and an inspectable,
+  review-only panel/settings surface shipped first (see Shipped). The parent remains
+  open for the host structural drafter, per-rule checks, shared-origin scope,
+  selected-rule capture and all named identity/flow cases. A pattern preview
+  must never imply that unknown-site capture is enabled.
+- [ ] `brwr-gf1` **Resolve the bare-Notion draft-rule contradiction.** The
+  named Notion identity success case has no route literal before its first
+  identifier, while the draft checker requires one. Document and test a
+  consistent outcome before closing `brwr-t40`; keep the host's leading-route
+  safety requirement intact until an explicit, tested design replaces it.
 - [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
   hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
   existing activity, notes, and index rows through explicit append-only
   alias/re-key events (the needed part of step 7.2). This replaces the
   conservative ID freeze instead of relaxing it.
-
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
   Windows CI, record an isolated real-Chrome run with source and OS/browser
   versions, native registration, the folder picker, standing HTTP(S) access,
@@ -294,47 +278,27 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 - [x] `brwr-6wz` **M2 step 8.2 — Host invocation, now open access PRs 2-3.**
   Closed with `brwr-sr3` (2026-10-27): the service runs the real runners.
   A tracking pointer: agent runs move to the per-user Brauser service (spec
-  §5, open-access PR 2) with full-access Codex or Claude Code runners (spec §6,
-  open-access PR 3), per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`. The
+  §5, shipped in #75) with full-access Codex or Claude Code runners (spec §6,
+  `brwr-sr3`), per `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`. The
   allowlisted-environment, templated-argv, harness-token, and §7.1 canary
-  design it described is superseded. Close it when open-access PRs 2–3 ship;
-  do not build a second invocation path.
+  design it described is superseded. Close it when `brwr-sr3` closes (PR 2 shipped in
+  #75); don't build it separately.
 - [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
   Structural first, agent second: for unknown sites, "Improve with AI"
   refines the structural draft by launching an agent job through the Brauser
-  service (open-access PR 2 and the PR 3 runners;
+  service (the open access PR 2 service, shipped in #75, and PR 3 runners `brwr-sr3`;
   spec above), not the old M2 step 8.2 harness path. Agent drafts are
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
 - [x] `brwr-0ij` **M2 step 8.4 — Content extraction, now open access PR 3.**
   Closed with `brwr-sr3` (2026-10-27). A
   tracking pointer: pinned Readability extraction, the Summarize & log button,
-  and the context-menu item are built in open-access PR 3 (spec §5.3 and §6). With
-  standing access there is no `activeTab` trigger. Close it with open-access PR 3.
+  and the context-menu item are built in `brwr-sr3` (spec §5.3 and §6). With
+  standing access there is no `activeTab` trigger. Close it with `brwr-sr3`.
 - [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel, now open access PR
   4.** A tracking pointer: the summary file, log event, and index/panel
-  integration are built in open-access PR 4 (spec §7); there is no denylist check.
-  Close it with open-access PR 4.
-
-### Queue reconciliation (2026-10-27)
-
-These items are still open in the authoritative database, despite older
-markdown notes saying they were closed or superseded. Preserve their status;
-human-labelled gates remain for the operator to reconcile with the v6 spec.
-
-- [ ] `brwr-0cj` **M2 streaming protocol pointer.** The local queue still
-  tracks the old streaming milestone; implement its replacement via the
-  service polling/run-card work in open-access PRs 2–3, not a second transport.
-- [ ] `brwr-9yc` **[human] Harness authentication decision gate.** The v6
-  spec chooses service-owned `agent.env`; the old human bead remains open.
-- [ ] `brwr-rva` **[human] Former activeTab acceptance gate.** Standing site
-  access supersedes these checks; only the operator may close this human bead.
-- [ ] `brwr-ac1` **First-tool setup tracking.** Its choose-and-scope value is
-  absorbed by Capture Site. The former Chrome/native-confirmation flow is
-  superseded; reconcile the duplicate when Capture Site is complete.
-- [ ] `brwr-ahb` **Former consent-identity consolidation.** Native Yes/No
-  confirmation is removed in v6. The queue still marks this task open;
-  no removed consent path should be rebuilt to satisfy it.
+  integration are built in `brwr-so4` (spec §7); there is no denylist check.
+  Close it with `brwr-so4`.
 
 ### Gated plan work (do not start yet)
 
@@ -362,15 +326,6 @@ human-labelled gates remain for the operator to reconcile with the v6 spec.
   run for the same key can start. Use bounded retries and an in-memory end
   state, keeping the key reserved, rather than holding the queue on a failing
   disk.
-- [ ] `brwr-hme` **One Brauser home folder (P1, John 2026-10-27).** The user
-  picks one home folder; Brauser creates its notes, artifacts, summaries, logs,
-  config and state inside it. Owned by the Columbus session (design, then a
-  PR); not Cookie work until that design lands. The service's state stays in
-  OS directories behind `service::paths`.
-- [ ] `brwr-hrc` **Note identity: remember contracts removed by hand edits
-  (P1, follow-up to #70).** Record adapter contracts that vanish from
-  `config.toml` outside the settings path, so a hand-deleted board adapter
-  cannot leave its modal rule's notes unrecognized.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -437,7 +392,10 @@ main, check the item off as "not reproduced" and say why. The last item,
   hyphenated UUID, but the hex payload keeps the raw `event_id`, so
   `parse_marker_event` (host/src/index.rs ~1403/1422) rejects the line.
   Canonicalize `event_id` in the payload at capture for single and batch
-  activity and for why (host/src/capture.rs).
+  activity and for why (host/src/capture.rs) the way `record_summary`
+  already does (capture.rs ~408-415). The lane C2 review re-confirmed this
+  (findings 18/25); writers are `record_activity` ~296/~337, `record_why`
+  ~373, and batch activity ~730/~764.
 - [ ] `brwr-u8n` **URLs that grow past 8192 bytes when normalized are
   captured, then dropped on rescan.** Capture bounds the raw URL
   (host/src/capture.rs ~627/~802, `activity_shape_is_valid` ~154/166) but
@@ -462,17 +420,79 @@ main, check the item off as "not reproduced" and say why. The last item,
   panel adds the Use button for every older note (extension/panel.ts ~222-246)
   even when the artifact note already exists, where `use_as_artifact_note`
   (host/src/note.rs ~597) always refuses. Show only View in that case.
-- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
-  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
-  stripping a query key that an adapter rule matches on (Jira's
-  `selectedIssue`) is accepted and collapses artifact identity. Decided
-  2026-10-27: a save that adds or changes such an entry is refused with a clear
-  message; an existing config with the conflict still loads and saves, shows a
-  warning, and offers a one-click "Stop stripping <param>" fix. Also record
-  which params were stripped. P2; depends on `brwr-hrc` (rebase onto it first,
-  both edit config.rs).
+
+
+### Cross-PR seam review defects (lane C2, 2026-10-27)
+
+A 2026-10-27 review of the seams between the PRs merged that night (main at
+6ad6020) confirmed each of these with a probe test that fails on that commit.
+None blocks deploy, so they are P3 bugs, and they wait behind the plan work
+above. Line numbers were re-checked on 0ab41f4; re-check them against current
+main. Same rules as the lane C list: write the regression test in the bead
+first, show it fails, then fix, one cycle each; if it does not fail, check the
+item off as "not reproduced" and say why. Findings 18 and 25 of this review
+were folded into `brwr-q7e` above rather than given their own item.
+
+- [ ] `brwr-jdi` **An adapter change made elsewhere costs the next note edit.**
+  `scheduleReload` (extension/panel.ts ~507) calls `notes.retry()`, which only
+  reloads after a failed load (note-editor.ts ~127), so the editor keeps the
+  old record key and the next autosave gets `key_changed`. Reload the note
+  when the config revision changed.
+- [ ] `brwr-mm0` **A delivery absorbed by Pause, Discard or Dismiss never
+  refreshes the card.** Only `panelTick` (extension/panel.ts ~539) compares
+  `delivered_batches`; the other `refreshStatus()` callers (~559/~581/~596)
+  overwrite it unchecked, so the card keeps stale totals.
+- [ ] `brwr-gob` **The pending-pause Why hint names a disabled button.**
+  `whyPausedReason` (extension/panel.ts ~294) says "Use Pause capture" while
+  `updateControls` (~406) disables it because the host is unreachable.
+- [ ] `brwr-b50` **The card keeps "native host is not connected" after the
+  host returns.** `render()` (extension/panel.ts ~456) runs on reconnect but
+  never calls `refreshArtifact`; refresh on a false-to-true transition.
+- [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
+  sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
+  see show "○ Not an artifact" (~155 via `showNoPage` ~820).
+- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
+  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
+  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
+  whole-second forms. Make them agree.
+- [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
+  the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
+  rejects format 0 or more than 64 adapters, which the host returns with
+  `adapter_issue` set, so the repair prompt is unreachable.
+- [ ] `brwr-ylm` **Queued and resumed runs launch in a stale notes folder.**
+  `run_cwd` (host/src/service/server.rs ~335) skips the identity check and
+  `resume`/`Inner::run` (supervisor.rs ~341/~663) reuse the recorded cwd;
+  re-check under the lock and fail closed. Latent until a runner ships.
+  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
+  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
+  the cap that `write_request` (host/src/frame.rs ~64) enforces after
+  connecting; refuse it as too large before contacting the service.
+  Waits for `brwr-sr3`: open access PR 3 is reworking the service run path.
+- [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
+  host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
+- [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
+  `whyPausedReason`/`whySaveBlocked` (extension/panel.ts ~289-310) ignore
+  `pending_removals`, which the panel's own warning (~448) calls off.
+- [ ] `brwr-hnr` **Summary-only days count as opened days.** The Summary arm
+  of `derive` (host/src/index.rs ~1394) inserts the day with no open, unlike
+  the Activity (~1217) and Legacy (~1340) arms. Latent until summaries ship.
+- [ ] `brwr-t8m` **Capture Site promises a save that retired adapter history
+  will refuse.** `planCaptureSite` (extension/capture-site.ts ~35) cannot see
+  `[[adapter_id_history]]`, so the host's frozen-ID check (host/src/config.rs
+  `validate_adapter_transition_with_history` ~2105) fails at commit. Re-check
+  against #85's retired-contract recording first.
+- [ ] `brwr-rft` **Coalesced activity keeps the old title's refs.**
+  `coalesceActivity` (extension/worker.ts ~285/~295) unions refs while taking
+  the newer title, so the host rejects it with `activity_refs_mismatch`; keep
+  the winning title's refs as activity.ts (~177) does.
 
 ### Cookie's own proposals (only after the plan work above)
+
+- [ ] `brwr-vny` **Explain why the current page is outside capture.** Use
+  the compiled policy to distinguish a paused site, pending removal, tenant
+  scope and an unmatched page rule, with the relevant settings/review action.
+  Link patterns must never become evidence that a page was visited.
 
 - [ ] `brwr-r88` **Show ambiguous historical notes for explicit read-only viewing.**
   When several artifacts share a canonical URL after removal, list the
@@ -498,6 +518,84 @@ main, check the item off as "not reproduced" and say why. The last item,
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
+  child can exit after printing its reply before the parent writes the framed
+  request, intermittently producing `EPIPE` even though production dialog
+  children read the request first. Make the fixture obey the real handshake
+  and exercise it repeatedly. The repair is committed as `00dbc75` and
+  included in `728b200`;
+  the bead is blocked on full verification in a runner that permits local IPC.
+
+  Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
+  request, make the reply fixture consume exactly the framed byte count, and
+  stress repeated replies. Review the complete diff and rerun the required
+  checks. Keep this bead open until the driver can verify the full suite: this
+  sandbox refuses Unix sockets (EPERM), including a standalone bind probe.
+  Repair committed: the large-input reproduction failed with Broken pipe before
+  the fix; the child now reads the byte count and complete body before replying.
+  Sixty exchanges cover empty, short and 64 KiB UTF-8 requests without waiting
+  for EOF. No production dialog behavior changed. Full verification remains
+  pending outside the sandbox; no shipped claim or bead closure this cycle.
+
+  Latest verification (2026-10-27, clean `8b7acd7`): no quarantine file
+  or incomplete changes. Protocol generation, workspace build, format, both
+  Clippy configurations, offline npm ci, typecheck, lint, extension build,
+  all 13 extension test files, current-state and queue checks pass. The
+  unfiltered Rust gate has 26 adapter-template passes, 447 host passes and
+  32 service/IPC failures; later binaries are not reached. Five dialog tests
+  pass, including the repaired 60-exchange fixture. Independent AF_UNIX bind
+  and connect probes both return EPERM. Node spawnSync reports status 0 but
+  error EPERM and empty output; script diagnostics show 8 passes, 1 failure
+  and 1 platform skip. No source changes, disabled tests, feature work or
+  history reset. Raw logs: `target/overnight-health/baseline-8b7acd7/`.
+  Driver action: run the unfiltered gate with local IPC permitted and include
+  the tested baseline SHA and result in the next cycle's handoff. The absence
+  of a quarantine file does not establish green health.
+
+- In progress in the Columbus session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
+  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
+  stripping a query key that an adapter rule matches on (Jira's
+  `selectedIssue`) is accepted and collapses artifact identity. Decided
+  2026-10-27: a save that adds or changes such an entry is refused with a clear
+  message; an existing config with the conflict still loads and saves, shows a
+  warning, and offers a one-click "Stop stripping <param>" fix. Also record
+  which params were stripped. P2; in progress in the Columbus session (builds
+  on #85).
+- [ ] `brwr-hrr` **Give damaged adopted-contract state a visible repair path,
+  and guard ID changes against hand-retired contracts.** Follow-up to #85.
+
+- In progress in the Lane A session (PR 3 on `feat/agent-runners-pr3`), not Cookie. Cookie must not claim these:
+- [ ] `brwr-t28` Task 28: Line-streaming child process primitive (after `brwr-sv2`).
+- [ ] `brwr-t29` Task 29: Codex app-server runner (after `brwr-t28`).
+- [ ] `brwr-t30` Task 30: Claude Code stream-json runner (after `brwr-t29`).
+- [ ] `brwr-t31` Task 31: Production registry, knowledge base cwd, per-run timeout (after `brwr-t30`).
+- [ ] `brwr-t32` Task 32: The §6.4 prompt and an editable type/category vocabulary (after `brwr-t31`).
+- [ ] `brwr-t33` Task 33: Validated structured answer with one repair turn (after `brwr-t32`).
+- [ ] `brwr-t34` Task 34: Harness setup in the service: detect on its PATH, probe the real invocation (after `brwr-t33`).
+- [ ] `brwr-t35` Task 35: Delete the harness lockdown (after `brwr-t34`).
+- [ ] `brwr-t36` Task 36: Cross-platform opener, service `open_path`, and `get_agent_env` (after `brwr-t35`).
+- [ ] `brwr-t37` Task 37: Settings: summary harness section (after `brwr-t36`).
+- [ ] `brwr-t38` Task 38: Bundle pinned Readability and a self-contained page extractor (after `brwr-t37`).
+- [ ] `brwr-t39` Task 39: Summarize & log button, `summarize` command, context-menu item (after `brwr-t38`).
+- [ ] `brwr-p40` Task 40: Run card: polling, Cancel, Retry save, Open in Codex / Copy resume command, restore (after `brwr-t39`).
+- [ ] `brwr-t41` Task 41: Headless smoke covers real runners against fake harnesses (after `brwr-p40`).
+- [ ] `brwr-t42` Task 42: Docs, backlog, and full gate (after `brwr-t41`).
+
+- In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
+- [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
+- [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
+- [ ] `brwr-t45` Task 45: Summary file rendering and the checked summary write (after `brwr-t44`).
+- [ ] `brwr-t46` Task 46: Extend #59's summary event: record key, harness, and adapter artifacts (after `brwr-t45`).
+- [ ] `brwr-t47` Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache (after `brwr-t46`).
+- [ ] `brwr-t48` Task 48: Recent, worklog, and a page's summary on the wire (after `brwr-t47`).
+- [ ] `brwr-t49` Task 49: `SummaryFinisher`: write under the configuration current at finish (after `brwr-t48`).
+- [ ] `brwr-t50` Task 50: `open_summary`: open a page's owned summary file (after `brwr-t49`).
+- [ ] `brwr-t51` Task 51: Panel: the page's existing summary and summarized Recent rows (after `brwr-t50`).
+- [ ] `brwr-t52` Task 52: Run card: saved-summary line and Open summary (after `brwr-t51`).
+- [ ] `brwr-t53` Task 53: Headless smoke covers outputs end to end (after `brwr-t52`).
+- [ ] `brwr-t54` Task 54: Docs, backlog, and the full gate (after `brwr-t53`).
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   Extend the existing built-page smoke check so it opens the artifact card,
@@ -529,12 +627,26 @@ main, check the item off as "not reproduced" and say why. The last item,
   missing, then close this item. `brwr-i1g` stays open for the interactive
   Windows acceptance.
 
-- [ ] `brwr-1hj` **Capture Site (parent, step 7.6).** The known-site panel
-  flow shipped as `brwr-qox`. Keep this parent in progress until `brwr-t40`
-  completes unknown-site URL shaping, samples, link shapes, host structural
-  drafting and all named safety/flow tests in DESIGN §5.1 and §12.2 step 7.6.
-  Extend the same plain-language review and v6 revisioned save. Re-learning
-  remains the separate alias/re-key migration, not a relaxation of frozen IDs.
+- [ ] `brwr-1hj` **Capture Site (P1 parent; step 7.6 moved forward; rescoped
+  2026-10-26).** One side-panel "Capture Site" button. Known starter sites
+  (Jira Cloud, SharePoint/OneDrive) produce the adapter from the URL alone;
+  GitHub prompts inline for the work-organization list; unknown sites use the
+  host's structural drafter (no agent) with every safety rule in DESIGN §5.1
+  and §12.2 step 7.6. The save goes through `update_config` under protocol v6:
+  no Chrome grants, no native confirmation, no ungranted-tab flow, and no
+  pending-grant expiry or rollback. Before the save, a plain-language review
+  shows what Brauser will remember here, with real example pages it matched,
+  and what it won't (search, dashboards, login, sharing). The JSON editor
+  stays an advanced view nobody has to open. Tier 1 is not required. It
+  absorbs the choose-and-scope part of the old first-tool setup proposal; keep
+  GitHub PR and issue owner scopes separate rather than inferring one shared
+  value. **Split in Cookie's cycle 1 (2026-10-27):** filed first as
+  `brwr-1hj.1` (known sites) and `brwr-1hj.2` (unknown sites), then refiled
+  under flat IDs. The known-site panel flow shipped as `brwr-qox` (see
+  Shipped); unknown-site URL shaping, samples, link shapes, host structural
+  drafting and all named safety/flow tests are `brwr-t40`. Keep this parent in progress until
+  `brwr-t40` completes. Re-learning remains the separate alias/re-key
+  migration (`brwr-6x2`), not a relaxation of frozen IDs.
 
 
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
@@ -542,6 +654,12 @@ main, check the item off as "not reproduced" and say why. The last item,
 ## Shipped
 
 - **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
+
+- [x] `brwr-hrc` **Note identity: remember contracts removed by hand edits (2026-10-27, #85).** Adapter contracts that vanish from `config.toml` outside the settings path are recorded, so a hand-deleted board adapter cannot leave its modal rule's notes unrecognized.
+
+- **Category:** New Feature. **Inspect private page patterns from the panel and settings (2026-10-27).** A collapsed panel review shows the shaped current address and same-origin link patterns only after a click, including on unknown sites. The shared shaper removes identifier/query values and title-like segments; the isolated top-frame reader checks page identity, scans at most 500 anchors and returns at most 50 shapes, generalizing singleton literals. Configured sites retain at most 20 visited shapes for seven days with local show/clear controls, including during host repair; incognito tabs, pauses and removals stay excluded, and samples never enter delivery or the vault. Closing, collapsing or navigating drops link results. This completes `brwr-b39`; unknown-site host drafting and enabling remain in `brwr-t40`. **Metrics:** 332 Rust tests and 11 extension test files passing; 21 new shaper, worker and composed UI scenarios; full required gate, both Clippy configurations and queue consistency green. macOS smoke unavailable on Linux; no scripted-dialog or smoke-step changes. Salvaged onto main by hand after the overnight rebase failed; the independent review pass also stopped attention timing on the previous artifact after an oversized same-origin navigation.
+
+- [x] `brwr-hme` **One Brauser home folder (2026-10-27, #82).** The user picks one home folder; Brauser keeps `notes/`, `artifacts/`, `summaries/` and `logs/` inside it in a fixed layout, migrating older layouts once (`pages/` → `notes/`, `log/` → `logs/`, no-clobber). Machine state stays in OS directories.
 - **Category:** New Capability. **Start capturing known work sites from the current page (2026-10-27).** The panel now reviews and enables Jira Cloud, SharePoint/OneDrive and separately scoped GitHub pull requests/issues without opening JSON. It shows the actual page's match, labeled illustrative examples and all fixed safety probes, preserves configured sites and pauses, and refuses stale reviews or pending removals. Existing note edits save before identity changes, with copy-out on failure; page-installed policy starts attention on already-open artifacts without inventing cold opens or suppressing real opens during background renewal. Unknown-site drafting stays queued in `brwr-t40`, and the parent remains open. **Metrics:** 332 Rust tests and 10 extension test files passing; 26 new model, composed-panel and worker regressions; full required gate, both Clippy configurations and queue consistency green. macOS smoke refused on Linux; 14 scripted dialogs unchanged.
 
 - **Category:** Bug Fix. **Keep shared and older notes reachable after capture rules are removed (2026-10-27).** Historical note recovery now retains the older URL-note list and its read-only viewing action after adapter removal, recognition narrowing and site removal. Both URL lookup directions share durable activity, mode and explicit-context evidence, so alternate routes and context-only history recover the same note without inventing activity. Native request tests prove separate URL notes, migration refusals, stale-key copy-out, cache deletion/reindex and suppressed capture preserve existing content. **Metrics:** 332 Rust tests (+5) and 8 extension test files passing; full required build/quality gate and both Clippy configurations green; macOS smoke unavailable on Linux, 14 scripted dialogs unchanged.
@@ -577,29 +695,34 @@ main, check the item off as "not reproduced" and say why. The last item,
 
 ## Notes / Ideas for Later
 
-- The opening code gate was green. End-of-cycle queue cleanup found existing
-  markdown/export disagreement: PR-specific service IDs absent from the
-  committed queue, two claimed items listed as Proposed, and old v6-obsolete
-  tasks described as closed while still open. The markdown now reflects the
-  database, including the human gates Cookie cannot close. `brwr-4vb` was
-  already closed in the database; no dialog fix is claimed this cycle.
+- **2026-10-27 queue restore.** Cookie's cycle-1 queue update (PR #77,
+  `aa200d3`) exported a stale local beads database over `.beads/issues.jsonl`
+  and rewrote this file to match, reverting the open-access retarget from #69.
+  The rows and backlog wording were restored from `5a80dda`: `brwr-sv2`,
+  `brwr-sr3`, and `brwr-so4` are real beads; `brwr-0cj`, `brwr-9yc`,
+  `brwr-rva`, `brwr-ac1`, `brwr-ahb`, and `brwr-jfe` are closed as recorded
+  below; `brwr-4vb` stays open because its fix never merged. Cycle 1's
+  Capture Site work (`brwr-qox`, `brwr-t40`, the `brwr-1hj` claim) is kept.
+  `bd import` merges dependency edges and never deletes them, so a database
+  that imported the stale export keeps `brwr-f45`'s retired blocking edges on
+  `brwr-0cj` and `brwr-6wz` after it re-imports this file. Before the next
+  export, run `bd dep remove brwr-f45 brwr-0cj` and
+  `bd dep remove brwr-f45 brwr-6wz` (or rebuild the database from this
+  file), then confirm `bd export` matches the committed rows.
 - Capture Site is split into known-site setup and unknown-site drafting. Keep
   its next slice on the host-owned shaper/drafter path; do not turn arbitrary
   page links into starter rules in the panel. A configured site stays in
   settings until explicit re-key migrations support Re-learn.
 
-- **2026-10-27 design retarget for open access** (spec
-  `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`).
-  The following records the intended retarget; current queue statuses are
-  listed under Queue reconciliation above. Intended closures:
+- **2026-10-27 queue retarget for open access** (spec
+  `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`). Closed:
   `brwr-9yc` (decided: `agent.env` in the Brauser service, spec §5.1);
   `brwr-jfe` and `brwr-0cj` (superseded by polling `get_run`, spec §5.3);
   `brwr-rva` (no `activeTab` trigger or grant expiry with standing access);
   `brwr-ac1` (no grant to request or roll back and no native confirmation; its
   choose-and-scope part folds into Capture Site). `brwr-6wz`, `brwr-0ij`, and
-  `brwr-deo` are design pointers to open access PRs 2–4; agent refinement
-  follows those runners rather than the superseded host path. Windows agent
-  support (`brwr-ooy`) is retargeted and
+  `brwr-deo` are now pointers to open access PRs 2-4; `brwr-f45` depends on
+  `brwr-sv2`/`brwr-sr3` instead of `brwr-6wz`; `brwr-ooy` is retargeted and
   deferred; `brwr-1hj` is reopened with the rescoped Capture Site. Windows
   support stays in scope (DESIGN §14, 2026-10-16), so `brwr-bzx` and
   `brwr-i1g` remain open.
@@ -730,3 +853,71 @@ main, check the item off as "not reproduced" and say why. The last item,
 - Cross-page adapter edits can safely follow `(origin, type, id)` plus an unchanged structural snapshot today. If M1.5b aliases introduce persistent adapter or rule identifiers, carry those identifiers into the editor target instead of weakening this fail-closed conflict check; same-identity ambiguity must never fall back to array position.
 - Consent deltas now use the same `(origin, type, id)` identity as the settings editor but deliberately keep precedence as a separate ordered concern. If persistent adapter IDs arrive with aliases, migrate both consumers together and retain explicit reorder detection; conflating identity with array position was the root cause of two independent deploy blockers.
 - A Chrome revocation can leave a rule for that origin inside an unsupported adapter document because the host's repair exception permits only an exact echo. Capture remains suspended and the host site allowlist is narrowed immediately; `brwr-jnj`'s replacement workspace should call out and remove these now-orphaned rules when the user converts the document to a supported format.
+
+### Cycle observations (2026-10-27 — page-pattern review)
+
+- `brwr-b39` completes the private input and user inspection surface; continue
+  `brwr-t40` for a real unknown-site draft and enable flow rather than adding
+  another diagnostic view. The parent remains open, and the external
+  open-access service work remains outside this cycle.
+- Review the Notion contract in `brwr-gf1` before implementing kind grouping: a
+  bare fixed-shape identifier has no leading route literal. The existing
+  checker must not be bypassed to make a named success case appear green.
+- Short lowercase route words survive shaping by design. Keep the disclosure
+  concrete; patterns are useful drafting evidence, not guaranteed anonymous
+  data. Link counts are not visits, and link-only candidates must remain
+  unchecked in the future rule review.
+- `brwr-vny` is a later product idea: help a person understand a skipped page
+  using an actual policy reason, after the ordered Capture Site work.
+
+### Cycle observations (2026-10-27 — dialog fixture repair)
+
+- Health started red solely at Unix-socket service tests: 32 host failures, all
+  explained by denied socket operations; a minimal independent bind also
+  returned EPERM. The workspace started clean and no commit-gate failure file
+  existed. Keep real socket coverage intact and have the driver rerun it.
+- The successful-dialog fixture must read the framed request before answering,
+  as production does. Large requests reliably exposed the old fixture's
+  early-exit race; small requests alone passed by scheduling luck.
+- Node's synchronous child-process transport also returns EPERM here, even for
+  a child that only prints JSON. `test:scripts` consequently fails its win32
+  path simulation, while extension test files pass. This is an environment
+  limitation, not evidence that the registration logic needs replacement.
+- No history reset was attempted: the clean baseline itself fails the socket
+  probe, and none of the preceding five commits is verified green under this
+  restriction. Resetting history cannot restore a denied OS capability.
+- Once the external gate is green, finish the existing unknown-site Capture
+  Site assignment; the private pattern review already provides its inputs.
+  A useful later review would show how selected rules group example pages
+  into the same artifact before enabling them, within the existing review.
+
+### Current health handoff (2026-10-27 — baseline `1305440`)
+
+- Clean workspace; no quarantine failure file. The unfiltered opening gate
+  again passes 26 adapter-template tests and 447 host tests, then fails 32
+  service tests. Later Rust test binaries are not reached. All 13 extension
+  test files pass, as do protocol generation, build, fmt, both Clippy
+  configurations, npm install, typecheck, lint, extension build, current-state
+  validation and queue consistency. The repaired dialog fixture completes its
+  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
+- Independent workspace AF_UNIX bind and connect both return errno 1 EPERM.
+  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
+  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
+  and 1 platform skip, with the win32 simulation unable to parse empty output.
+  TESTING.md documents that diagnostic and the restriction. Keep all tests
+  enabled and do not change production IPC to fit this runner.
+- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29` and
+  `8b7acd7`. No commit among the last five is verified green in this runner,
+  so no history reset was attempted. Earlier quarantine documentation was
+  recovered; this cycle introduces no product or test change and claims no
+  shipped feature.
+- The driver needs to carry the baseline SHA and an unfiltered external
+  gate result into its next handoff, and provide a runner permitting local
+  IPC and synchronous child output. Another unchanged restricted cycle will
+  reproduce these failures rather than advance the assigned product work.
+- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
+  selectable rules and example artifact grouping using the existing private
+  pattern inputs. Resolve the Notion leading-literal contradiction
+  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
+  preview which example pages share an artifact still belongs in this review;
+  no additional diagnostic view or self-directed feature is needed first.

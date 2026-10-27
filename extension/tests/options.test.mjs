@@ -63,8 +63,8 @@ function statusFor(overrides = {}) {
 function configWith(adapters, captureEnabled) {
   return {
     storage: {
-      root: "/vault", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
-      summaries_dir: null, knowledge_base_dir: null,
+      root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
+      summaries_dir: "summaries", knowledge_base_dir: null,
     },
     capture_enabled: captureEnabled ?? adapters.length > 0,
     strip_params: [],
@@ -109,14 +109,16 @@ function install({
     ["cancel-adapter", "button"],
     ["harness-warning", "p"], ["harness-state", "p"], ["detect-harnesses", "button"], ["harness-list", "ul"],
     ["harness-timeout", "input"], ["test-harness", "button"], ["remove-harness", "button"],
-    ["summaries-dir", "input"], ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
+    ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
+    ["build-id", "span"], ["host-build", "span"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
   elements.get("adapter-editor").hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
+  elements.get("build-id").textContent = "abc1234def56";
 
   function hostReply(request) {
     state.requests.push(request);
@@ -249,6 +251,55 @@ const lastUpdate = () => env.requests.findLast((request) => request.type === "up
 // Each site row is its origin followed by a Remove site button.
 const siteRows = () => env.elements.get("sites-list").children.map((item) => item.children[0]?.textContent ?? item.textContent);
 
+test("settings inspect and clear local page patterns without saving configuration", async () => {
+  const origin = "https://patterns.example";
+  let rows = [{ shape: "/items/{num}", count: 3, last_seen: Date.now() }];
+  install({ adapters: [artifactFor(origin)], worker: {
+    get_site_patterns: (request) => { assert.equal(request.origin, origin); return rows; },
+    clear_site_patterns: (request) => { assert.equal(request.origin, origin); rows = []; return rows; },
+  } });
+  await openSettings();
+  const site = env.elements.get("sites-list").children[0];
+  const details = site.children.find((child) => child.tagName === "DETAILS");
+  assert.ok(details);
+  const [show, clear] = details.querySelectorAll("button");
+  assert.equal(show.textContent, "Show patterns");
+  assert.equal(clear.textContent, "Clear patterns");
+  assert.equal(env.workerRequests.some((request) => request.kind === "get_site_patterns"), false, "samples load only on request");
+  const requestsBefore = env.requests.length;
+  show.click();
+  await until(() => !show.disabled, "patterns to load");
+  assert.match(details.querySelectorAll("li")[0].textContent, /\/items\/\{num\} · 3 navigations/);
+  clear.click();
+  await until(() => !clear.disabled, "patterns to clear");
+  assert.equal(details.querySelectorAll("li").length, 0);
+  assert.ok(details.children.some((child) => child.textContent.startsWith("Patterns cleared.")));
+  assert.equal(env.requests.length, requestsBefore, "no native request for reading or clearing samples");
+  assert.equal(env.config.capture_enabled, true);
+  assert.deepEqual(env.permissionCalls, []);
+});
+
+test("pattern controls report worker failures and remain usable during host repair", async () => {
+  const origin = "https://pattern-repair.example";
+  install({ adapters: [artifactFor(origin)], worker: {
+    get_site_patterns: () => { throw new Error("Pattern storage unavailable"); },
+    clear_site_patterns: () => [],
+  } });
+  env.configIssue = "Repair the host configuration";
+  await openSettings();
+  const details = env.elements.get("sites-list").children[0].children.find((child) => child.tagName === "DETAILS");
+  const [show, clear] = details.querySelectorAll("button");
+  assert.equal(show.disabled, false);
+  assert.equal(clear.disabled, false);
+  show.click();
+  await until(() => !show.disabled, "the failed pattern read");
+  assert.ok(details.children.some((child) => child.textContent.includes("Pattern storage unavailable")));
+  clear.click();
+  await until(() => !clear.disabled, "local clearing during repair");
+  assert.ok(details.children.some((child) => child.textContent.startsWith("Patterns cleared.")));
+  assert.equal(env.requests.some((request) => request.type === "update_config"), false);
+});
+
 async function openSettings({ connected = true } = {}) {
   loads += 1;
   await import(`../dist/options.js?load=${loads}`);
@@ -264,7 +315,7 @@ function typeSite(url) {
 }
 
 async function removeListedSite(index = 0) {
-  const remove = env.elements.get("sites-list").querySelectorAll("button")[index];
+  const remove = env.elements.get("sites-list").querySelectorAll("button").filter((button) => button.textContent === "Remove site")[index];
   remove.click();
   await until(() => statusText().startsWith("Removed ") && idle(), "the removal to finish");
 }
@@ -274,6 +325,32 @@ async function saveOpenAdapter(what) {
   env.elements.get("save-adapter").click();
   await until(() => env.revision > before && idle(), what);
 }
+
+test("the header names the host build and flags one from another commit", async () => {
+  install({ host: { hello: () => ({
+    type: "hello_result", host_version: "0.1.0+0123456789ab", configured: true, config_issue: null,
+  }) } });
+  await openSettings();
+  assert.equal(env.elements.get("host-build").textContent,
+    " · host 0123456789ab (not the extension's commit; rebuild both)");
+});
+
+test("a restarted host's build replaces the exited one's in the header", async () => {
+  const state = install({ host: { hello: (_request, current) => ({
+    type: "hello_result", host_version: `0.1.0+${current.connects === 1 ? "abc1234def56" : "0123456789ab"}`,
+    configured: true, config_issue: null,
+  }) } });
+  await openSettings();
+  assert.equal(env.elements.get("host-build").textContent, " · host abc1234def56");
+
+  state.exitHost();
+  // Whatever answers next may be a rebuilt binary.
+  assert.equal(env.elements.get("host-build").textContent, "");
+  env.elements.get("refresh-artifacts").click();
+  await until(() => env.elements.get("host-build").textContent !== "", "the new host's build");
+  assert.equal(env.elements.get("host-build").textContent,
+    " · host 0123456789ab (not the extension's commit; rebuild both)");
+});
 
 test("the site list is the distinct adapter origins", async () => {
   install({ adapters: [
@@ -398,7 +475,7 @@ test("setupProblem ignores sites and pause", async () => {
   const { setupProblem, captureStateText } = await import("../dist/settings.js");
   const configured = configWith([artifactFor(SITE.origin)]);
   assert.equal(setupProblem({ ...configured, capture_enabled: false, adapters: { format: 1, artifacts: [] } }, null), null);
-  assert.equal(setupProblem({ ...configured, storage: null }, null), "No notes folder is chosen.");
+  assert.equal(setupProblem({ ...configured, storage: null }, null), "No home folder is chosen.");
   assert.equal(setupProblem(configured, "bad file"), "The host configuration needs repair: bad file");
   assert.equal(captureStateText({ ...configured, capture_enabled: false }), "Capture is paused.");
   assert.equal(captureStateText(configured), "Capturing on sites with adapters.");
@@ -834,7 +911,7 @@ test("a failed hello reports the host as unavailable", async () => {
   assert.match(statusText(), /^Native host unavailable: host broke\./);
 });
 
-const FOLDER_ISSUE = "The selected notes folder is unavailable or changed. Choose it again.";
+const FOLDER_ISSUE = "The selected home folder is unavailable or changed. Choose it again.";
 
 test("a kept config with a folder issue needs a new folder pick, which repairs it", async () => {
   const state = install({ adapters: [artifactFor(SITE.origin)] });
@@ -889,6 +966,32 @@ test("choosing a folder saves it at once, leaving adapters and capture as they w
   assert.deepEqual(state.config.adapters.artifacts, []);
   assert.equal(env.elements.get("folder-path").textContent, "/vault");
   assert.match(statusText(), /^No site has an adapter yet\./);
+});
+
+test("choosing a home folder saves the fixed layout, never an older one", async () => {
+  const saves = [];
+  const state = install({
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  state.config = {
+    ...state.config,
+    storage: {
+      ...state.config.storage, root: "/old", log_dir: "log", pages_dir: "pages", artifacts_dir: "brauser-artifacts",
+      summaries_dir: null, knowledge_base_dir: "/kb",
+    },
+  };
+  await openSettings();
+  env.elements.get("choose-folder").click();
+  await until(() => saves.length === 1 && idle(), "the home folder to be saved");
+  assert.deepEqual(saves[0].config.storage, {
+    root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
+    artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: "/kb",
+  });
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  for (const folder of ["notes/", "logs/", "artifacts/", "summaries/", "later/"]) {
+    assert.ok(html.includes(`<code>${folder}</code>`), folder);
+  }
+  assert.ok(!html.includes("summaries-dir"));
 });
 
 test("a host restart drops a folder selection only the old host knew", async () => {
@@ -950,7 +1053,7 @@ test("choosing a knowledge base folder saves it with its own token", async () =>
     },
   });
   await openSettings();
-  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder (/vault)");
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the home folder (/vault)");
   assert.equal(env.elements.get("kb-use-notes").disabled, true);
   env.elements.get("choose-kb").click();
   await until(() => state.config.storage?.knowledge_base_dir === "/kb" && idle(), "the knowledge base to be saved");
@@ -964,7 +1067,7 @@ test("choosing a knowledge base folder saves it with its own token", async () =>
   assert.match(statusText(), /^Knowledge base folder saved\./);
 });
 
-test("Use notes folder clears the knowledge base folder without a token", async () => {
+test("Use home folder clears the knowledge base folder without a token", async () => {
   const state = install();
   state.config.storage.knowledge_base_dir = "/kb";
   await openSettings();
@@ -972,22 +1075,22 @@ test("Use notes folder clears the knowledge base folder without a token", async 
   const button = env.elements.get("kb-use-notes");
   assert.equal(button.disabled, false);
   button.click();
-  await until(() => state.config.storage?.knowledge_base_dir === null && idle(), "the knowledge base to follow the notes folder");
+  await until(() => state.config.storage?.knowledge_base_dir === null && idle(), "the knowledge base to follow the home folder");
   assert.equal(lastUpdate().knowledge_base_token, null);
   assert.equal(lastUpdate().picker_token, null);
   assert.equal(env.requests.some((request) => request.type === "choose_folder"), false);
 });
 
-test("a knowledge base folder needs a notes folder first", async () => {
+test("a knowledge base folder needs a home folder first", async () => {
   const state = install();
   state.config = { ...state.config, storage: null };
   await openSettings();
   assert.equal(env.elements.get("choose-kb").disabled, true);
   assert.equal(env.elements.get("kb-use-notes").disabled, true);
-  assert.equal(env.elements.get("kb-path").textContent, "Same as the notes folder");
+  assert.equal(env.elements.get("kb-path").textContent, "Same as the home folder");
 });
 
-test("a notes folder change keeps the chosen knowledge base folder", async () => {
+test("a home folder change keeps the chosen knowledge base folder", async () => {
   const state = install({
     host: {
       choose_folder: () => ({ type: "folder_chosen", path: "/other", picker_token: "notes" }),
@@ -996,7 +1099,7 @@ test("a notes folder change keeps the chosen knowledge base folder", async () =>
   state.config.storage.knowledge_base_dir = "/kb";
   await openSettings();
   env.elements.get("choose-folder").click();
-  await until(() => state.config.storage?.root === "/other" && idle(), "the notes folder to be saved");
+  await until(() => state.config.storage?.root === "/other" && idle(), "the home folder to be saved");
   assert.equal(lastUpdate().config.storage.knowledge_base_dir, "/kb");
   assert.equal(lastUpdate().knowledge_base_token, null);
   assert.equal(lastUpdate().picker_token, "notes");
@@ -1055,8 +1158,9 @@ test("detect lists both harnesses with versions and Test sends set_up_harness", 
   assert.equal("expected_revision" in discover, false);
   const setUp = state.requests.find((request) => request.type === "set_up_harness");
   const { type: _type, protocol_version: _version, request_id: _id, ...lastSetUp } = setUp;
+  // The host keeps summaries in the fixed summaries/ folder.
   assert.deepEqual(lastSetUp, {
-    harness: "codex", timeout_secs: 600, summaries_dir: "summaries", expected_revision: "r1",
+    harness: "codex", timeout_secs: 600, summaries_dir: null, expected_revision: "r1",
   });
   // The page reloads the host config after setup.
   assert.ok(hostTypes.lastIndexOf("get_config") > hostTypes.indexOf("set_up_harness"));

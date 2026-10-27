@@ -29,14 +29,29 @@ reconciliation, the sync caution, and the harness setup dialog and its token.
 Settings saves config with the revision check only. A site is on exactly when
 it has an adapter: `ConfigSnapshot.sites` is gone, and the host derives capture
 origins from the exact origins of a valid adapter document (none while
-`adapter_issue` is set). Turning capture on needs only a notes folder.
+`adapter_issue` is set). Turning capture on needs only a home folder.
 Path-prefix narrowing is dropped. A version 5 `config.toml` loads unchanged and
 drops `sites`, `agent_denylist`, `agent_denylist_confirmed`, and `log_incognito`
 on its next save. `StorageConfig.knowledge_base_dir` (null means the notes
 folder) is the folder a later summary agent reads; it is chosen with the same
 native picker, whose token names its `FolderPurpose` (`notes_folder` or
 `knowledge_base`) so one selection cannot authorize the other, and the host
-records the folder's identity as it does for the notes root.
+records the folder's identity as it does for the home folder.
+
+The home folder (2026-10-27, `brwr-hme`): `storage.root` is the one folder
+the user picks, and the content folders inside it are fixed
+(`host/src/layout.rs`: `notes/`, `logs/`, `artifacts/`, `summaries/`,
+`later/`). The wire `StorageConfig` keeps its `*_dir` fields with those
+values, and `config::validate_update` refuses any others, so settings has no
+per-folder fields and harness setup no summaries name. An older config.toml
+is moved once by `ConfigStore::migrate_layout` (host start, `hello`,
+`get_config`, and a same-folder save in `update_with_grants`): under the
+config and capture locks it renames each existing older folder no-clobber,
+records a `log/` rename in `visit-ids/log-relocations.json` for intent
+replay (`CaptureStore::open_original_day_dir`), then writes the fixed names.
+A fixed name already present, or a nested, symlinked, or case-variant older
+folder, refuses with a `config_issue` and changes nothing; until the move
+succeeds the older layout is never used for vault I/O.
 
 The Brauser service skeleton (PR 2 of the open-access spec, DESIGN.md §12.2
 step 10.2) is built on `feat/agent-service-pr2` in `host/src/service/`
@@ -134,17 +149,20 @@ native host now updates a rebuildable SQLite `index.db` only after durable log
 delivery and lazily regenerates ownership-checked artifact Markdown when the
 panel's connection closes and on the first connection of each local day
 (never on worker-sync or settings connections), checkpointing long passes. `brauser reindex` recreates both from the owned log
-markers. The panel now exposes the current artifact card and one-line context,
+markers; a catch-up or rebuild larger than one pass's 64 MiB read bound saves
+its progress and resumes on the next pass (DESIGN.md §6.7). The panel now exposes the current artifact card and one-line context,
 a cross-tool Recent list, and copyable daily or weekly worklogs. Notes resolve
 to host-derived artifact keys (with guarded migration of older URL-keyed
 notes), and settings can regenerate artifact files while reporting every
 unowned-path conflict it leaves untouched.
 
 After adapter/site removal, recognition narrowing, or while the adapter
-document is inert, note keys come from the note-only contracts config.toml
-still records (`[[adapter_id_history]]` and the inert document; never
-capture), so every route a contract matched keeps one note
-(`ConfigStore::note_key_rule`). Those contracts alone decide an origin they
+document is inert, note keys come from the note-only contracts still recorded
+(`[[adapter_id_history]]`, the inert document, and contracts removed from
+config.toml by hand, which the host keeps in its own `adopted-contracts.json`
+state file; never capture), so every route a contract matched keeps one note
+(`ConfigStore::note_key_rule`). An unusable state file makes identity on
+every page the current policy does not recognize unavailable. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL
@@ -164,8 +182,19 @@ reviews, and saves old note edits before reloading their host-derived identity.
 Installing policy from a page seeds already-open recognized tabs for attention
 measurement without inventing cold opens; background renewals retain their
 normal navigation accounting.
-Unknown-site URL shaping, link shapes and the host structural drafter are still
-unbuilt (`brwr-t40`); starter live-tool certification remains human work.
+The separate **Page patterns** panel review now inspects a URL and up to 500
+same-page anchors on an explicit click, in the top frame's isolated world.
+Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier
+and query values with fixed placeholders, keeps only short lowercase route
+words, generalizes link-only singleton literals and returns at most 50 link
+shapes. Link shapes stay only in the review and are discarded on navigation,
+close or collapse. The worker independently samples at most 20 visited shapes
+per actively enabled origin for seven days in trusted-only local storage;
+settings can show or clear them without the host. Private tabs are excluded,
+pauses/removals purge samples, and samples never enter delivery or the vault.
+This is the input/review slice of `brwr-t40`, not unknown-site capture: the
+host structural drafter, selected-rule enable flow and recurring-page hint
+remain unbuilt; starter live-tool certification remains human work.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
@@ -210,8 +239,8 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - Treat all extension messages and page-derived content as untrusted.
 - Keep vault paths rooted in a user-selected directory; never accept a raw file path from a page or extension request.
 - Preserve existing user files. Page notes and generated artifact files are the two implemented file kinds the host replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`). An unrelated or unowned file at either path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
-- Keep capture off until a notes folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose notes folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The service re-checks that identity before every run and refuses a missing or replaced knowledge base folder (`not_configured`, host/src/service/server.rs).
-- The host re-checks every delivered event against its own adapters with the Rust engine before any vault I/O; a worker can only narrow what is recorded, never widen it. Never let a Chrome permission, a worker claim, or extension state substitute for that check.
+- Keep capture off until a home folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The service re-checks that identity before every run and refuses a missing or replaced knowledge base folder (`not_configured`, host/src/service/server.rs).
+- The host re-checks every delivered event against its own adapters with the Rust engine before any vault I/O; a worker can only narrow what is recorded, never widen it. Never let a Chrome permission, a worker claim, or extension state substitute for that check. That includes every activity trail source: the host rejects the event rather than drop a trail, so the worker strips trails whose source left the lease before dispatch (`trailsUnder` in extension/worker.ts) and never edits a dispatched event.
 - Carry pending site removals across upgrades. Origins an earlier build removed or saw revoked are migrated into the worker's one pending-removal list (`migratePendingRemovals` in extension/worker.ts), their adapters stay out of every capture lease, and the list clears only when a lease the host actually sent holds no adapter on those origins. An unreadable list pauses capture (fail closed).
 - Only harness setup (`set_up_harness`, host/src/service/setup.rs) may set the harness entry; it names a `HarnessId`, never a path or arguments, and the service detects that harness again and probes it through the real runner before committing. `update_config` may only echo the harness entry unchanged or remove it (host/src/consent.rs `check_agent_fields`).
 - Before offering a harness, detection verifies the resolved binary and its parent directory are owned by the current user or root and are not group/world-writable, and refuses it otherwise (host/src/harness.rs `detect`, `check_install`).

@@ -45,9 +45,84 @@ starter URLs against live tools or prove Chrome layout and keyboard focus.
 Those checks remain the existing human starter-certification and interactive
 Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
 Capture Site adds no scripted dialogs; the runner compares answered dialogs
-with its transcript instead of expecting a fixed total. Unknown-site shaping,
-link extraction and structural drafting need the separate DESIGN §12.2
-step 7.6 tests when implemented.
+with its transcript instead of expecting a fixed total. Unknown-site structural
+drafting still needs the separate DESIGN §12.2 step 7.6 safety, grouping,
+scope and identity tests when implemented.
+
+## Page-pattern review coverage
+
+`extension/tests/site-patterns.test.mjs` covers the shared URL shaper against
+the recorded starter vectors and named Confluence, SharePoint, Notion,
+Google Docs, encoded-name and mixed-case forms. Privacy assertions check
+placeholder classes, query-value removal, literal/length limits, corrupt
+stored values and metadata stripping. The link-reader tests serialize the
+bundled function into a fresh VM context with a fake top-frame DOM, catching
+module dependencies that would break Chrome's `scripting` serialization.
+They verify exact URL/origin checks before and after href reads, singleton
+literal generalization even for duplicated planted links, same-origin-only
+results, the 500-anchor scan cap and the 50-shape result cap.
+
+Worker tests exercise recognized and skipped navigations, incognito/missing
+tabs, subframes, SPA events, count/shape caps, expiry, cold worker wake and
+maintenance alarms, pending removals, policy suspension, pause and explicit
+clear. They assert samples reach neither activity/delivery nor a native host,
+and that sample-storage failures leave recognized capture working. Composed
+panel tests assert isolated top-frame injection only after a click, read-only
+results on unknown sites, cancellation/navigation races, collapse cleanup and
+scripting failures. Composed settings tests inspect and clear patterns without
+native messages, including during host repair.
+
+These checks use mocked Chrome APIs and DOM objects; the serialized function
+has been exercised, but real Chrome injection, disclosure layout and keyboard
+focus still need the macOS interactive/headless gates. No scripted dialog or
+smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
+claim that it passed here. Structural drafting and unknown-site enabling are
+still unbuilt, so these tests do not certify any machine-drafted rule.
+
+## Dialog reply fixture and restricted runners
+
+`dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
+child that reads the length line and exactly that many body bytes before
+printing its reply. It exercises 60 exchanges across empty, short and 64 KiB
+UTF-8 bodies. Do not replace the reader with an immediate `printf`: that
+closes stdin before the parent finishes writing and races into `EPIPE`. Do
+not read until EOF either: the parent keeps stdin open until the child exits.
+The fixture uses the same `head -c` tool as the neighboring timeout fixture.
+
+A restricted runner can deny Unix socket creation and connection with EPERM,
+even under a temporary directory. On 2026-10-27 this caused 32 host service
+test failures, confirmed with an independent Unix-socket bind. The same
+runner denied Node `spawnSync`, preventing `test:scripts` from running its
+win32 path simulation. Keep these tests enabled; run the full gate outside
+that restriction. An explicitly filtered local run can diagnose the remaining
+tests, but is not a passing full gate. The dialog repair remains in progress
+until that external gate passes.
+
+The restricted runs on baselines `728b200` and `90f88b4` reproduced the
+same failures. To distinguish a runner denial from a service regression,
+try an independent Python `AF_UNIX` bind in a temporary workspace directory.
+Do not change service paths or permissions to work around a denied bind.
+Node's restriction can be misleading: a JSON-only `spawnSync` child returned
+`status: 0` alongside `error.code: "EPERM"` and empty stdout. Inspect the
+spawn result's `error` as well as its exit status. The script suite consequently
+reported `Unexpected end of JSON input` in its win32 simulation; no real
+registration or launchd call was involved.
+
+If `npm run test:scripts` reports only a failed file, use
+`node --test --test-isolation=none scripts/tests/dev-service.test.mjs` for
+diagnosis. On this runner it exposes the win32 simulation's empty-output
+JSON parse error (8 pass, 1 fail, 1 platform skip). This changes only the
+diagnostic invocation; the required script gate remains unmodified and failing.
+The required opening gate stops Cargo after the failing host test binary,
+so its 26 adapter-template passes and 447 host passes do not establish that
+later integration and documentation tests passed.
+
+The diagnostic workspace run excluding `service::client::tests::`,
+`service::server::tests::` and `native::tests::run_proxy::` passed 493 tests
+with 39 host tests filtered out. The scripted-dialog unit group passed 10
+tests. Neither result substitutes for the unfiltered gate, and neither
+justifies disabling the socket tests or changing production IPC to fit the
+runner. Verify the full gate in a runner that permits these local operations.
 
 ## UI-free end-to-end: the recipe
 
@@ -67,7 +142,7 @@ step 7.6 tests when implemented.
 
 ### Native dialogs (the folder picker)
 
-Brauser's only native dialog is the folder picker, used for the notes folder and the knowledge base folder. There is no native Yes/No confirmation any more. If a future change adds a native dialog, give it the same seam. Add a **test-only seam at the process boundary**:
+Brauser's only native dialog is the folder picker, used for the home folder and the knowledge base folder. There is no native Yes/No confirmation any more. If a future change adds a native dialog, give it the same seam. Add a **test-only seam at the process boundary**:
 
 - Replace only the code that draws the dialog. Keep the code that decides what the answer authorizes (tokens, grants, validation) real, so a scripted answer has exactly the authority of a person's click.
 - Gate the seam at compile time (a cargo feature or build flag) and make it **impossible in release builds** (for example, `compile_error!` when the feature is on without `debug_assertions`). Build it into a separate output directory so the everyday dev binary never contains it.
@@ -166,6 +241,49 @@ This standard is meant to improve with use. When you change it:
 ## Learning log
 
 - 2026-10-27: Branch `feat/agent-runners-pr3`. The page extractor caps text in encoded bytes, not characters: it truncates until the JSON-encoded, UTF-8 length of the content plus the selection fits 3 MiB (the selection alone 64 KiB). CJK text is three bytes a character, and quotes and control characters grow under JSON escaping (`\u0001` is six bytes), so a character cap can push a `start_run` frame past the host's 4 MiB `MAX_INBOUND_BYTES`. `maximal extraction stays under the host frame cap` builds the full `start_run` JSON from 1,000,000 CJK characters with interleaved `"` and `\u0001` and checks it.
+- 2026-10-27: Salvage review of Cookie cycle 2 reproduced three page-pattern
+  gaps with failing-first tests: unreadable pending-removal state on a
+  same-origin skipped page left the previous artifact mapped for attention
+  time; a failed sample purge during pause was hidden, so resuming could keep
+  the old rows; and a failed visited-sample read discarded the page's own
+  shapes in the panel. The link reader now walks the lazy `document.links`
+  collection and never reads its length, so the 500-link cap also bounds work
+  on a hostile page; the site-pattern test's mock fails if length is read.
+  A same-URL reload kept a completed review's link shapes, since the panel
+  compared only tab ID and URL; any `loading` or URL update in the reviewed
+  tab now discards the review, held reads included.
+  A failed sample purge on site removal or policy suspension was likewise
+  only logged, so re-enabling the origin revived its rows. Every purge now
+  runs after the narrower policy commits (never blocking it), falls back to
+  deleting all samples, and reports only if deletion fails too; maintenance
+  also expires samples when pause or removal state is unreadable. A
+  same-origin skipped page whose tab read failed also left the previous
+  artifact mapped, since sampling moved the tab read ahead of the
+  artifact match; that path now ends the entry too. A lease that expired
+  while the tab and samples were read could still gain a sample; the worker
+  now rechecks the lease before retaining one.
+- 2026-10-27: Independent review reproduced an oversized same-origin
+  navigation leaving the previous artifact mapped for attention measurement.
+  The worker regression starts on a recognized artifact, navigates to a
+  search URL over the byte limit, and verifies that later focused time is
+  excluded and no pattern is retained. Oversized navigations now end the
+  previous mapping through the normal unrecognized-page path. No browser or
+  native dialog is involved.
+- 2026-10-27: Branch `feat/brauser-home-folder`. The one-time move of an
+  older folder layout to the fixed home layout is tested natively against a
+  checked-in copy of a real pre-home install (`host/tests/fixtures/pre-home-layout`:
+  the real config shape with `pages_dir = "pages"`, `log_dir = "log"`, and only
+  `pages/` on disk), copied to a temporary folder per test. The tests cover
+  the move through `hello`, refusal when `notes/` already exists (config.toml
+  and both folders byte-exact, notes and saves refused, retried after the user
+  moves the folder), a crash after a rename and before the config write,
+  three hosts migrating at once while another holds the config lock or the
+  capture lock, intent replay and torn-batch recovery after `log/` is renamed,
+  and an index rescan after the rename. Removing the capture lock from the
+  migration, or skipping the migration, makes those tests fail. The headless
+  smoke run now checks the host saves the fixed layout, settings shows it with
+  no folder-name field, and the home holds only the fixed folders at the end.
+  The real folder picker was not exercised.
 - 2026-10-27: Review reproduced the same stripped-URL collision through the
   fallback for an origin config.toml no longer covers: after the adapter and
   `[[adapter_id_history]]` were gone, the bare Jira board and another issue's
@@ -266,6 +384,7 @@ This standard is meant to improve with use. When you change it:
   an Obsidian/VS Code preview or a macOS Chrome run. For the macOS smoke,
   the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 - 2026-10-27: Trail-transition validation uses a strict allowlist for new activity and the original bounded shape checks for historical markers. The regressions test terminal refusal through both native delivery paths, all browser values plus `forward_back`, and a pre-validation ingestion cache followed by reindexing an owned marker. They verify actual SQLite edge kinds, retained activity totals and exact payloads, unchanged source logs, and continued rejection of oversized or unpaired legacy trails. No browser or native dialog is involved.
+- 2026-10-27: Branch `fix/c2-index-full-rebuild-cap`. Two index regressions failed first on main: once the logs together passed the per-pass read bound, a deleted cache, `brauser reindex`, `reconcile_from_logs`, and a removed or truncated log each returned unavailable history on every call, and the reset after a removed log let a backdated duplicate in an earlier-dated log replace the conflict winner the cache had chosen. Review then found two more, also failing first: a bounded pass never checkpointed headerless Markdown, so non-log files that filled a pass were reread forever, and a restored winner kept the rejected body's log position, so a same-instant sibling event took over the latest title after any rebuild. A second review round found that an earlier-dated log arriving between the passes of a cacheless rebuild let the later-dated body win, unlike a one-pass rebuild; the regression compares both rebuilds of the same logs. The tests lower the bound with the test-only `SCAN_LIMIT` (sized from one fixture log, so two logs fit per pass) instead of writing 64 MiB of fixtures; `bounded_passes` checks every pass's `LOG_BYTES_READ` stays within the bound and reports unavailable history until the rebuild finishes, and that no partial cache is published meanwhile. No browser or native dialog is involved.
 - 2026-10-27: Branch `fix/lanec-index-robustness-2`. Index regressions failed first on main: a crafted log title over 2,048 bytes stopped every later `index.db` write, an ingestion cache already holding an oversize row did the same, a record payload between SQLite's local table-leaf limit (65,501 bytes at 64 KiB pages) and the old cell check was written inline and read back as "database disk image is malformed", and an M1 visit rendered `opens: 0` with an empty Timeline. The SQLite checks run Python's `sqlite3` `pragma integrity_check` on the written file rather than trusting the writer; size the fixture from the record header (a one-column text record of 65,497 bytes has a 4-byte header) so one row sits exactly at the limit and one just over. No browser or native dialog is involved.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.
@@ -280,3 +399,4 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-26: Branch `feat/open-access-pr1`. The native Yes/No confirmation is gone; the folder picker is the only native dialog. Removed the `macos-alert` crate and `scripts/check-macos-alert.mjs`.
 - 2026-10-26: Branch `feat/open-access-pr1`. Install-time HTTP(S) access means the UI-free run no longer grants anything ahead of time, and the folder picker (notes and knowledge base) is the only dialog left. The dialog-counter rule is now explicit: `dialogsShown` must equal the scripted answers the runner gives, and the last check compares it with the dialog log's line count, never a hard-coded total, because overnight cycle 3 once added a dialog without updating a fixed count.
 - 2026-10-26: Branch `feat/agent-service-pr2`. A Unix socket path must fit in `sun_path`, 104 bytes on macOS, and a socket in a support directory under a `$TMPDIR`-based temporary `HOME` (`/var/folders/...`) can exceed it, so binding fails. The service refuses a too-long path outright instead of moving the socket, and the smoke runner and service tests now use a short `HOME` directly under `/tmp`. Tests also never call `launchctl`: the runner starts the service child itself, and the host's spawn seam replaces `kickstart` in the Rust integration tests.
+- 2026-10-27: Branch `fix/retired-hand-removed-contracts`. Rewriting config.toml in a test no longer simulates lost adapter contracts by itself: any refresh under the config lock (every note request, and `ConfigStore::update`) records adopted contracts in `adopted-contracts.json` beside the test's config, so a later hand edit keeps their note keys. A fixture that means "no contract recorded anywhere" must also remove `config::adopted_contracts_path(dir)`, and tolerate its absence, since a contract removed through settings before any locked refresh is only in `[[adapter_id_history]]`. A plain `loaded()` store refreshes without the lock and records nothing.

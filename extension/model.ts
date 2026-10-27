@@ -16,6 +16,15 @@ export const MAX_QUEUE_BYTES = 512 * 1_024;
 export const POLICY_STORAGE_KEY = storageKey("policy_v1");
 // The only extension pages whose messages the worker accepts.
 export const TRUSTED_PAGES = ["panel.html", "options.html"] as const;
+// The fixed folders the host keeps inside the home folder (DESIGN.md §6.1).
+// The host refuses any other names, so settings never chooses them.
+export const HOME_LAYOUT = {
+  pages_dir: "notes",
+  log_dir: "logs",
+  artifacts_dir: "artifacts",
+  summaries_dir: "summaries",
+  later_dir: "later",
+} as const;
 
 // A summary started outside the panel (the shortcut or the context menu), for
 // the panel to show. The worker keeps the latest in chrome.storage.session, so
@@ -117,6 +126,8 @@ export type WorkerRequest =
   | { kind: "discard_pending"; event_ids: string[] }
   | { kind: "get_pending" }
   | { kind: "get_activity" }
+  | { kind: "get_site_patterns"; origin: string }
+  | { kind: "clear_site_patterns"; origin: string }
   | { kind: "ack_visit"; event_id: string; outcome: VisitOutcome; reason: string | null }
   | { kind: "get_status" }
   | { kind: "sync_now" }

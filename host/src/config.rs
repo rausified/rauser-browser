@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
@@ -25,7 +27,10 @@ thread_local! {
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::index::ArtifactIndex;
-use crate::vault::{STALE_TEMPORARY_AGE, Vault, is_generated_temporary, selected_root_identity};
+use crate::layout;
+use crate::vault::{
+    STALE_TEMPORARY_AGE, Vault, is_generated_temporary, open_selected_root, selected_root_identity,
+};
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_ROOT_PATH_BYTES: usize = 4 * 1024;
@@ -52,6 +57,21 @@ const UNREADABLE_REVISION: &str = "unreadable";
 /// Hash at most this much of an oversized config. Past it, the revision
 /// also covers the length so a growing file still changes revision.
 const MAX_HASHED_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
+
+/// At most this many contracts, and this many bytes, in the adopted-contract
+/// state file. A larger file is unreadable; a write that would exceed either
+/// bound is skipped.
+const MAX_ADOPTED_CONTRACTS: usize = 1024;
+const MAX_ADOPTED_CONTRACTS_BYTES: usize = 1024 * 1024;
+const ADOPTED_CONTRACTS_FORMAT: u32 = 1;
+
+/// The host-owned record of every adapter contract a host has adopted under
+/// the config lock (see `AdoptedContracts`). It lives beside config.toml in
+/// the OS config directory, or beside an injected test config; like the rest
+/// of the host's state, it stays out of the home folder (DESIGN.md §6.1).
+pub(crate) fn adopted_contracts_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("adopted-contracts.json")
+}
 
 pub(crate) fn default_strip_params() -> Vec<String> {
     vec!["utm_*".into(), "fbclid".into(), "gclid".into()]
@@ -100,6 +120,28 @@ pub struct ConfigStore {
     retired_adapter_contracts: Vec<serde_json::Value>,
     /// Note-only identity rules; see `note_key_rule`.
     note_key_rules: NoteKeyRules,
+    /// Set while a `ConfigLock` from `lock_current` is alive.
+    lock_held: Arc<AtomicBool>,
+    /// The adopted-contract state as last read.
+    adopted: AdoptedContracts,
+    /// This revision's contracts in recordable form, computed on the first
+    /// refresh under the lock.
+    recordable: Option<Vec<serde_json::Value>>,
+}
+
+/// The config lock from `ConfigStore::lock_current`. While it is alive,
+/// that store's refreshes record the contracts they adopt.
+#[must_use]
+pub struct ConfigLock {
+    held: Arc<AtomicBool>,
+    _file: File,
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        // Fields drop after this, so the flag clears before the unlock.
+        self.held.store(false, Ordering::SeqCst);
+    }
 }
 
 struct DiskState {
@@ -135,10 +177,9 @@ const SET_UP_HARNESS: &str = concat!(
     crate::app_name!(),
     " settings."
 );
-const CHOOSE_SUMMARIES: &str = concat!(
-    "Choose a summaries folder in ",
+const LAYOUT_PENDING: &str = concat!(
     crate::app_name!(),
-    " settings."
+    " is moving its folders to the fixed layout in your home folder. Reload this page to finish."
 );
 
 impl AgentView {
@@ -232,8 +273,109 @@ impl ConfigStore {
         Ok(dirs.config_dir().join("config.toml"))
     }
 
+    /// Load config.toml, first moving an older folder layout to the fixed one
+    /// (`migrate_layout`). Every native-messaging connection starts a host
+    /// process, so this runs on each connection until it succeeds.
     pub fn load() -> Result<Self> {
-        Ok(Self::load_from(Self::default_path()?))
+        let mut store = Self::load_from(Self::default_path()?);
+        store.migrate_layout_or_warn();
+        Ok(store)
+    }
+
+    /// Migrate only when the last read found an older layout, so the usual
+    /// path never waits for a lock another host holds for a long write.
+    pub(crate) fn migrate_layout_or_warn(&mut self) {
+        let older = self
+            .config
+            .storage
+            .as_ref()
+            .is_some_and(|storage| !layout::is_fixed(storage));
+        if !older {
+            return;
+        }
+        if let Err(error) = self.migrate_layout() {
+            eprintln!(
+                "{NAMESPACE}: warning: could not move folders to the fixed layout: {error:#}"
+            );
+        }
+    }
+
+    /// Rename an older layout's folders (for example `pages/` and `log/`)
+    /// to the fixed names inside the same home folder, then record the fixed
+    /// layout in config.toml. Runs under the config lock and the capture
+    /// lock, which every vault writer in every host process holds, so no
+    /// capture, note save, or regeneration runs meanwhile. Nothing is ever
+    /// replaced or merged: if a fixed name already exists beside its older
+    /// folder, nothing changes and `config_issue` says what to move. A crash
+    /// after a rename and before the config write resumes on the next call,
+    /// because a renamed folder leaves no older folder to move.
+    pub(crate) fn migrate_layout(&mut self) -> Result<()> {
+        let parent = self.dir()?.to_path_buf();
+        let _config_lock = self.lock_current()?;
+        let current = read_disk_state(&self.path)?;
+        let Some(storage) = current
+            .config
+            .storage
+            .clone()
+            .filter(|storage| !layout::is_fixed(storage))
+        else {
+            self.adopt(current);
+            return Ok(());
+        };
+        // An invalid, unconfirmed, or unavailable folder already has its own
+        // issue and repair; never rename inside a folder that is not the one
+        // the user chose.
+        let Some(identity) = current
+            .root_identity
+            .clone()
+            .filter(|_| !current.needs_backup)
+        else {
+            self.adopt(current);
+            return Ok(());
+        };
+        let Ok((root, _)) = open_selected_root(Path::new(&storage.root), Some(&identity)) else {
+            self.adopt(current);
+            return Ok(());
+        };
+        let _capture_lock = crate::capture::lock_capture(&parent)?;
+        let moves = match layout::plan(&root, &storage) {
+            Ok(moves) => moves,
+            // read_disk_state reported the same refusal as the issue.
+            Err(_) => {
+                self.adopt(current);
+                return Ok(());
+            }
+        };
+        let result = move_folders(&parent, &root, &identity, &moves).and_then(|()| {
+            let mut next = current.config.clone();
+            next.storage = Some(layout::fixed(&storage));
+            let serialized = toml::to_string_pretty(&StoredConfig::from_snapshot(
+                &next,
+                current.root_identity.clone(),
+                current.knowledge_base_identity.clone(),
+                &current.agent,
+                current.retired_adapter_contracts.clone(),
+                current.adapter_extensions.clone(),
+            ))
+            .context("serializing config TOML")?;
+            // A local editor might ignore our lock. Leave its bytes alone;
+            // the next call finds the folders already renamed.
+            if read_disk_state(&self.path)?.revision != current.revision {
+                bail!("config.toml changed while folders were being renamed");
+            }
+            publish_config(&parent, &self.path, &serialized).map(|_| ())
+        });
+        let refusal = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<layout::Refusal>())
+            .cloned();
+        self.adopt(read_disk_state(&self.path)?);
+        if let Some(refusal) = refusal {
+            self.issue = Some(refusal.0);
+            return Ok(());
+        }
+        result
     }
 
     fn load_from(path: PathBuf) -> Self {
@@ -274,6 +416,7 @@ impl ConfigStore {
         self.adapter_document = None;
         self.retired_adapter_contracts.clear();
         self.note_key_rules = NoteKeyRules::default();
+        self.recordable = None;
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
@@ -320,6 +463,10 @@ impl ConfigStore {
             adapter_document: Some(AdapterTemplates::default()),
             retired_adapter_contracts: Vec::new(),
             note_key_rules: NoteKeyRules::default(),
+            lock_held: Arc::new(AtomicBool::new(false)),
+            // Never equal to a read state, so the first adopt compiles rules.
+            adopted: AdoptedContracts::Unread,
+            recordable: None,
         }
     }
 
@@ -334,8 +481,46 @@ impl ConfigStore {
         self.adapter_extensions = state.adapter_extensions;
         self.retired_adapter_contracts = state.retired_adapter_contracts;
         if revision_changed {
-            self.set_adapter_policy(false);
+            self.recordable = None;
+            self.set_capture_adapter_policy(false);
         }
+        // Another host or an editor can change the state file while
+        // config.toml stays the same.
+        if self.sync_adopted_contracts() || revision_changed {
+            self.set_note_key_rules();
+        }
+    }
+
+    /// Re-read the adopted-contract state and, under the config lock, add
+    /// the current revision's contracts to it. Every note request refreshes
+    /// under the lock before deriving a key, so a contract is recorded
+    /// before it can key a note. Returns whether the state changed.
+    fn sync_adopted_contracts(&mut self) -> bool {
+        let Some(path) = self.path.parent().map(adopted_contracts_path) else {
+            return false;
+        };
+        let adopted = if self.lock_held.load(Ordering::SeqCst) {
+            let recordable = self
+                .recordable
+                .get_or_insert_with(|| individually_valid_adapter_contracts(&self.config));
+            match record_adopted_contracts(&path, recordable) {
+                Ok(adopted) => adopted,
+                // The contracts stay current, so a later refresh retries.
+                // Until then a hand removal of one leaves its pages on URL
+                // keys (DESIGN.md §6.2).
+                Err(error) => {
+                    eprintln!(
+                        "{NAMESPACE}: warning: could not record adopted adapter contracts: {error:#}"
+                    );
+                    read_adopted_contracts(&path)
+                }
+            }
+        } else {
+            read_adopted_contracts(&path)
+        };
+        let changed = adopted != self.adopted;
+        self.adopted = adopted;
+        changed
     }
 
     pub fn snapshot(&self) -> &ConfigSnapshot {
@@ -370,7 +555,7 @@ impl ConfigStore {
     }
 
     /// The folder the summary agent reads: the chosen knowledge base folder,
-    /// or the notes folder while none is chosen. The host never writes here.
+    /// or the home folder while none is chosen. The host never writes here.
     pub fn knowledge_base_dir(&self) -> Option<PathBuf> {
         let storage = self.config.storage.as_ref()?;
         Some(PathBuf::from(
@@ -393,7 +578,7 @@ impl ConfigStore {
 
     /// Hold this lock from the policy refresh through a privileged write.
     /// ConfigStore::update takes the same lock before replacing config.toml.
-    pub fn lock_current(&self) -> Result<File> {
+    pub fn lock_current(&self) -> Result<ConfigLock> {
         let parent = self.path.parent().context("config path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         let path = parent.join(".config.lock");
@@ -405,7 +590,11 @@ impl ConfigStore {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         file.lock().context("locking configuration")?;
-        Ok(file)
+        self.lock_held.store(true, Ordering::SeqCst);
+        Ok(ConfigLock {
+            held: Arc::clone(&self.lock_held),
+            _file: file,
+        })
     }
 
     /// A malformed or newer config is shown to setup, never used for capture.
@@ -471,7 +660,13 @@ impl ConfigStore {
     /// was matched by one of these contracts or by the current policy, so an
     /// origin they cover is decided by them alone: a stripped canonical URL
     /// that happens to equal another page's is never identity evidence.
+    ///
+    /// Contracts that left config.toml by hand are read the same way from
+    /// the host's adopted-contract state (`AdoptedContracts`).
     pub(crate) fn note_key_rule(&self, url: &str) -> NoteKeyRule {
+        if self.note_key_rules.all_unavailable {
+            return NoteKeyRule::Unavailable;
+        }
         let mut covered = self.adapter_document.as_ref().is_some_and(|document| {
             !matches!(document.evaluate(url, None), Err(NoMatch::NoAdapter))
         });
@@ -506,12 +701,12 @@ impl ConfigStore {
             .context("adapter policy is unavailable")
     }
 
-    fn set_adapter_policy(&mut self, include_warnings: bool) {
-        self.set_capture_adapter_policy(include_warnings);
+    fn set_note_key_rules(&mut self) {
         self.note_key_rules = note_key_rules(
             &self.config,
             self.adapter_document.is_none(),
             &self.retired_adapter_contracts,
+            &self.adopted,
         );
     }
 
@@ -612,15 +807,8 @@ impl ConfigStore {
                 None => refuse(AgentState::NotSetUp, SET_UP_HARNESS),
             };
         }
-        if self
-            .config
-            .storage
-            .as_ref()
-            .and_then(|storage| storage.summaries_dir.as_ref())
-            .is_none()
-        {
-            return refuse(AgentState::NotSetUp, CHOOSE_SUMMARIES);
-        }
+        // The summaries folder is fixed (DESIGN.md §6.1): a layout that
+        // lacks it is pending a move, which `issue` already refuses.
         None
     }
 
@@ -752,7 +940,7 @@ impl ConfigStore {
                     .context("a fresh native folder selection is required")?;
                 let actual = selected_root_identity(Path::new(&storage.root))?;
                 if actual != expected {
-                    bail!("selected notes folder changed; choose it again");
+                    bail!("selected home folder changed; choose it again");
                 }
                 Some(actual)
             }
@@ -809,6 +997,24 @@ impl ConfigStore {
             bail!("configuration exceeds the 64 KiB size limit");
         }
 
+        // Saving the fixed layout for the same home folder (for example
+        // after reconnecting it) first moves its older folders, exactly as
+        // `migrate_layout` does. A different home folder starts fresh and
+        // leaves the old one untouched.
+        let _capture_lock = match (current.config.storage.as_ref(), next.storage.as_ref()) {
+            (Some(old), Some(new)) if old.root == new.root && !layout::is_fixed(old) => {
+                let identity = next_identity
+                    .as_deref()
+                    .context("a fresh native folder selection is required")?;
+                let capture_lock = crate::capture::lock_capture(&parent)?;
+                let (root, _) = open_selected_root(Path::new(&new.root), Some(identity))?;
+                let moves = layout::plan(&root, old)?;
+                move_folders(&parent, &root, identity, &moves)?;
+                Some(capture_lock)
+            }
+            _ => None,
+        };
+
         // Repair must preserve the exact unreadable file. A no-clobber,
         // durable backup is created before the replacement can be published.
         if current.needs_backup {
@@ -822,20 +1028,7 @@ impl ConfigStore {
             }
         }
 
-        let temporary = parent.join(format!(".config-{}.tmp", Uuid::new_v4()));
-        let (mut file, _cleanup) = create_temporary(&temporary)?;
-        let write_result = (|| -> Result<()> {
-            file.write_all(serialized.as_bytes())?;
-            file.sync_all()?;
-            Ok(())
-        })();
-        // Close the handle before the cleanup guard runs on error. Windows may
-        // refuse to remove a still-open temporary file.
-        drop(file);
-        write_result?;
-        fs::rename(&temporary, &self.path)
-            .with_context(|| format!("replacing {}", self.path.display()))?;
-        let revision = revision_for(serialized.as_bytes());
+        let revision = publish_config(&parent, &self.path, &serialized)?;
         self.config = next;
         self.revision = revision.clone();
         self.issue = None;
@@ -844,12 +1037,11 @@ impl ConfigStore {
         self.agent = agent;
         self.adapter_extensions = adapter_extensions;
         self.retired_adapter_contracts = retired_adapter_contracts;
-        self.set_adapter_policy(true);
-        if let Err(error) = sync_parent(&parent) {
-            eprintln!(
-                "{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}"
-            );
-        }
+        self.recordable = None;
+        self.set_capture_adapter_policy(true);
+        // Still under the lock: record what this write adopted.
+        self.sync_adopted_contracts();
+        self.set_note_key_rules();
         Ok(Some(revision))
     }
 
@@ -1137,7 +1329,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         return Ok(DiskState {
             config: empty_config(),
             revision,
-            issue: Some("Configuration exceeds 64 KiB. Choose a notes folder and save a replacement; the original will be backed up.".into()),
+            issue: Some("Configuration exceeds 64 KiB. Choose a home folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
             knowledge_base_identity: None,
@@ -1161,10 +1353,11 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent();
             if root_unconfirmed || validate_base(&config).is_err() {
+                let retired_adapter_contracts = repairable_history(retired_adapter_contracts);
                 let issue = if root_unconfirmed {
-                    "This notes folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."
+                    "This home folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."
                 } else {
-                    "Configuration settings are invalid. Choose a notes folder and save a repair; the original config will be backed up."
+                    "Configuration settings are invalid. Choose a home folder and save a repair; the original config will be backed up."
                 };
                 return Ok(DiskState {
                     config: empty_config(),
@@ -1175,7 +1368,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     knowledge_base_identity: None,
                     agent,
                     adapter_extensions: BTreeMap::new(),
-                    retired_adapter_contracts: Vec::new(),
+                    retired_adapter_contracts,
                 });
             }
             // The settings themselves are valid. A folder that is missing or
@@ -1190,10 +1383,15 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     Err(_) => true,
                 }
             });
+            let issue = if folder_changed {
+                Some("The selected home folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned())
+            } else {
+                config.storage.as_ref().and_then(layout_issue)
+            };
             Ok(DiskState {
                 config,
                 revision,
-                issue: folder_changed.then(|| "The selected notes folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned()),
+                issue,
                 needs_backup: false,
                 root_identity,
                 knowledge_base_identity,
@@ -1205,15 +1403,90 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         Err(_) => Ok(DiskState {
             config: empty_config(),
             revision,
-            issue: Some("Configuration is invalid or from a newer version. Choose a notes folder and save a replacement; the original will be backed up.".into()),
+            issue: Some("Configuration is invalid or from a newer version. Choose a home folder and save a replacement; the original will be backed up.".into()),
             needs_backup: true,
             root_identity: None,
             knowledge_base_identity: None,
             agent: AgentView::default(),
             adapter_extensions: BTreeMap::new(),
-            retired_adapter_contracts: Vec::new(),
+            // A newer or partly invalid file may still be valid TOML.
+            retired_adapter_contracts: std::str::from_utf8(&contents)
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Table>(text).ok())
+                .and_then(|mut table| table.remove("adapter_id_history"))
+                .and_then(|history| history.try_into::<Vec<serde_json::Value>>().ok())
+                .map(repairable_history)
+                .unwrap_or_default(),
         }),
     }
+}
+
+/// The `[[adapter_id_history]]` a repair carries forward: every entry this
+/// host can validate on its own. A repair replaces the whole file, so an
+/// entry it cannot validate would block any later adapter edit; the backup
+/// keeps the original. A file over the size limit is not parsed at all, so
+/// its history is not recovered.
+fn repairable_history(history: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut kept: Vec<serde_json::Value> = Vec::new();
+    for contract in history {
+        if validate_adapter_history(std::slice::from_ref(&contract)).is_ok()
+            && !kept.contains(&contract)
+        {
+            kept.push(contract);
+        }
+    }
+    kept
+}
+
+/// Atomically replace config.toml with `serialized` and return its revision.
+/// Callers hold the config lock and have checked the current revision.
+fn publish_config(parent: &Path, path: &Path, serialized: &str) -> Result<String> {
+    let temporary = parent.join(format!(".config-{}.tmp", Uuid::new_v4()));
+    let (mut file, _cleanup) = create_temporary(&temporary)?;
+    let write_result = (|| -> Result<()> {
+        file.write_all(serialized.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    // Close the handle before the cleanup guard runs on error. Windows may
+    // refuse to remove a still-open temporary file.
+    drop(file);
+    write_result?;
+    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+    if let Err(error) = sync_parent(parent) {
+        eprintln!("{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}");
+    }
+    Ok(revision_for(serialized.as_bytes()))
+}
+
+/// Rename the planned folders. Before the log folder moves, record where
+/// its logs went, so visit and batch intents that name the old path still
+/// find their logs. Callers hold the config and capture locks.
+fn move_folders(
+    state_dir: &Path,
+    root: &cap_std::fs::Dir,
+    root_identity: &str,
+    moves: &[layout::Move],
+) -> Result<()> {
+    if let Some(logs) = moves.iter().find(|step| step.to == layout::LOGS_DIR) {
+        crate::capture::record_log_relocation(state_dir, root_identity, &logs.from, logs.to)?;
+    }
+    layout::apply(root, moves)
+}
+
+/// An older folder layout is never used for vault I/O. It is moved by
+/// `migrate_layout`; until then this says why it has not been.
+fn layout_issue(storage: &StorageConfig) -> Option<String> {
+    if layout::is_fixed(storage) {
+        return None;
+    }
+    let refusal = open_selected_root(Path::new(&storage.root), None)
+        .map_err(|_| layout::Refusal(LAYOUT_PENDING.to_owned()))
+        .and_then(|(root, _)| layout::plan(&root, storage));
+    Some(match refusal {
+        Ok(_) => LAYOUT_PENDING.to_owned(),
+        Err(refusal) => refusal.0,
+    })
 }
 
 fn backup_invalid(parent: &Path, source_path: &Path, expected_revision: &str) -> Result<()> {
@@ -1370,6 +1643,9 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
 /// authoritative adapter validation.
 pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     validate_base(next)?;
+    if let Some(storage) = &next.storage {
+        layout::require_fixed(storage)?;
+    }
     let preserving_inert_adapters = current.adapters == next.adapters
         && compile_validated_adapters(current).is_err()
         && compile_validated_adapters(next).is_err();
@@ -1399,7 +1675,7 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     validate_vocabulary("document type", &config.summary_vocabulary.document_types)?;
     validate_vocabulary("category", &config.summary_vocabulary.categories)?;
     if config.capture_enabled && config.storage.is_none() {
-        bail!("capture requires a selected notes folder");
+        bail!("capture requires a selected home folder");
     }
     if let Some(agent) = &config.agent {
         validate_summarizer(agent)?;
@@ -1468,6 +1744,9 @@ struct NoteKeyRules {
     /// contract may have named artifacts there, so identity on those origins
     /// is unavailable rather than decided by the contracts that remain.
     unavailable_origins: std::collections::BTreeSet<String>,
+    /// The adopted-contract state is unreadable, or holds a damaged entry
+    /// with no origin, so no unrecognized URL's key can be established.
+    all_unavailable: bool,
 }
 
 /// Compile the note-only identity rules. Retired contracts are compiled
@@ -1476,13 +1755,25 @@ struct NoteKeyRules {
 /// (only capture-specific checks failed), keeping first-match and scope
 /// semantics, and otherwise per contract. A contract without a valid origin
 /// never compiled on any host, so it cannot have produced a record key.
+///
+/// Adopted contracts config.toml no longer holds, as current or history,
+/// were removed by hand and are added like history entries. Their file is
+/// host-written, so a damaged entry is corruption: one with no readable
+/// origin makes every unrecognized URL unavailable.
 fn note_key_rules(
     config: &ConfigSnapshot,
     current_inert: bool,
     retired: &[serde_json::Value],
+    adopted: &AdoptedContracts,
 ) -> NoteKeyRules {
     // History entries are stored in contract form; anything else is invalid.
-    fn add(rules: &mut NoteKeyRules, contract: &serde_json::Value, format: u32, exact: bool) {
+    // Returns false for an invalid entry with no origin to attribute it to.
+    fn add(
+        rules: &mut NoteKeyRules,
+        contract: &serde_json::Value,
+        format: u32,
+        exact: bool,
+    ) -> bool {
         let compiled = (format == 1)
             .then(|| adapter_contract(contract))
             .flatten()
@@ -1500,16 +1791,23 @@ fn note_key_rules(
         match compiled {
             Some(document) => rules.documents.push(document),
             None => {
-                if let Some(origin) = contract
+                let Some(origin) = contract
                     .get("origin")
                     .and_then(serde_json::Value::as_str)
                     .and_then(|origin| url::Url::parse(origin).ok())
+                    // Only a page origin can localize the damage; any other
+                    // scheme serializes to an origin no page has.
+                    .filter(|origin| {
+                        matches!(origin.scheme(), "http" | "https") && origin.host().is_some()
+                    })
                     .map(|origin| origin.origin().ascii_serialization())
-                {
-                    rules.unavailable_origins.insert(origin);
-                }
+                else {
+                    return false;
+                };
+                rules.unavailable_origins.insert(origin);
             }
         }
+        true
     }
     let mut rules = NoteKeyRules::default();
     if current_inert {
@@ -1525,7 +1823,149 @@ fn note_key_rules(
     for contract in retired {
         add(&mut rules, contract, 1, true);
     }
+    match adopted {
+        AdoptedContracts::Read { contracts, .. } => {
+            let current = adapter_contracts(config);
+            for contract in contracts {
+                if !current.contains(contract)
+                    && !retired.contains(contract)
+                    && !add(&mut rules, contract, 1, true)
+                {
+                    rules.all_unavailable = true;
+                }
+            }
+        }
+        AdoptedContracts::Unreadable => rules.all_unavailable = true,
+        AdoptedContracts::Unread => {}
+    }
     rules
+}
+
+/// Every adapter contract, in the recognition form `[[adapter_id_history]]`
+/// uses, that a host adopted from config.toml under the config lock. Only a
+/// settings save records history, so a contract deleted from config.toml in
+/// an editor would otherwise leave its routes on URL keys and its artifact
+/// note unreachable. A recorded contract config.toml no longer holds names
+/// note keys like a history entry; it never authorizes capture and never
+/// guards ID changes. Contracts are only ever added: re-adding one makes it
+/// current again, and one later moved to history is read from there.
+///
+/// Several hosts (one per native-messaging connection) share the file. Each
+/// rereads it under the config lock, adds what it lacks, and replaces it
+/// atomically; readers without the lock see one whole version or the other.
+/// A file this host cannot read is never rewritten: it may name the
+/// contracts that decide an origin, so note identity on every URL the
+/// current policy does not recognize is unavailable until it is repaired or
+/// removed. Removing it forgets those contracts, like a config repair.
+#[derive(Debug, Clone, PartialEq)]
+enum AdoptedContracts {
+    /// Not read yet.
+    Unread,
+    /// The file as read, or nothing recorded when it is absent.
+    Read {
+        revision: String,
+        contracts: Vec<serde_json::Value>,
+    },
+    /// Unreadable, not a regular file, over a bound, malformed, or from a
+    /// newer host.
+    Unreadable,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAdoptedContracts {
+    format: u32,
+    contracts: Vec<serde_json::Value>,
+}
+
+fn read_adopted_contracts(path: &Path) -> AdoptedContracts {
+    // As for config.toml, opening a FIFO would block under the lock.
+    match fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AdoptedContracts::Read {
+                revision: MISSING_REVISION.into(),
+                contracts: Vec::new(),
+            };
+        }
+        Ok(metadata) if metadata.is_file() => {}
+        _ => return AdoptedContracts::Unreadable,
+    }
+    let mut bytes = Vec::new();
+    let read = File::open(path).and_then(|file| {
+        file.take(MAX_ADOPTED_CONTRACTS_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+    });
+    if read.is_err() || bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
+        return AdoptedContracts::Unreadable;
+    }
+    match serde_json::from_slice::<StoredAdoptedContracts>(&bytes) {
+        Ok(stored)
+            if stored.format == ADOPTED_CONTRACTS_FORMAT
+                && stored.contracts.len() <= MAX_ADOPTED_CONTRACTS =>
+        {
+            AdoptedContracts::Read {
+                revision: revision_for(&bytes),
+                contracts: stored.contracts,
+            }
+        }
+        _ => AdoptedContracts::Unreadable,
+    }
+}
+
+/// Call under the config lock. Adds the `contracts` the file lacks and
+/// returns the state as written, or as found when nothing was missing or it
+/// cannot be read. Fails without writing past either bound.
+fn record_adopted_contracts(
+    path: &Path,
+    contracts: &[serde_json::Value],
+) -> Result<AdoptedContracts> {
+    let found = read_adopted_contracts(path);
+    let AdoptedContracts::Read {
+        contracts: recorded,
+        ..
+    } = &found
+    else {
+        return Ok(found);
+    };
+    let mut next = recorded.clone();
+    for contract in contracts {
+        if !next.contains(contract) {
+            next.push(contract.clone());
+        }
+    }
+    if next.len() == recorded.len() {
+        return Ok(found);
+    }
+    let bytes = serde_json::to_vec(&StoredAdoptedContracts {
+        format: ADOPTED_CONTRACTS_FORMAT,
+        contracts: next.clone(),
+    })
+    .context("serializing adopted adapter contracts")?;
+    if next.len() > MAX_ADOPTED_CONTRACTS || bytes.len() > MAX_ADOPTED_CONTRACTS_BYTES {
+        bail!("{} is full", path.display());
+    }
+    let parent = path.parent().context("state path has no parent")?;
+    // The config directory's startup sweep removes this name if a killed
+    // host leaves it behind.
+    let temporary = parent.join(format!(".config-{}.tmp", Uuid::new_v4()));
+    let (mut file, _cleanup) = create_temporary(&temporary)?;
+    let write_result = (|| -> Result<()> {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    drop(file);
+    write_result?;
+    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+    if let Err(error) = sync_parent(parent) {
+        eprintln!(
+            "{NAMESPACE}: warning: contract state was saved but directory sync failed: {error:#}"
+        );
+    }
+    Ok(AdoptedContracts::Read {
+        revision: revision_for(&bytes),
+        contracts: next,
+    })
 }
 
 fn compile_validated_adapters(config: &ConfigSnapshot) -> Result<AdapterTemplates> {
@@ -1851,7 +2291,7 @@ fn adapter_identity(value: &serde_json::Value) -> Option<(&str, &str)> {
 fn validate_persisted(config: &ConfigSnapshot) -> Result<()> {
     validate_base(config)?;
     if let Some(storage) = &config.storage {
-        Vault::open(storage).context("notes folder is unavailable")?;
+        Vault::open(storage).context("home folder is unavailable")?;
     }
     Ok(())
 }
@@ -1861,14 +2301,14 @@ fn validate_storage(storage: &StorageConfig) -> Result<()> {
         bail!("storage.root exceeds the 4096-byte path limit");
     }
     if has_unsafe_display_chars(&storage.root) {
-        bail!("notes folder path contains control or bidirectional formatting characters");
+        bail!("home folder path contains control or bidirectional formatting characters");
     }
     let root = Path::new(&storage.root);
     if !root.is_absolute() {
         bail!("storage.root must be an existing absolute folder selected by the user");
     }
     // The knowledge base is its own user-selected folder, read only by the
-    // summary agent. It may hold or sit inside the notes folder.
+    // summary agent. It may hold or sit inside the home folder.
     if let Some(knowledge_base) = &storage.knowledge_base_dir {
         if knowledge_base.len() > MAX_ROOT_PATH_BYTES {
             bail!("storage.knowledge_base_dir exceeds the 4096-byte path limit");
@@ -1965,7 +2405,7 @@ fn validate_summarizer(agent: &AgentConfig) -> Result<()> {
 /// Path components in canonical caseless form, NFD(fold(NFD(name))), so two
 /// names a case-insensitive APFS volume treats as one folder compare equal.
 /// `to_lowercase` is not enough: it keeps final sigma distinct from sigma.
-fn lower_components(path: &Path) -> Vec<String> {
+pub(crate) fn lower_components(path: &Path) -> Vec<String> {
     let fold = icu_casemap::CaseMapper::new();
     let nfd = icu_normalizer::DecomposingNormalizer::new_nfd();
     path.components()
@@ -2023,18 +2463,49 @@ pub(crate) mod fixtures {
 
     /// A config with storage under `root`. `keys` go at the top level and
     /// `tables` after `[storage]`.
+    /// The storage keys default to the fixed layout; `storage_extra` may set
+    /// any of them instead, as an older build's file would.
     pub(crate) fn write(path: &Path, root: &Path, storage_extra: &str, keys: &str, tables: &str) {
         let identity = selected_root_identity(root).unwrap();
+        let mut layout = String::new();
+        for (key, value) in [
+            ("log_dir", "logs"),
+            ("pages_dir", "notes"),
+            ("later_dir", "later"),
+            ("artifacts_dir", "artifacts"),
+            ("summaries_dir", "summaries"),
+        ] {
+            if !storage_extra
+                .lines()
+                .any(|line| line.split('=').next().map(str::trim) == Some(key))
+            {
+                layout.push_str(&format!("{key} = \"{value}\"\n"));
+            }
+        }
         let body = format!(
-            "root_picker_confirmed = true\nroot_identity = {}\n{keys}\n[storage]\nroot = {}\nprofile = \"neutral\"\nlog_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n{storage_extra}\n{tables}",
+            "root_picker_confirmed = true\nroot_identity = {}\n{keys}\n[storage]\nroot = {}\nprofile = \"neutral\"\n{layout}{storage_extra}\n{tables}",
             quoted(&identity),
             quoted(&root.to_string_lossy()),
         );
         fs::write(path, body).unwrap();
     }
 
-    /// A notes folder and a config.toml with a summary harness set up.
-    /// Returns the config path and the notes folder.
+    /// The storage table an older build wrote: `log/`, `pages/`, and
+    /// `later/`, with `storage_extra` adding the keys later versions added.
+    pub(crate) fn write_legacy(path: &Path, root: &Path, storage_extra: &str) {
+        write(
+            path,
+            root,
+            &format!(
+                "log_dir = \"log\"\npages_dir = \"pages\"\nlater_dir = \"later\"\n{storage_extra}"
+            ),
+            "",
+            "",
+        );
+    }
+
+    /// A home folder and a config.toml with a summary harness set up.
+    /// Returns the config path and the home folder.
     pub(crate) fn ready(folder: &Path) -> (PathBuf, PathBuf) {
         let root = folder.join("notes");
         fs::create_dir(&root).unwrap();
@@ -2165,6 +2636,416 @@ mod tests {
             store.note_key_rule("https://elsewhere.example/items/8"),
             NoteKeyRule::Uncovered
         );
+    }
+
+    /// A repair rewrites a config read_disk_state could not use. It must
+    /// carry forward every `[[adapter_id_history]]` entry this host can
+    /// validate: those entries keep removed adapters' IDs from being reused
+    /// and keep their note keys (DESIGN.md §6.2).
+    mod repair_keeps_adapter_id_history {
+        use super::*;
+
+        const HISTORY: &str = "[[adapter_id_history]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n\n";
+        // Parseable, but no host can compile this shape.
+        const DAMAGED: &str = "[[adapter_id_history]]\ntype = \"work.other\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{n:nope}\" }]\nid = \"other:{host}/{n}\"\n\n";
+
+        fn repair(edit: impl Fn(String) -> String) -> (String, ConfigStore) {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("home");
+            fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            fixtures::write(&path, &root, "", "", &format!("{HISTORY}{DAMAGED}"));
+            fs::write(&path, edit(fs::read_to_string(&path).unwrap())).unwrap();
+            let mut store = ConfigStore::for_test(path.clone());
+            store.refresh().unwrap();
+            assert!(store.config_issue().is_some(), "fixture must need repair");
+            let revision = store.revision().to_owned();
+            let identity = selected_root_identity(&root).unwrap();
+            let storage = layout::fixed(&StorageConfig {
+                root: root.to_string_lossy().into_owned(),
+                profile: "neutral".into(),
+                log_dir: String::new(),
+                pages_dir: String::new(),
+                later_dir: String::new(),
+                artifacts_dir: String::new(),
+                summaries_dir: None,
+                knowledge_base_dir: None,
+            });
+            let next = ConfigSnapshot {
+                storage: Some(storage),
+                ..empty_config()
+            };
+            store
+                .update_with_root_identity(next, &revision, Some(&identity))
+                .unwrap()
+                .unwrap();
+            (fs::read_to_string(&path).unwrap(), loaded(&path))
+        }
+
+        fn assert_kept(repaired: &str, store: &ConfigStore) {
+            assert_eq!(
+                repaired.matches("[[adapter_id_history]]").count(),
+                1,
+                "{repaired}"
+            );
+            assert!(repaired.contains("work:{host}/{id}"), "{repaired}");
+            assert!(store.config_issue().is_none());
+            assert_eq!(
+                store.note_key_rule("https://work.example/items/7"),
+                NoteKeyRule::Artifact("work:work.example/7".into())
+            );
+        }
+
+        #[test]
+        fn an_unconfirmed_folder_repair_keeps_valid_history() {
+            let (repaired, store) =
+                repair(|text| text.replace("root_picker_confirmed = true\n", ""));
+            assert_kept(&repaired, &store);
+        }
+
+        #[test]
+        fn an_invalid_settings_repair_keeps_valid_history() {
+            let (repaired, store) = repair(|text| format!("strip_params = [\"*\"]\n{text}"));
+            assert_kept(&repaired, &store);
+        }
+
+        #[test]
+        fn a_newer_version_repair_keeps_valid_history() {
+            let (repaired, store) = repair(|text| format!("future_key = 1\n{text}"));
+            assert_kept(&repaired, &store);
+        }
+    }
+
+    /// Host-state fixtures for contracts that leave config.toml by hand.
+    mod adopted_contracts {
+        use super::*;
+
+        const ITEM: &str = "[[artifacts]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n";
+        const DOC: &str = "[[artifacts]]\ntype = \"work.doc\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/docs/{id:int}\" }]\nid = \"doc:{host}/{id}\"\n";
+        const ITEM_7: &str = "https://work.example/items/7";
+        const DOC_8: &str = "https://work.example/docs/8";
+        const BOARD: &str = "https://work.example/boards/1";
+        const ELSEWHERE: &str = "https://elsewhere.example/items/8";
+
+        /// Write config.toml by hand, as a user editing it would.
+        fn write_by_hand(folder: &Path, adapters: &[&str]) -> PathBuf {
+            let root = folder.join("notes");
+            fs::create_dir_all(&root).unwrap();
+            let path = folder.join("config.toml");
+            fixtures::write(
+                &path,
+                &root,
+                "",
+                "",
+                &format!("[adapters]\nformat = 1\n\n{}", adapters.join("\n")),
+            );
+            path
+        }
+
+        /// A refresh under the config lock, as every note request makes.
+        fn adopted(path: &Path) -> ConfigStore {
+            let mut store = ConfigStore::for_test(path.to_path_buf());
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            store
+        }
+
+        fn state_path(folder: &Path) -> PathBuf {
+            adopted_contracts_path(folder)
+        }
+
+        fn entries(folder: &Path) -> Vec<serde_json::Value> {
+            let state: serde_json::Value =
+                serde_json::from_slice(&fs::read(state_path(folder)).unwrap()).unwrap();
+            state["contracts"].as_array().unwrap().clone()
+        }
+
+        #[test]
+        fn a_hand_removed_contract_keeps_naming_note_keys() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+
+            write_by_hand(folder.path(), &[ITEM]);
+            let store = loaded(&path);
+            assert!(store.adapter_match(DOC_8, None).is_err());
+            assert_eq!(
+                store.note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+            // The origin is still decided by contracts alone.
+            assert_eq!(store.note_key_rule(BOARD), NoteKeyRule::Unrecognized);
+            assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Uncovered);
+            // Never written into config.toml, and never capture authority.
+            assert!(
+                !fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("adapter_id_history")
+            );
+            assert_eq!(store.capture_origins(), vec!["https://work.example"]);
+            assert!(!store.adapter_matches(DOC_8, None).unwrap());
+        }
+
+        #[test]
+        fn only_a_refresh_under_the_config_lock_records_contracts() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            let mut store = loaded(&path);
+            store.refresh().unwrap();
+            assert!(!state_path(folder.path()).exists());
+            // A contract nobody adopted under the lock cannot have keyed a
+            // note, so its removal leaves nothing to keep.
+            write_by_hand(folder.path(), &[ITEM]);
+            let store = adopted(&path);
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
+            assert_eq!(entries(folder.path()).len(), 1);
+        }
+
+        #[test]
+        fn a_re_added_contract_is_current_again_and_recorded_once() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            adopted(&path);
+            write_by_hand(folder.path(), &[ITEM]);
+            adopted(&path);
+            write_by_hand(folder.path(), &[DOC, ITEM]);
+            let store = adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+            assert!(store.note_key_rules.documents.is_empty());
+            assert!(store.adapter_matches(DOC_8, None).unwrap());
+
+            write_by_hand(folder.path(), &[ITEM]);
+            let store = adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+            assert_eq!(
+                store.note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+        }
+
+        #[test]
+        fn a_settings_removal_is_kept_once_by_adapter_id_history() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+            let mut store = adopted(&path);
+            let before = fs::read(state_path(folder.path())).unwrap();
+            let mut next = store.snapshot().clone();
+            next.adapters
+                .artifacts
+                .retain(|adapter| adapter["type"] != "work.doc");
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(store.retired_adapter_contracts.len(), 1);
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), before);
+
+            for store in [store, adopted(&path)] {
+                assert_eq!(store.note_key_rules.documents.len(), 1);
+                assert_eq!(
+                    store.note_key_rule(DOC_8),
+                    NoteKeyRule::Artifact("doc:work.example/8".into())
+                );
+            }
+        }
+
+        #[test]
+        fn a_settings_save_records_the_contracts_it_writes() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut store = loaded(&path);
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.push(adapter(
+                "https://work.example",
+                "work.doc",
+                "/docs/{id:int}",
+                "doc:{host}/{id}",
+            ));
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            assert_eq!(entries(folder.path()).len(), 2);
+
+            write_by_hand(folder.path(), &[ITEM]);
+            assert_eq!(
+                loaded(&path).note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+        }
+
+        #[test]
+        fn hosts_sharing_the_state_file_keep_each_others_contracts() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut first = adopted(&path);
+            write_by_hand(folder.path(), &[DOC]);
+            adopted(&path);
+            assert_eq!(entries(folder.path()).len(), 2);
+
+            write_by_hand(folder.path(), &[]);
+            let lock = first.lock_current().unwrap();
+            first.refresh().unwrap();
+            drop(lock);
+            assert_eq!(
+                first.note_key_rule(ITEM_7),
+                NoteKeyRule::Artifact("work:work.example/7".into())
+            );
+            assert_eq!(
+                first.note_key_rule(DOC_8),
+                NoteKeyRule::Artifact("doc:work.example/8".into())
+            );
+        }
+
+        /// The state file can change while config.toml does not, when
+        /// another host records into it or it is damaged.
+        #[test]
+        fn a_changed_state_file_is_reread_without_a_config_change() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut store = adopted(&path);
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
+            fs::write(state_path(folder.path()), b"not json").unwrap();
+            store.refresh().unwrap();
+            assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unavailable);
+        }
+
+        #[test]
+        fn unreadable_state_makes_unrecognized_note_identity_unavailable() {
+            let oversized = format!(
+                "{{\"format\":1,\"contracts\":[],\"pad\":\"{}\"}}",
+                "x".repeat(MAX_ADOPTED_CONTRACTS_BYTES)
+            );
+            for (damage, bytes) in [
+                ("garbage", Some(b"{\"format\":1,\"contr".to_vec())),
+                (
+                    "newer format",
+                    Some(b"{\"format\":2,\"contracts\":[]}".to_vec()),
+                ),
+                (
+                    "unknown key",
+                    Some(b"{\"format\":1,\"contracts\":[],\"x\":1}".to_vec()),
+                ),
+                ("oversized", Some(oversized.into_bytes())),
+                ("directory", None),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = write_by_hand(folder.path(), &[ITEM, DOC]);
+                adopted(&path);
+                let state = state_path(folder.path());
+                fs::remove_file(&state).unwrap();
+                match &bytes {
+                    Some(bytes) => fs::write(&state, bytes).unwrap(),
+                    None => fs::create_dir(&state).unwrap(),
+                }
+                write_by_hand(folder.path(), &[ITEM]);
+
+                let mut store = adopted(&path);
+                // The contract that left config.toml cannot be read back,
+                // so no unrecognized URL anywhere may choose a key.
+                for url in [DOC_8, BOARD, ELSEWHERE] {
+                    assert_eq!(
+                        store.note_key_rule(url),
+                        NoteKeyRule::Unavailable,
+                        "{damage}: {url}"
+                    );
+                }
+                // The current policy still decides the pages it recognizes.
+                assert!(store.adapter_match(ITEM_7, None).is_ok(), "{damage}");
+                // The damaged file is evidence: never overwrite it.
+                match &bytes {
+                    Some(bytes) => assert_eq!(&fs::read(&state).unwrap(), bytes, "{damage}"),
+                    None => assert!(state.is_dir(), "{damage}"),
+                }
+
+                // Removing it forgets what it held, like a config repair.
+                match &bytes {
+                    Some(_) => fs::remove_file(&state).unwrap(),
+                    None => fs::remove_dir(&state).unwrap(),
+                }
+                let lock = store.lock_current().unwrap();
+                store.refresh().unwrap();
+                drop(lock);
+                assert_eq!(
+                    store.note_key_rule(DOC_8),
+                    NoteKeyRule::Unrecognized,
+                    "{damage}"
+                );
+                assert_eq!(
+                    store.note_key_rule(ELSEWHERE),
+                    NoteKeyRule::Uncovered,
+                    "{damage}"
+                );
+                assert_eq!(entries(folder.path()).len(), 1, "{damage}");
+            }
+        }
+
+        #[test]
+        fn a_damaged_entry_makes_only_its_origin_unavailable() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[]);
+            let damaged = json!({
+                "type": "work.other",
+                "origin": "https://work.example",
+                "match": [{"path": "/items/{n:nope}"}],
+                "id": "other:{host}/{n}",
+            });
+            fs::write(
+                state_path(folder.path()),
+                serde_json::to_vec(&json!({"format": 1, "contracts": [damaged]})).unwrap(),
+            )
+            .unwrap();
+            let store = loaded(&path);
+            assert_eq!(store.note_key_rule(ITEM_7), NoteKeyRule::Unavailable);
+            assert_eq!(store.note_key_rule(ELSEWHERE), NoteKeyRule::Uncovered);
+
+            // An entry that names no HTTP(S) origin cannot be attributed to
+            // a page's origin.
+            for origin in [
+                None,
+                Some("mailto:x@work.example"),
+                Some("ftp://work.example"),
+            ] {
+                let mut entry = json!({"type": "work.other"});
+                if let Some(origin) = origin {
+                    entry["origin"] = json!(origin);
+                }
+                fs::write(
+                    state_path(folder.path()),
+                    serde_json::to_vec(&json!({"format": 1, "contracts": [entry]})).unwrap(),
+                )
+                .unwrap();
+                let store = loaded(&path);
+                assert_eq!(
+                    store.note_key_rule(ELSEWHERE),
+                    NoteKeyRule::Unavailable,
+                    "{origin:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn the_state_file_stops_growing_at_its_bound() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let full: Vec<_> = (0..MAX_ADOPTED_CONTRACTS)
+                .map(|n| {
+                    adapter(
+                        &format!("https://site{n}.example"),
+                        "work.item",
+                        "/items/{id:int}",
+                        "work:{host}/{id}",
+                    )
+                })
+                .collect();
+            let bytes = serde_json::to_vec(&json!({"format": 1, "contracts": full})).unwrap();
+            fs::write(state_path(folder.path()), &bytes).unwrap();
+            let store = adopted(&path);
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), bytes);
+            assert_eq!(
+                store.note_key_rule("https://site3.example/items/4"),
+                NoteKeyRule::Artifact("work:site3.example/4".into())
+            );
+            assert!(store.adapter_matches(ITEM_7, None).unwrap());
+        }
     }
 
     fn adapter(origin: &str, artifact_type: &str, path: &str, id: &str) -> serde_json::Value {
@@ -2300,11 +3181,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: dir.path().to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: Some("kb".into()),
             }),
             ..empty_config()
@@ -2317,7 +3198,7 @@ mod tests {
         storage.knowledge_base_dir = Some("/kb\u{202e}".into());
         assert!(validate_base(&config).is_err());
         let storage = config.storage.as_mut().unwrap();
-        // The knowledge base may be, hold, or sit inside the notes folder.
+        // The knowledge base may be, hold, or sit inside the home folder.
         storage.knowledge_base_dir = Some(storage.root.clone());
         validate_base(&config).unwrap();
     }
@@ -2336,7 +3217,7 @@ mod tests {
         next.storage.as_mut().unwrap().knowledge_base_dir =
             Some(knowledge_base.to_string_lossy().into_owned());
         let revision = store.revision().to_owned();
-        // The notes folder's identity does not vouch for another folder.
+        // The home folder's identity does not vouch for another folder.
         let root_identity = store.root_identity().unwrap().to_owned();
         assert!(
             store
@@ -2364,7 +3245,7 @@ mod tests {
         reloaded.update(unrelated, &revision).unwrap().unwrap();
         assert_eq!(reloaded.knowledge_base_identity(), Some(identity.as_str()));
 
-        // Following the notes folder again drops the host-only identity.
+        // Following the home folder again drops the host-only identity.
         let mut follow = reloaded.snapshot().clone();
         follow.storage.as_mut().unwrap().knowledge_base_dir = None;
         let revision = reloaded.revision().to_owned();
@@ -2419,17 +3300,28 @@ mod tests {
     fn m1_config_without_new_keys_loads_not_set_up() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        // An M1 file: storage without summaries_dir and no agent keys.
-        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
-        let store = loaded(&path);
+        // An M1 file: storage without artifacts_dir or summaries_dir, and
+        // no agent keys. It loads as an older layout, then moves to the
+        // fixed one; with no folders created yet there is nothing to rename.
+        fixtures::write_legacy(&path, folder.path(), "");
+        let body = fs::read_to_string(&path).unwrap();
+        let body = body
+            .lines()
+            .filter(|line| !line.starts_with("artifacts_dir") && !line.starts_with("summaries_dir"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, format!("capture_enabled = false\n{body}")).unwrap();
+        let mut store = loaded(&path);
+        let storage = store.snapshot().storage.clone().unwrap();
+        assert_eq!(storage.summaries_dir, None);
+        assert_eq!(storage.artifacts_dir, "artifacts");
+        assert_eq!(store.config_issue(), Some(LAYOUT_PENDING));
+        assert!(!store.configured());
+        store.migrate_layout().unwrap();
         assert_eq!(store.config_issue(), None);
         assert!(store.configured());
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.storage.as_ref().unwrap().summaries_dir, None);
-        assert_eq!(
-            snapshot.storage.as_ref().unwrap().artifacts_dir,
-            "artifacts"
-        );
+        assert!(layout::is_fixed(snapshot.storage.as_ref().unwrap()));
         assert_eq!(snapshot.agent, None);
         assert_eq!(snapshot.adapters.format, 1);
         assert!(snapshot.adapters.artifacts.is_empty());
@@ -2444,14 +3336,15 @@ mod tests {
     fn old_config_gets_a_non_overlapping_artifact_directory() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
-        fixtures::write(&path, folder.path(), "", "capture_enabled = false", "");
+        fixtures::write_legacy(&path, folder.path(), "");
         let body = fs::read_to_string(&path)
             .unwrap()
-            .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"");
+            .replace("pages_dir = \"pages\"", "pages_dir = \"artifacts\"")
+            .replace("artifacts_dir = \"artifacts\"\n", "");
         fs::write(&path, body).unwrap();
 
         let store = loaded(&path);
-        assert_eq!(store.config_issue(), None);
+        assert_eq!(store.config_issue(), Some(LAYOUT_PENDING));
         let storage = store.snapshot().storage.as_ref().unwrap();
         assert_eq!(storage.pages_dir, "artifacts");
         assert_eq!(storage.artifacts_dir, "brauser-artifacts");
@@ -2466,7 +3359,13 @@ mod tests {
             std::thread::spawn(move || {
                 let folder = tempfile::tempdir().unwrap();
                 let path = folder.path().join("config.toml");
-                fixtures::write(&path, folder.path(), storage_extra, "", "");
+                fixtures::write_legacy(&path, folder.path(), storage_extra);
+                if !storage_extra.contains("artifacts_dir") {
+                    let body = fs::read_to_string(&path)
+                        .unwrap()
+                        .replace("artifacts_dir = \"artifacts\"\n", "");
+                    fs::write(&path, body).unwrap();
+                }
                 let (field, _) = line.split_once(" = ").unwrap();
                 let body = fs::read_to_string(&path)
                     .unwrap()
@@ -3071,11 +3970,11 @@ mod tests {
         config.storage = Some(StorageConfig {
             root: root.to_string_lossy().into_owned(),
             profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
-            summaries_dir: None,
+            summaries_dir: Some("summaries".into()),
             knowledge_base_dir: None,
         });
         let identity = selected_root_identity(&root).unwrap();
@@ -3151,11 +4050,11 @@ mod tests {
         let storage = StorageConfig {
             root: dir.path().to_string_lossy().into_owned(),
             profile: "neutral".into(),
-            log_dir: "log".into(),
-            pages_dir: "pages".into(),
+            log_dir: "logs".into(),
+            pages_dir: "notes".into(),
             later_dir: "later".into(),
             artifacts_dir: "artifacts".into(),
-            summaries_dir: None,
+            summaries_dir: Some("summaries".into()),
             knowledge_base_dir: None,
         };
         let enabled = ConfigSnapshot {
@@ -3170,7 +4069,7 @@ mod tests {
             ..empty_config()
         };
         let error = validate_base(&no_folder).unwrap_err().to_string();
-        assert!(error.contains("notes folder"), "{error}");
+        assert!(error.contains("home folder"), "{error}");
     }
 
     #[test]
@@ -3553,31 +4452,45 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_refuses_without_harness_or_summaries_folder() {
+    fn agent_status_refuses_without_harness_or_before_the_layout_moves() {
         let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("config.toml");
-        fixtures::write(
-            &path,
-            folder.path(),
-            "summaries_dir = \"summaries\"",
-            "",
-            "",
-        );
+        let (path, root) = fixtures::ready(folder.path());
+        fixtures::write(&path, &root, "", "", "");
         assert_eq!(
             refusal(&loaded(&path)),
             (AgentState::NotSetUp, SET_UP_HARNESS.into())
         );
+
+        // An M1 file has no summaries folder. That is an older layout, which
+        // is never used until it has been moved to the fixed one.
         fixtures::write(
             &path,
-            folder.path(),
-            "",
+            &root,
+            "summaries_dir = \"my-summaries\"",
             "",
             &fixtures::agent_table(Path::new(&fixtures::absent_binary("claude"))),
         );
+        fs::write(
+            &path,
+            fs::read_to_string(&path)
+                .unwrap()
+                .replace("summaries_dir = \"my-summaries\"\n", ""),
+        )
+        .unwrap();
+        let mut store = loaded(&path);
         assert_eq!(
-            refusal(&loaded(&path)),
-            (AgentState::NotSetUp, CHOOSE_SUMMARIES.into())
+            store.snapshot().storage.as_ref().unwrap().summaries_dir,
+            None
         );
+        assert_eq!(
+            refusal(&store),
+            (
+                AgentState::NotSetUp,
+                "configuration is unavailable or needs repair".into()
+            )
+        );
+        store.migrate_layout().unwrap();
+        assert_ready(&store, Some("2.1.284"));
     }
 
     #[test]
@@ -3664,11 +4577,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: folder.path().to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,
@@ -3693,11 +4606,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: folder.path().to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             ..empty_config()
@@ -3744,11 +4657,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             ..empty_config()
@@ -3795,11 +4708,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: true,
@@ -3916,11 +4829,11 @@ mod tests {
             storage: Some(StorageConfig {
                 root: "x".repeat(MAX_CONFIG_BYTES),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,

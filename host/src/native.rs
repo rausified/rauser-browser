@@ -271,17 +271,23 @@ fn dispatch(
         // Report that state instead of an error: the extension treats a
         // failed hello as a missing host, and the issue says how to repair.
         Request::Hello(value) => {
+            // The panel and settings ask on every open; that retries a
+            // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
+            config.migrate_layout_or_warn();
             Response::HelloResult(HelloResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
-                host_version: env!("CARGO_PKG_VERSION").to_owned(),
+                host_version: crate::BUILD_LABEL.to_owned(),
                 configured: config.configured(),
                 config_issue: config.config_issue().map(str::to_owned),
             })
         }
         Request::GetConfig(value) => {
+            // The panel and settings ask on every open; that retries a
+            // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
+            config.migrate_layout_or_warn();
             let adapter_warnings = config.adapter_warnings().to_vec();
             Response::ConfigResult(ConfigResult {
                 protocol_version: PROTOCOL_VERSION,
@@ -362,11 +368,16 @@ fn dispatch(
                     ErrorCode::Conflict,
                     "configuration changed; read it again before updating",
                 ),
-                Err(_) => error(
-                    &value.request_id,
-                    ErrorCode::Internal,
-                    "could not save configuration",
-                ),
+                // Saving the same home folder moves its older folders first;
+                // a refusal says which folder is in the way.
+                Err(save_error) => match save_error.downcast_ref::<crate::layout::Refusal>() {
+                    Some(refusal) => error(&value.request_id, ErrorCode::InvalidConfig, &refusal.0),
+                    None => error(
+                        &value.request_id,
+                        ErrorCode::Internal,
+                        "could not save configuration",
+                    ),
+                },
             }
         }
         Request::ChooseFolder(value) => {
@@ -581,14 +592,14 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
         Err(_) => return retryable("adapter policy is unavailable"),
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return retryable("choose a notes folder before capture");
+        return retryable("choose a home folder before capture");
     };
     let store = match config
         .dir()
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => return retryable("notes folder is unavailable"),
+        Err(_) => return retryable("home folder is unavailable"),
     };
     let policy = CapturePolicy {
         enabled: config.snapshot().capture_enabled,
@@ -671,7 +682,7 @@ fn record_activity(
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
             VisitOutcome::Retryable,
-            Some("choose a notes folder before capture".into()),
+            Some("choose a home folder before capture".into()),
             None,
         );
     };
@@ -683,7 +694,7 @@ fn record_activity(
         Err(_) => {
             return answer(
                 VisitOutcome::Retryable,
-                Some("notes folder is unavailable".into()),
+                Some("home folder is unavailable".into()),
                 None,
             );
         }
@@ -864,7 +875,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                 Accepted::Activity(event) => event.event_id.clone(),
             },
             outcome: VisitOutcome::Retryable,
-            reason: Some("choose a notes folder before capture".into()),
+            reason: Some("choose a home folder before capture".into()),
             relative_path: None,
         }));
         return Response::BatchRecorded(BatchRecorded {
@@ -887,7 +898,7 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
                     Accepted::Activity(event) => event.event_id.clone(),
                 },
                 outcome: VisitOutcome::Retryable,
-                reason: Some("notes folder is unavailable".into()),
+                reason: Some("home folder is unavailable".into()),
                 relative_path: None,
             }));
             return Response::BatchRecorded(BatchRecorded {
@@ -1076,7 +1087,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return answer(
             VisitOutcome::Retryable,
-            Some("choose a notes folder before capture".into()),
+            Some("choose a home folder before capture".into()),
             None,
         );
     };
@@ -1088,7 +1099,7 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         Err(_) => {
             return answer(
                 VisitOutcome::Retryable,
-                Some("notes folder is unavailable".into()),
+                Some("home folder is unavailable".into()),
                 None,
             );
         }
@@ -1249,12 +1260,12 @@ fn resolve_key_parts(
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
     };
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid"))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, "notes folder is unavailable"))?;
+        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable"))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule
@@ -1273,8 +1284,8 @@ fn resolve_key_parts(
             },
             // A covered origin is decided by its contracts alone; an
             // ambiguous one keeps the URL note rather than guessing. On an
-            // origin no recorded contract covers (a config repair discarded
-            // its history, or it was removed before that history existed),
+            // origin no recorded contract covers (both records were lost,
+            // or it was removed before either existed),
             // recorded URLs are stripped canonical forms: a Jira board and
             // every issue modal on it share one once `selectedIssue` is
             // stripped, so no recorded URL can name this page's artifact.
@@ -1314,10 +1325,11 @@ fn note_context(
     // artifact itself. Recorded URLs are stripped canonical forms: the
     // page's own canonical URL, an indexed modal route, or a note's creation
     // URL can equal an unrelated page's URL once `strip_params` removed the
-    // query value that identified the artifact. A URL on an origin config.toml no longer covers names no artifact, for
-    // the same reason it gets no artifact key above; that holds even for the
-    // artifact's own indexed routes and its note's creation URL, which are
-    // stripped forms too. A current match is final, as it is for the page's
+    // query value that identified the artifact. A URL on an origin no
+    // recorded contract covers names no artifact, for the same reason it
+    // gets no artifact key above; that holds even for the artifact's own
+    // indexed routes and its note's creation URL, which are stripped forms
+    // too. A current match is final, as it is for the page's
     // own key: a retired shape cannot also claim a URL the current policy
     // names differently.
     let names_artifact = |candidate: &str| {
@@ -1674,7 +1686,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         return error(
             &value.request_id,
             ErrorCode::NotConfigured,
-            "choose a notes folder first",
+            "choose a home folder first",
         );
     };
     let cache_dir = match config.cache_dir() {
@@ -1901,7 +1913,7 @@ fn read_index(config: &mut ConfigStore) -> Result<ArtifactIndex, (ErrorCode, &'s
         ));
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
-        return Err((ErrorCode::NotConfigured, "choose a notes folder first"));
+        return Err((ErrorCode::NotConfigured, "choose a home folder first"));
     };
     let unavailable = || (ErrorCode::Internal, "artifact index is unavailable");
     let cache_dir = config.cache_dir().map_err(|_| unavailable())?;
@@ -1995,6 +2007,10 @@ mod tests {
             Response::HelloResult(value) => {
                 assert!(!value.configured);
                 assert!(value.config_issue.is_some());
+                // The build commit rides as semver build metadata.
+                let (version, build) = value.host_version.split_once('+').unwrap();
+                assert_eq!(version, env!("CARGO_PKG_VERSION"));
+                assert!(build == "unknown" || build.len() >= crate::build_id::COMMIT_LENGTH);
             }
             other => panic!("expected hello_result, got {other:?}"),
         }
@@ -2194,11 +2210,11 @@ mod tests {
                 storage: Some(brauser_protocol::StorageConfig {
                     root: root.to_string_lossy().into_owned(),
                     profile: "neutral".into(),
-                    log_dir: "log".into(),
-                    pages_dir: "pages".into(),
+                    log_dir: "logs".into(),
+                    pages_dir: "notes".into(),
                     later_dir: "later".into(),
                     artifacts_dir: "artifacts".into(),
-                    summaries_dir: None,
+                    summaries_dir: Some("summaries".into()),
                     knowledge_base_dir: None,
                 }),
                 capture_enabled: false,
@@ -2314,11 +2330,11 @@ mod tests {
             storage: Some(brauser_protocol::StorageConfig {
                 root: root.to_string_lossy().into_owned(),
                 profile: "neutral".into(),
-                log_dir: "log".into(),
-                pages_dir: "pages".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
                 later_dir: "later".into(),
                 artifacts_dir: "artifacts".into(),
-                summaries_dir: None,
+                summaries_dir: Some("summaries".into()),
                 knowledge_base_dir: None,
             }),
             capture_enabled: false,
@@ -2780,10 +2796,11 @@ id = "work:{host}/{id}"
         };
 
         // Rewrite config.toml with no adapter and no `[[adapter_id_history]]`,
-        // as a hand edit or repair would. Recorded history alone is a stripped
-        // canonical URL and cannot name the artifact, so the page gets its URL
-        // note, and the shared note stays untouched on disk.
-        write_adapter_config(&path, &root, "");
+        // and forget the host's adopted contracts, as a repair on a fresh
+        // install would. Recorded history alone is a stripped canonical URL
+        // and cannot name the artifact, so the page gets its URL note, and
+        // the shared note stays untouched on disk.
+        forget_every_contract(&mut config, &path, &root, url, &saved);
         assert_shared_note_is_kept_but_not_guessed(&mut config, &root, url, &saved);
     }
 
@@ -2848,8 +2865,24 @@ id = "work:{host}/{id}"
         };
 
         // The note's stored creation URL is a stripped form too.
-        write_adapter_config(&path, &root, "");
+        forget_every_contract(&mut config, &path, &root, url, &saved);
         assert_shared_note_is_kept_but_not_guessed(&mut config, &root, url, &saved);
+    }
+
+    /// Delete every adapter from config.toml by hand. The host's adopted
+    /// contracts still name the shared note; then remove that state too.
+    fn forget_every_contract(
+        config: &mut ConfigStore,
+        path: &std::path::Path,
+        root: &std::path::Path,
+        url: &str,
+        shared: &NoteSaved,
+    ) {
+        write_adapter_config(path, root, "");
+        let kept = note_load(config, url);
+        assert_eq!(kept.key, shared.key);
+        assert_eq!(kept.body, "keep this text");
+        std::fs::remove_file(config::adopted_contracts_path(path.parent().unwrap())).unwrap();
     }
 
     #[test]
@@ -3231,8 +3264,9 @@ id = "jira:{host}/{key}"
             );
         }
 
-        /// Removes the Jira adapter and then `[[adapter_id_history]]`, as a
-        /// config repair or an install older than that history would, so no
+        /// Removes the Jira adapter, then `[[adapter_id_history]]` and the
+        /// host's adopted-contract state, as a config repair on a fresh
+        /// install or an install older than both records would, so no
         /// recorded contract covers the origin any more.
         fn forget_jira_contracts(folder: &tempfile::TempDir, config: &mut ConfigStore) {
             let mut next = config.snapshot().clone();
@@ -3244,6 +3278,9 @@ id = "jira:{host}/{key}"
                 toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
             assert!(table.remove("adapter_id_history").is_some());
             std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            // The host's own record of adopted contracts goes too, as on a
+            // fresh install or one older than that record.
+            std::fs::remove_file(config::adopted_contracts_path(folder.path())).unwrap();
             *config = loaded(&path);
             assert_eq!(
                 config.note_key_rule(ABC_123),
@@ -3365,7 +3402,6 @@ id = "jira.board:{host}/{id}"
         /// Removing only jira.board by hand must keep the board's note
         /// reachable, and the next autosave must update it, not split it.
         #[test]
-        #[ignore = "brwr-hrc: hand-removed contract recovery, follow-up (B)"]
         fn hand_removing_only_the_board_adapter_keeps_its_note_beside_the_modal_rule() {
             let folder = tempfile::tempdir().unwrap();
             let root = folder.path().join("notes");
@@ -3386,18 +3422,7 @@ id = "jira.board:{host}/{id}"
             let issue_path = root.join(&issue.relative_path);
             let issue_bytes = std::fs::read(&issue_path).unwrap();
 
-            let mut table: toml::Table =
-                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let artifacts = table
-                .get_mut("artifacts")
-                .and_then(toml::Value::as_array_mut)
-                .expect("top-level [[artifacts]]");
-            let before = artifacts.len();
-            artifacts.retain(|rule| {
-                rule.get("type").and_then(toml::Value::as_str) != Some("jira.board")
-            });
-            assert_eq!(artifacts.len(), before - 1);
-            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            hand_remove_board_adapter(&path);
             config = loaded(&path);
 
             let loaded_board = note_load(&mut config, BOARD);
@@ -3421,10 +3446,80 @@ id = "jira.board:{host}/{id}"
             assert_eq!(std::fs::read(&issue_path).unwrap(), issue_bytes);
             assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 text");
         }
+
+        fn board_and_issue_store(folder: &tempfile::TempDir) -> (std::path::PathBuf, ConfigStore) {
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            config::fixtures::write(
+                &path,
+                &root,
+                "artifacts_dir = \"artifacts\"",
+                "capture_enabled = true\nstrip_params = [\"selectedIssue\"]",
+                &format!("[adapters]\nformat = 1\n\n{JIRA}\n{JIRA_BOARD}"),
+            );
+            (path.clone(), loaded(&path))
+        }
+
+        /// Delete the jira.board adapter from config.toml in an editor.
+        fn hand_remove_board_adapter(path: &std::path::Path) {
+            let mut table: toml::Table =
+                toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let artifacts = table
+                .get_mut("artifacts")
+                .and_then(toml::Value::as_array_mut)
+                .expect("top-level [[artifacts]]");
+            let before = artifacts.len();
+            artifacts.retain(|rule| {
+                rule.get("type").and_then(toml::Value::as_str) != Some("jira.board")
+            });
+            assert_eq!(artifacts.len(), before - 1);
+            std::fs::write(path, toml::to_string(&table).unwrap()).unwrap();
+        }
+
+        /// If the host's record of the removed board contract cannot be
+        /// read, the board's key cannot be established: loads and saves
+        /// refuse rather than start a URL note beside the artifact note.
+        #[test]
+        fn unreadable_contract_state_refuses_the_hand_removed_boards_note() {
+            let folder = tempfile::tempdir().unwrap();
+            let (path, mut config) = board_and_issue_store(&folder);
+            let board = save(&mut config, BOARD, "board artifact note");
+            let root = folder.path().join("notes");
+            let board_bytes = std::fs::read(root.join(&board.relative_path)).unwrap();
+            hand_remove_board_adapter(&path);
+            std::fs::write(config::adopted_contracts_path(folder.path()), b"{").unwrap();
+            config = loaded(&path);
+
+            let refused = |response: &Response| matches!(response, Response::Error(reply) if reply.code == ErrorCode::Internal);
+            let loaded_board = load_note(
+                brauser_protocol::LoadNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "load".into(),
+                    url: BOARD.into(),
+                },
+                &mut config,
+            );
+            assert!(refused(&loaded_board), "{loaded_board:?}");
+            let url_key = crate::vault::url_record_key(BOARD).unwrap();
+            for key in [url_key, board.key.clone()] {
+                let saved = note_save(&mut config, BOARD, "split", "missing", key);
+                assert!(refused(&saved), "{saved:?}");
+            }
+            assert_eq!(
+                std::fs::read(root.join(&board.relative_path)).unwrap(),
+                board_bytes
+            );
+            // The live issue adapter still decides its own pages.
+            assert_eq!(
+                note_load(&mut config, BROWSE_123).key.kind,
+                RecordKeyKind::Artifact
+            );
+        }
     }
 
     /// A page on an origin no recorded contract covers needs no scan of the
-    /// notes folder, so its note works however many notes the folder holds.
+    /// home folder, so its note works however many notes the folder holds.
     #[test]
     fn a_large_notes_folder_does_not_block_notes_on_uncovered_pages() {
         let folder = tempfile::tempdir().unwrap();
@@ -3466,7 +3561,7 @@ id = "jira.board:{host}/{id}"
         const CONTEXT: &str = "https://work.example/items/7/context";
 
         struct Session {
-            _folder: tempfile::TempDir,
+            folder: tempfile::TempDir,
             root: std::path::PathBuf,
             path: std::path::PathBuf,
             // Capture rejects events more than 30 days old, so fixtures are
@@ -3494,7 +3589,7 @@ id = "work:{host}/{id}"
                     .replace_nanosecond(0)
                     .unwrap();
                 Self {
-                    _folder: folder,
+                    folder,
                     root,
                     path,
                     at,
@@ -3510,7 +3605,7 @@ id = "work:{host}/{id}"
             fn log_path(&self) -> std::path::PathBuf {
                 let date = self.at.date();
                 self.root.join(format!(
-                    "log/{:04}/{:02}/{:04}-{:02}-{:02}.md",
+                    "logs/{:04}/{:02}/{:04}-{:02}-{:02}.md",
                     date.year(),
                     u8::from(date.month()),
                     date.year(),
@@ -3589,13 +3684,19 @@ id = "work:{host}/{id}"
                 );
             }
 
-            /// A config repair or hand edit can discard `[[adapter_id_history]]`;
-            /// the origin is then uncovered and its pages use URL keys.
+            /// A config repair on a fresh install, or one older than both
+            /// records, has neither `[[adapter_id_history]]` nor the host's
+            /// adopted contracts; the origin is then uncovered and its pages
+            /// use URL keys.
             fn forget_policy_history(&self) {
                 let mut table: toml::Table =
                     toml::from_str(&std::fs::read_to_string(&self.path).unwrap()).unwrap();
                 assert!(table.remove("adapter_id_history").is_some());
                 std::fs::write(&self.path, toml::to_string(&table).unwrap()).unwrap();
+                match std::fs::remove_file(config::adopted_contracts_path(self.folder.path())) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => panic!("{error}"),
+                    _ => {}
+                }
                 let config = loaded(&self.path);
                 assert!(config.config_issue().is_none());
                 assert_eq!(
@@ -3938,7 +4039,7 @@ id = "work:{host}/{id}"
                     Response::NoteConflict(reply) if reply.reason == "stale" && reply.body == "Still editable")
                 );
                 assert!(
-                    !session.root.join("log").exists(),
+                    !session.root.join("logs").exists(),
                     "notes cannot restart capture"
                 );
             }
@@ -3973,7 +4074,7 @@ id = "work:{host}/{id}"
                 assert_eq!(other_route.key, created.key, "{removal}");
                 assert_eq!(other_route.body, "Item 8", "{removal}");
                 assert!(
-                    !session.root.join("log").exists(),
+                    !session.root.join("logs").exists(),
                     "{removal}: note keys never restart capture"
                 );
             }
@@ -4130,7 +4231,7 @@ id = "work:{host}/{id}"
                 session.forget_policy_history();
                 let note_path = session.root.join(saved.relative_path);
                 let original = std::fs::read(&note_path).unwrap();
-                let pages = session.root.join("pages");
+                let pages = session.root.join("notes");
                 let mut faults = Vec::new();
                 match fault {
                     "count" => {
@@ -4750,7 +4851,7 @@ scope = { owner = ["acme"] }
                 other => panic!("expected a suppressed visit for {label}, got {other:?}"),
             }
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
 
         let response = record_visit(
             RecordVisitRequest {
@@ -4873,7 +4974,7 @@ id = "work:{host}/{id}"
                 assert!(relative_path.is_none());
             }
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
         assert!(!config.cache_dir().unwrap().join("index.db").exists());
     }
 
@@ -5073,7 +5174,7 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
                     assert_eq!(stored, event, "{label}, batch={batched}");
                 } else {
                     assert!(relative_path.is_none());
-                    assert!(!root.join("log").exists(), "{label}, batch={batched}");
+                    assert!(!root.join("logs").exists(), "{label}, batch={batched}");
                     assert!(!config.cache_dir().unwrap().join("index.db").exists());
                 }
                 outcomes.push((outcome, reason, relative_path));
@@ -5194,7 +5295,7 @@ id = "work:{host}/{id}"
                 std::fs::create_dir(&fault).unwrap();
                 fault
             } else {
-                let fault = root.join("log/oversized.md");
+                let fault = root.join("logs/oversized.md");
                 std::fs::File::create(&fault)
                     .unwrap()
                     .set_len(32 * 1024 * 1024 + 1)
@@ -5424,7 +5525,7 @@ id = "work:{host}/{id}"
             let cache = config.cache_dir().unwrap();
             let old_state = std::fs::read(cache.join("index-state.json")).unwrap();
             let fault = if oversized_log {
-                let fault = root.join("log/oversized.md");
+                let fault = root.join("logs/oversized.md");
                 let file = std::fs::File::create(&fault).unwrap();
                 file.set_len(32 * 1024 * 1024 + 1).unwrap();
                 fault
@@ -5962,7 +6063,77 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected a rejected trail, got {other:?}"),
         }
-        assert!(!root.join("log").exists());
+        assert!(!root.join("logs").exists());
+    }
+
+    #[test]
+    fn a_trail_from_a_removed_site_rejects_only_its_own_batch_hour() {
+        // The host never rewrites a delivered event: a trail whose source no
+        // adapter resolves is rejected, never logged, and costs only that hour.
+        // The worker strips such trails before dispatch (DESIGN.md §5.1 Trails).
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, root) = adapter_only_config(&folder);
+        let occurred_at = hour_timestamp();
+        let stale = work_item_activity(
+            &occurred_at,
+            vec![ActivityTrail {
+                from_artifact_id: Some("removed:removed.example/2".into()),
+                from_url: Some("https://removed.example/items/2".into()),
+                transition: "link".into(),
+            }],
+        );
+        let mut clean = work_item_activity(&occurred_at, Vec::new());
+        clean.artifact_id = "work:work.example/8".into();
+        clean.url = "https://work.example/items/8".into();
+        let item = |event: &ActivityEvent| CaptureBatchItem {
+            kind: CaptureEventKind::Activity,
+            visit: None,
+            activity: Some(event.clone()),
+        };
+        let response = record_batch(
+            RecordBatchRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "batch-stale-trail".into(),
+                batch_id: uuid::Uuid::new_v4().to_string(),
+                events: vec![item(&stale), item(&clean)],
+                overflow: None,
+            },
+            &mut config,
+        );
+        let Response::BatchRecorded(recorded) = response else {
+            panic!("expected batch results, got {response:?}");
+        };
+        let outcome = |id: &str| {
+            recorded
+                .results
+                .iter()
+                .find(|result| result.event_id == id)
+                .map(|result| (result.outcome, result.reason.clone()))
+                .unwrap()
+        };
+        assert_eq!(
+            outcome(&stale.event_id),
+            (
+                VisitOutcome::Rejected,
+                Some("trail_identity_mismatch".into())
+            )
+        );
+        assert_eq!(outcome(&clean.event_id).0, VisitOutcome::Persisted);
+        let mut logged = String::new();
+        let mut pending = vec![root.join(crate::layout::LOGS_DIR)];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    logged.push_str(&std::fs::read_to_string(path).unwrap());
+                }
+            }
+        }
+        assert!(logged.contains("https://work.example/items/8"));
+        assert!(!logged.contains("removed.example"));
+        assert!(!logged.contains(&stale.event_id));
     }
 
     fn refused(response: &Response) -> (ErrorCode, &str) {
@@ -6674,5 +6845,355 @@ id = "work:{host}/{id}"
             refreshed, first,
             "the panel's close regenerates dirty files"
         );
+    }
+
+    /// One-time move of an older install's folders to the fixed layout
+    /// (DESIGN.md §6.1), against a fixture shaped like a real pre-home install.
+    mod home_layout_migration {
+        use super::*;
+        use std::fs;
+        use std::path::{Path, PathBuf};
+
+        const FIXTURE: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/pre-home-layout"
+        );
+        const FORUM_NOTE: &str = "forum-example-com-item-5888e994a837414002b5aa66675dd4546e95a792d52a480a1f1b95ac4fd02c42.md";
+        const NEWS_URL: &str = "https://news.example.org/region/livestory/provincial-election-results-live-updates-2026-9.1234567";
+
+        struct Install {
+            _folder: tempfile::TempDir,
+            home: PathBuf,
+            path: PathBuf,
+        }
+
+        impl Install {
+            fn new() -> Self {
+                let folder = tempfile::tempdir().unwrap();
+                let home = folder.path().join("notes-brauser");
+                fs::create_dir_all(home.join("pages")).unwrap();
+                for entry in fs::read_dir(Path::new(FIXTURE).join("home/pages")).unwrap() {
+                    let entry = entry.unwrap();
+                    fs::copy(entry.path(), home.join("pages").join(entry.file_name())).unwrap();
+                }
+                let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
+                let identity = crate::vault::selected_root_identity(&home).unwrap();
+                let config = fs::read_to_string(Path::new(FIXTURE).join("config.toml"))
+                    .unwrap()
+                    .replace("\"@ROOT_IDENTITY@\"", &quoted(&identity))
+                    .replace("\"@ROOT@\"", &quoted(&home.to_string_lossy()));
+                let state = folder.path().join("state");
+                fs::create_dir(&state).unwrap();
+                let path = state.join("config.toml");
+                fs::write(&path, config).unwrap();
+                Self {
+                    _folder: folder,
+                    home,
+                    path,
+                }
+            }
+
+            fn store(&self) -> ConfigStore {
+                ConfigStore::for_test(self.path.clone())
+            }
+
+            fn call(&self, config: &mut ConfigStore, request: Request) -> Response {
+                dispatch(
+                    request,
+                    config,
+                    &mut ConsentAuthority::new(),
+                    &SetupContext::new(),
+                )
+            }
+
+            fn hello(&self, config: &mut ConfigStore) -> HelloResult {
+                let request = Request::Hello(brauser_protocol::HelloRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "hello".into(),
+                });
+                match self.call(config, request) {
+                    Response::HelloResult(value) => value,
+                    other => panic!("expected hello_result, got {other:?}"),
+                }
+            }
+
+            fn load(&self, config: &mut ConfigStore, url: &str) -> Response {
+                self.call(
+                    config,
+                    Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "load".into(),
+                        url: url.into(),
+                    }),
+                )
+            }
+
+            fn fixture_note(name: &str) -> Vec<u8> {
+                fs::read(Path::new(FIXTURE).join("home/pages").join(name)).unwrap()
+            }
+
+            fn table(&self) -> toml::Table {
+                fs::read_to_string(&self.path).unwrap().parse().unwrap()
+            }
+        }
+
+        fn without_layout(mut table: toml::Table) -> toml::Table {
+            let storage = table["storage"].as_table_mut().unwrap();
+            for key in [
+                "log_dir",
+                "pages_dir",
+                "later_dir",
+                "artifacts_dir",
+                "summaries_dir",
+            ] {
+                storage.remove(key);
+            }
+            table
+        }
+
+        #[test]
+        fn a_real_pre_home_install_moves_pages_to_notes_once() {
+            let install = Install::new();
+            let before = install.table();
+            let mut config = install.store();
+            let hello = install.hello(&mut config);
+            assert_eq!(hello.config_issue, None);
+            assert!(hello.configured);
+
+            assert!(!install.home.join("pages").exists());
+            for entry in fs::read_dir(Path::new(FIXTURE).join("home/pages")).unwrap() {
+                let name = entry.unwrap().file_name();
+                assert_eq!(
+                    fs::read(install.home.join("notes").join(&name)).unwrap(),
+                    Install::fixture_note(name.to_str().unwrap())
+                );
+            }
+            // Only folders that existed are renamed; nothing else is created.
+            let mut names: Vec<_> = fs::read_dir(&install.home)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            assert_eq!(names, ["notes"]);
+
+            let after = install.table();
+            let storage = after["storage"].as_table().unwrap();
+            for (key, value) in [
+                ("log_dir", "logs"),
+                ("pages_dir", "notes"),
+                ("later_dir", "later"),
+                ("artifacts_dir", "artifacts"),
+                ("summaries_dir", "summaries"),
+            ] {
+                assert_eq!(storage[key].as_str(), Some(value), "{key}");
+            }
+            // Every other setting, including the harness and adapters, is kept.
+            assert_eq!(without_layout(after), without_layout(before));
+
+            match install.load(&mut config, NEWS_URL) {
+                Response::NoteLoaded(value) => {
+                    assert!(value.exists);
+                    assert_eq!(value.body.trim(), "Note");
+                }
+                other => panic!("expected note_loaded, got {other:?}"),
+            }
+            // A second connection finds nothing to do.
+            let bytes = fs::read(&install.path).unwrap();
+            let mut second = install.store();
+            assert_eq!(install.hello(&mut second).config_issue, None);
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+        }
+
+        #[test]
+        fn an_existing_notes_folder_refuses_without_changing_anything_until_moved() {
+            let install = Install::new();
+            fs::create_dir(install.home.join("notes")).unwrap();
+            fs::write(install.home.join("notes/mine.md"), "the user's own").unwrap();
+            let bytes = fs::read(&install.path).unwrap();
+            let mut config = install.store();
+            let hello = install.hello(&mut config);
+            assert!(!hello.configured);
+            let issue = hello.config_issue.unwrap();
+            assert!(
+                issue.contains("notes/ already exists beside pages/"),
+                "{issue}"
+            );
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+            assert_eq!(
+                fs::read(install.home.join("pages").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            assert_eq!(
+                fs::read_to_string(install.home.join("notes/mine.md")).unwrap(),
+                "the user's own"
+            );
+            // Notes, capture, and settings saves stay off meanwhile.
+            assert!(matches!(
+                install.load(&mut config, NEWS_URL),
+                Response::Error(_)
+            ));
+            let mut next = config.snapshot().clone();
+            next.storage = Some(crate::layout::fixed(next.storage.as_ref().unwrap()));
+            let revision = config.revision().to_owned();
+            let response = install.call(
+                &mut config,
+                Request::UpdateConfig(brauser_protocol::UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save".into(),
+                    config: next,
+                    expected_revision: revision,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }),
+            );
+            match response {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("notes/ already exists"),
+                        "{}",
+                        value.message
+                    );
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+            assert_eq!(fs::read(&install.path).unwrap(), bytes);
+
+            // The user moves their folder; the next open finishes the move.
+            fs::rename(install.home.join("notes"), install.home.join("my-notes")).unwrap();
+            let hello = install.hello(&mut config);
+            assert_eq!(hello.config_issue, None);
+            assert!(hello.configured);
+            assert_eq!(
+                fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            assert_eq!(
+                fs::read_to_string(install.home.join("my-notes/mine.md")).unwrap(),
+                "the user's own"
+            );
+        }
+
+        #[test]
+        fn a_crash_between_renames_and_the_config_write_resumes() {
+            let install = Install::new();
+            fs::create_dir_all(install.home.join("log/2026/10")).unwrap();
+            fs::write(install.home.join("log/2026/10/2026-10-26.md"), "log").unwrap();
+            // As if a host renamed pages/ and then died.
+            fs::rename(install.home.join("pages"), install.home.join("notes")).unwrap();
+            let mut config = install.store();
+            config.refresh().unwrap();
+            assert!(!config.configured());
+            config.migrate_layout().unwrap();
+            assert!(config.configured());
+            assert!(crate::layout::is_fixed(
+                config.snapshot().storage.as_ref().unwrap()
+            ));
+            assert_eq!(
+                fs::read_to_string(install.home.join("logs/2026/10/2026-10-26.md")).unwrap(),
+                "log"
+            );
+            assert!(!install.home.join("log").exists());
+            assert_eq!(
+                fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                Install::fixture_note(FORUM_NOTE)
+            );
+            // Intents that name log/ are pointed at logs/ before it moves.
+            let relocations = fs::read_to_string(
+                install
+                    .path
+                    .parent()
+                    .unwrap()
+                    .join("visit-ids/log-relocations.json"),
+            )
+            .unwrap();
+            assert!(
+                relocations.contains("\"from\":\"log\",\"to\":\"logs\""),
+                "{relocations}"
+            );
+
+            // Every folder renamed, config still old: only the config changes.
+            let install = Install::new();
+            fs::rename(install.home.join("pages"), install.home.join("notes")).unwrap();
+            let mut config = install.store();
+            config.migrate_layout().unwrap();
+            assert!(config.configured());
+            assert!(crate::layout::is_fixed(
+                config.snapshot().storage.as_ref().unwrap()
+            ));
+        }
+
+        #[test]
+        fn migration_waits_for_every_writer_and_runs_once_across_hosts() {
+            for hold_capture in [false, true] {
+                let install = Install::new();
+                let state = install.path.parent().unwrap().to_path_buf();
+                // A writer in another host process holds its lock.
+                let writer = install.store();
+                let held: Box<dyn std::any::Any> = if hold_capture {
+                    Box::new(crate::capture::lock_capture(&state).unwrap())
+                } else {
+                    Box::new(writer.lock_current().unwrap())
+                };
+                let hosts: Vec<_> = (0..3)
+                    .map(|_| {
+                        let mut store = install.store();
+                        std::thread::spawn(move || {
+                            store.migrate_layout().unwrap();
+                            store.configured()
+                        })
+                    })
+                    .collect();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                assert!(
+                    install.home.join("pages").is_dir(),
+                    "hold_capture={hold_capture}"
+                );
+                assert!(
+                    !install.home.join("notes").exists(),
+                    "hold_capture={hold_capture}"
+                );
+                drop(held);
+                for host in hosts {
+                    assert!(host.join().unwrap(), "hold_capture={hold_capture}");
+                }
+                assert!(!install.home.join("pages").exists());
+                assert_eq!(
+                    fs::read(install.home.join("notes").join(FORUM_NOTE)).unwrap(),
+                    Install::fixture_note(FORUM_NOTE)
+                );
+            }
+        }
+
+        #[test]
+        fn an_update_cannot_choose_its_own_folder_names() {
+            let install = Install::new();
+            let mut config = install.store();
+            assert!(install.hello(&mut config).configured);
+            let mut next = config.snapshot().clone();
+            next.storage.as_mut().unwrap().pages_dir = "pages".into();
+            let revision = config.revision().to_owned();
+            match install.call(
+                &mut config,
+                Request::UpdateConfig(brauser_protocol::UpdateConfigRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "save".into(),
+                    config: next,
+                    expected_revision: revision,
+                    picker_token: None,
+                    knowledge_base_token: None,
+                }),
+            ) {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("content folders are fixed"),
+                        "{}",
+                        value.message
+                    );
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
     }
 }

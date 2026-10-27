@@ -11,7 +11,7 @@ const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
 
 const config = {
   storage: {
-    root: "/notes", profile: "neutral", log_dir: "log", pages_dir: "pages", later_dir: "later", artifacts_dir: "artifacts",
+    root: "/notes", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
     summaries_dir: "summaries", knowledge_base_dir: null,
   },
   capture_enabled: false, strip_params: [],

@@ -2,6 +2,7 @@ import type { WorkerStatus } from "./model.js";
 import { ConfigSession, describe, element, withConfigMutationLock, worker } from "./settings.js";
 import { captureOrigin, planCaptureSite, siteConfigured, type CapturePlan } from "./capture-site.js";
 import { starterKind } from "./starter-adapters.js";
+import { SitePatternPanel } from "./site-pattern-panel.js";
 
 export interface CapturePage {
   url: string;
@@ -19,6 +20,7 @@ interface CaptureActions {
 /** An in-panel, revision-bound review. All transient page URLs and scopes
  * remain in this panel; only the reviewed config goes to the native host. */
 export class CaptureSitePanel {
+  private readonly patterns = new SitePatternPanel();
   private readonly area = element<HTMLElement>("capture-site-area");
   private readonly start = element<HTMLButtonElement>("capture-site");
   private readonly hint = element<HTMLElement>("capture-site-hint");
@@ -53,6 +55,7 @@ export class CaptureSitePanel {
   }
 
   render(page: CapturePage | null, busy: boolean): void {
+    this.patterns.render(page, busy);
     this.page = page;
     if (this.target && !this.samePage(page, this.target)) this.close();
     const origin = page ? captureOrigin(page.url) : null;
@@ -64,7 +67,7 @@ export class CaptureSitePanel {
     this.start.disabled = configured || busy || !this.session.connected || !config?.storage ||
       !!this.session.configIssue || !!this.session.adapterIssue;
     this.hint.textContent = configured ? "This site has capture rules. Manage them in settings."
-      : !config?.storage ? "Choose a notes folder in settings, then capture this site here."
+      : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
       : "Remember work on this site without configuring rules by hand.";
     if (this.target) this.updateControls(busy);

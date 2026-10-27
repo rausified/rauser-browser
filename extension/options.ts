@@ -1,7 +1,7 @@
 import type {
   AdapterDocument, FolderPurpose, HarnessFound, HarnessId, StorageConfig,
 } from "../protocol/ts/generated.js";
-import { isHttpUrl, type WorkerStatus } from "./model.js";
+import { HOME_LAYOUT, isHttpUrl, type WorkerStatus } from "./model.js";
 import {
   ConfigSession,
   capturePaused,
@@ -15,6 +15,8 @@ import {
 } from "./settings.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
+import { sitePatternControls } from "./site-pattern-settings.js";
+import { hostBuildText } from "./build-info.js";
 import {
   SETUP_WARNING,
   agentEnvText,
@@ -43,6 +45,12 @@ import {
 } from "./starter-adapters.js";
 
 const status = element<HTMLDivElement>("status");
+const buildId = element<HTMLSpanElement>("build-id");
+const hostBuild = element<HTMLSpanElement>("host-build");
+
+function showHostBuild(hostVersion: string): void {
+  hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
+}
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
 const siteOrigin = element<HTMLInputElement>("site-origin");
@@ -68,7 +76,6 @@ const harnessState = element<HTMLParagraphElement>("harness-state");
 const detectButton = element<HTMLButtonElement>("detect-harnesses");
 const harnessList = element<HTMLUListElement>("harness-list");
 const timeoutInput = element<HTMLInputElement>("harness-timeout");
-const summariesInput = element<HTMLInputElement>("summaries-dir");
 const knowledgeBasePath = element<HTMLOutputElement>("kb-path");
 const chooseKnowledgeBaseButton = element<HTMLButtonElement>("choose-kb");
 const knowledgeBaseUseNotesButton = element<HTMLButtonElement>("kb-use-notes");
@@ -89,7 +96,6 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 let harnesses: HarnessFound[] = [];
 let selectedHarnessId: HarnessId | null = null;
 // Fields the user has typed in keep their text across config renders.
-let summariesEdited = false;
 let timeoutEdited = false;
 let vocabularyEdited = false;
 // Setup instructions while the last service request found no service.
@@ -105,6 +111,13 @@ let githubScopeText = "";
 // save, from this page or another, makes it unusable.
 const session = new ConfigSession(renderConfig, () => {
   picker = null;
+});
+
+// The header names the host process that answered. Another one, possibly
+// from a rebuilt binary, starts on the next call after it exits.
+session.host.onHostExit(() => { hostBuild.textContent = ""; });
+session.host.onHostRestart(() => {
+  void session.hello().then((hello) => showHostBuild(hello.host_version), () => undefined);
 });
 
 // A folder selection's token lives only in the host process that issued it.
@@ -167,7 +180,7 @@ function updateControls(): void {
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
-  // The host refuses capture without a notes folder, and capture has nothing
+  // The host refuses capture without a home folder, and capture has nothing
   // to record until some site has an adapter.
   resumeButton.disabled = !connected || busy || repairing || repairingAdapters ||
     session.config?.capture_enabled !== false || !session.config.storage ||
@@ -175,6 +188,7 @@ function updateControls(): void {
   // Resume is offered only while a finished setup is paused.
   resumeButton.hidden = !capturePaused(session.config, session.configIssue ?? session.adapterIssue);
   for (const button of sitesList.querySelectorAll("button")) {
+    if (button.dataset.patternControl === "true") continue;
     button.disabled = !connected || busy || repairing || repairingAdapters;
   }
   newAdapterButton.disabled = !connected || busy || repairing || repairingAdapters;
@@ -195,7 +209,7 @@ function updateControls(): void {
   removeHarnessButton.disabled = !idle || !session.config?.agent;
   revealAgentEnvButton.disabled = !idle;
   saveVocabularyButton.disabled = !idle || session.configIssue !== null;
-  // The knowledge base is stored with the notes folder, so it needs one.
+  // The knowledge base is stored with the home folder, so it needs one.
   const folderReady = idle && !repairing && !!session.config?.storage;
   chooseKnowledgeBaseButton.disabled = !folderReady;
   knowledgeBaseUseNotesButton.disabled = !folderReady || !session.config?.storage?.knowledge_base_dir;
@@ -245,7 +259,6 @@ function renderAgent(): void {
   if (config?.storage?.summaries_dir) state.push(`Summaries folder: ${config.storage.summaries_dir}.`);
   harnessState.textContent = serviceProblem ?? state.join(" ");
   harnessState.classList.toggle("warning", serviceProblem !== null);
-  if (!summariesEdited) summariesInput.value = config?.storage?.summaries_dir ?? "summaries";
   if (!timeoutEdited) timeoutInput.value = String(agent ? Math.max(1, Math.round(agent.timeout_secs / 60)) : 10);
   if (!vocabularyEdited && config) {
     vocabularyTypes.value = config.summary_vocabulary.document_types.join("\n");
@@ -253,7 +266,7 @@ function renderAgent(): void {
   }
   const storage = config?.storage ?? null;
   knowledgeBasePath.textContent = storage?.knowledge_base_dir ??
-    (storage ? `Same as the notes folder (${storage.root})` : "Same as the notes folder");
+    (storage ? `Same as the home folder (${storage.root})` : "Same as the home folder");
 
   harnessList.replaceChildren();
   if (!harnesses.length) {
@@ -625,7 +638,7 @@ function closeAdapterEditor(): void {
 
 /**
  * Save a new adapter document. A site is on while it has an adapter, so the
- * host derives the sites from the document, and the first adapter saved with a notes folder
+ * host derives the sites from the document, and the first adapter saved with a home folder
  * turns capture on unless a pause is still pending. A folder selection the
  * host has not saved yet is saved with it.
  */
@@ -749,6 +762,7 @@ function renderConfig(): void {
     remove.setAttribute("aria-label", `Remove site ${origin}`);
     remove.addEventListener("click", () => void removeSite(origin));
     item.append(remove);
+    item.append(sitePatternControls(origin));
     sitesList.append(item);
   }
   renderStarterGallery();
@@ -787,16 +801,13 @@ function scheduleReload(): void {
   }, 250);
 }
 
-/** The storage settings for a folder chosen through the native picker. */
+/** The storage settings for a home folder chosen through the native picker.
+ * Its folders always have the fixed names; only the knowledge base carries over. */
 function storageFor(root: string, current: StorageConfig | null): StorageConfig {
   return {
     root,
     profile: "neutral",
-    log_dir: current?.log_dir ?? "log",
-    pages_dir: current?.pages_dir ?? "pages",
-    later_dir: current?.later_dir ?? "later",
-    artifacts_dir: current?.artifacts_dir ?? "artifacts",
-    summaries_dir: current?.summaries_dir ?? null,
+    ...HOME_LAYOUT,
     knowledge_base_dir: current?.knowledge_base_dir ?? null,
   };
 }
@@ -861,7 +872,7 @@ async function chooseKnowledgeBase(): Promise<void> {
   }
 }
 
-/** Let the knowledge base follow the notes folder again. */
+/** Let the knowledge base follow the home folder again. */
 async function useNotesFolderAsKnowledgeBase(): Promise<void> {
   if (busy || !session.config?.storage?.knowledge_base_dir || session.configIssue) return;
   busy = true;
@@ -871,7 +882,7 @@ async function useNotesFolderAsKnowledgeBase(): Promise<void> {
       ...session.config!,
       storage: { ...session.config!.storage!, knowledge_base_dir: null },
     }, null));
-    show("Summary agents will read the notes folder as the knowledge base.");
+    show("Summary agents will read the home folder as the knowledge base.");
   } catch (error) {
     show(`Could not change the knowledge base folder: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
@@ -966,7 +977,7 @@ async function detectHarnesses(): Promise<void> {
     if (ready) {
       show(session.config?.storage
         ? `Found ${harnessFoundText(ready)}. Choose Test and use to run a test prompt through it.`
-        : `Found ${harnessFoundText(ready)}. Choose a notes folder first, then test the harness.`);
+        : `Found ${harnessFoundText(ready)}. Choose a home folder first, then test the harness.`);
     } else {
       show(harnesses.some((found) => found.binary !== null)
         ? "No harness found here can be used yet; see the reasons below."
@@ -988,12 +999,7 @@ async function testHarness(): Promise<void> {
   const found = selectedHarness();
   if (busy || !found) return;
   if (!session.config?.storage) {
-    show("Choose a notes folder first.", true);
-    return;
-  }
-  const summaries = summariesInput.value.trim();
-  if (!summaries) {
-    show("Enter a summaries folder name.", true);
+    show("Choose a home folder first.", true);
     return;
   }
   const minutes = timeoutMinutes();
@@ -1004,9 +1010,8 @@ async function testHarness(): Promise<void> {
   busy = true;
   updateControls();
   try {
-    await withConfigMutationLock(() => session.setupHarness(found.harness, minutes * 60, summaries));
+    await withConfigMutationLock(() => session.setupHarness(found.harness, minutes * 60, null));
     serviceProblem = null;
-    summariesEdited = false;
     timeoutEdited = false;
     await reloadConfig();
     show(`${harnessName(found.harness)} is set up. ${agentStateText(session.agentStatus)}`);
@@ -1114,7 +1119,6 @@ testButton.addEventListener("click", () => void testHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
 revealAgentEnvButton.addEventListener("click", () => void revealAgentEnv());
 saveVocabularyButton.addEventListener("click", () => void saveVocabulary());
-summariesInput.addEventListener("input", () => { summariesEdited = true; });
 timeoutInput.addEventListener("input", () => { timeoutEdited = true; });
 vocabularyTypes.addEventListener("input", () => { vocabularyEdited = true; });
 vocabularyCategories.addEventListener("input", () => { vocabularyEdited = true; });
@@ -1144,6 +1148,7 @@ void (async () => {
       show(`Native host unavailable: ${describe(error)}. Install or register the development host, then reload this page.`, true);
       return;
     }
+    showHostBuild(hello.host_version);
     try {
       await reloadConfig();
       if (hello.config_issue) show(hello.config_issue, true);

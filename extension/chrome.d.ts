@@ -99,6 +99,12 @@ interface ChromeApi {
     onAlarm: { addListener(listener: (alarm: { name: string }) => void): void };
   };
   scripting: {
+    executeScript<T>(injection: {
+      target: { tabId: number; frameIds: [0] };
+      world: "ISOLATED";
+      func: (expectedUrl: string, readLinks: boolean) => T;
+      args: [string, boolean];
+    }): Promise<{ frameId: number; result?: T }[]>;
     executeScript(injection: { target: ChromeInjectionTarget; files: string[] }): Promise<ChromeInjectionResult<unknown>[]>;
     executeScript<Args extends unknown[], Result>(injection: {
       target: ChromeInjectionTarget;

@@ -19,6 +19,13 @@ the typed request. A mismatch returns an `error` response with code
 `unsupported_protocol_version` and the host's protocol version. If malformed
 input has no recoverable request ID, an `error` response may use an empty ID.
 
+`hello_result.host_version` is the host's package version with its build
+commit as semver build metadata, for example `0.1.0+c7c6be06d378` or
+`0.1.0+c7c6be06d378-dirty` when the Rust sources built into it had uncommitted
+changes (`unknown` when built outside a Git checkout). The
+panel and settings page show that commit beside the extension's own and flag a
+different commit; nothing else depends on its format.
+
 Protocol version 6 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
@@ -33,7 +40,15 @@ or newer TOML file yields an inert empty snapshot, its raw-file revision, and a
 backs up those exact bytes before replacing the file.
 
 `ConfigSnapshot.storage` must be present: use `null` only to explicitly clear
-the selected notes folder. `strip_params` is
+the selected home folder. `storage.root` is the home folder; the content
+locations inside it are fixed (DESIGN.md §6.1). Without a protocol change,
+`log_dir`, `pages_dir`, `later_dir`, `artifacts_dir`, and `summaries_dir`
+always carry `logs`, `notes`, `later`, `artifacts`, and `summaries` in a
+config the host uses, and `update_config` refuses any other values as
+`invalid_config`. A config.toml from before the fixed layout is reported with
+its own names and a `config_issue` until the host has moved its folders; a
+save of the fixed names for the same home folder moves them first, and a
+refusal (a fixed folder already exists) is `invalid_config` naming the folder. `strip_params` is
 also required. The generated Rust deserializer rejects omitted nullable fields,
 matching the JSON Schema requirement. Existing M0 TOML defaults to an empty
 site list, `utm_*`/`fbclid`/`gclid` stripping, and a 300-second repeat window.
@@ -118,7 +133,7 @@ Added in version 6:
   `probed_at`. TOML keeps it in a `[summarizer]` table.
 - `StorageConfig.knowledge_base_dir`, required and nullable: the absolute
   folder a summary agent reads as its knowledge base, with `null` meaning the
-  notes folder. `choose_folder` now names a `purpose` (`notes_folder` or
+  home folder. `choose_folder` now names a `purpose` (`notes_folder` or
   `knowledge_base`), and `update_config` has a required-nullable
   `knowledge_base_token`. A new or changed `knowledge_base_dir` needs a picker
   token minted for the `knowledge_base` purpose, and a notes-folder token
@@ -181,7 +196,7 @@ settings never depend on the service.
 
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while
-`adapter_issue` is set. Turning capture on needs only a notes folder.
+`adapter_issue` is set. Turning capture on needs only a home folder.
 
 A version 5 `config.toml` loads unchanged. A file that still has `sites`,
 `agent_denylist`, `agent_denylist_confirmed`, or `log_incognito` keeps working,
@@ -206,7 +221,8 @@ harnesses, `codex` then `claude`, as found with the service's `PATH` and run
 environment: the `binary` found (`null` when it is not), its `version`, and a
 `problem` when it was found but cannot be used. Any well-formed version is
 accepted. `set_up_harness` names one `harness`, `timeout_secs`, and
-`summaries_dir` (`null` keeps the current folder or uses `summaries`). The
+`summaries_dir` (`null` or `summaries`, the fixed folder; any other name is
+`invalid_config`). The
 service detects that harness again, runs one probe prompt through the real
 invocation in the knowledge base folder with its environment plus
 `agent.env`, and only when the answer contains "ok" commits the harness entry
