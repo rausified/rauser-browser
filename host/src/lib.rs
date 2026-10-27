@@ -15,5 +15,6 @@ pub mod harness;
 pub mod index;
 pub mod native;
 pub mod note;
+mod presentation;
 pub mod privacy;
 pub mod vault;
