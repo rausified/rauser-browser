@@ -425,6 +425,10 @@ fn dispatch(
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
+        // Placeholder until the drafting handlers land (plan Task 8).
+        Request::DraftSite(_) | Request::CheckSiteDraft(_) => {
+            error(id, ErrorCode::InvalidRequest, "not yet")
+        }
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup

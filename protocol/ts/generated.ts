@@ -637,6 +637,128 @@ export interface ServiceReady {
   build_id: string;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | GetAgentEnvRequest | ServiceHelloRequest;
+export interface ShapeCount {
+  shape: string;
+  count: number;
+}
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | AgentEnvListed | ServiceReady | ErrorResponse;
+export interface DraftSiteRequest {
+  type: "draft_site";
+  protocol_version: 6;
+  request_id: string;
+  origin: string;
+  visited: ShapeCount[];
+  links: ShapeCount[];
+}
+
+export type SiteDrafter = "structural";
+
+export type DraftScopeState = "not_shared" | "copied" | "pending" | "unscoped_only";
+
+export type UncheckedReason = "link_only" | "token_only";
+
+export type DraftDropReason = "root" | "probe" | "search_or_paging" | "blocked_route" | "param_name" | "already_recognized" | "no_route_word" | "no_identifier" | "limit" | "draft_forbidden_key" | "draft_no_scope_source" | "draft_scope_conflict" | "draft_no_leading_literal" | "draft_rest_second" | "draft_id_needs_typed_capture" | "draft_search_capture" | "draft_matches_probe" | "draft_overlap" | "draft_blocked_route" | "draft_paging_capture" | "draft_invalid_rule" | "draft_scope_pending" | "draft_scope_choice";
+
+export type PreviewSource = "visited" | "link" | "probe";
+
+export type RuleProvenance = "drafted" | "user_written";
+
+export type RuleVerdictKind = "kept" | "dropped" | "warned";
+
+export type ResolvedScopeKind = "not_shared" | "scoped" | "unscoped";
+
+export interface DraftTenantView {
+  segment: number;
+  capture: string;
+}
+
+export interface DraftedRuleView {
+  rule: number;
+  checked: boolean;
+  unchecked_reason: UncheckedReason | null;
+  visited: number;
+  links: number;
+  example: string;
+}
+
+export interface DraftedAdapterView {
+  adapter: Record<string, unknown>;
+  scope: DraftScopeState;
+  tenant: DraftTenantView | null;
+  rules: DraftedRuleView[];
+}
+
+export interface DroppedView {
+  shape: string | null;
+  adapter: number | null;
+  rule: number | null;
+  reason: DraftDropReason;
+}
+
+export interface PreviewRowView {
+  source: PreviewSource;
+  shape: string;
+  url: string;
+  adapter: number | null;
+  rule: number | null;
+  artifact_id: string | null;
+}
+
+export interface SiteDrafted {
+  type: "site_drafted";
+  protocol_version: 6;
+  request_id: string;
+  revision: string;
+  drafter: SiteDrafter;
+  adapters: DraftedAdapterView[];
+  dropped: DroppedView[];
+  preview: PreviewRowView[];
+  taken_types: string[];
+  remapped: number;
+}
+
+export interface ScopeValues {
+  values: string[];
+}
+
+export type UnscopedChoice = "unscoped";
+
+export type ScopeChoiceView = ScopeValues | UnscopedChoice;
+
+export interface CheckSiteDraftRequest {
+  type: "check_site_draft";
+  protocol_version: 6;
+  request_id: string;
+  origin: string;
+  expected_revision: string;
+  adapters: Record<string, unknown>[];
+  provenance: RuleProvenance[][];
+  scope: (ScopeChoiceView | null)[];
+  visited: ShapeCount[];
+  links: ShapeCount[];
+}
+
+export interface RuleVerdictView {
+  verdict: RuleVerdictKind;
+  reason: string | null;
+}
+
+export interface ScopeVerdictView {
+  state: DraftScopeState;
+  resolved: ResolvedScopeKind | null;
+  reason: string | null;
+}
+
+export interface SiteDraftChecked {
+  type: "site_draft_checked";
+  protocol_version: 6;
+  request_id: string;
+  revision: string;
+  rules: RuleVerdictView[][];
+  scope: ScopeVerdictView[];
+  preview: PreviewRowView[];
+}
+
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | GetAgentEnvRequest | DraftSiteRequest | CheckSiteDraftRequest | ServiceHelloRequest;
+
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | ServiceReady | ErrorResponse;

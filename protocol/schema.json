@@ -75,6 +75,8 @@
         { "$ref": "#/$defs/RetrySaveRequest" },
         { "$ref": "#/$defs/OpenPathRequest" },
         { "$ref": "#/$defs/GetAgentEnvRequest" },
+        { "$ref": "#/$defs/DraftSiteRequest" },
+        { "$ref": "#/$defs/CheckSiteDraftRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
     },
@@ -134,6 +136,8 @@
         { "$ref": "#/$defs/RunUpdated" },
         { "$ref": "#/$defs/PathOpened" },
         { "$ref": "#/$defs/AgentEnvListed" },
+        { "$ref": "#/$defs/SiteDrafted" },
+        { "$ref": "#/$defs/SiteDraftChecked" },
         { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
@@ -1939,6 +1943,222 @@
         "protocol_version": { "type": "integer", "const": 6 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "build_id": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "ShapeCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One private URL shape (never a URL) and how often it was seen.",
+      "required": ["shape", "count"],
+      "properties": {
+        "shape": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+      }
+    },
+    "DraftSiteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Draft a capture policy for one exact HTTP(S) origin from private URL shapes: the visited sample (current page plus the worker's sample) and click-only link shapes. No URL, link, or title crosses.",
+      "required": ["type", "protocol_version", "request_id", "origin", "visited", "links"],
+      "properties": {
+        "type": { "const": "draft_site" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "origin": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "visited": { "type": "array", "maxItems": 21, "items": { "$ref": "#/$defs/ShapeCount" } },
+        "links": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/ShapeCount" } }
+      }
+    },
+    "SiteDrafter": {
+      "type": "string",
+      "description": "Which drafter produced the adapters. Only the deterministic structural drafter exists.",
+      "enum": ["structural"]
+    },
+    "DraftScopeState": {
+      "type": "string",
+      "description": "The scope a draft on its origin gets: not a shared origin, a scope copied from agreeing adapters, a tenant scope the review must choose, or unscoped only.",
+      "enum": ["not_shared", "copied", "pending", "unscoped_only"]
+    },
+    "UncheckedReason": {
+      "type": "string",
+      "description": "Why a drafted rule starts unchecked in the review.",
+      "enum": ["link_only", "token_only"]
+    },
+    "DraftDropReason": {
+      "type": "string",
+      "description": "Why a shape or drafted rule was not used: a structural drop reason or a draft check code.",
+      "enum": ["root", "probe", "search_or_paging", "blocked_route", "param_name", "already_recognized", "no_route_word", "no_identifier", "limit", "draft_forbidden_key", "draft_no_scope_source", "draft_scope_conflict", "draft_no_leading_literal", "draft_rest_second", "draft_id_needs_typed_capture", "draft_search_capture", "draft_matches_probe", "draft_overlap", "draft_blocked_route", "draft_paging_capture", "draft_invalid_rule", "draft_scope_pending", "draft_scope_choice"]
+    },
+    "PreviewSource": {
+      "type": "string",
+      "description": "Where a match preview row comes from: a visited shape, a link shape, or a fixed probe path.",
+      "enum": ["visited", "link", "probe"]
+    },
+    "RuleProvenance": {
+      "type": "string",
+      "description": "Who wrote a rule: drafted rules fail closed, user-written rules only warn.",
+      "enum": ["drafted", "user_written"]
+    },
+    "RuleVerdictKind": {
+      "type": "string",
+      "description": "A re-checked rule's verdict.",
+      "enum": ["kept", "dropped", "warned"]
+    },
+    "ResolvedScopeKind": {
+      "type": "string",
+      "description": "The scope a saved draft carries once the choice is accepted.",
+      "enum": ["not_shared", "scoped", "unscoped"]
+    },
+    "DraftTenantView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The path segment index and capture name of a shared origin's tenant.",
+      "required": ["segment", "capture"],
+      "properties": {
+        "segment": { "type": "integer", "minimum": 0 },
+        "capture": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "DraftedRuleView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One drafted rule of an adapter, by index into its match list, with its provenance counts and a filled example URL (never a real one).",
+      "required": ["rule", "checked", "unchecked_reason", "visited", "links", "example"],
+      "properties": {
+        "rule": { "type": "integer", "minimum": 0 },
+        "checked": { "type": "boolean" },
+        "unchecked_reason": { "oneOf": [{ "$ref": "#/$defs/UncheckedReason" }, { "type": "null" }] },
+        "visited": { "type": "integer", "minimum": 0 },
+        "links": { "type": "integer", "minimum": 0 },
+        "example": { "type": "string", "maxLength": 8192 }
+      }
+    },
+    "DraftedAdapterView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One drafted adapter table with only Tier 0 keys, before any scope, unscoped, or title overlay.",
+      "required": ["adapter", "scope", "tenant", "rules"],
+      "properties": {
+        "adapter": { "type": "object" },
+        "scope": { "$ref": "#/$defs/DraftScopeState" },
+        "tenant": { "oneOf": [{ "$ref": "#/$defs/DraftTenantView" }, { "type": "null" }] },
+        "rules": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/DraftedRuleView" } }
+      }
+    },
+    "DroppedView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A shape or drafted rule that was not used, and why.",
+      "required": ["shape", "adapter", "rule", "reason"],
+      "properties": {
+        "shape": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] },
+        "adapter": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "rule": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "reason": { "$ref": "#/$defs/DraftDropReason" }
+      }
+    },
+    "PreviewRowView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One match preview row: a shape filled to an illustrative URL, or a probe URL, and the adapter rule that recognizes it without scope. url is never a real URL.",
+      "required": ["source", "shape", "url", "adapter", "rule", "artifact_id"],
+      "properties": {
+        "source": { "$ref": "#/$defs/PreviewSource" },
+        "shape": { "type": "string", "maxLength": 2048 },
+        "url": { "type": "string", "maxLength": 8192 },
+        "adapter": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "rule": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "artifact_id": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] }
+      }
+    },
+    "SiteDrafted": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The host's draft for the request's origin, bound to the config revision it was drafted against.",
+      "required": ["type", "protocol_version", "request_id", "revision", "drafter", "adapters", "dropped", "preview", "taken_types", "remapped"],
+      "properties": {
+        "type": { "const": "site_drafted" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "drafter": { "$ref": "#/$defs/SiteDrafter" },
+        "adapters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/DraftedAdapterView" } },
+        "dropped": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/DroppedView" } },
+        "preview": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/PreviewRowView" } },
+        "taken_types": { "type": "array", "maxItems": 160, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+        "remapped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ScopeValues": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Scope the tenant capture to these values.",
+      "required": ["values"],
+      "properties": {
+        "values": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+      }
+    },
+    "UnscopedChoice": {
+      "type": "string",
+      "description": "Record every account on this shared origin in this Chrome profile.",
+      "enum": ["unscoped"]
+    },
+    "ScopeChoiceView": {
+      "description": "The review's scope choice for one adapter, sent beside the checked table and never inside it; null means no choice.",
+      "oneOf": [{ "$ref": "#/$defs/ScopeValues" }, { "$ref": "#/$defs/UnscopedChoice" }]
+    },
+    "CheckSiteDraftRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Re-check the review's selection at expected_revision before update_config. adapters are the checked tables, before the scope, unscoped, and title overlays; provenance and scope have one entry per adapter. There is no title field.",
+      "required": ["type", "protocol_version", "request_id", "origin", "expected_revision", "adapters", "provenance", "scope", "visited", "links"],
+      "properties": {
+        "type": { "const": "check_site_draft" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "origin": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "adapters": { "type": "array", "maxItems": 8, "items": { "type": "object" } },
+        "provenance": { "type": "array", "maxItems": 8, "items": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/RuleProvenance" } } },
+        "scope": { "type": "array", "maxItems": 8, "items": { "oneOf": [{ "$ref": "#/$defs/ScopeChoiceView" }, { "type": "null" }] } },
+        "visited": { "type": "array", "maxItems": 21, "items": { "$ref": "#/$defs/ShapeCount" } },
+        "links": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/ShapeCount" } }
+      }
+    },
+    "RuleVerdictView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One re-checked rule: kept, dropped (a drafted rule that failed), or warned (a user-written rule that failed). reason is the draft check code.",
+      "required": ["verdict", "reason"],
+      "properties": {
+        "verdict": { "$ref": "#/$defs/RuleVerdictKind" },
+        "reason": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] }
+      }
+    },
+    "ScopeVerdictView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One adapter's scope state and how the review's choice resolved; resolved is null and reason set when the choice is refused.",
+      "required": ["state", "resolved", "reason"],
+      "properties": {
+        "state": { "$ref": "#/$defs/DraftScopeState" },
+        "resolved": { "oneOf": [{ "$ref": "#/$defs/ResolvedScopeKind" }, { "type": "null" }] },
+        "reason": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] }
+      }
+    },
+    "SiteDraftChecked": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The re-check's per-rule and per-adapter verdicts and match preview at the current revision.",
+      "required": ["type", "protocol_version", "request_id", "revision", "rules", "scope", "preview"],
+      "properties": {
+        "type": { "const": "site_draft_checked" },
+        "protocol_version": { "type": "integer", "const": 6 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "rules": { "type": "array", "maxItems": 8, "items": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/RuleVerdictView" } } },
+        "scope": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ScopeVerdictView" } },
+        "preview": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/PreviewRowView" } }
       }
     }
   }

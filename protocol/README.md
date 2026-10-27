@@ -194,6 +194,39 @@ extension does not accept `service_ready`.
 not be started in time, or keeps reporting another build. Notes, capture, and
 settings never depend on the service.
 
+Version 6 additions: Capture Site drafting. Two request/response pairs were
+added within version 6, as the run messages were; no existing message changed
+shape. `draft_site` asks the host's deterministic structural drafter for a
+capture policy on one exact HTTP(S) `origin`. Only the origin and private URL
+shapes cross: `visited` (at most 21 `ShapeCount`s, the current page's shape
+plus the worker's sample) and `links` (at most 50 click-only link shapes),
+each a `shape` of at most 2,048 characters and a `count` from 1 to 1,000,000.
+No raw URL, link `href`, or tab title is sent; the host refuses a value that
+is a URL rather than a shape, or any shape it cannot parse, as
+`invalid_request`. `site_drafted` returns the config `revision` it drafted
+against, the `drafter` (`structural`, the only value), at most 8
+`DraftedAdapterView`s (an adapter table with only Tier 0 keys, its scope
+state, the shared-origin tenant, and at most 16 rules, each with whether it
+starts checked and why not), at most 128 `dropped` shapes or rules with their
+reason, a `preview` of at most 128 rows (every visited and link shape filled
+to an illustrative URL, and every probe URL, with the rule that recognizes it
+ignoring scope; never a real URL), the `taken_types`, and `remapped`.
+`check_site_draft` re-checks the review's selection before the save: the
+checked `adapters` (at most 8 tables, before the scope, unscoped, and title
+overlays), one `provenance` list per adapter (`drafted` or `user_written`,
+at most 16), one `scope` choice per adapter in a separate field
+(`{ "values": [...] }` with 1 to 64 values of at most 128 characters,
+`"unscoped"`, or `null`), and the same shapes. There is no title field: a
+title entry comes from the tab title, which never reaches the host, and the
+panel adds it after the check. The host compares `expected_revision` with
+the current config and answers `conflict` when it differs; the extension
+then saves with the usual revision-checked `update_config`.
+`site_draft_checked` returns one `RuleVerdictView` (`kept`, `dropped`, or
+`warned`, with the draft check code) per rule, one `ScopeVerdictView` per
+adapter, and the preview. A version 6 host built before these messages
+answers `invalid_request` for the unknown types, and the panel then asks for
+a host rebuild. The host enforces every bound above at runtime.
+
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while
 `adapter_issue` is set. Turning capture on needs only a home folder.

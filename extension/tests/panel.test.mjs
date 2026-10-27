@@ -1493,3 +1493,93 @@ test("the panel restores run cards on load and shows a run the shortcut started"
   await until(() => page.el("run-area").textContent.includes("Shortcut run"), "the shortcut's card");
   assert.equal(page.el("run-area").textContent.split("Restored run").length, 2, "each run shows once");
 });
+
+// --- Response shape validation: Capture Site drafting ------------------------
+
+const { isResponseShape } = await import("../dist/protocol-shape.js");
+
+function previewRow(source = "visited") {
+  return {
+    source, shape: "/issue/{num}", url: "https://work.example/issue/1",
+    adapter: 0, rule: 0, artifact_id: "work.issue:work.example/1",
+  };
+}
+
+function siteDrafted() {
+  return {
+    type: "site_drafted", protocol_version: PROTOCOL_VERSION, request_id: "r1",
+    revision: "sha256:00", drafter: "structural",
+    adapters: [{
+      adapter: { type: "work.issue", origin: "https://work.example", match: [{ path: "/issue/{num:int}" }], id: "work.issue:{host}/{num}" },
+      scope: "pending", tenant: { segment: 0, capture: "org" },
+      rules: [{ rule: 0, checked: false, unchecked_reason: "link_only", visited: 0, links: 3, example: "https://work.example/issue/1" }],
+    }],
+    dropped: [
+      { shape: "/search", adapter: null, rule: null, reason: "probe" },
+      { shape: null, adapter: 0, rule: 1, reason: "draft_overlap" },
+    ],
+    preview: [previewRow("visited"), previewRow("link"), { ...previewRow("probe"), adapter: null, rule: null, artifact_id: null }],
+    taken_types: ["jira.issue"], remapped: 0,
+  };
+}
+
+function siteDraftChecked() {
+  return {
+    type: "site_draft_checked", protocol_version: PROTOCOL_VERSION, request_id: "r2", revision: "sha256:00",
+    rules: [[{ verdict: "kept", reason: null }], [{ verdict: "warned", reason: "draft_overlap" }]],
+    scope: [
+      { state: "pending", resolved: "scoped", reason: null },
+      { state: "unscoped_only", resolved: null, reason: "draft_scope_choice" },
+    ],
+    preview: [previewRow()],
+  };
+}
+
+test("site_drafted with an extra key or an unbounded list fails the response shape check", () => {
+  assert.equal(isResponseShape(siteDrafted()), true);
+  assert.equal(isResponseShape(siteDraftChecked()), true);
+  const mutations = [
+    (draft) => { draft.extra = 1; },
+    (draft) => { draft.adapters[0].extra = 1; },
+    (draft) => { draft.adapters[0].tenant.extra = 1; },
+    (draft) => { draft.adapters[0].rules[0].extra = 1; },
+    (draft) => { draft.dropped[0].extra = 1; },
+    (draft) => { draft.preview[0].extra = 1; },
+    (draft) => { delete draft.remapped; },
+    (draft) => { draft.drafter = "agent"; },
+    (draft) => { draft.adapters[0].scope = "scoped"; },
+    (draft) => { draft.adapters[0].rules[0].unchecked_reason = "planted"; },
+    (draft) => { draft.dropped[0].reason = "because"; },
+    (draft) => { draft.preview[0].source = "tab"; },
+    (draft) => { draft.adapters[0].adapter = []; },
+    (draft) => { draft.adapters = Array.from({ length: 9 }, () => siteDrafted().adapters[0]); },
+    (draft) => { draft.adapters[0].rules = Array.from({ length: 17 }, () => siteDrafted().adapters[0].rules[0]); },
+    (draft) => { draft.dropped = Array.from({ length: 129 }, () => siteDrafted().dropped[0]); },
+    (draft) => { draft.preview = Array.from({ length: 129 }, () => previewRow()); },
+    (draft) => { draft.taken_types = Array.from({ length: 161 }, (_, n) => `t${n}`); },
+    (draft) => { draft.remapped = -1; },
+  ];
+  for (const mutate of mutations) {
+    const draft = siteDrafted();
+    mutate(draft);
+    assert.equal(isResponseShape(draft), false, mutate.toString());
+  }
+  const checkedMutations = [
+    (checked) => { checked.extra = 1; },
+    (checked) => { checked.rules[0][0].extra = 1; },
+    (checked) => { checked.rules[0][0].verdict = "maybe"; },
+    (checked) => { checked.scope[0].extra = 1; },
+    (checked) => { checked.scope[0].state = "copied_maybe"; },
+    (checked) => { checked.scope[0].resolved = "pending"; },
+    (checked) => { checked.rules = Array.from({ length: 9 }, () => [{ verdict: "kept", reason: null }]); },
+    (checked) => { checked.rules[0] = Array.from({ length: 17 }, () => ({ verdict: "kept", reason: null })); },
+    (checked) => { checked.scope = Array.from({ length: 9 }, () => siteDraftChecked().scope[0]); },
+    (checked) => { checked.preview = Array.from({ length: 129 }, () => previewRow()); },
+    (checked) => { delete checked.preview; },
+  ];
+  for (const mutate of checkedMutations) {
+    const checked = siteDraftChecked();
+    mutate(checked);
+    assert.equal(isResponseShape(checked), false, mutate.toString());
+  }
+});
