@@ -2012,3 +2012,12 @@ test("diagnostics show their count, copy as JSON lines with a header, and clear"
     await diag.clear();
   }
 });
+
+test("the run time limit hint says tasks get at least 30 minutes", () => {
+  // The service runs a task with the larger of this limit and 30 minutes
+  // (TASK_MIN_TIMEOUT_SECS), so the hint must not claim every run stops here.
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const field = html.slice(html.indexOf('for="harness-timeout"'), html.indexOf("</small>", html.indexOf('for="harness-timeout"')));
+  assert.match(field, /A summary run that takes longer is stopped/);
+  assert.match(field, /task bar runs for at least 30 minutes/);
+});
