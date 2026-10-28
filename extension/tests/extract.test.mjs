@@ -535,6 +535,20 @@ test("a hung subframe falls back to reading the top frame alone", async () => {
   assert.equal(requests[0].content, "Top text");
 });
 
+test("a hung Readability injection is given up on and the page is read without it", async () => {
+  const { deps, requests, injections } = framesDeps(
+    [{ frameId: 0, result: framePage({ content: "Body text" }) }],
+    { readability: () => new Promise(() => {}) },
+  );
+  deps.allFramesTimeoutMs = 20;
+  await summarizeTab(TAB, deps);
+  assert.deepEqual(injections.map((injection) => [injection.target, injection.files ?? injection.func]), [
+    [{ tabId: 9, allFrames: true }, ["vendor/readability.js"]],
+    [{ tabId: 9, allFrames: true }, extractReadablePage],
+  ]);
+  assert.equal(requests[0].content, "Body text");
+});
+
 test("the all-frames timeout is ten seconds", async () => {
   const { ALL_FRAMES_TIMEOUT_MS } = await import("../dist/summarize.js");
   assert.equal(ALL_FRAMES_TIMEOUT_MS, 10_000);

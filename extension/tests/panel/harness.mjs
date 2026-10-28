@@ -247,9 +247,11 @@ export async function install({
     clipboard: { async writeText(text) { state.copied.push(text); } },
   } });
   let close;
+  const windowListeners = new Map();
   globalThis.window = {
     localStorage,
     addEventListener(type, listener) {
+      windowListeners.set(type, [...(windowListeners.get(type) ?? []), listener]);
       if (type === "pagehide") {
         let closed = false;
         close = () => {
@@ -405,6 +407,10 @@ export async function install({
       return found;
     },
     calls: (name) => state.counts.get(name) ?? 0,
+    // The panel's window gets an event, such as focus.
+    windowEvent(type) {
+      for (const listener of type === "pagehide" ? [] : windowListeners.get(type) ?? []) listener({ type });
+    },
     // The worker broadcasts a notice to open extension pages.
     notify(notice) {
       for (const listener of state.runtimeMessages.registered) {
@@ -534,7 +540,7 @@ export const RUN_VIEW = {
   error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
   stream_bytes: 0, can_retry_save: false, answer: null,
 };
-export const WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
+export const WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v2");
 
 // A page Readability can read: the bundled library loads, then the extractor
 // returns the page.

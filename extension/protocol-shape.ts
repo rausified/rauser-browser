@@ -139,12 +139,14 @@ const RUN_VIEW_KEYS: readonly string[] = [
 const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report"];
 const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
 
-/** A task view carries its instruction, and its report as a string or
- * null; no other kind carries either key. */
+/** A task view carries its instruction as a string, and its report as a
+ * string or null; no other kind carries either key. The service omits the
+ * instruction from the failed view of a task whose request record is
+ * missing, so a missing one is accepted and the card shows none. */
 function taskKeysFit(run: Record<string, unknown>): boolean {
   const task = run.kind === "task";
   if (!task) return !Object.hasOwn(run, "instruction") && !Object.hasOwn(run, "task_report");
-  return typeof run.instruction === "string" &&
+  return (!Object.hasOwn(run, "instruction") || typeof run.instruction === "string") &&
     (!Object.hasOwn(run, "task_report") || run.task_report === null || typeof run.task_report === "string");
 }
 

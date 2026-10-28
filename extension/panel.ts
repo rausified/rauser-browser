@@ -182,7 +182,9 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
 const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
-const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
+// v2 since the warning was reworded for tasks, so it shows once more to
+// everyone who saw the summary-only text.
+const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v2");
 
 // --- Page area (§5.3, §5.7) --------------------------------------------------
 // The panel follows the active tab. `tabRefreshSeq` lets a refresh whose tab
@@ -1201,24 +1203,35 @@ async function runTask(): Promise<void> {
       taskInput.focus();
     }
   } catch (error) {
+    const failure = taskFailureText(error);
     // Like Summarize, the line is about the tab the task was started on.
-    if (followedTabId === tabId) {
-      const failure = taskFailureText(error);
-      showRunLine(taskRunArea, tabId, failure.text, true, failure.openSettings);
-    }
+    if (followedTabId === tabId) showRunLine(taskRunArea, tabId, failure.text, true, failure.openSettings);
+    // A lost answer may hide a queued task; listing the runs shows its card
+    // (on every tab), so Run is not pressed again for a duplicate.
+    if (failure.uncertain) void restoreCards();
   } finally {
     taskStarting = false;
     updateControls();
   }
 }
 
+// The announcement waiting for its tick after the region was emptied.
+let announceTimer: ReturnType<typeof setTimeout> | null = null;
+
 /** Announces a task card's finish in `#task-announce`, the bar's only live
- * region. */
+ * region. The region is emptied first and written on the next tick, so a
+ * screen reader announces a text identical to the last one again. */
 function announceTask(run: RunView): void {
   const chars = Array.from(run.instruction ?? "");
   const shown = chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : chars.join("");
   const outcome = run.state === "succeeded" ? "done" : run.state === "canceled" ? "canceled" : "failed";
-  taskAnnounce.textContent = `Task ${outcome}: ${shown}`;
+  const text = `Task ${outcome}: ${shown}`;
+  if (announceTimer !== null) clearTimeout(announceTimer);
+  taskAnnounce.textContent = "";
+  announceTimer = setTimeout(() => {
+    announceTimer = null;
+    if (!closed) taskAnnounce.textContent = text;
+  }, 0);
 }
 
 /** Reuse on a finished task card: the instruction the service stored goes
@@ -1748,6 +1761,10 @@ taskInput.addEventListener("keydown", (event) => {
   void runTask();
 });
 taskInput.addEventListener("focus", () => void probeSelection());
+// The selection may have changed in the page since the bar got focus: check
+// again as Run is pressed and when the panel's window gets focus back.
+taskRunButton.addEventListener("pointerdown", () => void probeSelection());
+window.addEventListener("focus", () => void probeSelection());
 taskHintSettings.addEventListener("click", openSettings);
 pageSummaryOpen.addEventListener("click", () => void openPageSummary());
 chrome.runtime.onMessage.addListener((message, sender) => {

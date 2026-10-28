@@ -154,8 +154,19 @@ export async function readTab(
   deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs">,
 ): Promise<TabPage> {
   const target = { tabId: tab.id, allFrames: true };
+  const timeoutMs = deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS;
+  // Races `work` against the all-frames timeout, which then wins.
+  const withinTimeout = async <T>(work: Promise<T>): Promise<T | "timeout"> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
+  };
   try {
-    await deps.scripting.executeScript({ target, files: ["vendor/readability.js"] });
+    // A hung subframe holds the injection too; past the timeout the
+    // extractor runs without waiting for it.
+    await withinTimeout(deps.scripting.executeScript({ target, files: ["vendor/readability.js"] }));
   } catch {
     // The extractor falls back to body text where Readability did not load.
   }
@@ -169,11 +180,7 @@ export async function readTab(
     // targeted; otherwise it drops every frame that failed, the top frame
     // included, from the results and resolves. A missing top frame result
     // (say, a navigation mid-injection) reads as unreadable below.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS);
-    });
-    const all = await Promise.race([extract(target), timedOut]).finally(() => clearTimeout(timer));
+    const all = await withinTimeout(extract(target));
     // A slow or hung subframe holds the whole call, so the top frame is read
     // alone, as before every frame was.
     results = all === "timeout" ? await extract({ tabId: tab.id, frameIds: [0] }) : all;

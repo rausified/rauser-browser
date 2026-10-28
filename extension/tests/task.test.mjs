@@ -4,8 +4,8 @@ import test from "node:test";
 // Run after build:extension.
 const { EXTRACT_LIMITS } = await import("../dist/extract.js");
 const {
-  TASK_INPUT_MAX_UTF16_UNITS, TASK_NEEDS_HARNESS_MESSAGE, TASK_PAGE_CHANGED_MESSAGE, TASK_UNREADABLE_MESSAGE,
-  cleanInstruction, startTask, taskFailureText,
+  TASK_INPUT_MAX_UTF16_UNITS, TASK_MAY_HAVE_STARTED_MESSAGE, TASK_NEEDS_HARNESS_MESSAGE, TASK_PAGE_CHANGED_MESSAGE,
+  TASK_UNREADABLE_MESSAGE, cleanInstruction, startTask, taskFailureText,
 } = await import("../dist/task.js");
 const { HostClient, HostError, PROTOCOL_VERSION } = await import("../dist/native.js");
 const { DIAG_FLUSH_MS, DIAG_STORAGE_KEY, diag } = await import("../dist/diag.js");
@@ -157,8 +157,10 @@ test("a maximal page plus the worst-case instruction fits the frame", async () =
 });
 
 test("taskFailureText maps each error", () => {
-  const settings = (text) => ({ text, openSettings: true });
-  const plain = (text) => ({ text, openSettings: false });
+  const settings = (text) => ({ text, openSettings: true, uncertain: false });
+  const plain = (text) => ({ text, openSettings: false, uncertain: false });
+  // The answer was lost after start_task may have reached the service.
+  const uncertain = { text: TASK_MAY_HAVE_STARTED_MESSAGE, openSettings: false, uncertain: true };
   const finishSetup = settings("Finish setup in Brauser settings to run tasks (home folder, knowledge base folder and agent).");
   const repair = settings("Brauser's settings need repair before a task can run.");
   const cases = [
@@ -186,8 +188,14 @@ test("taskFailureText maps each error", () => {
       plain("Could not start the task: instruction contains a control character")],
     [new HostError("invalid_request", "invalid or unsupported request JSON!"),
       plain("Could not start the task: invalid or unsupported request JSON!")],
-    [new HostError("timeout", "Native host did not respond in time"),
-      plain("Could not start the task: Native host did not respond in time")],
+    [new HostError("timeout", "Native host did not respond in time"), uncertain],
+    [new HostError("disconnected", "Native host has exited."), uncertain],
+    [new HostError("invalid_response", "Native host returned run_fetched instead of run_started"), uncertain],
+    // The host's own lost answer (EXCHANGE_TIMEOUT, or a service that closed
+    // the connection) and its unusable reply.
+    [new HostError("service_unavailable", "The Brauser service stopped before answering. Try again in a moment."), uncertain],
+    [new HostError("internal", "The Brauser service sent an unexpected reply."), uncertain],
+    [new HostError("internal", "task broke"), plain("Could not start the task: task broke")],
     [new Error("boom"), plain("Could not start the task: boom")],
     ["odd", plain("Could not start the task: odd")],
   ];
@@ -199,6 +207,7 @@ test("taskFailureText maps each error", () => {
   }
   assert.equal(TASK_NEEDS_HARNESS_MESSAGE, "Set up an agent (Codex or Claude Code) in settings to run tasks.");
   assert.equal(TASK_UNREADABLE_MESSAGE, "Brauser could not read this page for a task.");
+  assert.equal(TASK_MAY_HAVE_STARTED_MESSAGE, "The task may have started — check below before running it again.");
   assert.equal(TASK_INPUT_MAX_UTF16_UNITS, 4000);
 });
 

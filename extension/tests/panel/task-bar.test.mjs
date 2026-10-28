@@ -565,3 +565,156 @@ test("Dismiss is remembered", async () => {
   assert.equal(taskCards(again).length, 0);
   assert.equal(descendants(again.el("task-run-area")).length, 0);
 });
+
+const MAY_HAVE_STARTED = "The task may have started — check below before running it again.";
+
+test("a lost start_task answer says the task may have started and restores its card", async () => {
+  const lost = [
+    ["the host's lost answer", (respond) => respond({
+      type: "error", code: "service_unavailable", message: "The Brauser service stopped before answering. Try again in a moment.",
+    })],
+    ["a closed port", (_respond, page) => page.hostExits()],
+  ];
+  for (const [what, lose] of lost) {
+    const start = held();
+    let started = null;
+    const queued = { ...TASK_VIEW, instruction: "Possibly started" };
+    const views = new Map([[queued.run_id, queued]]);
+    const page = await taskPanel({
+      intercept: (request) => {
+        if (request.type === "start_task") {
+          started = request;
+          return start.promise;
+        }
+        // The service queued the task before its answer was lost.
+        if (request.type === "list_runs") return { type: "runs_listed", runs: started ? [queued] : [] };
+        return startsTask(views)(request);
+      },
+    });
+    await until(() => page.sent("list_runs").length === 1, `${what}: the first list`);
+    type(page, "Possibly started");
+    enter(page);
+    await until(() => page.sent("start_task").length === 1, `${what}: start_task`);
+    lose(start.release, page);
+    await until(() => page.el("task-run-area").textContent.includes(MAY_HAVE_STARTED), `${what}: the softer line`);
+    assert.doesNotMatch(page.el("task-run-area").textContent, /Could not start the task/, what);
+    assert.equal(page.el("task-input").value, "Possibly started", what);
+    await until(() => taskCards(page).length === 1, `${what}: the restored card`);
+    assert.equal(page.sent("list_runs").length, 2, what);
+    assert.match(taskCards(page)[0].textContent, /Possibly started/, what);
+    teardown.splice(0).forEach((listener) => listener());
+  }
+
+  // A definite refusal keeps its text and lists nothing again.
+  const refused = await taskPanel({
+    intercept: (request) => request.type === "start_task"
+      ? { type: "error", code: "conflict", message: "Four tasks are already waiting or running." }
+      : startsTask()(request),
+  });
+  await until(() => refused.sent("list_runs").length === 1, "the first list");
+  type(refused, "A fifth task");
+  enter(refused);
+  await until(() => refused.el("task-run-area").textContent.includes("Four tasks are already waiting or running."), "the refusal");
+  await settle(20);
+  assert.doesNotMatch(refused.el("task-run-area").textContent, /may have started/);
+  assert.equal(refused.sent("list_runs").length, 1);
+});
+
+test("a task view without an instruction (a corrupt record) still lists, without Reuse", async () => {
+  const { instruction: _instruction, ...corrupt } = {
+    ...TASK_VIEW, run_id: "00000000-0000-4000-8000-000000000051", state: "failed",
+    error: "The task's request is missing.", error_kind: "harness_failed",
+    started_at: null, finished_at: RECENT,
+  };
+  const running = { ...TASK_VIEW, state: "running", instruction: "Still running" };
+  const views = new Map([[corrupt.run_id, corrupt], [running.run_id, running]]);
+  const page = await taskPanel({
+    intercept: (request) => request.type === "list_runs"
+      ? { type: "runs_listed", runs: [corrupt, running] }
+      : startsTask(views)(request),
+  });
+  await until(() => taskCards(page).length === 2, "both task cards");
+  const shown = taskCards(page).find((card) => card.textContent.includes("The task's request is missing."));
+  assert.ok(shown, "the corrupt record's card");
+  assert.equal(buttonIn(shown, "Reuse"), null);
+  assert.doesNotMatch(page.el("task-run-area").textContent, /Could not list agent runs/);
+});
+
+test("a started task clears an earlier restore notice", async () => {
+  let listFails = true;
+  const page = await taskPanel({
+    intercept: (request) => request.type === "list_runs" && listFails
+      ? { type: "error", code: "internal", message: "list broke" }
+      : startsTask()(request),
+  });
+  await until(() => page.el("task-run-area").textContent.includes("Could not list agent runs: list broke"), "the notice");
+  listFails = false;
+  type(page, "Start anyway");
+  enter(page);
+  await until(() => taskCards(page).length === 1, "the task card");
+  assert.doesNotMatch(page.el("task-run-area").textContent, /list broke/);
+});
+
+test("the reworded setup warning shows once more to users who saw the old one", async () => {
+  const local = new Map([[storageKey("summarize_warning_seen_v1"), true]]);
+  const page = await taskPanel({ local });
+  type(page, "First task since the rewording");
+  enter(page);
+  await until(() => page.el("task-run-area").textContent.includes(SETUP_WARNING), "the setup warning");
+  assert.equal(local.get(storageKey("summarize_warning_seen_v2")), true);
+  assert.equal(WARNING_SEEN_KEY, storageKey("summarize_warning_seen_v2"));
+});
+
+test("the selection is checked again when Run is pressed and when the panel gets focus", async () => {
+  let selected = false;
+  const page = await taskPanel({ selection: () => selected });
+  await until(() => page.state.selectionProbes.length >= 1, "the first probe");
+  await settle(20);
+  assert.equal(page.el("task-context").textContent, "Uses this page: Tab title");
+  selected = true;
+  page.el("task-run").dispatch("pointerdown");
+  await until(() => page.el("task-context").textContent === "Uses this page and your selection: Tab title", "the line after pointerdown");
+  selected = false;
+  page.windowEvent("focus");
+  await until(() => page.el("task-context").textContent === "Uses this page: Tab title", "the line after focus");
+});
+
+test("a repeated identical announcement is announced again", async () => {
+  const instruction = "Count the links";
+  let next = 0;
+  const views = new Map();
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "start_task") {
+        next += 1;
+        const run_id = `00000000-0000-4000-8000-00000000007${next}`;
+        const queued = { ...TASK_VIEW, run_id, instruction: request.instruction };
+        views.set(run_id, {
+          ...queued, state: "succeeded", started_at: "2026-10-27T09:00:01-07:00", finished_at: RECENT, task_report: "Seven.",
+        });
+        return { type: "run_started", run: queued, existing: false };
+      }
+      if (request.type === "get_run" && views.has(request.run_id)) {
+        return { type: "run_fetched", run: views.get(request.run_id), stream_text: "", next_offset: 0, more: false };
+      }
+      return startsTask()(request);
+    },
+  });
+  const announce = page.el("task-announce");
+  const writes = [];
+  Object.defineProperty(announce, "textContent", {
+    get() { return this.ownText; },
+    set(value) {
+      writes.push(String(value));
+      this.ownText = String(value);
+      this.children = [];
+    },
+  });
+  for (const round of [1, 2]) {
+    type(page, instruction);
+    enter(page);
+    await until(() => writes.filter((text) => text === `Task done: ${instruction}`).length === round, `announcement ${round}`);
+  }
+  // Each announcement first empties the region, so the same text is new.
+  assert.deepEqual(writes, ["", `Task done: ${instruction}`, "", `Task done: ${instruction}`]);
+});

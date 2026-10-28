@@ -811,8 +811,12 @@ export class RunCards {
     return this.disposed;
   }
 
-  /** Shows `run` at the top, or updates its card if it has one. */
+  /** Shows `run` at the top, or updates its card if it has one. A run just
+   * started proves the host answers, so a restore failure notice in this
+   * set's container goes. */
   show(run: RunView): void {
+    if (this.disposed) return;
+    clearNotice(this.container);
     this.add(run, true);
   }
 

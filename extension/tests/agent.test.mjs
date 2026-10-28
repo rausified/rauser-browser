@@ -274,7 +274,7 @@ test("isRunView accepts task views and rejects task keys on other kinds", () => 
   }
 });
 
-test("a task view without instruction is rejected", () => {
+test("a task view without instruction (a corrupt record's failed view) is accepted", () => {
   const view = {
     run_id: "00000000-0000-4000-8000-000000000001", state: "queued", harness: "claude",
     record_key: { kind: "url", value: "https://a.example/x" }, written_record_key: null,
@@ -283,9 +283,13 @@ test("a task view without instruction is rejected", () => {
     error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
     stream_bytes: 0, can_retry_save: false, answer: null, kind: "task", task_report: null,
   };
-  assert.equal(isResponseShape({ type: "run_updated", run: view }), false);
+  assert.equal(isResponseShape({ type: "run_updated", run: view }), true);
   assert.equal(isResponseShape({ type: "run_updated", run: { ...view, instruction: "Go" } }), true);
-  assert.equal(isResponseShape({ type: "runs_listed", runs: [view] }), false);
+  assert.equal(isResponseShape({ type: "runs_listed", runs: [view, { ...view, instruction: "Go" }] }), true);
+  // Present, it is still a string.
+  for (const instruction of [null, 7, ["Go"]]) {
+    assert.equal(isResponseShape({ type: "runs_listed", runs: [{ ...view, instruction }] }), false, String(instruction));
+  }
 });
 
 test("path_opened and agent_env_listed responses are checked", () => {

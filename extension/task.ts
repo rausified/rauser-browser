@@ -26,9 +26,34 @@ export const TASK_FINISH_SETUP_MESSAGE =
   `Finish setup in ${APP_NAME} settings to run tasks (home folder, knowledge base folder and agent).`;
 export const TASK_REPAIR_MESSAGE = `${APP_NAME}'s settings need repair before a task can run.`;
 export const TASK_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to use the task bar.`;
+/** start_task's answer was lost after the request may have reached the
+ * service, which may have queued it. */
+export const TASK_MAY_HAVE_STARTED_MESSAGE = "The task may have started — check below before running it again.";
 // What an older host's parse_envelope answers for a request type it does
 // not know, such as start_task.
 const UNSUPPORTED_REQUEST_TEXT = "invalid or unsupported request JSON";
+// The host's texts for a service whose answer it lost (its EXCHANGE_TIMEOUT
+// or a closed connection) and for a reply it could not use.
+const HOST_NO_ANSWER_TEXT = "The Brauser service stopped before answering. Try again in a moment.";
+const HOST_UNEXPECTED_REPLY_TEXT = "The Brauser service sent an unexpected reply.";
+
+/** Whether `error` lost start_task's answer rather than refusing the task:
+ * the port closed, the extension or the host gave up waiting, or the
+ * answer was unusable. The service may have queued the task meanwhile. */
+function answerLost(error: HostError): boolean {
+  switch (error.code) {
+    case "disconnected":
+    case "timeout":
+    case "invalid_response":
+      return true;
+    case "service_unavailable":
+      return error.message === HOST_NO_ANSWER_TEXT;
+    case "internal":
+      return error.message === HOST_UNEXPECTED_REPLY_TEXT;
+    default:
+      return false;
+  }
+}
 
 // Every control character (Unicode Cc, as Rust's char::is_control) except
 // newline and tab: the host refuses them.
@@ -41,12 +66,23 @@ export function cleanInstruction(text: string): string {
   return wellFormed(text).replace(CONTROL, " ").trim();
 }
 
-/** What a failed startTask tells the user, and whether settings is the
- * fix. Host refusals are mapped by code, never by the host's text, which
- * names summaries. */
-export function taskFailureText(error: unknown): { text: string; openSettings: boolean } {
-  const plain = (text: string): { text: string; openSettings: boolean } => ({ text, openSettings: false });
+/** What a failed startTask tells the user. */
+export interface TaskFailure {
+  text: string;
+  /** Settings is the fix, so the line offers Open settings. */
+  openSettings: boolean;
+  /** The answer was lost, so the task may have started: the panel lists
+   * the runs to show its card. */
+  uncertain: boolean;
+}
+
+/** What a failed startTask tells the user, whether settings is the fix,
+ * and whether the task may have started anyway. Host refusals are mapped by
+ * code, never by the host's text, which names summaries. */
+export function taskFailureText(error: unknown): TaskFailure {
+  const plain = (text: string): TaskFailure => ({ text, openSettings: false, uncertain: false });
   if (error instanceof HostError) {
+    if (answerLost(error)) return { text: TASK_MAY_HAVE_STARTED_MESSAGE, openSettings: false, uncertain: true };
     switch (error.code) {
       case "unreadable":
         return plain(TASK_UNREADABLE_MESSAGE);
@@ -59,9 +95,9 @@ export function taskFailureText(error: unknown): { text: string; openSettings: b
       case "conflict":
         return plain(error.message);
       case "not_configured":
-        return { text: TASK_FINISH_SETUP_MESSAGE, openSettings: true };
+        return { text: TASK_FINISH_SETUP_MESSAGE, openSettings: true, uncertain: false };
       case "invalid_config":
-        return { text: TASK_REPAIR_MESSAGE, openSettings: true };
+        return { text: TASK_REPAIR_MESSAGE, openSettings: true, uncertain: false };
       case "invalid_request":
         if (error.message === UNSUPPORTED_REQUEST_TEXT) return plain(TASK_REBUILD_HOST_MESSAGE);
         break;
