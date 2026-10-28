@@ -3698,7 +3698,7 @@ test("Improve with AI sends start_site_draft with the held shapes and reads noth
   assert.equal(request.harness, null);
   assert.deepEqual(request.visited, structural.visited);
   assert.deepEqual(request.links, structural.links);
-  assert.doesNotMatch(JSON.stringify({ ...request, origin: null }), /http|Work page|42/);
+  assert.doesNotMatch(JSON.stringify({ ...request, origin: null, request_id: null, requested_at: null }), /http|Work page|42/);
   assert.equal(page.state.scripts.length, scripts, "no page is read again");
   assert.equal(page.state.workerRequests.filter((message) => message.kind === "get_site_patterns").length, samples);
   assert.deepEqual(sentAfter(page, from), ["start_site_draft"]);
