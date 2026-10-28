@@ -3114,7 +3114,7 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
-        let occurred_at = time::OffsetDateTime::now_utc()
+        let occurred_at = crate::capture::fixtures::event_time()
             .replace_nanosecond(0)
             .unwrap()
             .format(&time::format_description::well_known::Rfc3339)
@@ -3476,7 +3476,7 @@ id = "jira:{host}/{key}"
         }
 
         fn record_modal_activity(config: &mut ConfigStore, url: &str, issue: &str) {
-            let occurred_at = time::OffsetDateTime::now_utc()
+            let occurred_at = crate::capture::fixtures::event_time()
                 .replace_nanosecond(0)
                 .unwrap()
                 .format(&time::format_description::well_known::Rfc3339)
@@ -4052,7 +4052,7 @@ match = [{ path = "/items/{id:int}/edit", mode = "edit" }, { path = "/items/{id:
 id = "work:{host}/{id}"
 "#,
                 );
-                let at = time::OffsetDateTime::now_utc()
+                let at = crate::capture::fixtures::event_time()
                     .replace_nanosecond(0)
                     .unwrap();
                 Self {
@@ -4796,7 +4796,7 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
-        let occurred_at = time::OffsetDateTime::now_utc()
+        let occurred_at = crate::capture::fixtures::event_time()
             .replace_nanosecond(0)
             .unwrap()
             .format(&time::format_description::well_known::Rfc3339)
@@ -4866,7 +4866,7 @@ id = "work:{host}/{id}"
             event_id: uuid::Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A summarized page".into(),
-            occurred_at: time::OffsetDateTime::now_utc()
+            occurred_at: crate::capture::fixtures::event_time()
                 .replace_nanosecond(0)
                 .unwrap()
                 .format(&time::format_description::well_known::Rfc3339)
@@ -5770,7 +5770,7 @@ id = "work:{host}/{id}"
             url: "https://work.example/issues/1".into(),
             title: Some("Issue 1".into()),
             // Relative to now: a fixed date ages out of the 30-day window.
-            occurred_at: time::OffsetDateTime::now_utc()
+            occurred_at: crate::capture::fixtures::event_time()
                 .replace_minute(0)
                 .unwrap()
                 .replace_second(0)
@@ -5900,7 +5900,7 @@ id = "work:{host}/{owner}/{id}"
 scope = { owner = ["acme"] }
 "#,
         );
-        let occurred_at = time::OffsetDateTime::now_utc()
+        let occurred_at = crate::capture::fixtures::event_time()
             .replace_nanosecond(0)
             .unwrap()
             .format(&time::format_description::well_known::Rfc3339)
@@ -6008,7 +6008,7 @@ id = "work:{host}/{id}"
             "\u{202e}link",
         ] {
             let mut event = activity_for_invalid_policy();
-            event.occurred_at = time::OffsetDateTime::now_utc()
+            event.occurred_at = crate::capture::fixtures::event_time()
                 .replace_minute(0)
                 .unwrap()
                 .replace_second(0)
@@ -6165,7 +6165,7 @@ id = "work:{host}/{id}"
             let mut event = activity_for_invalid_policy();
             event.url = "https://work.example/teams/acme/items/1".into();
             event.artifact_id = "work:work.example/acme/1".into();
-            event.occurred_at = time::OffsetDateTime::now_utc()
+            event.occurred_at = crate::capture::fixtures::event_time()
                 .replace_minute(0)
                 .unwrap()
                 .replace_second(0)
@@ -7042,7 +7042,7 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
-        let occurred_at = time::OffsetDateTime::now_utc()
+        let occurred_at = crate::capture::fixtures::event_time()
             .replace_minute(0)
             .unwrap()
             .replace_second(0)
@@ -7192,7 +7192,7 @@ id = "work:{host}/{id}"
     }
 
     fn hour_timestamp() -> String {
-        time::OffsetDateTime::now_utc()
+        crate::capture::fixtures::event_time()
             .replace_minute(0)
             .unwrap()
             .replace_second(0)
@@ -7535,7 +7535,7 @@ id = "work:{host}/{id}"
         const BUILD: &str = "this-build";
 
         fn now() -> String {
-            time::OffsetDateTime::now_utc()
+            crate::capture::fixtures::event_time()
                 .replace_nanosecond(0)
                 .unwrap()
                 .format(&time::format_description::well_known::Rfc3339)
@@ -7837,7 +7837,7 @@ id = "work:{host}/{id}"
             let link = link(fake::socket_in(&dir), never);
             // A current time with fractional seconds, as new Date().toISOString()
             // gives, is refused too: the schema's pattern admits whole seconds only.
-            let fractional = time::OffsetDateTime::now_utc()
+            let fractional = crate::capture::fixtures::event_time()
                 .replace_millisecond(452)
                 .unwrap()
                 .format(&time::format_description::well_known::Rfc3339)
@@ -8128,7 +8128,7 @@ match = [{ path = "/items/{id:int}" }]
 id = "work:{host}/{id}"
 "#,
         );
-        let occurred_at = time::OffsetDateTime::now_utc()
+        let occurred_at = crate::capture::fixtures::event_time()
             .replace_minute(0)
             .unwrap()
             .replace_second(0)

@@ -7,6 +7,7 @@ import vm from "node:vm";
 // it in the page, so each test runs its source text in a fresh context that
 // holds only the fakes it is given.
 const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js");
+const { summarizeTab } = await import("../dist/summarize.js");
 
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
@@ -27,11 +28,13 @@ const el = (tag, ...children) => ({
 // `bodyText` as the body's innerText and `selection` as the user's selection.
 function page({
   title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
+  mainHeadings = [],
 } = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
   const document = {
     title,
     body: { innerText: bodyText },
+    querySelectorAll: () => mainHeadings,
     cloneNode(deep) {
       seen.clonedDeep = deep;
       return { clone: true };
@@ -54,6 +57,87 @@ function page({
 
 const run = (scope, limits = EXTRACT_LIMITS) =>
   vm.runInNewContext(`(${extractReadablePage})(${JSON.stringify(limits)})`, scope);
+
+function heading(value, excluded = false) {
+  return { innerText: value, textContent: value, closest: () => excluded ? {} : null };
+}
+
+test("a current main heading wins over stale document and Readability titles", () => {
+  for (const article of [null, el("p", "The pull request's current content")]) {
+    const { scope } = page({
+      title: "Pull requests · acme/project", articleTitle: "Pull requests · acme/project", article,
+      bodyText: "Current body", mainHeadings: [heading("  Fix the\n release   #35  ")],
+    });
+    assert.equal(run(scope).title, "Fix the release #35");
+  }
+});
+
+test("missing or ambiguous main headings retain article and document title fallbacks", () => {
+  for (const mainHeadings of [[], [heading(" ")], [heading("Hidden", true)], [heading("First"), heading("Second")]]) {
+    assert.equal(run(page({ article: el("p", "Body"), articleTitle: "Article title", mainHeadings }).scope).title,
+      "Article title");
+    assert.equal(run(page({ title: "Document title", bodyText: "Body", mainHeadings }).scope).title,
+      "Document title");
+  }
+  assert.equal(run(page({ bodyText: "Body", mainHeadings: [heading("Same"), heading(" Same ")] }).scope).title, "Same");
+});
+
+test("heading titles keep the title cap and surrogate replacement", () => {
+  const { scope } = page({ bodyText: "Body", mainHeadings: [heading("\uD800" + "😀".repeat(2000))] });
+  const title = run(scope).title;
+  assert.equal(title[0], "\uFFFD");
+  assert.equal(title.length, EXTRACT_LIMITS.maxTitleChars - 1);
+  assert.ok(title.endsWith("😀"));
+});
+
+test("summarizeTab sends the item title after list-to-item SPA navigation with stale metadata", async () => {
+  const oldTitle = "Pull requests · acme/project";
+  const itemTitle = "Fix the release #35";
+  const mainHeadings = [heading("Pull requests")];
+  const article = el("div", el("p", "List content"));
+  const { scope } = page({
+    title: oldTitle, articleTitle: oldTitle, article, mainHeadings, href: "https://github.com/acme/project/pulls",
+  });
+  assert.equal(run(scope).content, "List content");
+  // pushState updates the URL and body before either tab/document metadata.
+  scope.window.location.href = "https://github.com/acme/project/pull/35";
+  article.childNodes = [el("h1", itemTitle), el("p", "Item content")];
+  mainHeadings.splice(0, 1, heading(itemTitle));
+  assert.equal(scope.document.title, oldTitle);
+  const requests = [];
+  const deps = {
+    scripting: {
+      async executeScript(request) {
+        assert.deepEqual(request.target, { tabId: 7, frameIds: [0] });
+        if (request.files) {
+          assert.deepEqual(request.files, ["vendor/readability.js"]);
+          return [];
+        }
+        return [{ result: vm.runInNewContext(`(${request.func})(${JSON.stringify(request.args[0])})`, scope) }];
+      },
+    },
+    host: {
+      async call(request, expected) {
+        assert.equal(request.type, "start_run");
+        assert.equal(expected, "run_started");
+        requests.push(request);
+        return { run: { title: request.title, url: request.url }, existing: false };
+      },
+    },
+    storage: { async set() {} },
+    now: () => new Date("2026-10-28T10:00:00Z"),
+  };
+  const result = await summarizeTab({ id: 7, url: scope.window.location.href, title: oldTitle }, deps);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].title, itemTitle);
+  assert.equal(requests[0].url, scope.window.location.href);
+  assert.equal(requests[0].content, `# ${itemTitle}\n\nItem content`);
+  assert.equal(result.run.title, itemTitle);
+  // A caller still on the list URL must never attach item content to it.
+  await assert.rejects(summarizeTab({ id: 7, url: "https://github.com/acme/project/pulls", title: oldTitle }, deps),
+    (error) => error.code === "page_changed");
+  assert.equal(requests.length, 1);
+});
 
 test("extracts article blocks as text and drops images", () => {
   const article = el("div",
