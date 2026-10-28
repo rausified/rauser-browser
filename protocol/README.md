@@ -26,7 +26,7 @@ changes (`unknown` when built outside a Git checkout). The
 panel and settings page show that commit beside the extension's own and flag a
 different commit; nothing else depends on its format.
 
-Protocol version 6 covers host discovery, configuration, native folder
+Protocol version 7 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
 configuration. `get_config` returns a
@@ -92,8 +92,47 @@ version 5, adapter additions or changes required a native confirmation through
 every-account-in-this-Chrome-profile warning to it; version 6 removes that
 confirmation, and an unscoped adapter still needs its `unscoped` acknowledgment.
 
-Version 6 is the current protocol. The host refuses version 5 and earlier
-requests with `unsupported_protocol_version`. It goes with standing HTTP(S)
+Version 7 is the current protocol. The host refuses version 6 and earlier
+requests with `unsupported_protocol_version`.
+
+Version 7: artifact containers. `ArtifactView` gains two required fields, so
+the artifact card can name what holds an artifact and what it holds:
+
+- `within`: `null`, or an `ArtifactRefView` (`artifact_id`, `artifact_type`,
+  `title`, `url`) for the container an adapter's `within` places this
+  artifact in, such as the GitHub repository of a pull request. A container
+  is titled from its ID (`owner/repo`), never from a sub-page title, while
+  some adapter declares `within` its type.
+- `contained`: at most 20 `ContainedArtifactView` entries (the same four
+  fields plus `focused_seconds`), the artifacts recorded within this one,
+  most focused first, ties broken by `artifact_id`. It is empty for an
+  artifact that is not a container.
+
+Totals are unchanged in meaning: a contained artifact's seconds count in its
+own view and once in its container's, and recent and worklog totals still
+count each second once. No existing message is removed; version 7 also
+carries the Capture Site drafting messages below.
+
+Downgrading after adding repositories is unsupported: older hosts reject
+`within` in the adapter config and in adapter history.
+
+`config_result.adopted_state` (added to version 6, 2026-10-27; the extension
+and host ship together) reports the host's record of adopted adapter
+contracts, `adopted-contracts.json` beside config.toml (DESIGN.md §6.2).
+`issue` is non-null while the record cannot be used, which pauses note loads
+and saves on pages the current adapters do not recognize and refuses adapter
+additions; it names the file and why. `warnings` (at most 8) says recording
+failed or the record is full, which leaves later hand removals unprotected
+and blocks nothing. `full` is true when the warning is the record's bound
+(1,024 contracts or 1 MiB), the one recording failure a forget repairs, so
+settings offers Forget for it too. `revision` is `missing`, `unreadable`, `not-a-file`, or
+the `sha256:` revision of the file's bytes. `forget_adopted_contracts`
+carries that revision as `expected_revision`: a changed record is a
+`conflict`; otherwise the host renames the record aside to
+`adopted-contracts.json.<UTC timestamp>.bak`, records the current contracts
+afresh, and answers with `config_result`.
+
+Version 6 goes with standing HTTP(S)
 access: the extension requests `http://*/*` and `https://*/*` at install, so
 nothing in the protocol depends on a per-site Chrome grant.
 
@@ -156,8 +195,10 @@ the same length-prefixed framing and generated types:
   naming another is refused as `not_configured`), `record_key`, and `requested_at`. The extension always sends
   `record_key` as `null`: the host resolves it exactly as `load_note` does and
   refuses a request that names one. `requested_at` is the user's local click
-  time as an RFC 3339 timestamp with its UTC offset, checked against the same
-  window as capture timestamps. The answer is `run_started` with the `run`
+  time as an RFC 3339 timestamp in whole seconds with its UTC offset (`Z` or
+  `+HH:MM`/`-HH:MM`, so `new Date().toISOString()`'s fractional seconds are
+  refused), the same form as capture's `occurred_at` and checked against the
+  same window. The answer is `run_started` with the `run`
   and `existing`, which is `true` when the page's record key already had a
   queued or running run; that run is returned instead of a new one.
 - `get_run` names a `run_id` and `since_offset`, the stream byte offset the
@@ -194,9 +235,10 @@ extension does not accept `service_ready`.
 not be started in time, or keeps reporting another build. Notes, capture, and
 settings never depend on the service.
 
-Version 6 additions: Capture Site drafting. Two request/response pairs were
-added within version 6, as the run messages were; no existing message changed
-shape. `draft_site` asks the host's deterministic structural drafter for a
+Version 7 additions: Capture Site drafting. Two request/response pairs, built
+additively within version 6 and moved onto version 7 (2026-10-27) when
+artifact containers took that version, so they ship with it; no existing
+message changed shape for them. `draft_site` asks the host's deterministic structural drafter for a
 capture policy on one exact HTTP(S) `origin`. Only the origin and private URL
 shapes cross: `visited` (at most 21 `ShapeCount`s, the current page's shape
 plus the worker's sample) and `links` (at most 50 click-only link shapes),
@@ -225,9 +267,10 @@ the current config and answers `conflict` when it differs; the extension
 then saves with the usual revision-checked `update_config`.
 `site_draft_checked` returns one `RuleVerdictView` (`kept`, `dropped`, or
 `warned`, with the draft check code) per rule, one `ScopeVerdictView` per
-adapter, and the preview. A version 6 host built before these messages
+adapter, and the preview. A version 7 host built before these messages
 answers `invalid_request` for the unknown types, and the panel then asks for
-a host rebuild. The host enforces every bound above at runtime.
+a host rebuild; a version 6 host refuses every version 7 request as
+`unsupported_protocol_version`. The host enforces every bound above at runtime.
 
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while

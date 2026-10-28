@@ -42,7 +42,7 @@ npm run test:scripts
 4. Open the Brauser side panel (the toolbar button opens it). Until setup is complete it warns that Brauser isn't set up; click the gear icon or **Open settings** to open settings in a tab and choose a home folder. Brauser writes only inside it, in fixed folders it creates as needed (`notes/`, `logs/`, `artifacts/`, `summaries/`, and `later/`); its settings, index, and recovery files stay in the OS application folders. An install from before this layout is moved once, automatically: `pages/` becomes `notes/` and `log/` becomes `logs/`. If one of the fixed folders already exists beside the older one, nothing moves and settings says which folder to move out of the way (DESIGN.md §6.1).
 5. On a Jira Cloud, SharePoint/OneDrive, or GitHub page, return to the panel and click **Capture Site**. Review what it remembers, whether the current page matches, and the safety-check results, then save without opening JSON. GitHub asks separately for the work organizations whose pull requests and issues to remember; uncheck a kind you do not need. The first site starts capture; adding a site while capture is paused keeps it paused. These are development starter drafts pending live-tool certification.
 6. On any other HTTP(S) site, **Capture Site** drafts the rules itself, with no agent: the host groups the private URL patterns of this page, its links, and the site's recent visits into kinds of page, and the panel lists in plain words what Brauser will and will not remember, with this page's result, illustrative examples, and the safety checks. Keep or drop each kind's rules (rules seen only in links, or whose ID has no fixed shape, start unchecked), rename a kind, and optionally remove a fixed ending from titles. On a site shared by many workspaces, such as Linear or Notion, choose the workspaces to record or the every-account statement before saving. Saving re-checks the selection with the host and then saves once, with no JSON, Chrome prompt, or dialog. On a site that already has rules, the panel offers **Draft rules for these pages** while you are on an unrecognized page and an unrecognized kind of page there has been visited three times; it only adds rules. **Open advanced settings** hands the draft to the adapter editor, where a rule you edit becomes your own and its safety failures only warn.
-7. Manage existing site rules in settings. A site is on exactly when it has an adapter. Settings also offers the same starter drafts in its advanced rule editor, with a match and safety-probe preview before saving.
+7. Manage existing site rules in settings. A site is on exactly when it has an adapter. Settings also offers the same starter drafts in its advanced rule editor, with a match and safety-probe preview before saving. A tracking-parameter entry (`strip_params` in config.toml) may not strip a query parameter an adapter reads: Brauser refuses a save that would add one, and if config.toml already has one, settings names it and offers **Stop stripping**, which removes just that entry.
 
 ### Set up a summary harness and Summarize & log
 
@@ -79,6 +79,17 @@ The host binds the chosen folder to its filesystem identity. If that folder is m
 
 Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Automatic capture still checks the original URL against the host's adapters before normalizing or logging it, but notes work on any HTTP(S) page whether or not an adapter covers it. See [protocol/README.md](protocol/README.md) for the message contract.
 
+Unsaved note edits also have a local recovery copy in this browser profile,
+written as you type so closing the panel during a save does not lose newer
+typing. Reopening shows the current saved note and a separate recovery box:
+use **Copy** to recover the text yourself, or **Discard recovery copies** to
+remove the displayed copies. Recovery never overwrites a note automatically.
+Confirmed saves clear their own draft; conflicted copies stay until discarded.
+These copies include note text and page addresses, stay outside the home folder,
+and are not synced by Brauser. If browser storage is blocked or full, the panel
+warns you to keep it open until the native save succeeds. Clearing extension
+data or uninstalling also removes the recovery copies.
+
 Removing a site or changing its capture rules keeps one shared note per
 artifact on every route the removed or earlier rules recognized, because
 config.toml keeps those rules for note keys (never for capture). A page those
@@ -94,10 +105,15 @@ too: the host records every adapter it has used in `adopted-contracts.json`
 beside config.toml and reads removed ones from there. Settings will not add an
 adapter that gives a removed one's pages a different artifact ID or type.
 If that file is damaged, notes on pages no current adapter recognizes refuse
-to load or save, and settings refuses to add adapters, until it is fixed or
-moved aside; the panel's message names the file. Moving it aside forgets
-those adapters, so notes from adapters removed by hand may need **Use as
-artifact note** again. Notes alone do not turn capture back on.
+to load or save, and settings refuses to add adapters, until it is repaired.
+Settings names the file and offers **Forget recorded adapters**, which asks
+in the page, backs the file up beside it, and starts a fresh record; the
+panel's message points there. Forgetting drops those adapters, so notes
+from adapters removed by hand may need **Use as artifact note** again. If
+Brauser cannot record an adapter (the record is full or cannot be written),
+settings shows a warning; nothing is blocked. For a full record it also
+offers **Forget recorded adapters**. Notes alone do not turn
+capture back on.
 
 Expand **Page patterns** in the panel and choose **Review page patterns** to
 inspect the current address and same-site link patterns, including on sites

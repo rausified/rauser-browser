@@ -240,16 +240,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-t40` **Capture Site for unknown sites.** Complete the URL shaper,
-  bounded worker sample, top-frame link shapes, host structural drafter and
-  per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
-  panel review; all named planted-link, shared-origin and identity tests remain
-  required. This is the remaining portion of Capture Site after known sites.
-  **Cycle split (2026-10-27):** the private input layer and an inspectable,
-  review-only panel/settings surface shipped first (see Shipped). The parent remains
-  open for the host structural drafter, per-rule checks, shared-origin scope,
-  selected-rule capture and all named identity/flow cases. A pattern preview
-  must never imply that unknown-site capture is enabled.
 - [ ] `brwr-gf1` **Resolve the bare-Notion draft-rule contradiction.** The
   named Notion identity success case has no route literal before its first
   identifier, while the draft checker requires one. Document and test a
@@ -265,13 +255,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   versions, native registration, the folder picker, standing HTTP(S) access,
   background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
-- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
-  Structural first, agent second: for unknown sites, "Improve with AI"
-  refines the structural draft by launching an agent job through the Brauser
-  service (the open access PR 2 service, shipped in #75, and PR 3 runners, shipped in #98;
-  spec above), not the old M2 step 8.2 harness path. Agent drafts are
-  untrusted and get the same per-rule host checks and plain-language review.
-  Capture Site must keep working with no agent configured.
 - [ ] `brwr-deo` **M2 step 8.5 — `/summarize` in the panel, now open access PR
   4.** A tracking pointer: the summary file, log event, and index/panel
   integration are built in `brwr-so4` (spec §7); there is no denylist check.
@@ -297,12 +280,9 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 
 ### Focused quality follow-up
 
-- [ ] `brwr-twd` **Service: keep a run's key until its terminal status is
-  durable.** From the PR #75 Codex review: a failed terminal status write
-  still frees the run's slot and key, so the record says running and a second
-  run for the same key can start. Use bounded retries and an in-memory end
-  state, keeping the key reserved, rather than holding the queue on a failing
-  disk.
+- [ ] `brwr-srp` **Record which query parameters were stripped beside stored
+  canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
+  artifacts apart in history; changes the log and index formats.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -311,19 +291,6 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
   when Capture Site or the open access PR 3 run card repeats rendering the
   panel already has; do not rewrite shipped views solely to create an
   abstraction. Close it as not needed if no second consumer appears by PR 3.
-
-- [ ] `brwr-3nq` **Retain unsaved panel notes across close and reopen.**
-  Found while exercising `brwr-9xg` (related): the pagehide flush queues behind
-  an in-flight save and then disconnects, so the newest edits and conflict
-  copy-out live only in memory and are lost on close. Add synchronous local
-  recovery before save dispatch and explicit Copy/Discard after reopening,
-  never silently applying a draft to a changed note. Cookie built this in
-  cycle 8 (closed PR #67, commit `8ae533c`, never merged): a `NoteRecovery`
-  store writes each snapshot under a fresh immutable key in the input
-  handler, so an acknowledgement or another panel's discard removes only the
-  exact snapshot it saw. Reuse or rebase that work rather than redesigning
-  it. The queue had imported this bead as closed from the cycle-8 export;
-  it is reopened because that code never reached `main`.
 
 - [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
   drop that races the last in-flight batch stays counted and visible, but its
@@ -350,29 +317,21 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 - [ ] `brwr-3rt` **Isolate scripted host lifecycle tests on Windows.** Add a
   debug-only disposable config-path seam before running host-kill tests on
   Windows, whose Known Folders lookup ignores the Unix HOME fixture.
+- [ ] `brwr-mdt` **Make capture.rs tests independent of the calendar day (P2).**
+  `batch_appends_visits_and_overflow_once_with_a_compact_intent` and
+  `oversized_daily_log_is_rejected_not_retried` failed on Windows CI at
+  exactly 2026-10-28T00:00Z (PR #126): their timestamps come from the wall
+  clock, so a run across midnight sees two days. Pin the clock or date, or
+  build timestamps away from midnight.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
-- [ ] `brwr-rq5` **Make Unix-socket tests sandbox-aware (P2).** When binding a Unix
-  socket fails with EPERM/EACCES and `BRAUSER_REQUIRE_IPC_TESTS` is not `1`,
-  skip with a printed reason; with the flag set, fail. Applies to the host
-  service tests and `npm run test:scripts`. Cookie's codex workspace-write
-  sandbox denies local IPC, so its health gate saw 32 socket-test failures and
-  refused product work for 10 cycles. CI sets the flag, so CI never skips.
-  Open access PR 3 (#98, merged 2026-10-27) rewrote those tests; recheck which
-  still bind sockets before starting.
 - [ ] `brwr-2za` **Neutralize `$` math in daily-log titles and Why text.**
   `safe_markdown_line` (host/src/capture.rs) still allows `$` math there.
   Moving them to `markdown::inline` needs a second frozen renderer generation
   so intent-journal recovery (`pre_sanitizer_entry`) still matches lines
   journaled byte-exact in the old form. DESIGN.md §5.2 and spec §7.1 record
   the gap. From Lane E / PR 4; related to `brwr-3cc`.
-- [ ] `brwr-647` **Flaky extension test: Capture Site dwell sum.** On the slow
-  Linux VM, "installing Capture Site policy measures already-open pages
-  without inventing opens" (extension/tests/worker.test.mjs ~2321)
-  intermittently gets `actual: 8519, expected: 15000`. It seeds its clock
-  from the real wall clock; check local-hour boundary splits and unmocked
-  time reads first.
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
@@ -382,8 +341,8 @@ rather than Known Issues, and they wait behind the plan work above. Line
 numbers are on 1c32114; re-check them against current main. For each one,
 write the regression test described in its bead first, show it fails, then
 fix, and keep each fix to one cycle. If the test does not fail on current
-main, check the item off as "not reproduced" and say why. The last item,
-`brwr-f4s`, is a decided P2 note-identity follow-up rather than a defect fix.
+main, check the item off as "not reproduced" and say why. The decided
+strip_params note-identity follow-up has shipped (see Shipped).
 
 - [ ] `brwr-q7e` **Non-canonical event IDs are captured, then dropped on
   rescan.** The marker's `id_hash` hashes `parse_event_id()`'s lowercase
@@ -400,20 +359,11 @@ main, check the item off as "not reproduced" and say why. The last item,
   stores the normalized one, and the index's `safe_page_url` (index.rs ~1483)
   bounds the stored value. Apply the bound after normalization to the page,
   mode, and trail URLs and reject with `url_too_long`.
-- [ ] `brwr-d3m` **Under a minute of activity renders as "0 min".** `measures`
-  (host/src/index.rs ~1875) uses `whole_minutes`, so 1-59 seconds shows
-  "focused 0 min" or "0 min in background" in the worklog and the artifact
-  Timeline. Show "<1 min" when 0 < seconds < 60.
 - [ ] `brwr-w4k` **Use as artifact note records the migration route as the
   note's URL.** `use_as_artifact_note` (host/src/note.rs ~622) renders the new
   note with `destination_url`, while `save_keyed_note` keeps the note's
   original URL. Keep the older note's URL. Re-check against #70 (note identity,
   merged at 7a929ce), which changed which older notes are offered.
-- [ ] `brwr-p9r` **Recent opened before the host answers never loads.**
-  `loadRecent` and `loadWorklog` (extension/panel.ts ~605/~632) return early
-  while not connected, and the startup path (~815-840) never reloads them.
-  Reload when connected if Recent is visible, and show "Waiting for the
-  host…" meanwhile.
 - [ ] `brwr-v5t` **Use as artifact note is offered when it must fail.** The
   panel adds the Use button for every older note (extension/panel.ts ~222-246)
   even when the artifact note already exists, where `use_as_artifact_note`
@@ -449,19 +399,10 @@ were folded into `brwr-q7e` above rather than given their own item.
 - [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
   sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
   see show "○ Not an artifact" (~155 via `showNoPage` ~820).
-- [ ] `brwr-f1o` **`start_run.requested_at` schema is looser than the host.**
-  The schema (protocol/schema.json ~1838) allows 1-32 chars; the host
-  (host/src/native.rs ~476, `parse_event_time`) takes only the 20/25-char
-  whole-second forms. Make them agree.
 - [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
   the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
   rejects format 0 or more than 64 adapters, which the host returns with
   `adapter_issue` set, so the repair prompt is unreachable.
-- [ ] `brwr-5u0` **An oversize start_run reports "unexpected reply".** Adding
-  `record_key` (host/src/native.rs ~494) can push a frame-sized request past
-  the cap that `write_request` (host/src/frame.rs ~64) enforces after
-  connecting; refuse it as too large before contacting the service.
-  Re-check against open access PR 3 (#98), which reworked the service run path.
 - [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
   host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
 - [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
@@ -481,6 +422,12 @@ were folded into `brwr-q7e` above rather than given their own item.
   the winning title's refs as activity.ts (~177) does.
 
 ### Cookie's own proposals (only after the plan work above)
+
+- [ ] `brwr-kws` **Review recovered note copies individually.** Let a person
+  recover one page's text or discard one copy without handling the whole set.
+  Keep copy-only recovery, explicit empty-edit wording and immutable snapshot
+  cleanup across panels. Discovered while restoring local note recovery; this optional
+  UX follow-up comes after assigned work.
 
 - [ ] `brwr-vny` **Explain why the current page is outside capture.** Use
   the compiled policy to distinguish a paused site, pending removal, tenant
@@ -512,41 +459,26 @@ were folded into `brwr-q7e` above rather than given their own item.
 
 ## In Progress / This Iteration
 
-- [ ] `brwr-4vb` **Make the dialog reply test consume its request.** The fake
-  child can exit after printing its reply before the parent writes the framed
-  request, intermittently producing `EPIPE` even though production dialog
-  children read the request first. Make the fixture obey the real handshake
-  and exercise it repeatedly. The repair is committed as `00dbc75` and
-  included in `728b200`;
-  the bead is blocked on full verification in a runner that permits local IPC.
-
-  Cycle plan (2026-10-27): reproduce the early-exit pipe race with a full-size
-  request, make the reply fixture consume exactly the framed byte count, and
-  stress repeated replies. Review the complete diff and rerun the required
-  checks. Keep this bead open until the driver can verify the full suite: this
-  sandbox refuses Unix sockets (EPERM), including a standalone bind probe.
-  Repair committed: the large-input reproduction failed with Broken pipe before
-  the fix; the child now reads the byte count and complete body before replying.
-  Sixty exchanges cover empty, short and 64 KiB UTF-8 requests without waiting
-  for EOF. No production dialog behavior changed. Full verification remains
-  pending outside the sandbox; no shipped claim or bead closure this cycle.
-
-  Latest verification: see the current health handoff below for clean
-  baseline `46f17b3`. The same IPC restriction remains; the existing repair
-  is retained and this item is not closed.
+- In progress in the Lane A session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-t40` **Capture Site for unknown sites.** Complete the URL shaper,
+  bounded worker sample, top-frame link shapes, host structural drafter and
+  per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
+  panel review; all named planted-link, shared-origin and identity tests remain
+  required. This is the remaining portion of Capture Site after known sites.
+  **Cycle split (2026-10-27):** the private input layer and an inspectable,
+  review-only panel/settings surface shipped first (see Shipped). The parent remains
+  open for the host structural drafter, per-rule checks, shared-origin scope,
+  selected-rule capture and all named identity/flow cases. A pattern preview
+  must never imply that unknown-site capture is enabled.
+- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
+  Structural first, agent second: for unknown sites, "Improve with AI"
+  refines the structural draft by launching an agent job through the Brauser
+  service (the open access PR 2 service, shipped in #75, and PR 3 runners, shipped in #98;
+  spec above), not the old M2 step 8.2 harness path. Agent drafts are
+  untrusted and get the same per-rule host checks and plain-language review.
+  Capture Site must keep working with no agent configured.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-f4s` **Refuse new `strip_params` entries an adapter rule reads.**
-  `validate_base` (host/src/config.rs ~1414 on 1c32114) checks only syntax, so
-  stripping a query key that an adapter rule matches on (Jira's
-  `selectedIssue`) is accepted and collapses artifact identity. Decided
-  2026-10-27: a save that adds or changes such an entry is refused with a clear
-  message; an existing config with the conflict still loads and saves, shows a
-  warning, and offers a one-click "Stop stripping <param>" fix. Also record
-  which params were stripped. P2; in progress in the Columbus session (builds
-  on #85).
-- [ ] `brwr-hrr` **Give damaged adopted-contract state a visible repair path,
-  and guard ID changes against hand-retired contracts.** Follow-up to #85.
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
@@ -617,6 +549,18 @@ were folded into `brwr-q7e` above rather than given their own item.
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- [x] `brwr-fgb` **Offer Forget recorded adapters for a full adopted record (2026-10-27).** `adopted_state.full` (additive v6) marks the 1,024-contract / 1 MiB warning, and settings shows Forget recorded adapters with the same in-page confirmation for it; write and lock failures, which forgetting cannot fix, show no button and no Forget wording.
+- [x] `brwr-smk` **The macOS headless smoke waits for state, not time (2026-10-27).** Since #98, main's required smoke had stopped three ways, each passing on rerun. `Extensions.loadUnpacked` had 15 s to cover Chrome's whole cold start. A reopened panel's restored Codex card was taken for the new Claude Code run. The capture step navigated before the worker was shown to hold the new lease. A fourth stop showed up under load: one timed-out `chrome.sidePanel.open` ended the run. `scripts/smoke-macos.mjs` now has one helper, `waitUntil(what, observe, accept)`, whose timeout reports the last state observed. It is used to wait for Chrome before loading the extension, for the worker's lease (`workerHoldsHostPolicy`, `reloadSettings`), for a new run card that the service did not already list (`summarizeFromPanel(harness)`), and to retry opening the panel safely. TESTING.md "Waiting for state, not time" documents it for later smoke steps. No product race was found, and no step asserts less. **Metrics:** before, 3 of 3 idle and 3 of 5 under full CPU load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load).
+- **Category:** Bug Fix. **Keep brief activity visible in worklogs and Timelines (2026-10-27).** Positive focus and background durations below one minute now read `<1 min` instead of `0 min` through the shared prose formatter. Zero durations stay omitted, longer durations keep whole minutes, and artifact frontmatter retains integer counters. Two regressions first reproduced the old output, then verified the actual worklog and regenerated artifact file. Completes `brwr-d3m`. **Metrics:** 569 exercised Rust tests (+2), 43 explicit IPC skips, all 15 extension and 2 script test files; full required gate and both Clippy configurations green.
+- **Category:** Bug Fix. **Load Recent when the host finishes connecting (2026-10-27).** Opening Recent during startup shows waiting text for the list and worklog, with Copy disabled, then fills both automatically once the host configuration arrives. Only loads that were waiting are retried, avoiding duplicate requests if the user opens Recent during policy installation; startup can still load page notes concurrently. Completes `brwr-p9r`. **Metrics:** Three new composed-panel timing cases, all 15 extension and 2 script test files green; typecheck, lint, extension build, Rust suites and both Clippy configurations pass. macOS smoke is unavailable on Linux; no dialog or smoke-step changes.
+- **Category:** Bug Fix. **Keep unsaved page notes across panel close and reopen (2026-10-27).** Restored the unmerged `8ae533c` recovery work for `brwr-3nq`: each edit synchronously writes an immutable local snapshot before autosave, so closing during debounce or a held save preserves the latest text. Reopening loads the current host note alongside separate Copy/Discard recovery; conflicts and empty deletions remain, acknowledgements remove only their own snapshot, and quota/blocked-storage failures warn without blocking native saves. Recovered text never autosaves into a changed revision or artifact key. **Metrics:** Full required gate green; 567 Rust tests exercised with 43 explicit IPC skips (610 reported passes), all 15 extension and 2 script test files passing, 15 new regressions (29 editor and 60 composed-panel cases). macOS smoke refuses Linux; browser acceptance remains separate.
+- **Category:** Testing & Verification. **Guard missing-service tests when a sandbox denies IPC (2026-10-27).** Six service/proxy tests now use the existing permission-denial guard, including missing-listener connections and the keyed-frame forwarding boundary. Assertions stay intact; simulated denial skips locally and fails when CI requires IPC. This closes `brwr-elx` and verifies the already-merged 60-exchange dialog fixture (`brwr-4vb`, `00dbc75`). **Metrics:** Full required gate green; workspace 567 exercised/43 IPC skips; scripted-dialogs 522 exercised/53 IPC skips; six CI-required denial failures verified.
+- **Category:** Testing & Verification. **Verify Capture Site attention across hour boundaries (2026-10-27).** Reproduced `brwr-647` by starting its 15-second interval ten seconds before the hour: status correctly queued 10 seconds and kept 5 seconds live. Fixed local clocks and explicit live-plus-queued assertions now cover both mid-hour and boundary-crossing intervals while retaining zero-open, tab-identity and renewal checks. **Metrics:** 77 worker cases (+1), 20 repeated worker runs, three time zones, and three complete 15-file extension runs green; full required gate and both Clippy configurations pass.
+
+- [x] `brwr-rq5` **Unix-socket tests skip in a sandbox that denies local IPC (2026-10-27, #125).** Codex's `workspace-write` sandbox on Linux refuses to bind or connect a Unix socket (EPERM), so Cookie's in-cycle health gate failed every socket test and refused product work for 20+ cycles. That was a limitation of the runner, never a product defect or a red `main`. Every test that binds or connects a socket now calls one cached probe first (`host/src/ipc_test_guard.rs` for Rust, `scripts/tests/ipc-guard.mjs` for `test:scripts`): a permission denial skips it with a one-line `skipping: local IPC denied by sandbox` reason on stderr; with `BRAUSER_REQUIRE_IPC_TESTS=1` (set by CI since #107) it fails instead, and any other probe error always fails. `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` exercises both paths where IPC works. Guarded: 47 Rust tests (38 unit, 9 `scripted-dialogs` integration) and 2 `test:scripts` tests. TESTING.md "Local IPC in sandboxes" documents it.
+- [x] `brwr-hrr` **Repair a damaged adopted-adapter record from settings (2026-10-27).** Hand-retired adapter contracts freeze their routes' IDs (#122), and `config_result.adopted_state` (additive protocol v6) now names a damaged `adopted-contracts.json`, why it cannot be used, and that notes on unrecognized pages are paused; settings' **Forget recorded adapters** confirms in the page, sends `forget_adopted_contracts` with the shown revision, and the host backs the file up as `adopted-contracts.json.<timestamp>.bak` and records afresh under the config lock. A full or unwritable record is a non-blocking settings warning. Covered by host, wire, settings and headless smoke tests.
+- **Category:** Bug Fix. `brwr-f4s` **Refuse `strip_params` entries an adapter rule reads (2026-10-27).** A settings save that would make `strip_params` remove a query parameter an adapter rule reads (a `query` key or `absent` entry; current, historical, or hand-removed adapters) is refused with a message naming the adapter, origin, parameter and entry, because the pages that rule tells apart would share one stripped address. Existing conflicts still load and save; settings shows them with a one-click **Stop stripping** fix. Matching uses the host's strip rule, pinned by shared vectors in `protocol/strip-params/vectors.json`. Recording which parameters were stripped is split out as `brwr-srp`.
 
 - **Category:** New Feature. `brwr-sr3` **Open access PR 3: Summarize & log with full-access runners (2026-10-27).** The Brauser service now runs real agents: Codex as a `codex app-server` JSON-RPC thread with `approvalPolicy: "never"`, `danger-full-access`, and the answer schema as `outputSchema`, and Claude Code as `claude -p` stream-json with `--dangerously-skip-permissions` and a resumable session, both in the knowledge base folder with the service environment plus `agent.env`. The §6.4 prompt names `page.md` by path and marks it untrusted, with an editable type and category vocabulary; the answer is validated with one repair turn. Harness setup moved into the service (detect on its `PATH`, probe through the real runner) and the harness lockdown is deleted. Settings detects, tests, and chooses the harness and shows `agent.env` names; every HTTP(S) page gets **Summarize & log**, a `summarize` command, and a context-menu item that extract the page with pinned Readability 0.6.0 under encoded-byte caps; the polling run card offers Cancel, Retry save, Copy, Open in Codex, and Copy resume command, and is restored from `list_runs`. Summaries are not saved yet (PR 4). Closes `brwr-0ij` and `brwr-6wz`. **[human]**: a real Codex and a real Claude Code summary from the dev build, and Open in Codex opening Codex Desktop (TESTING.md "Real-UI acceptance"). Built on `feat/agent-runners-pr3`, not yet merged.
 
@@ -835,89 +779,93 @@ were folded into `brwr-q7e` above rather than given their own item.
 - `brwr-vny` is a later product idea: help a person understand a skipped page
   using an actual policy reason, after the ordered Capture Site work.
 
-### Cycle observations (2026-10-27 — dialog fixture repair)
+### Cycle observations (2026-10-27 — dialog fixture repair and sandbox IPC)
 
-- Health started red solely at Unix-socket service tests: 32 host failures, all
-  explained by denied socket operations; a minimal independent bind also
-  returned EPERM. The workspace started clean and no commit-gate failure file
-  existed. Keep real socket coverage intact and have the driver rerun it.
+Corrected 2026-10-27. Cycles on baselines `728b200` through `5231f9e` (merged
+in #93, #94, #101 and #108) recorded the health gate as blocked and asked the
+driver for a different runner. That was a sandbox limitation, not a product
+blocker: Codex's `workspace-write` sandbox denies local Unix-socket IPC
+(bind/connect return EPERM, and Node's child pipes, which are socketpairs on
+Linux, fail the same way), so every socket test failed there while `main` was
+green in CI. `brwr-rq5` fixed it in the tests: socket tests now skip in such a
+sandbox with a printed reason and still run, and must pass, everywhere
+`BRAUSER_REQUIRE_IPC_TESTS=1` is set, which includes CI (TESTING.md "Local IPC
+in sandboxes"). A gate whose only failures are socket tests is no reason to
+stop product work, and no history reset or production IPC change is called for.
+
 - The successful-dialog fixture must read the framed request before answering,
   as production does. Large requests reliably exposed the old fixture's
   early-exit race; small requests alone passed by scheduling luck.
-- Node's synchronous child-process transport also returns EPERM here, even for
-  a child that only prints JSON. `test:scripts` consequently fails its win32
-  path simulation, while extension test files pass. This is an environment
-  limitation, not evidence that the registration logic needs replacement.
-- No history reset was attempted: the clean baseline itself fails the socket
-  probe, and none of the preceding five commits is verified green under this
-  restriction. Resetting history cannot restore a denied OS capability.
-- Once the external gate is green, finish the existing unknown-site Capture
-  Site assignment; the private pattern review already provides its inputs.
-  A useful later review would show how selected rules group example pages
-  into the same artifact before enabling them, within the existing review.
+- Resume the assigned Capture Site work, `brwr-1hj` through `brwr-t40`: host
+  drafting, selectable rules and example artifact grouping using the existing
+  private pattern inputs. Resolve the Notion leading-literal contradiction
+  (`brwr-gf1`) before claiming its identity cases. A useful later review would
+  show which example pages selected rules group into one artifact before they
+  are enabled, within the existing review; no additional diagnostic view or
+  health surface is needed first.
 
-### Current health handoff (2026-10-27 — baseline `21d06c3`)
+### Cycle observations (2026-10-27 — green health gate)
 
-- Clean workspace; no quarantine failure file. The unfiltered opening gate
-  again passes 26 adapter-template tests and 447 host tests, then fails 32
-  service tests. Later Rust test binaries are not reached. All 13 extension
-  test files pass, as do protocol generation, build, fmt, both Clippy
-  configurations, npm install, typecheck, lint, extension build, current-state
-  validation and queue consistency. The repaired dialog fixture completes its
-  60 exchanges in the host run; `brwr-4vb` remains blocked on a full green gate.
-- An independent workspace AF_UNIX bind returns errno 1 EPERM.
-  A JSON-only Node spawnSync returns status 0, error EPERM and empty output.
-  The script gate fails; its non-isolated diagnostic reports 8 pass, 1 fail
-  and 1 platform skip, with the win32 simulation unable to parse empty output.
-  TESTING.md documents that diagnostic and the restriction. Keep all tests
-  enabled and do not change production IPC to fit this runner.
-- The same restriction was recorded on `728b200`, `90f88b4`, `382bf29`,
-  `8b7acd7`, `1305440`, `6de061e`, `b4b28e9`, `46f17b3`, `bdbbbb4` and `21d06c3`.
-  No commit among the last five is verified green in this runner, so no
-  history reset was attempted. Earlier quarantine recovery is retained; this
-  cycle introduces no product or test change and claims no shipped feature.
-- The driver needs to carry the baseline SHA and an unfiltered external
-  gate result into its next handoff, and provide a runner permitting local
-  IPC and synchronous child output. Another unchanged restricted cycle will
-  reproduce these failures rather than advance the assigned product work.
-- After health is green, resume `brwr-1hj` through `brwr-t40`: host drafting,
-  selectable rules and example artifact grouping using the existing private
-  pattern inputs. Resolve the Notion leading-literal contradiction
-  (`brwr-gf1`) before claiming its identity cases. The existing proposal to
-  preview which example pages share an artifact still belongs in this review;
-  no additional diagnostic view or self-directed feature is needed first.
+- The health-only cycle on `349b6ca0` repaired `brwr-elx` and `brwr-647`,
+  verified and closed `brwr-4vb`, and changed no product contract. The full
+  required gate and scripted-dialogs tests now pass under the documented
+  sandbox policy. Do not describe the explicit IPC skips as exercised socket
+  coverage; CI still requires those tests and must verify them outside this
+  sandbox. Logs are in `target/overnight-health/final-repair/` (gitignored).
+- Missing-listener connections need the same IPC guard as listener tests.
+  Attention checks spanning an hour must count both the live totals and the
+  completed events handed to delivery; use fixed local clocks for that case.
+- `brwr-t40` and `brwr-f45` remain reserved for Lane A. The parent
+  `brwr-1hj` stays open. Once health passes next cycle, the next independent
+  assigned user benefit is `brwr-3nq`: retain unsaved page-note drafts across
+  panel close/reopen, with explicit recovery that preserves host revision
+  checks. Reuse the existing note copy-out flow rather than inventing another
+  recovery surface; no duplicate proposal is needed.
+- The local beads export initially carried older notes for `brwr-1hj` and
+  `brwr-4vb` and lacked `brwr-hnr`'s committed assignment. Imported those three
+  committed records before updates/export to preserve the operator's queue.
+  No assignment labels or other sessions' ownership were changed. Export also
+  refreshes `brwr-sr3`'s derived dependent count; its edges are unchanged.
 
-- Baseline `bdbbbb4` was checked again without test exclusions. Raw Rust
-  output is retained locally at
-  `target/overnight-health/baseline-bdbbbb4/cargo-test.log` (gitignored).
-  The script gate and its diagnostic output are beside it as
-  `scripts-test.log` and `scripts-diagnostic.log`.
-  The first denied fixture bind is `host/src/service/client.rs:436`;
-  server fixtures subsequently time out waiting for the unavailable listener.
-  No product or test changes can grant the missing runner capability.
-  Keep the existing product proposals; adding more internal health work
-  would not unblock the assigned Capture Site implementation.
+### Cycle observations (2026-10-27 — durable note recovery)
 
-- Rechecks on `21d06c3` and `5231f9e` reproduce those exact counts with no test
-  exclusions: 447 host passes, 32 socket failures, 26 adapter-template passes,
-  and all 13 extension files passing. The script diagnostic still reports
-  8 pass, 1 fail and 1 platform skip. Both Clippy configurations and the other
-  required build/quality checks pass. The repaired dialog fixture passes.
-  Independent socket and JSON-only child probes still return EPERM. No
-  quarantine file existed and no code repair or reset would restore these
-  denied operations. `brwr-1hj` stays in progress and `brwr-t40` stays open.
-  Before scheduling another unchanged cycle, the driver should establish
-  whether its own unfiltered gate passes and supply that result in the
-  handoff. Product priority remains selected-rule Capture Site review and
-  example artifact grouping, not another health surface.
+- Clean opening health gate on `fe81cbd`: no quarantine file or incomplete
+  changes. Capture Site parent `brwr-1hj` remains in progress because its
+  remaining `brwr-t40` work is explicitly reserved for Lane A. Cookie took
+  the next ready assigned item, `brwr-3nq`, and restored its prior unmerged
+  implementation without importing unrelated history changes from PR #67.
+- Recovery is a local safety copy, not a second editor or a promise that
+  teardown can finish a native request. Preserve the load-current-note and
+  explicit-copy boundary when changing the panel or artifact identity. Keep
+  quota failures visible: a failed new write cannot guarantee newest text
+  survives close, even when an older copy remains durable.
+- Follow-up `brwr-kws` proposes per-copy review for people with drafts from
+  several pages; it is optional UX work, not grounds to delay recovery or
+  displace the remaining assigned issues. Prioritize the queue over further
+  recovery internals. Real macOS panel teardown/storage validation stays with
+  the existing browser acceptance work (`brwr-9xg`), which remains open.
 
-- Baseline `5231f9e` evidence is retained in
-  `target/overnight-health/baseline-5231f9e/` (gitignored), including the
-  unfiltered Cargo output and non-isolated script diagnostic. No quarantine
-  file or incomplete diff existed. No preceding commit in the last five has
-  a verified green gate in this restricted runner, so resetting history would
-  discard work without fixing the denied operations. The dialog repair is
-  retained under blocked `brwr-4vb`; no new feature or contract shipped.
-  The existing Capture Site proposals remain sufficient: resume the host
-  drafter and selected-rule preview once the driver supplies an unfiltered
-  green baseline, rather than scheduling repeated unchanged restricted runs.
+### Cycle observations (2026-10-27 — brief activity and startup Recent)
+
+- Opening gate on `7cb3a75e719e` passed with a clean tree and no quarantine
+  file. Capture Site parent `brwr-1hj` stays open: its remaining `brwr-t40`
+  implementation belongs to Lane A. Completed the next two ready assigned
+  issues, `brwr-d3m` and `brwr-p9r`, with failures reproduced before fixes.
+- The next assigned queue work is `brwr-q7e` and `brwr-u8n`, preserving
+  captured IDs and normalized URLs across index rescans. Keep their raw log
+  and rebuilt-index assertions together; do not displace them with further
+  formatting polish. Refresh the authoritative queue before claiming.
+- A useful later product direction is the already-proposed worklog curation
+  (`brwr-ppn`): let people pick what to share and preview the resulting text,
+  especially for brief reviews now visible as `<1 min`. Reuse Recent and its
+  existing Copy flow; do not introduce a separate history screen or alter
+  recorded durations. This is guidance for that bead, not new assigned work.
+- Startup has a period after configuration arrives while the worker installs
+  its lease. Fetches opened during that period already work, so an automatic
+  retry must only repeat the loads that actually waited. Test before hello,
+  during policy install, and after startup to protect that distinction.
+- Final Rust result: 612 reported outcomes, comprising 569 exercised tests
+  and 43 explicit IPC-denial skips. All 15 extension and 2 script test files
+  pass. Headless smoke refuses Linux; dialog accounting still compares the
+  dynamic `dialogsShown` total with the host log, with no added steps or
+  scripted answers in this cycle.

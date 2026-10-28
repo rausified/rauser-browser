@@ -15,12 +15,16 @@ import {
   MAX_SHAPE_COUNT, MAX_SITE_SHAPES, httpOrigin, isUrlShape, type SampledShape, type SitePatterns,
 } from "./site-patterns.js";
 import {
-  parseGitHubOrganizations, parseTenantList, starterKind, starterOffers, type StarterOffer,
+  linkedToPresentContainers, orderContainedFirst, parseGitHubOrganizations, parseTenantList, starterKind,
+  starterOffers, type StarterOffer,
 } from "./starter-adapters.js";
 
 export interface CaptureChoice {
-  pullRequests: string | null;
-  issues: string | null;
+  /** One shared, comma-separated organization list, used for every checked GitHub type. */
+  organizations: string;
+  repositories: boolean;
+  pullRequests: boolean;
+  issues: boolean;
 }
 
 export interface CapturePlan {
@@ -32,6 +36,9 @@ export interface CapturePlan {
   probes: PreviewRow[];
   startsCapture: boolean;
 }
+
+// A repository example is its home page.
+const GITHUB_EXAMPLE_ROUTES: Record<string, string> = { "github.pr": "/pull/123", "github.issue": "/issues/123" };
 
 export function captureOrigin(url: string): string | null {
   try {
@@ -59,22 +66,30 @@ export function planCaptureSite(
   if (siteConfigured(config, origin)) return { ok: false, message: "This site already has capture rules. Manage them in settings." };
   const offers: StarterOffer[] = [];
   if (starterKind(origin) === "github") {
-    for (const [type, value, label] of [
-      ["github.pr", choice.pullRequests, "pull requests"],
-      ["github.issue", choice.issues, "issues"],
-    ] as const) {
-      if (value === null) continue;
-      const organizations = parseGitHubOrganizations(value);
-      if (!organizations) return { ok: false, message: `Enter 1–32 comma-separated GitHub organizations for ${label}, or uncheck that kind of page.` };
-      offers.push(starterOffers(origin, organizations).find((offer) => offer.artifact_type === type)!);
+    const checkedTypes = [
+      ["github.pr", choice.pullRequests],
+      ["github.issue", choice.issues],
+      ["github.repo", choice.repositories],
+    ] as const;
+    if (!checkedTypes.some(([, checked]) => checked)) {
+      return { ok: false, message: "Choose repositories, pull requests, issues, or some combination." };
+    }
+    const organizations = parseGitHubOrganizations(choice.organizations);
+    if (!organizations) return { ok: false, message: "Enter 1–32 comma-separated GitHub organizations, or uncheck every GitHub page type." };
+    const allOffers = starterOffers(origin, organizations);
+    for (const [type, checked] of checkedTypes) {
+      if (!checked) continue;
+      offers.push(allOffers.find((offer) => offer.artifact_type === type)!);
     }
   } else {
     offers.push(...starterOffers(origin, []));
   }
-  if (!offers.length) return { ok: false, message: "Choose pull requests, issues, or both." };
-  const artifacts = offers.map((offer) => offer.adapter!);
-  const additions: AdapterDocument = { format: 1, artifacts };
-  const document: AdapterDocument = { ...config.adapters, artifacts: [...config.adapters.artifacts, ...artifacts] };
+  const artifacts = linkedToPresentContainers(offers.map((offer) => offer.adapter!), config.adapters.artifacts);
+  const additions: AdapterDocument = { format: 1, artifacts: orderContainedFirst(artifacts) };
+  const document: AdapterDocument = {
+    ...config.adapters,
+    artifacts: orderContainedFirst([...config.adapters.artifacts, ...artifacts]),
+  };
   const validation = validateAdapterDocument(document);
   if (validation) return { ok: false, message: validation };
   const preview = previewDocument(additions, url, "", true, origin);
@@ -86,7 +101,8 @@ export function planCaptureSite(
     let example = exampleUrl(offer.adapter!);
     if (offer.kind === "github") {
       const scope = offer.adapter!.scope as { owner: string[] };
-      example = `${origin}/${scope.owner[0]}/example-repository/${offer.artifact_type === "github.pr" ? "pull" : "issues"}/123`;
+      const route = GITHUB_EXAMPLE_ROUTES[offer.artifact_type] ?? "";
+      example = `${origin}/${scope.owner[0]}/example-repository${route}`;
     }
     const result = previewDocument(additions, example, "", false);
     if (result.ok) examples.push(...result.rows);

@@ -3,6 +3,7 @@ import test from "node:test";
 
 // Run after build:extension.
 const { MAX_NOTE_TITLE_BYTES, NoteEditor, clampUtf8 } = await import("../dist/note-editor.js");
+const { NoteRecovery } = await import("../dist/note-recovery.js");
 
 // Pending autosave timers must not keep the test process alive.
 const realSetTimeout = globalThis.setTimeout;
@@ -27,7 +28,7 @@ async function settle() {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
 }
 
-function harness(debounceMs = 60_000) {
+function harness(debounceMs = 60_000, recovery) {
   const view = {
     body: "",
     editable: false,
@@ -43,6 +44,7 @@ function harness(debounceMs = 60_000) {
       this.warning = warning;
     },
     showUnsaved(entries) { this.unsaved = entries.map((entry) => ({ ...entry })); },
+    setRecoveryWarning(message) { this.recoveryWarning = message; },
     showOlderNotes(entries) { this.older = entries.map((entry) => ({ ...entry })); },
   };
   const calls = [];
@@ -58,7 +60,7 @@ function harness(debounceMs = 60_000) {
       return pending.promise;
     },
   };
-  const editor = new NoteEditor(view, host, (error) => error.message, debounceMs);
+  const editor = new NoteEditor(view, host, (error) => error.message, debounceMs, recovery);
   // Answers the oldest unanswered host call of `kind`.
   async function next(kind) {
     await settle();
@@ -407,4 +409,194 @@ test("clampUtf8 never splits a character", () => {
   assert.equal(clampUtf8("a😀", 4), "a");
   assert.equal(clampUtf8("a😀", 5), "a😀");
   assert.equal(clampUtf8("short", 2_048), "short");
+});
+
+function recoveryFixture() {
+  const data = new Map();
+  const storage = {
+    get length() { return data.size; },
+    key(index) { return [...data.keys()][index] ?? null; },
+    getItem(key) { return data.get(key) ?? null; },
+    setItem(key, value) { data.set(key, value); },
+    removeItem(key) { data.delete(key); },
+  };
+  return { data, storage, recovery: new NoteRecovery(() => storage) };
+}
+
+test("closing before debounce leaves a synchronous recovery copy without autosaving it on reopen", async () => {
+  const { recovery } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("pending before close");
+  assert.equal(recovery.list()[0].text, "pending before close", "persisted in the input stack");
+  assert.equal(h.calls.filter((call) => call.kind === "save").length, 0);
+  const reopened = harness(60_000, recovery);
+  await open(reopened, "https://p.test/", "saved");
+  assert.equal(reopened.view.body, "saved");
+  assert.equal(reopened.view.unsaved[0].text, "pending before close");
+  assert.equal(reopened.calls.filter((call) => call.kind === "save").length, 0);
+});
+
+test("a late save acknowledgement cannot delete edits made during that save", async () => {
+  const { recovery } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("first");
+  const saving = h.editor.flush();
+  const first = await h.next("save");
+  h.type("first and more, just before closing");
+  first.resolve({ type: "note_saved", revision: "first-rev" });
+  await saving;
+  assert.equal(recovery.list()[0].text, "first and more, just before closing");
+  const reopened = harness(60_000, recovery);
+  await open(reopened, "https://p.test/", "first");
+  assert.equal(reopened.view.unsaved[0].text, "first and more, just before closing");
+  // Completing the next save removes only this panel's pending copy.
+  const tail = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_saved", revision: "tail-rev" });
+  await tail;
+  assert.deepEqual(recovery.list(), []);
+});
+
+test("a failed save and an empty deletion both remain recoverable", async () => {
+  const { recovery } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("");
+  const saving = h.editor.flush();
+  (await h.next("save")).reject(new Error("disconnected"));
+  await saving;
+  const reopened = harness(60_000, recovery);
+  assert.equal(reopened.view.unsaved.length, 1);
+  assert.equal(reopened.view.unsaved[0].text, "");
+  assert.equal(recovery.list()[0].text, "");
+});
+
+test("a conflicted copy survives reopening and later successful edits until explicit discard", async () => {
+  const { recovery } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("mine");
+  const saving = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_conflict", revision: "other-rev", body: "theirs" });
+  await saving;
+  h.type("theirs plus a fresh edit");
+  const next = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_saved", revision: "next-rev" });
+  await next;
+  assert.deepEqual(recovery.list().map((entry) => entry.text), ["mine"]);
+  const reopened = harness(60_000, recovery);
+  assert.equal(reopened.view.unsaved[0].text, "mine");
+  reopened.editor.discardUnsaved();
+  assert.deepEqual(recovery.list(), []);
+  assert.deepEqual(reopened.view.unsaved, []);
+});
+
+test("independent panels and stale discard never erase a newer recovery snapshot", async () => {
+  const { recovery } = recoveryFixture();
+  const a = harness(60_000, recovery);
+  const b = harness(60_000, recovery);
+  await open(a, "https://p.test/", "");
+  await open(b, "https://p.test/", "");
+  a.type("A");
+  b.type("B");
+  const viewer = harness(60_000, recovery); // Holds A and B's earlier versions.
+  a.type("A newer");
+  viewer.editor.discardUnsaved();
+  assert.deepEqual(recovery.list().map((entry) => entry.text), ["A newer"]);
+  const saving = b.editor.flush();
+  (await b.next("save")).resolve({ type: "note_saved", revision: "b-rev" });
+  await saving;
+  assert.deepEqual(recovery.list().map((entry) => entry.text), ["A newer"]);
+});
+
+test("quota failure warns without replacing newer text with an older recovery copy", async () => {
+  const { recovery, storage } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("old draft");
+  storage.setItem = () => { throw new Error("quota full"); };
+  h.type("newest draft");
+  assert.match(h.view.recoveryWarning, /quota full/);
+  const switched = h.editor.showPage(page("https://a.test/"));
+  (await h.next("save")).reject(new Error("offline"));
+  (await h.next("load")).resolve(loaded("a"));
+  await switched;
+  assert.equal(h.view.unsaved[0].text, "newest draft");
+  assert.equal(recovery.list()[0].text, "old draft", "old bytes stay intact on quota failure");
+});
+
+test("blocked storage cannot prevent loading and saving a note", async () => {
+  const recovery = new NoteRecovery(() => { throw new Error("storage blocked"); });
+  const h = harness(60_000, recovery);
+  assert.match(h.view.recoveryWarning, /storage blocked/);
+  await open(h, "https://p.test/", "saved");
+  h.type("new text");
+  const saving = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_saved", revision: "r2" });
+  await saving;
+  assert.equal(h.view.status, "Saved");
+  assert.match(h.view.recoveryWarning, /storage blocked/);
+});
+
+test("failed recovery discard leaves the displayed text available for copy", async () => {
+  const { recovery, storage } = recoveryFixture();
+  recovery.write({ url: "https://p.test/", text: "still needed", reason: "pending" });
+  const h = harness(60_000, recovery);
+  storage.removeItem = () => { throw new Error("storage blocked"); };
+  h.editor.discardUnsaved();
+  assert.equal(h.view.unsaved[0].text, "still needed");
+  assert.match(h.view.recoveryWarning, /storage blocked/);
+  assert.equal(recovery.list().length, 1);
+});
+
+test("recovery listing ignores malformed and unrelated keys without deleting them", () => {
+  const { recovery, data } = recoveryFixture();
+  recovery.write({ url: "https://p.test/", text: "<img src=x>", reason: "pending" });
+  const validKey = [...data.keys()][0];
+  data.set("unrelated", "keep me");
+  data.set(`${validKey}-bad`, "{bad JSON");
+  data.set(`${validKey}-wrong-id`, data.get(validKey));
+  assert.equal(recovery.list().length, 1);
+  recovery.remove(recovery.list()[0]);
+  assert.equal(data.size, 3);
+  assert.equal(data.get("unrelated"), "keep me");
+});
+
+test("a partial recovery update keeps the newest conflict copy after retiring an old snapshot fails", async () => {
+  const { recovery, storage } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("old draft");
+  storage.removeItem = () => { throw new Error("remove blocked"); };
+  h.type("newest draft");
+  assert.match(h.view.recoveryWarning, /remove blocked/);
+  const saving = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_conflict", revision: "other-r2", body: "theirs" });
+  await saving;
+  assert.equal(h.view.unsaved[0].text, "newest draft");
+  const reopened = harness(60_000, recovery);
+  assert.ok(reopened.view.unsaved.some((entry) => entry.text === "newest draft"));
+  assert.equal(reopened.view.body, "", "a recovered conflict is never placed in the editor");
+});
+
+test("a recovered identity-conflict draft cannot autosave into the newly derived artifact key", async () => {
+  const { recovery } = recoveryFixture();
+  const h = harness(60_000, recovery);
+  await open(h, "https://p.test/", "saved");
+  h.type("edit under the old key");
+  const saving = h.editor.flush();
+  (await h.next("save")).resolve({
+    type: "note_conflict", revision: "other-r2", body: "", reason: "key_changed",
+    key: { kind: "artifact", value: "doc:new" },
+  });
+  const load = await h.next("load");
+  load.resolve({ ...loaded("new artifact note"), key: { kind: "artifact", value: "doc:new" } });
+  await saving;
+  assert.equal(h.view.body, "new artifact note");
+  const reopened = harness(60_000, recovery);
+  await open(reopened, "https://p.test/", "new artifact note");
+  await reopened.editor.flush();
+  assert.equal(reopened.view.unsaved[0].text, "edit under the old key");
+  assert.equal(reopened.calls.filter((call) => call.kind === "save").length, 0);
 });

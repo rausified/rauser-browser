@@ -15,6 +15,14 @@ it could not save. The capture housekeeping controls from M1 collapsed into a
 one-line, expandable capture strip. The answer card, Summary section, and full
 omnibar are not built (M2/M3).
 
+Unacknowledged note edits now have synchronous browser-local recovery
+(`extension/note-recovery.ts`, `brwr-3nq`). Every snapshot has an immutable
+key, and native acknowledgements/discards only remove the exact snapshot
+they saw. Reopening shows recovered copies beside the current host note with
+Copy/Discard; they never enter the editor or autosave automatically. Storage
+failures warn without preventing host saves. Preserve that boundary when
+changing note identity, save sequencing or panel teardown.
+
 Open access (protocol version 6, PR 1 of
 `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`)
 removed the per-site grant wall. The manifest requests `http://*/*` and
@@ -166,7 +174,11 @@ frozen-ID check (`validate_adapter_transition_with_history`, via
 `retired_by_hand`). An unusable state file makes identity on every page the
 current policy does not recognize unavailable (`NoteKeyRule::StateUnavailable`,
 whose refusal names the file), and refuses adapter additions until it is
-repaired; a damaged entry does both for its origin only. Those contracts alone decide an origin they
+repaired; a damaged entry does both for its origin only. `config_result`
+reports it as `adopted_state` (issue, revision, and recording warnings), and
+settings' **Forget recorded adapters** (`forget_adopted_contracts`,
+`ConfigStore::forget_adopted_contracts`, `extension/adopted-state-settings.ts`)
+backs the file up and records afresh under the config lock. Those contracts alone decide an origin they
 cover, so a stripped canonical URL shared with another page (a Jira board and
 its issue modal) is never identity evidence, and older-note candidates must
 map to the same artifact. An origin with no recorded contract uses the URL
@@ -174,18 +186,62 @@ key with no history lookup or note scan: its recorded URLs are stripped forms
 and cannot name an artifact, and its URLs never count as older-note
 candidates. Ambiguous contracts fall back to the URL key, while an
 uncompilable recorded contract refuses loads and saves instead of guessing an
-autosave target.
+autosave target. A save that would make `strip_params` remove a query
+parameter an adapter rule reads (a `query` key or `absent` key of a current,
+history, or adopted contract) is refused as `invalid_config`
+(`config::validate_strip_params_readers`, brwr-f4s); a config.toml that
+already has one still loads and saves, and settings derives the warning from
+the snapshot and offers **Stop stripping**.
 
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety
-probes inline, with separate GitHub pull-request and issue organization lists,
+probes inline. GitHub now offers repositories alongside pull requests and
+issues, all three checked by default and sharing one organization field
+(2026-10-27) instead of separate PR and issue lists; the field is pre-filled
+from the current URL's owner segment (also `/orgs/<org>/…`), lowercased and
+shown for the user to confirm or edit rather than applied unseen, and a page
+with no usable owner (the GitHub root, a reserved top-level route, `/orgs`
+with no org) gets no pre-fill and asks instead. The confirmation line names
+only the types actually checked, so it is never wider than what is saved. It
 then saves once through revisioned `update_config`. It preserves configured
 sites and global pauses, refuses pending local pauses/removals and stale
 reviews, and saves old note edits before reloading their host-derived identity.
 Installing policy from a page seeds already-open recognized tabs for attention
 measurement without inventing cold opens; background renewals retain their
 normal navigation accounting.
+
+GitHub repositories as container artifacts (2026-10-27): the adapter-template
+language gained a general mechanism for an adapter to declare
+`within = { type, id }`, naming a container artifact its own matches sit
+inside (adapter-templates.md §3, §8.3), and a required path capture a `scope`
+key restricts to a literal list now counts as an anchor segment too (§4.1,
+§6), not only a literal or a fixed-shape capture. `github.repo` is the first
+adapter to use either: a new starter, a catch-all over everything inside a
+GitHub repository that no PR or issue adapter claims, scoped to the owner
+like the other two, with `github.pr` and `github.issue` now declaring
+`within` it. `orderContainedFirst` (`extension/starter-adapters.ts`) keeps PR
+and issue adapters ahead of the repo catch-all on every save path (the panel,
+settings, and the JSON editor), because adapters on one origin are tried in
+config order and a PR or issue visit already rolls up into its repository.
+The host's index (`host/src/index.rs`) derives each contained visit's
+container by re-evaluating the logged URL, not by recording it at log time,
+so existing PR and issue history rolls up into repositories retroactively; a
+`within` edge records the relationship, worklog and day totals count a
+rolled-up visit once, and a container whose own page has never been opened
+directly still gets a title and URL derived from its ID instead of a stale or
+missing one. The route-history guard in `host/src/config.rs` is amended so a
+declared container may overlap the routes of a retired or removed contract it
+is exactly the container of, which is what lets settings add `github.repo` on
+top of already-configured PR/issue adapters (adding `within` to them in the
+same save) without tripping the existing-history freeze. Protocol version 7
+exposes the relationship to the panel: `ArtifactView.within` and `.contained`
+on `get_artifact`/`list_artifacts`, with the card showing "In <repo>" on a
+contained artifact's own card and "Worked on inside" with its rolled-up
+contents on a container's card. Downgrading after adding repositories is
+unsupported: older hosts reject `within` in the adapter config and in adapter
+history.
+
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
 Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier
@@ -261,6 +317,7 @@ changes a contract.
 - `adapter-templates/` is the Rust crate implementing the adapter-template grammar specified in `adapter-templates.md`; `extension/adapter-templates.ts` is its TypeScript twin. Keep both in sync with the shared vectors in `protocol/adapter-templates/vectors.json` — run `npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) after changing either engine; CI also checks `adapter-templates/fuzz` compiles.
 - `adapter-templates/src/shape.rs` parses private URL shapes (the Rust twin of `isUrlShape`), `adapter-templates/src/structural.rs` is the Capture Site structural drafter, and `adapter-templates/src/policy.rs` holds `DraftPolicy`, the plain-struct form of the host catalog; the per-rule checks are `check_draft_rules` in `adapter-templates/src/draft.rs`. `host/src/capture_site.rs` parses the catalog and handles `draft_site` and `check_site_draft`.
 - `protocol/capture-site/` holds `catalog.json` (the host-owned drafting catalog) and `shapes.json` (real URL forms and their expected shapes, shared by the Rust parser and the in-page shaper's tests).
+- `protocol/strip-params/vectors.json` pins the `strip_params` matching rule shared by `matches_param` (host/src/capture.rs) and `stripsParam` (extension/adapter-review.ts); both test suites read it.
 - `host/` contains the native host. Keep host policy checks on the privileged side of the messaging boundary. `host/src/consent.rs` holds the purpose-bound folder-picker grants and the `update_config` field checks; `host/src/dialog.rs` runs the native folder picker, the only native dialog. There is no `privacy.rs`, `extension/grants.ts`, or `macos-alert/` crate any more (removed with protocol v6).
 - Every first-party crate is `#![forbid(unsafe_code)]`.
 - `host/src/answer.rs` validates the structured summary answer; `host/src/open.rs` is the platform opener (`/usr/bin/open` on macOS, a log file in test builds). `host/src/service/` holds the service: `child.rs` (line-streaming child processes), `codex.rs` and `claude.rs` (the runners), `prompt.rs` (the §6.4 prompt), `setup.rs` (detect and probe), and `open.rs` (`open_path`, `get_agent_env`), beside PR 2's server, supervisor, queue, records, and client. There is no `harness_setup.rs` any more.
@@ -275,6 +332,16 @@ changes a contract.
 Run the commands in [README.md](README.md#development) before proposing a code change. The Rust version is pinned in `rust-toolchain.toml`. `deny.toml` is the Rust dependency policy (license allowlist; no wildcard versions, unknown registries, or unknown git sources) that CI's `cargo-deny` job enforces — run `cargo deny check --all-features --locked` before adding or upgrading a Rust dependency. After changing either adapter-template engine, run `npm run test:adapter-diff` (differential testing against the shared vectors, `adapter-templates.md` §12).
 
 For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a window or takes focus. Only when the user asks for it, run `npm run smoke:macos -- --auto` instead (real dialogs, UI scripting; warn them before it takes focus) — `--auto` and `--headless` are mutually exclusive flags of the same script, not combinable. See [TESTING.md](TESTING.md) for what each check (`smoke:macos:headless`, `probe:m15a`) actually does, how to run the real-dialog variants, and what headless cannot prove — it is the single, self-contained source for testing guidance; update it with anything you learn here.
+
+## Review and merge cadence
+
+These rules exist because repeated review passes, main moving under open PRs, and strictly serial review chains cost more time than building (2026-10-27).
+
+- **One Codex pass.** Run `codex exec review --base origin/main` once, after the full gate. Fix every P1 test-first. File each P2 and P3 as a bead (with the finding text and file) instead of fixing it in the PR, unless the fix is a few lines and needs no new test seam. Run a second pass only when the P1 fixes changed behaviour substantially; never a third.
+- **Run the Codex review alongside CI**, not after it. Both start on the same pushed head.
+- **Announce the final stretch of a big PR.** Before merging main into a PR that touches more than about ten files or a shared seam (protocol schema, `adapter-templates`, `service/`, `config.rs`), tell the other active sessions so they hold merges that touch the same files until it lands. Whoever merges second resolves the conflicts.
+- **Overlap per-task review with the next task** in multi-task plans: review task N while task N+1 is being built, unless N+1 depends on code the review may change. Batch small, low-risk tasks (docs, wiring) into one review.
+- **Check scope before a large build.** For a plan of more than about five tasks, list the user-facing decisions it assumes and confirm any that are open before building.
 
 ## Security rules
 
@@ -293,5 +360,6 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - The Brauser service (`host/src/service/`) runs as the user, never root, as a per-user LaunchAgent started on demand. Its support directory must be a real directory owned by the user with mode 0700 (refuse a symlink or another owner, `ServicePaths::ensure_private`), its socket is mode 0600, and the service refuses a support path too long for a Unix socket rather than moving the socket elsewhere. Only the native host talks to it; the host accepts no `service_hello` from the extension and always chooses the run's record key itself.
 - `agent.env` is read at the start of every run and must be a regular, non-symlink file of mode 0600, or the run fails before it starts (host/src/service/agent_env.rs). Never put a value from it in an error, log line, protocol message, or settings view; settings may show its names only.
 - Before forwarding a run message, the host compares the service's `service_hello` `build_id` with its own and restarts a stale service once; a persistent mismatch is `service_unavailable`, never a request sent to old code (host/src/service/client.rs).
+- A test that binds or connects a Unix socket (or reads a Node child's piped output) starts with the IPC guard, `ipc_test_guard::ipc_denied()` in Rust or `ipcDenied(t, kind)` from `scripts/tests/ipc-guard.mjs`, so it skips with a printed reason in a sandbox that denies local IPC and fails there when `BRAUSER_REQUIRE_IPC_TESTS=1` (CI). Never weaken a socket test's assertions instead (TESTING.md "Local IPC in sandboxes").
 - Tests never call `launchctl` or touch the real `~/Library`: they use temp support directories, an injected launch function, and the test-only `BRAUSER_SERVICE_SPAWN` seam (scripted-dialogs builds only) that spawns the service directly. `scripts/register-dev-host.mjs` takes an injectable `run` for the same reason.
 - Do not claim an installer, browser extension, or agent mode works until it has been built and exercised.

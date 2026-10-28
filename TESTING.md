@@ -19,6 +19,29 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Page-note recovery coverage
+
+`extension/tests/note-editor.test.mjs` drives the real recovery store with
+in-memory synchronous storage. It covers pending debounce, newer input during
+an in-flight save, failed saves, conflicts, empty deletions, exact acknowledged
+snapshot cleanup, independent panels, stale discard, quota errors, blocked
+storage, partial write/cleanup failures, malformed/unrelated entries and
+artifact-key changes. Reopened editors load the current host note and never
+replay recovery text automatically.
+
+`extension/tests/panel.test.mjs` runs the built panel module and shipped HTML
+with the real native client and mocked DOM/Chrome/storage. Its close/reopen
+tests exercise debounce and in-flight-save teardown, a late host completion,
+separate current and recovered text, Copy/Discard, persistent conflicts
+(including empty deletions), subsequent successful edits and visible quota
+errors while native autosave continues. Clipboard calls are captured in memory;
+no test touches the user's clipboard or a real browser profile.
+
+These prove the composed client flow; Chrome storage durability, layout and
+real panel teardown still need the macOS browser gates. The headless macOS
+runner refuses Linux, and no real-browser pass is claimed on this VM. No
+smoke step, real dialog or protocol changed for recovery.
+
 ## Capture Site coverage
 
 `npm run test:extension` builds on the extension build from the development
@@ -129,7 +152,17 @@ smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
 claim that it passed here. Unknown-site drafting is covered separately
 (above); these tests do not certify any machine-drafted rule.
 
-## Dialog reply fixture and restricted runners
+## Capture Site attention across an hour boundary
+
+The worker's already-open-tab policy-install test uses fixed local times,
+covering both a mid-hour interval and the last ten seconds of an hour. After
+15 seconds, `get_status` freezes completed hours into delivery: the boundary
+case must retain 10 seconds in the queue and 5 seconds in live totals, with
+zero opens across both. Queued activity uses seconds; live totals use
+milliseconds. Checking only live totals against 15 seconds made the old test
+fail whenever the real wall clock happened to cross an hour boundary.
+
+## Dialog reply fixture
 
 `dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
 child that reads the length line and exactly that many body bytes before
@@ -139,40 +172,47 @@ closes stdin before the parent finishes writing and races into `EPIPE`. Do
 not read until EOF either: the parent keeps stdin open until the child exits.
 The fixture uses the same `head -c` tool as the neighboring timeout fixture.
 
-A restricted runner can deny Unix socket creation and connection with EPERM,
-even under a temporary directory. On 2026-10-27 this caused 32 host service
-test failures, confirmed with an independent Unix-socket bind. The same
-runner denied Node `spawnSync`, preventing `test:scripts` from running its
-win32 path simulation. Keep these tests enabled; run the full gate outside
-that restriction. An explicitly filtered local run can diagnose the remaining
-tests, but is not a passing full gate. The dialog repair remains in progress
-until that external gate passes.
+## Local IPC in sandboxes
 
-The restricted runs on baselines `728b200` and `90f88b4` reproduced the
-same failures. To distinguish a runner denial from a service regression,
-try an independent Python `AF_UNIX` bind in a temporary workspace directory.
-Do not change service paths or permissions to work around a denied bind.
-Node's restriction can be misleading: a JSON-only `spawnSync` child returned
-`status: 0` alongside `error.code: "EPERM"` and empty stdout. Inspect the
-spawn result's `error` as well as its exit status. The script suite consequently
-reported `Unexpected end of JSON input` in its win32 simulation; no real
-registration or launchd call was involved.
+Some development sandboxes deny local IPC. Codex's `workspace-write` sandbox
+on Linux, which Cookie's in-cycle health gate runs in, refuses to bind or
+connect a Unix socket even in a temporary directory (EPERM), and Node's child
+pipes, which are socketpairs on Linux, fail the same way: a `spawnSync` child
+can come back with `status: 0`, `error.code: "EPERM"` and empty stdout. This
+is a limitation of the sandbox, not a product defect. Do not change service
+paths, permissions or production IPC to fit it.
 
-If `npm run test:scripts` reports only a failed file, use
-`node --test --test-isolation=none scripts/tests/dev-service.test.mjs` for
-diagnosis. On this runner it exposes the win32 simulation's empty-output
-JSON parse error (8 pass, 1 fail, 1 platform skip). This changes only the
-diagnostic invocation; the required script gate remains unmodified and failing.
-The required opening gate stops Cargo after the failing host test binary,
-so its 26 adapter-template passes and 447 host passes do not establish that
-later integration and documentation tests passed.
+Every test that binds or connects a Unix socket, or starts a service that
+does, starts with a guard (Rust: `host/src/ipc_test_guard.rs`, test and
+`scripted-dialogs` builds only; `test:scripts`: `scripts/tests/ipc-guard.mjs`,
+with a `"socket"` and a `"child-pipe"` probe). One cached probe per test
+process binds and connects a socket in a fresh `/tmp` directory (the Node
+`"child-pipe"` probe reads a child's stdout instead) and then:
 
-The diagnostic workspace run excluding `service::client::tests::`,
-`service::server::tests::` and `native::tests::run_proxy::` passed 493 tests
-with 39 host tests filtered out. The scripted-dialog unit group passed 10
-tests. Neither result substitutes for the unfiltered gate, and neither
-justifies disabling the socket tests or changing production IPC to fit the
-runner. Verify the full gate in a runner that permits these local operations.
+- IPC works: the test runs.
+- EPERM or EACCES, with `BRAUSER_REQUIRE_IPC_TESTS` unset: the test returns
+  early and prints `<test>: skipping: local IPC denied by sandbox (...)` to
+  stderr, so the suite passes in the sandbox without hiding the skip.
+- EPERM or EACCES with `BRAUSER_REQUIRE_IPC_TESTS=1`: the test fails. CI sets
+  the flag on every build job (`.github/workflows/build-os.yml`), so CI never
+  skips a socket test.
+- Any other probe error: the test fails, flag or not.
+
+`BRAUSER_TEST_SIMULATE_IPC_DENIED=1` makes the probe report a denial without
+trying, to check both paths on a machine that allows IPC. On macOS a real
+denial can be reproduced with a Seatbelt profile that denies
+`network-bind (local unix-socket)` and `network-outbound (remote unix-socket)`
+under `sandbox-exec -f <profile> cargo test ...`. A new socket test must start
+with the guard (`if crate::ipc_test_guard::ipc_denied() { return; }`, or
+`brauser_host::ipc_test_guard::ipc_denied()` from `host/tests`; in Node,
+`if (await ipcDenied(t, "socket")) return;`); without it, it fails in the
+sandbox like the 32 to 47 tests that kept Cookie's gate red before `brwr-rq5`.
+
+This includes connections to a missing listener: a restricted runner can
+return EPERM before the client sees the expected missing-socket error, so
+missing-service, failed-launch and launch-timeout tests need the guard too.
+A boundary test that proves rejection without connecting but also verifies
+successful forwarding at the limit needs it for that forwarding step.
 
 ## UI-free end-to-end: the recipe
 
@@ -189,6 +229,25 @@ runner. Verify the full gate in a runner that permits these local operations.
 - Put the native-messaging host manifest in `<profile>/NativeMessagingHosts/` so the normal registration is untouched.
 - Drive pages with real input events (`Input.dispatchMouseEvent`) so the browser treats them as user gestures. Use `Runtime.evaluate` with `userGesture: true` for APIs that need a gesture, such as `chrome.sidePanel.open`.
 - Assert on real state (files written, host config, `chrome.permissions.contains`, page text) rather than on the fact that a click happened.
+
+### Waiting for state, not time
+
+The required CI check runs the headless smoke on a shared runner, sometimes the slower `macos-15-intel` fallback, so every wait must hold up when the machine is loaded. `scripts/smoke-macos.mjs` has one helper for this, and new steps should use it:
+
+```js
+const state = await waitUntil("what the step waits for", observe, accept, { timeout, interval, signal: abort.signal });
+```
+
+`observe()` reads the current state (anything `JSON.stringify` can show: host config, worker storage, run cards, files). `accept(state)` says whether that state is the one wanted. The accepted state is returned. On timeout it throws `Timed out after <s> waiting for <what>; last observed <state>` plus the last error, so a stop shows what the run saw, not just "found []". An error marked `fatal` (`Object.assign(new Error(...), { fatal: true })`) stops the wait at once. Use that for states that can never recover, such as a blocked page that was measured. The older `waitFor(check)` (the check throws until it passes) is still fine for simple UI polls whose error message already names the state.
+
+Rules learned from the stops fixed in `brwr-smk`:
+
+- **Wait for the state the next step depends on, not for something that usually comes with it.** The worker judges a navigation by the lease it holds when the navigation commits, and never looks at it again. So before a step navigates and expects capture, call `workerHoldsHostPolicy()`, which waits until the worker's stored lease has the host's current revision. "Settings is connected" is not proof of that.
+- **`Page.reload` can return while the old document still answers.** Use `reloadSettings()`. It marks the old document and waits for an unmarked, connected one.
+- **Identify a new item by excluding everything that already existed, not by what the page showed a moment earlier.** A new panel enables **Summarize & log** before it restores earlier runs' cards from `list_runs`, so `summarizeFromPanel(harness)` treats every run the service already lists as old, and checks the new run's harness.
+- **A cold Chrome can take far longer than one CDP request's timeout to start reading its pipe.** The runner waits for `Browser.getVersion` before `Extensions.loadUnpacked`. It never retries a non-idempotent request. Chrome writes `Preferences` on a delay of about ten seconds, so the wait for the profile to record the extension needs room well beyond that. The runner logs each of these times.
+- **Retry only what is safe to repeat, and check the result before asking again.** `openPanel()` looks for the panel target before each new `chrome.sidePanel.open` request. Opening a panel that is already open changes nothing.
+- **To check a wait, run the smoke under full CPU load** (one `yes > /dev/null` per core, from `sysctl -n hw.ncpu`, killed afterwards), not just on an idle machine. Every stop fixed in `brwr-smk` passed when idle.
 
 ### Native dialogs (the folder picker)
 
@@ -291,6 +350,23 @@ This standard is meant to improve with use. When you change it:
 ## Learning log
 
 - 2026-10-27: Branch `feat/capture-site-unknown` (`brwr-t40`). Unknown-site Capture Site pins the host catalog and real URL shapes in `protocol/capture-site/` and reads them from both the Rust and extension suites, so neither side keeps a private copy of the probe list, fill values or shaper expectations ("Unknown-site drafting" above). Scope, `unscoped` and title overlays are tested on both sides of `check_site_draft`: the checked request never carries them, and a table that does is still refused. `scripts/check_current_state.py` now rejects the retired "Unknown-site automatic drafting is still in development" claim.
+- 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).
+  Failing-first host tests (`config::tests::strip_params_readers`,
+  `native::tests::update_config_refuses_stripping_a_parameter_an_adapter_reads`)
+  showed `update` accepting a `strip_params` entry a Jira modal rule reads,
+  including prefix, case, `absent`, and retired-contract variants. A refusal
+  raised inside `update_with_grants` reaches the extension as `internal`
+  ("could not save configuration") unless native dispatch downcasts its
+  error type, so a new under-the-lock refusal needs its own type
+  (`StripParamsRefusal`) as well as the pre-lock check against the store's
+  last read. Settings tests cover the warning and the one-click fix with the
+  fake DOM; the headless smoke run does not cover it, because it never edits
+  config.toml by hand. Codex review then reproduced an existing conflict
+  masking a new rule on the same adapter that read the same parameter,
+  because conflicts were compared by entry, parameter, origin, and type
+  only; they now include the reading rule and `id` template, and the
+  existing-conflict test adds such a rule first. No browser or native
+  dialog is involved.
 - 2026-10-27: Branch `feat/agent-runners-pr3`. The page extractor caps text in encoded bytes, not characters: it truncates until the JSON-encoded, UTF-8 length of the content plus the selection fits 3 MiB (the selection alone 64 KiB). CJK text is three bytes a character, and quotes and control characters grow under JSON escaping (`\u0001` is six bytes), so a character cap can push a `start_run` frame past the host's 4 MiB `MAX_INBOUND_BYTES`. `maximal extraction stays under the host frame cap` builds the full `start_run` JSON from 1,000,000 CJK characters with interleaved `"` and `\u0001` and checks it.
 - 2026-10-27: Salvage review of Cookie cycle 2 reproduced three page-pattern
   gaps with failing-first tests: unreadable pending-removal state on a
@@ -452,3 +528,10 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-26: Branch `feat/agent-service-pr2`. A Unix socket path must fit in `sun_path`, 104 bytes on macOS, and a socket in a support directory under a `$TMPDIR`-based temporary `HOME` (`/var/folders/...`) can exceed it, so binding fails. The service refuses a too-long path outright instead of moving the socket, and the smoke runner and service tests now use a short `HOME` directly under `/tmp`. Tests also never call `launchctl`: the runner starts the service child itself, and the host's spawn seam replaces `kickstart` in the Rust integration tests.
 - 2026-10-27: Branch `fix/retired-hand-removed-contracts`. Rewriting config.toml in a test no longer simulates lost adapter contracts by itself: any refresh under the config lock (every note request, and `ConfigStore::update`) records adopted contracts in `adopted-contracts.json` beside the test's config, so a later hand edit keeps their note keys. A fixture that means "no contract recorded anywhere" must also remove `config::adopted_contracts_path(dir)`, and tolerate its absence, since a contract removed through settings before any locked refresh is only in `[[adapter_id_history]]`. A plain `loaded()` store refreshes without the lock and records nothing.
 - 2026-10-27: Branch `fix/adopted-contract-repair`. `ConfigStore::update` now reads `adopted-contracts.json` for the frozen-ID check, so a test that adds adapters after damaging or hand-editing that file gets a refusal it did not before: either restore the file or assert the refusal. Checking a refusal's wording against a constant was not enough once the message carried the runtime state path; the native test matches the stable prefix plus `adopted_contracts_path(dir)`, then renames the file aside and checks that notes come back, which is the repair the message promises.
+- 2026-10-27: Branch `fix/sandbox-aware-ipc-tests` (`brwr-rq5`). Cookie's health gate had failed every Unix-socket test inside Codex's `workspace-write` sandbox since the service landed, and Cookie read that as a blocked gate for 20+ cycles. The socket tests now probe once and skip on EPERM/EACCES unless `BRAUSER_REQUIRE_IPC_TESTS=1` ("Local IPC in sandboxes"). Checked on macOS: a normal run skips nothing. Under `sandbox-exec` with Unix-socket bind and connect denied, and separately with `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, the 47 guarded Rust tests (38 unit, 9 `scripted-dialogs` integration) skip with the reason and both Cargo runs pass; with `BRAUSER_REQUIRE_IPC_TESTS=1` the same runs fail exactly those 47. In `test:scripts` the simulated denial skips the 2 guarded child-pipe tests and the probe self-test, and fails them with the flag; Seatbelt leaves child pipes alone, so there only the socket probe self-test skips.
+- 2026-10-27: Branch `feat/adopted-state-repair`. `get_config` now refreshes under the config lock, so it records adopted contracts like a note request; a test that wants "never recorded" must avoid `get_config` as well as locked refreshes. Recording warnings come from the reporting host's own last locked attempt, so a host test injects a write failure by making the config directory read-only (0500) after `.config.lock` exists, and an unlocked refresh must leave the warning in place. Settings' confirmation text lives in `options.html`, which the fake DOM does not parse, so the options test checks the markup between `forget-adopted-confirm` and `forget-adopted-yes`. The headless smoke forgets a damaged record through the real page and checks the `.bak` bytes and that no native dialog appeared.
+- 2026-10-27: Branch `fix/forget-for-full-record`. Settings decides whether to offer Forget from `adopted_state.full`, not from warning text, so the tests assert both the flag and the wording: a full record's warning mentions Forget recorded adapters, and write-failure and lock-failure warnings must not mention Forget at all.
+- 2026-10-27: Branch `fix/smoke-macos-flakes` (`brwr-smk`). Since #98, main's required macOS smoke had stopped three ways, each passing on rerun. The fixes are in "Waiting for state, not time". (1) `Extensions.loadUnpacked timed out` on the `macos-15-intel` fallback: the first CDP request had 15 s to cover Chrome's whole cold start. Reproduced locally with the old runner under 3x CPU load. On the arm64 CI runners, loading plus the profile check already took 12.9 s, and Chrome writes `Preferences` about ten seconds late, so the old 12 s profile wait was nearly as tight. (2) `Expected exactly two claude runs; got []`: a reopened panel enables **Summarize & log** before `restore()` adds earlier cards, so the earlier, already-summarized Codex card was taken for the new run, and the check ran before Claude Code started. Reproduced 2 of 5 under full load, where the fake's log showed both Claude turns starting after the check. (3) `Expected one open of the allowed page in the hourly totals; found []`: never reproduced locally (0 of 8 before the fix, including 4 old runs at 3x load). The step went on once settings looked connected, not once the worker held the new lease. The lease the worker held before matches only `/items/{id:int}`, which gives exactly an empty total. Probes found settings enables its controls only after its lease install, and showed no stale document after `Page.reload`, so this cause is inferred, not shown. The new waits record the worker's lease in the timeout message, so a recurrence will tell a late lease from a product fault. A fourth stop appeared under load: `openPanel()` gave up when one `chrome.sidePanel.open` evaluate timed out. Results: before the fix, 3 of 3 idle and 3 of 5 under full load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load). No product race was found.
+- 2026-10-27: Cookie's `brwr-d3m`/`brwr-p9r` cycle. Duration presentation tests should inspect both the worklog and a regenerated artifact file, including numeric frontmatter, rather than only the shared formatter. Panel startup tests now hold hello or `install_policy` to cover opening Recent before connection, during policy installation, and after startup. The connected policy-install window already permits requests; retry only views that actually waited. The fake DOM supplies `Option` and select `add` for real Recent rendering. For focused test diagnostics in a runner whose child test output is opaque, `node --test --test-isolation=none --test-name-pattern='Recent loads once' extension/tests/panel.test.mjs` prints the individual cases; still run the normal complete extension suite for the gate.
+- 2026-10-27: Independent review of the brief-activity/startup-Recent cycle reproduced two additional startup failures before fixing them: no home folder left both areas saying "Waiting for the host…" after connection, and a worker policy-install error prevented history loads despite a usable host configuration. Composed-panel regressions now cover setup guidance with Copy disabled and exactly one history/worklog request after that worker failure.
+- 2026-10-27: Branch `salvage/cookie-cycles-2-3` (`brwr-p9r` follow-up). A startup Recent test that releases the policy install together with `hello` cannot tell "loads on connect" from "loads after startup finishes"; hold `install_policy` pending and assert the history results arrive first.

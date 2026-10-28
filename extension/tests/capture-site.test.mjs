@@ -4,11 +4,12 @@ import test from "node:test";
 const { captureOrigin, planCaptureSite } = await import("../dist/capture-site.js");
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 const { starterOffers } = await import("../dist/starter-adapters.js");
+const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const CONFIG = {
   storage: { root: "/vault" }, capture_enabled: false,
   adapters: { format: 1, artifacts: [] },
 };
-const BOTH = { pullRequests: "Acme-Corp", issues: "other-org" };
+const BOTH = { organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true };
 const plan = (url, config = CONFIG, choice = BOTH) => {
   const result = planCaptureSite(config, url, choice);
   assert.equal(result.ok, true, result.message);
@@ -37,26 +38,50 @@ test("Jira and OneDrive start from the current URL and retain starter identities
   }
 });
 
-test("GitHub choices keep PR and issue scopes separate and show current-page misses", () => {
-  const result = plan("https://github.com/acme-corp/widget/pull/12/files");
+test("one organization field scopes every checked GitHub type", () => {
+  const result = plan("https://github.com/acme-corp/widget/pull/12/files", CONFIG,
+    { organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true });
   assert.equal(result.current.result.mode, "review");
-  assert.deepEqual(result.document.artifacts[0].scope, { owner: ["acme-corp"] });
-  assert.deepEqual(result.document.artifacts[1].scope, { owner: ["other-org"] });
-  assert.equal(match(result, "https://github.com/other-org/widget/pull/12").match, false);
-  assert.equal(match(result, "https://github.com/acme-corp/widget/issues/12").match, false);
-  assert.equal(match(result, "https://github.com/other-org/widget/issues/12").match, true);
+  for (const adapter of result.document.artifacts) assert.deepEqual(adapter.scope, { owner: ["acme-corp"] });
+  assert.equal(match(result, "https://github.com/acme-corp/widget/pull/12").match, true);
+  assert.equal(match(result, "https://github.com/acme-corp/widget/issues/12").match, true);
+  assert.equal(match(result, "https://github.com/acme-corp/widget/tree/main").match, true);
+  assert.equal(match(result, "https://github.com/other-org/widget/issues/12").match, false);
   assert.equal(match(result, "https://github.com/personal/widget/issues/12").match, false);
   assert.ok(result.examples.every((row) => row.result.match));
-  const issueOnly = plan("https://github.com/acme-corp/widget/pull/12", CONFIG, { pullRequests: null, issues: "other-org" });
+  const issueOnly = plan("https://github.com/acme-corp/widget/pull/12", CONFIG,
+    { organizations: "acme-corp", repositories: false, pullRequests: false, issues: true });
   assert.equal(issueOnly.document.artifacts.length, 1);
   assert.equal(issueOnly.current.result.match, false);
 });
 
+test("capture plan puts PR and issue before repo", () => {
+  const result = plan("https://github.com/acme-corp/widget/pull/12/files", CONFIG,
+    { organizations: "acme-corp", repositories: true, pullRequests: true, issues: true });
+  assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["github.pr", "github.issue", "github.repo"]);
+  assert.equal(result.current.result.type, "github.pr");
+  assert.deepEqual(result.current.result.within, { type: "github.repo", artifact_id: "github.repo:github.com/acme-corp/widget" });
+  assert.equal(match(result, "https://github.com/acme-corp/widget/issues/3").type, "github.issue");
+  assert.equal(match(result, "https://github.com/acme-corp/widget/tree/main").type, "github.repo");
+  assert.ok(result.probes.every((row) => !row.result.match));
+  assert.deepEqual(result.examples.map((row) => row.result.type), ["github.pr", "github.issue", "github.repo"]);
+});
+
+test("unchecking repositories leaves pull requests and issues unlinked", () => {
+  const result = plan("https://github.com/acme-corp/widget/pull/12", CONFIG,
+    { organizations: "acme-corp", repositories: false, pullRequests: true, issues: true });
+  assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["github.pr", "github.issue"]);
+  for (const adapter of result.document.artifacts) assert.equal(adapter.within, undefined);
+  assert.equal(result.current.result.type, "github.pr");
+  assert.equal(result.current.result.within ?? null, null);
+});
+
 test("empty, invalid, or unselected GitHub scope cannot produce a save", () => {
   for (const choice of [
-    { pullRequests: "", issues: "acme" }, { pullRequests: "acme", issues: "" },
-    { pullRequests: null, issues: null }, { pullRequests: "bad/org", issues: null },
-    { pullRequests: "*", issues: null },
+    { organizations: "", repositories: true, pullRequests: false, issues: false },
+    { organizations: "acme", repositories: false, pullRequests: false, issues: false },
+    { organizations: "bad/org", repositories: false, pullRequests: true, issues: false },
+    { organizations: "*", repositories: false, pullRequests: true, issues: false },
   ]) assert.equal(planCaptureSite(CONFIG, "https://github.com/acme/repo/pull/1", choice).ok, false);
 });
 
@@ -117,7 +142,7 @@ const PROBE = { source: "probe", shape: "/login", url: `${WIKI}/login`, adapter:
 
 function drafted(adapters, preview = [], taken = []) {
   return {
-    type: "site_drafted", protocol_version: 6, request_id: "draft-1", revision: "7",
+    type: "site_drafted", protocol_version: PROTOCOL_VERSION, request_id: "draft-1", revision: "7",
     drafter: "structural", adapters, dropped: [], preview, taken_types: taken, remapped: 0,
   };
 }
@@ -367,7 +392,7 @@ test("a copied scope is applied to the document but sent as null", () => {
   assert.deepEqual(added(plan, config)[0].scope, { owner: ["acme-corp"] });
   assert.deepEqual(plan.checked.scope, [null]);
   assert.equal("scope" in plan.checked.adapters[0], false);
-  assert.deepEqual(plan.document.artifacts.slice(0, 2), config.adapters.artifacts);
+  assert.deepEqual(plan.document.artifacts.slice(0, config.adapters.artifacts.length), config.adapters.artifacts);
   assert.equal(plan.current.result.match, true);
   // The copied scope is fixed: the review cannot choose another.
   for (const scope of ["unscoped", { values: "other-org" }]) {
@@ -417,7 +442,7 @@ test("ConfigSession sends draft_site and check_site_draft with only their schema
             posted.push(structuredClone(request));
             const reply = request.type === "draft_site"
               ? { ...wikiDraft(), request_id: request.request_id }
-              : { type: "site_draft_checked", protocol_version: 6, request_id: request.request_id, revision: "7", rules: [[{ verdict: "kept", reason: null }]], scope: [{ state: "not_shared", resolved: "not_shared", reason: null }], preview: [] };
+              : { type: "site_draft_checked", protocol_version: PROTOCOL_VERSION, request_id: request.request_id, revision: "7", rules: [[{ verdict: "kept", reason: null }]], scope: [{ state: "not_shared", resolved: "not_shared", reason: null }], preview: [] };
             setTimeout(() => { for (const listener of listeners) listener(reply); }, 0);
           },
           disconnect() {},

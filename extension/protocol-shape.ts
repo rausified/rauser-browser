@@ -74,6 +74,14 @@ function isAdapterWarning(value: unknown): boolean {
       (warning[key] as number) >= 0);
 }
 
+function isAdoptedState(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const state = value as Record<string, unknown>;
+  return Object.keys(state).length === 4 && stringOrNull(state.issue) && typeof state.full === "boolean" &&
+    typeof state.revision === "string" && state.revision.length > 0 &&
+    isStringArray(state.warnings) && (state.warnings as unknown[]).length <= 8;
+}
+
 function isRecordKey(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const key = value as Record<string, unknown>;
@@ -141,6 +149,19 @@ export function isRunView(value: unknown): boolean {
     (run.answer === null || isRunAnswer(run.answer));
 }
 
+const ARTIFACT_REF_KEYS = ["artifact_id", "artifact_type", "title", "url"];
+
+function isArtifactRef(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  return ARTIFACT_REF_KEYS.every((key) => typeof ref[key] === "string");
+}
+
+function isContainedArtifact(value: unknown): boolean {
+  return isArtifactRef(value) &&
+    isUnsignedInteger((value as Record<string, unknown>).focused_seconds);
+}
+
 function isArtifact(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Record<string, unknown>;
@@ -149,7 +170,10 @@ function isArtifact(value: unknown): boolean {
     ["focused_seconds", "background_seconds", "opens", "days_opened", "linked_count"]
       .every((key) => isUnsignedInteger(artifact[key])) &&
     (artifact.last_mode === null || ["view", "edit", "review"].includes(String(artifact.last_mode))) &&
-    stringOrNull(artifact.why);
+    stringOrNull(artifact.why) &&
+    (artifact.within === null || isArtifactRef(artifact.within)) &&
+    Array.isArray(artifact.contained) && artifact.contained.length <= 20 &&
+    artifact.contained.every(isContainedArtifact);
 }
 
 function isArtifactListItem(value: unknown): boolean {
@@ -319,7 +343,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.revision === "string" && isConfig(value.config) &&
         stringOrNull(value.config_issue) && isAgentStatus(value.agent_status) &&
         stringOrNull(value.adapter_issue) && Array.isArray(value.adapter_warnings) &&
-        value.adapter_warnings.length <= 256 && value.adapter_warnings.every(isAdapterWarning);
+        value.adapter_warnings.length <= 256 && value.adapter_warnings.every(isAdapterWarning) &&
+        isAdoptedState(value.adopted_state);
     case "config_updated":
       return typeof value.revision === "string" && isConfig(value.config);
     case "folder_chosen":

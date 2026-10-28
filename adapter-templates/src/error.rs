@@ -109,6 +109,11 @@ codes! {
         TooManyRefs => "too_many_refs",
         BadRef => "bad_ref",
         BadRefFind => "bad_ref_find",
+        WithinBadType => "within_bad_type",
+        WithinSelf => "within_self",
+        WithinIdSyntax => "within_id_syntax",
+        WithinIdReservedScheme => "within_id_reserved_scheme",
+        WithinUnknownCapture => "within_unknown_capture",
     }
 }
 
@@ -150,6 +155,8 @@ pub enum Field {
     Title,
     /// The alias's `capture` (`tab_title`) or `value` (`meta`).
     Alias,
+    /// The container's `within.id`.
+    Within,
 }
 
 impl fmt::Display for Field {
@@ -161,6 +168,7 @@ impl fmt::Display for Field {
             Field::Id => f.write_str("the id"),
             Field::Title => f.write_str("the title"),
             Field::Alias => f.write_str("the alias"),
+            Field::Within => f.write_str("the within id"),
         }
     }
 }

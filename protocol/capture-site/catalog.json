@@ -105,7 +105,7 @@
     "tailhex32": "example-page-0123456789abcdef0123456789abcdef",
     "id": "example123"
   },
-  "starter_types": ["jira.issue", "sharepoint.doc", "github.pr", "github.issue"],
+  "starter_types": ["jira.issue", "sharepoint.doc", "github.pr", "github.issue", "github.repo"],
   "shared_origins": {
     "https://github.com": {
       "tenant": { "segment": 0, "capture": "owner" },

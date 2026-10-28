@@ -344,6 +344,9 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 
 #[test]
 fn host_spawns_service_and_run_succeeds() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new();
     assert!(!world.socket().exists());
     let mut host = world.serve();
@@ -387,6 +390,9 @@ fn host_spawns_service_and_run_succeeds() {
 
 #[test]
 fn run_survives_host_exit() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new();
     world.set_mode("slow");
     let mut host = world.serve();
@@ -403,6 +409,9 @@ fn run_survives_host_exit() {
 
 #[test]
 fn cancel_kills_fake_group() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new();
     world.set_mode("hang");
     let mut host = world.serve();
@@ -429,6 +438,9 @@ fn cancel_kills_fake_group() {
 
 #[test]
 fn service_exits_when_idle() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let world = World::new();
     let reply = world.call_once(json!({"type": "list_runs"}));
     assert_eq!(reply["type"], "runs_listed", "{reply}");
@@ -443,6 +455,9 @@ fn service_exits_when_idle() {
 
 #[test]
 fn without_spawn_seam_host_reports_service_unavailable() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let mut world = World::new();
     world.spawn = false;
     let reply = world.call_once(json!({"type": "list_runs"}));
@@ -461,6 +476,9 @@ fn without_spawn_seam_host_reports_service_unavailable() {
 
 #[test]
 fn rebuilt_binary_restarts_the_running_service() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let mut world = World::new();
     // Touch a private copy: other tests' services run the shared binary,
     // and a newer mtime on it would restart them mid-run.
@@ -504,6 +522,9 @@ fn rebuilt_binary_restarts_the_running_service() {
 
 #[test]
 fn a_host_older_than_the_binary_never_restarts_the_newer_service() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
     let mut world = World::new();
     let copy = world.path("bin").join("brauser");
     fs::copy(HOST, &copy).unwrap();

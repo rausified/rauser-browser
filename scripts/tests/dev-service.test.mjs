@@ -7,6 +7,7 @@ import test from "node:test";
 import { SERVICE_LABEL } from "../../extension/brand.ts";
 import { isDevPlist, plistPath, servicePlist } from "../dev-service.mjs";
 import { main } from "../register-dev-host.mjs";
+import { ipcDenied } from "./ipc-guard.mjs";
 
 const EXTENSION_ID = "a".repeat(32);
 // These tests install the LaunchAgent into a temp home, and its paths are
@@ -62,7 +63,8 @@ test("paths are escaped and must be absolute", () => {
 // The LaunchAgent is macOS-only, so its paths must stay POSIX even when the
 // script tests run on Windows CI. A child process loads dev-service.mjs with
 // node:path resolved to path.win32, which is what a Windows runner gives it.
-test("plist paths stay POSIX when node:path is win32", () => {
+test("plist paths stay POSIX when node:path is win32", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const module = new URL("../dev-service.mjs", import.meta.url).href;
   const script = `
     import { registerHooks } from "node:module";
@@ -92,6 +94,7 @@ test("plist paths stay POSIX when node:path is win32", () => {
 });
 
 test("plist lints", { skip: process.platform !== "darwin" }, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const directory = await mkdtemp(path.join(os.tmpdir(), "bdl-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "service.plist");

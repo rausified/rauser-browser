@@ -317,7 +317,11 @@ fn resolve_install(found: &Path) -> Result<PathBuf, String> {
 fn check_not_replaceable(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     if metadata.mode() & 0o022 != 0 {
-        return Err(format!("{} is writable by other users", path.display()));
+        return Err(format!(
+            "{} is writable by other users; run `chmod go-w {}` to fix it",
+            path.display(),
+            path.display()
+        ));
     }
     let uid = rustix::process::getuid().as_raw();
     if metadata.uid() != uid && metadata.uid() != 0 {
@@ -789,7 +793,7 @@ mod process_tests {
             fs::set_permissions(fake.path("bin"), fs::Permissions::from_mode(dir_mode)).unwrap();
             let found = detected_claude(&fake);
             let problem = found.problem.clone().unwrap();
-            assert!(problem.ends_with("is writable by other users"), "{problem}");
+            assert!(problem.contains("is writable by other users"), "{problem}");
             assert_eq!(found.version, None);
             assert_eq!(fake.log("claude", "argv.log"), None);
             fs::set_permissions(fake.path("bin"), fs::Permissions::from_mode(0o755)).unwrap();
@@ -822,7 +826,7 @@ mod process_tests {
                 let found = detected_claude(&fake);
                 let problem = found.problem.clone().unwrap();
                 assert!(
-                    problem.ends_with("is writable by other users"),
+                    problem.contains("is writable by other users"),
                     "{dir_mode:o} {target:?}: {problem}"
                 );
                 assert_eq!(found.version, None);
@@ -830,7 +834,7 @@ mod process_tests {
                 let run_env = vec![("PATH".into(), fake.path("bin").into_os_string())];
                 let error = resolve_for_run(Adapter::ClaudeCode, &run_env).unwrap_err();
                 assert!(
-                    error.ends_with("is writable by other users"),
+                    error.contains("is writable by other users"),
                     "{dir_mode:o} {target:?}: {error}"
                 );
                 fs::set_permissions(fake.path("bin"), fs::Permissions::from_mode(0o700)).unwrap();
@@ -855,13 +859,14 @@ mod process_tests {
 
         let found = detected_claude(&fake);
         let problem = found.problem.clone().unwrap();
-        assert_eq!(
-            problem,
+        assert_eq!(problem, {
+            let shared = fs::canonicalize(&shared).unwrap();
             format!(
-                "{} is writable by other users",
-                fs::canonicalize(&shared).unwrap().display()
+                "{} is writable by other users; run `chmod go-w {}` to fix it",
+                shared.display(),
+                shared.display()
             )
-        );
+        });
         assert_eq!(fake.log("claude", "argv.log"), None);
         let run_env = vec![("PATH".into(), fake.path("bin").into_os_string())];
         let error = resolve_for_run(Adapter::ClaudeCode, &run_env).unwrap_err();

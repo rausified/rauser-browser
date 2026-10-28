@@ -60,14 +60,14 @@ function statusFor(overrides = {}) {
 }
 
 // A site is on while it has an adapter, so capture defaults to on with one.
-function configWith(adapters, captureEnabled) {
+function configWith(adapters, captureEnabled, stripParams = []) {
   return {
     storage: {
       root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later", artifacts_dir: "artifacts",
       summaries_dir: "summaries", knowledge_base_dir: null,
     },
     capture_enabled: captureEnabled ?? adapters.length > 0,
-    strip_params: [],
+    strip_params: stripParams,
     agent: null,
     summary_vocabulary: { document_types: ["report"], categories: ["news"] },
     adapters: { format: 1, artifacts: [] },
@@ -75,16 +75,17 @@ function configWith(adapters, captureEnabled) {
 }
 
 function install({
-  adapters = [], captureEnabled, storage = {}, host = {}, worker = {}, workerStatus = {},
+  adapters = [], captureEnabled, stripParams = [], storage = {}, host = {}, worker = {}, workerStatus = {},
   session = new Map(), hash = "",
 } = {}) {
   const elements = new Map();
   const state = {
     storage: new Map(Object.entries(storage)),
     session,
-    config: { ...configWith(adapters, captureEnabled), adapters: { format: 1, artifacts: adapters } },
+    config: { ...configWith(adapters, captureEnabled, stripParams), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
+    adoptedState: { issue: null, revision: "missing", warnings: [], full: false },
     storageChanged: [],
     requests: [],
     workerRequests: [],
@@ -103,7 +104,7 @@ function install({
   for (const [id, tag] of [
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-origin", "input"],
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
-    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
+    ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
@@ -115,10 +116,14 @@ function install({
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
     ["build-id", "span"], ["host-build", "span"],
+    ["adopted-state", "div"], ["adopted-issue", "p"], ["adopted-warnings", "ul"],
+    ["forget-adopted", "button"], ["forget-adopted-confirm", "div"],
+    ["forget-adopted-yes", "button"], ["forget-adopted-no", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
   elements.get("adapter-editor").hidden = true;
+  for (const id of ["adopted-state", "forget-adopted", "forget-adopted-confirm"]) elements.get(id).hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
   elements.get("build-id").textContent = "abc1234def56";
 
@@ -133,8 +138,11 @@ function install({
         return {
           type: "config_result", revision: String(state.revision), config: state.config,
           config_issue: state.configIssue, agent_status: AGENT_STATUS,
-          adapter_issue: null, adapter_warnings: [],
+          adapter_issue: null, adapter_warnings: [], adopted_state: state.adoptedState,
         };
+      case "forget_adopted_contracts":
+        state.adoptedState = { issue: null, revision: "sha256:fresh", warnings: [], full: false };
+        return hostReply({ ...request, type: "get_config" });
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
       case "update_config":
@@ -471,6 +479,7 @@ test("Resume capture waits for an invalid adapter policy to be repaired", async 
         type: "config_result", revision: String(current.revision), config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -515,6 +524,7 @@ test("a settings load failure after hello is not reported as a missing host", as
       get_config: (_request, current) => ({
         type: "config_result", revision: "1", config: current.config, config_issue: "config.json is unreadable",
         agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -566,6 +576,7 @@ test("pending removals leave an adapter document that needs repair as it is", as
         config: { ...current.config, adapters: futureAdapters }, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -597,6 +608,7 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: "unsupported adapter format 2",
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -611,11 +623,71 @@ test("adapter policy problems and overlap warnings are visible in settings", asy
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: null,
         adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
+});
+
+const JIRA_MODAL = {
+  type: "jira.issue",
+  origin: "https://acme.atlassian.net",
+  match: [
+    { path: "/browse/{key:jira_key}" },
+    { path: "/jira/{*}", query: { selectedIssue: "{key:jira_key}" } },
+  ],
+  id: "jira:{host}/{key}",
+};
+
+test("a strip_params entry an adapter reads is shown with a one-click fix", async () => {
+  install({ adapters: [JIRA_MODAL], stripParams: ["utm_*", "selectedIssue", "fbclid"] });
+  await openSettings();
+  const notices = env.elements.get("strip-conflicts");
+  assert.match(nodeText(notices), /selectedIssue/);
+  assert.match(nodeText(notices), /jira\.issue on https:\/\/acme\.atlassian\.net/);
+  assert.match(statusText(), /tracking-parameter entr/i);
+  const [fix] = notices.querySelectorAll("button");
+  assert.equal(fix.textContent, "Stop stripping selectedIssue");
+  assert.equal(fix.disabled, false);
+
+  const before = env.requests.filter((request) => request.type === "update_config").length;
+  fix.click();
+  await until(() => env.revision > 1 && idle(), "the fix to save");
+  const updates = env.requests.filter((request) => request.type === "update_config");
+  assert.equal(updates.length, before + 1);
+  // A revision-checked save that removes only that entry.
+  assert.equal(lastUpdate().expected_revision, "1");
+  assert.deepEqual(lastUpdate().config.strip_params, ["utm_*", "fbclid"]);
+  assert.deepEqual(lastUpdate().config.adapters, { format: 1, artifacts: [JIRA_MODAL] });
+  assert.equal(lastUpdate().config.capture_enabled, true);
+  assert.equal(lastUpdate().picker_token, null);
+  assert.equal(notices.querySelectorAll("button").length, 0);
+  assert.doesNotMatch(nodeText(notices), /selectedIssue/);
+  assert.match(statusText(), /no longer strips selectedIssue/);
+});
+
+test("no strip_params notice without a conflict, and the fix waits for repair", async () => {
+  install({ adapters: [JIRA_MODAL], stripParams: ["utm_*", "fbclid"] });
+  await openSettings();
+  assert.equal(env.elements.get("strip-conflicts").children.length, 0);
+
+  install({
+    adapters: [JIRA_MODAL],
+    stripParams: ["selected*"],
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: "choose the folder again",
+        agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
+      }),
+    },
+  });
+  await openSettings();
+  const [fix] = env.elements.get("strip-conflicts").querySelectorAll("button");
+  assert.equal(fix.textContent, "Stop stripping selected*");
+  assert.equal(fix.disabled, true);
 });
 
 test("an unsupported adapter document can be removed without blocking unrelated controls", async () => {
@@ -632,6 +704,7 @@ test("an unsupported adapter document can be removed without blocking unrelated 
           ? "unsupported adapter format 2"
           : null,
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -667,6 +740,7 @@ test("resetting a host-only adapter key on an empty document clears the key befo
         type: "config_result", revision: String(current.revision), config: current.config,
         config_issue: null, agent_status: AGENT_STATUS, adapter_issue: issue(),
         adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
       update_config: (request, current) => {
         const empty = request.config.adapters.format === 1 && request.config.adapters.artifacts.length === 0;
@@ -700,6 +774,7 @@ test("an adapter reset that leaves the issue in place does not report success", 
         type: "config_result", revision: String(current.revision), config: current.config,
         config_issue: null, agent_status: AGENT_STATUS,
         adapter_issue: "unsupported adapter-table key future_mode", adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -811,6 +886,7 @@ test("adapter workspace names overlaps and highlights a matching safety probe", 
         type: "config_result", revision: "1", config: current.config, config_issue: null,
         agent_status: AGENT_STATUS, adapter_issue: null,
         adapter_warnings: [{ first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 }],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       }),
     },
   });
@@ -854,6 +930,45 @@ test("adapter workspace edits, reorders, and removes through revisioned saves", 
   await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the removal");
   assert.equal(state.config.adapters.artifacts[0].type, "work.search");
   assert.ok(state.revision >= 4);
+});
+
+test("a pull request or issue rule cannot be moved below its repository rule", async () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  const scope = { owner: ["acme-corp"] };
+  const pr = {
+    type: "github.pr", origin: "https://github.com", scope, within,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  };
+  const issue = {
+    type: "github.issue", origin: "https://github.com", scope, within,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+    id: "github.issue:{host}/{owner}/{repo}/{number}",
+  };
+  const repo = {
+    type: "github.repo", origin: "https://github.com", scope,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }], id: within.id,
+  };
+  const state = install({ adapters: [pr, issue, repo] });
+  await openSettings();
+  const held = "A pull request or issue rule must stay ahead of its repository rule.";
+  // Each card has Edit, Move up, Move down, Remove.
+  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
+  assert.equal(buttons()[2].disabled, false, "PR and issue may swap");
+  assert.equal(buttons()[6].disabled, true, "the issue cannot move below the repository");
+  assert.equal(buttons()[6].title, held);
+  assert.equal(buttons()[9].disabled, true, "the repository cannot move above the issue");
+
+  // Even if the click arrives, nothing is saved and the reason is shown.
+  buttons()[6].dispatch("click");
+  await until(idle, "the held move");
+  assert.equal(statusText(), held);
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+
+  buttons()[2].click();
+  await until(() => state.config.adapters.artifacts[0].type === "github.issue" && idle(), "the allowed swap");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type),
+    ["github.issue", "github.pr", "github.repo"]);
 });
 
 test("an open adapter edit follows its target across an external reorder", async () => {
@@ -1133,6 +1248,7 @@ function opaqueRevision(state) {
   return {
     type: "config_result", revision: `r${state.revision}`, config: state.config,
     config_issue: null, agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
   };
 }
 
@@ -1472,4 +1588,259 @@ test("an adapter with a hand-added path_case is user-written and its forbidden k
   assert.deepEqual(check.provenance, [["user_written", "user_written"]]);
   assert.deepEqual(lastUpdate().config.adapters.artifacts, [edited]);
   assert.match(statusText(), /it did not pass Brauser's safety checks/);
+});
+
+// GitHub PR and issue rules as a user configured them before repositories
+// existed: scoped, with no `within`.
+function existingGitHubRules(prOwners = ["a"], issueOwners = ["b"]) {
+  return [
+    {
+      type: "github.pr", origin: "https://github.com", scope: { owner: prOwners },
+      match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+      id: "github.pr:{host}/{owner}/{repo}/{number}",
+    },
+    {
+      type: "github.issue", origin: "https://github.com", scope: { owner: issueOwners },
+      match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+      id: "github.issue:{host}/{owner}/{repo}/{number}",
+    },
+  ];
+}
+
+const repoButton = () => env.elements.get("starter-gallery").querySelectorAll("button")
+  .find((button) => button.dataset.starterKey === "github.repo");
+
+test("GitHub gallery pre-fills organizations from existing GitHub rules", async () => {
+  install({ adapters: existingGitHubRules(["a"], ["b"]) });
+  await openSettings();
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  assert.equal(scope.value, "a, b");
+
+  // Once the user edits the field, a re-render keeps what they typed.
+  scope.value = "c";
+  scope.dispatch("input");
+  typeSite("https://github.com");
+  assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "c");
+});
+
+test("a pull request starter links to repositories only when a repository rule exists", async () => {
+  const prButton = () => env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.starterKey === "github.pr");
+  install();
+  await openSettings();
+  typeSite("https://github.com");
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  scope.value = "acme-corp";
+  scope.dispatch("input");
+  prButton().click();
+  assert.equal(JSON.parse(env.elements.get("adapter-json").value).within, undefined);
+
+  const repository = {
+    type: "github.repo", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }],
+    id: "github.repo:{host}/{owner}/{repo}",
+  };
+  install({ adapters: [repository] });
+  await openSettings();
+  prButton().click();
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value).within,
+    { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" });
+});
+
+test("github.repo is offered when only PR and issue rules exist", async () => {
+  install({ adapters: existingGitHubRules(["acme-corp"], ["acme-corp"]) });
+  await openSettings();
+  const button = repoButton();
+  assert.ok(button);
+  assert.equal(button.textContent, "Review starter…");
+  assert.equal(button.disabled, false);
+});
+
+test("adding repositories links existing PR and issue rules without changing their scope", async () => {
+  const existing = existingGitHubRules(["a"], ["b"]);
+  const saves = [];
+  const state = install({
+    adapters: existing,
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  repoButton().click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.type, "github.repo");
+  assert.deepEqual(draft.scope, { owner: ["a", "b"] });
+  assert.match(env.elements.get("adapter-validation").textContent,
+    /Also links your existing pull request and issue rules to their repositories\./);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository save");
+  assert.equal(saves.length, 1);
+  const [pr, issue, repo] = saves[0].config.adapters.artifacts;
+  assert.deepEqual([pr.type, issue.type, repo.type], ["github.pr", "github.issue", "github.repo"]);
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  assert.deepEqual(pr, { ...existing[0], within });
+  assert.deepEqual(issue, { ...existing[1], within });
+  assert.deepEqual(pr.scope, { owner: ["a"] });
+  assert.deepEqual(issue.scope, { owner: ["b"] });
+});
+
+test("a repository starter with already-linked rules adds no linking line", async () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  install({ adapters: existingGitHubRules().map((adapter) => ({ ...adapter, within })) });
+  await openSettings();
+  repoButton().click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.match(env.elements.get("adapter-validation").textContent, /^Valid here\./);
+  assert.doesNotMatch(env.elements.get("adapter-validation").textContent, /Also links/);
+});
+
+test("an existing rule that cannot be linked stays as it is and does not block repositories", async () => {
+  const [, issue] = existingGitHubRules(["acme-corp"], ["acme-corp"]);
+  // Hand-written: its ID has no {repo}, so a repository `within` cannot be built from it.
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{_}/pull/{number:int}" }],
+    id: "github.pr:{host}/{number}",
+  };
+  const saves = [];
+  const state = install({
+    adapters: [handWritten, issue],
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  repoButton().click();
+  const validation = env.elements.get("adapter-validation").textContent;
+  assert.match(validation, /^Valid here\./);
+  assert.match(validation, /Also links your existing pull request and issue rules to their repositories\./);
+  assert.match(validation, /Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are\./);
+  assert.equal(env.elements.get("save-adapter").disabled, false);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository save");
+  assert.equal(saves.length, 1);
+  const saved = saves[0].config.adapters.artifacts;
+  assert.deepEqual(saved.find((adapter) => adapter.type === "github.pr"), handWritten);
+  assert.deepEqual(saved.find((adapter) => adapter.type === "github.issue"),
+    { ...issue, within: { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" } });
+});
+
+test("pre-filling organizations and rendering the gallery saves nothing", async () => {
+  const state = install({ adapters: existingGitHubRules(["a"], ["b"]) });
+  await openSettings();
+  typeSite("https://github.com");
+  assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "a, b");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+});
+
+const DAMAGED_RECORD = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) is malformed. " +
+  "Notes on pages the current adapters do not recognize are paused to protect note identity.";
+
+test("settings names a damaged adopted-adapter record and offers to forget it", async () => {
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-state").hidden, false);
+  assert.equal(el("adopted-issue").textContent, DAMAGED_RECORD);
+  assert.equal(el("forget-adopted").hidden, false);
+  assert.equal(el("forget-adopted").disabled, false);
+  // The rest of settings keeps working; this record only pauses some notes.
+  assert.equal(el("new-adapter").disabled, false);
+  assert.equal(el("pause-capture").disabled, false);
+});
+
+test("forgetting recorded adapters asks in the page first, then sends the shown revision", async () => {
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  const forgets = () => env.requests.filter((request) => request.type === "forget_adopted_contracts");
+
+  el("forget-adopted").click();
+  assert.equal(el("forget-adopted-confirm").hidden, false);
+  // The confirmation is in the page (no native dialog) and says what is lost.
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const confirmation = html.slice(html.indexOf('id="forget-adopted-confirm"'), html.indexOf('id="forget-adopted-yes"'));
+  assert.match(confirmation, /back the record up/);
+  assert.match(confirmation, /removed from config\.toml by hand/);
+  assert.match(confirmation, /Use as artifact note/);
+  assert.equal(forgets().length, 0, "nothing is forgotten before the in-page confirmation");
+  el("forget-adopted-no").click();
+  assert.equal(el("forget-adopted-confirm").hidden, true);
+  assert.equal(forgets().length, 0);
+
+  el("forget-adopted").click();
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-state").hidden, "the repaired record");
+  assert.equal(forgets().length, 1);
+  assert.equal(forgets()[0].expected_revision, "sha256:damaged");
+  assert.equal(el("forget-adopted-confirm").hidden, true);
+  assert.match(statusText(), /Recorded adapters forgotten/);
+  assert.equal(env.requests.filter((request) => request.type === "update_config").length, 0);
+  assert.deepEqual(env.permissionCalls, []);
+});
+
+test("a record that changed before forgetting is reread and shown, not forgotten", async () => {
+  const changed = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) " +
+    "was written by a newer version of Brauser.";
+  install({
+    adapters: [artifactFor("https://work.example")],
+    host: {
+      forget_adopted_contracts: (_request, state) => {
+        state.adoptedState = { issue: changed, revision: "sha256:newer", warnings: [], full: false };
+        return { type: "error", code: "conflict", message: "the record of adopted adapters changed" };
+      },
+    },
+  });
+  env.adoptedState = { issue: DAMAGED_RECORD, revision: "sha256:damaged", warnings: [], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  el("forget-adopted").click();
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-issue").textContent === changed, "the reread record");
+  assert.match(statusText(), /changed/);
+  assert.equal(el("forget-adopted-confirm").hidden, true);
+  assert.equal(el("forget-adopted").hidden, false);
+  // A second confirmation uses the revision the user is now shown.
+  el("forget-adopted").click();
+  el("forget-adopted-yes").click();
+  await until(() => env.requests.filter((request) => request.type === "forget_adopted_contracts").length === 2,
+    "the second forget");
+  assert.equal(env.requests.findLast((request) => request.type === "forget_adopted_contracts").expected_revision,
+    "sha256:newer");
+});
+
+test("a full record's warning offers the forget repair with the same confirmation", async () => {
+  const full = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) is full " +
+    "(1,024 adapters or 1 MiB), so 1 adapter in use is not recorded. Forget recorded adapters starts a fresh record.";
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full], full: true };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-issue").hidden, true);
+  assert.deepEqual(el("adopted-warnings").children.map((item) => item.textContent), [full]);
+  assert.equal(el("forget-adopted").hidden, false);
+  el("forget-adopted").click();
+  assert.equal(el("forget-adopted-confirm").hidden, false);
+  assert.equal(env.requests.filter((request) => request.type === "forget_adopted_contracts").length, 0);
+  el("forget-adopted-yes").click();
+  await until(() => el("adopted-state").hidden, "the fresh record");
+  const forgets = env.requests.filter((request) => request.type === "forget_adopted_contracts");
+  assert.equal(forgets.length, 1);
+  assert.equal(forgets[0].expected_revision, "sha256:full");
+});
+
+test("recording warnings Forget cannot fix are shown as notices without the forget repair", async () => {
+  const full = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) could not be " +
+    "updated: permission denied.";
+  install({ adapters: [artifactFor("https://work.example")] });
+  env.adoptedState = { issue: null, revision: "sha256:full", warnings: [full], full: false };
+  await openSettings();
+  const el = (id) => env.elements.get(id);
+  assert.equal(el("adopted-state").hidden, false);
+  assert.equal(el("adopted-issue").hidden, true);
+  assert.deepEqual(el("adopted-warnings").children.map((item) => item.textContent), [full]);
+  assert.equal(el("forget-adopted").hidden, true);
+  assert.equal(el("new-adapter").disabled, false);
 });

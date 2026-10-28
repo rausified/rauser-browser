@@ -9,6 +9,8 @@ const {
   parseAdapterJson,
   previewDocument,
   probeUrls,
+  stripParamConflicts,
+  stripsParam,
 } = await import("../dist/adapter-review.js");
 
 const catalog = JSON.parse(await readFile(new URL("../../protocol/capture-site/catalog.json", import.meta.url)));
@@ -118,4 +120,26 @@ test("probeUrls matches the host catalog", () => {
     probeUrls("https://x.test"),
     catalog.probe_paths.map((path) => `https://x.test${path}`),
   );
+});
+
+test("strip_params entries match query keys as the shared vectors say", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const vectors = JSON.parse(await readFile(new URL("../../protocol/strip-params/vectors.json", import.meta.url)));
+  assert.ok(vectors.cases.length > 0);
+  for (const { entry, param, strips } of vectors.cases) {
+    assert.equal(stripsParam(entry, param), strips, `${entry} vs ${param}`);
+  }
+});
+
+test("strip_params conflicts name each entry an adapter's query or absent keys read", () => {
+  const list = {
+    type: "work.list", origin: "https://work.example",
+    match: [{ path: "/lists/{id:int}", absent: ["q"] }], id: "list:{host}/{id}",
+  };
+  const document = { format: 1, artifacts: [JIRA, list, { match: "broken" }] };
+  assert.deepEqual(stripParamConflicts(["utm_*", "fbclid"], document), []);
+  assert.deepEqual(stripParamConflicts(["Q", "utm_*", "selected*"], document), [
+    { entry: "Q", params: ["q"], adapters: ["work.list on https://work.example"] },
+    { entry: "selected*", params: ["selectedIssue"], adapters: ["jira.issue on https://acme.atlassian.net"] },
+  ]);
 });

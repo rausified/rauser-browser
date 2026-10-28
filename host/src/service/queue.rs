@@ -38,6 +38,10 @@ pub struct Scheduler {
     running: Vec<Uuid>,
     waiting: VecDeque<Uuid>,
     by_key: HashMap<KeyId, Uuid>,
+    /// Keys held by runs recovery could not resume (no working directory,
+    /// or a second queued run for one key): they were never scheduled, but
+    /// until their end state is recorded their key must stay taken.
+    held: HashMap<Uuid, KeyId>,
 }
 
 impl Scheduler {
@@ -48,9 +52,18 @@ impl Scheduler {
         if let Some(existing) = self.by_key.get(&key) {
             return Submit::Existing(*existing);
         }
+        if let Some((holder, _)) = self.held.iter().find(|(_, held)| **held == key) {
+            return Submit::Existing(*holder);
+        }
         self.by_key.insert(key, id);
         self.waiting.push_back(id);
         Submit::New
+    }
+
+    /// Takes `key` for `id`, a run recovery could not resume, until
+    /// [`Scheduler::finished`] frees it. It takes no slot.
+    pub fn hold(&mut self, key: &RecordKey, id: Uuid) {
+        self.held.insert(id, key_id(key));
     }
 
     /// Moves the oldest waiting run to running, if a slot is free.
@@ -65,9 +78,16 @@ impl Scheduler {
 
     /// Records that a run has ended (in any state), freeing its slot and key.
     pub fn finished(&mut self, id: Uuid) {
+        self.release(id);
+        self.free_key(id);
+    }
+
+    /// Frees a run's slot but keeps its key taken, for a run that has ended
+    /// but whose end state is not yet recorded. [`Scheduler::finished`]
+    /// frees the key later. A released run does not count as busy.
+    pub fn release(&mut self, id: Uuid) {
         self.running.retain(|running| *running != id);
         self.waiting.retain(|waiting| *waiting != id);
-        self.free_key(id);
     }
 
     /// Removes a run that is still waiting. Returns false when the run is not
@@ -93,6 +113,7 @@ impl Scheduler {
 
     fn free_key(&mut self, id: Uuid) {
         self.by_key.retain(|_, owner| *owner != id);
+        self.held.remove(&id);
     }
 }
 
@@ -171,6 +192,27 @@ mod tests {
         assert_eq!(s.next_ready(), Some(d));
         // A running run keeps its key after a failed dequeue.
         assert_eq!(s.submit(&url("2"), Uuid::new_v4()), Submit::Existing(b));
+    }
+
+    #[test]
+    fn a_released_run_frees_its_slot_but_keeps_its_key_until_finished() {
+        let [a, b, c, d] = [(); 4].map(|()| Uuid::new_v4());
+        let mut s = Scheduler::default();
+        s.submit(&url("1"), a);
+        s.submit(&url("2"), b);
+        s.submit(&url("3"), c);
+        assert_eq!(s.next_ready(), Some(a));
+        assert_eq!(s.next_ready(), Some(b));
+        s.release(a);
+        // The slot is free for the next run, and nothing counts as busy.
+        assert_eq!(s.next_ready(), Some(c));
+        s.finished(b);
+        s.finished(c);
+        assert!(s.is_idle());
+        // The key is still taken until the run is finished.
+        assert_eq!(s.submit(&url("1"), d), Submit::Existing(a));
+        s.finished(a);
+        assert_eq!(s.submit(&url("1"), d), Submit::New);
     }
 
     #[test]

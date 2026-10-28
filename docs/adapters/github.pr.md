@@ -17,6 +17,18 @@ same artifact without a mode. Its title template covers the recorded
 to the full tab title when it differs. The extracted title may also expose
 uppercase Jira-key mentions to the later graph index.
 
+The draft declares `within = { type = "github.repo", id =
+"github.repo:{host}/{owner}/{repo}" }`, so each pull request sits within its
+repository (adapter-templates.md §8.3). Capture Site and settings keep that
+declaration only when a `github.repo` rule is kept on the origin; without one,
+the saved adapter has no `within` and records no repositories. A match names the container, for
+example `github.repo:github.com/acme-corp/widgets` for
+`https://github.com/acme-corp/widgets/pull/7/files`, and a visit counts once
+toward the pull request and once toward the repository. The container ID is frozen
+with the pull request ID. The `github.repo` draft (`github.repo.md`) builds the same
+ID for the repository's own pages and must come after this one on the origin;
+settings keeps that order.
+
 Known limits: personal repositories are not captured unless their owner is
 explicitly entered as a scope, enterprise GitHub on a private origin is not
 auto-suggested, and organization and repository rename handling waits for the

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { isResponseShape } = await import("../dist/protocol-shape.js");
 const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
 const { SETUP_WARNING } = await import("../dist/agent.js");
 const { storageKey } = await import("../dist/brand.js");
@@ -51,6 +52,7 @@ class FakeElement {
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
+  add(child) { this.append(child); }
   querySelector(selector) {
     return this.children.find((child) => child.tagName === selector.toUpperCase()) ?? new FakeElement(selector);
   }
@@ -117,6 +119,17 @@ function storageArea(entries) {
   };
 }
 
+function memoryStorage() {
+  const data = new Map();
+  return {
+    get length() { return data.size; },
+    key: (index) => [...data.keys()][index] ?? null,
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  };
+}
+
 let loads = 0;
 let teardown = [];
 
@@ -134,6 +147,7 @@ function hostReply(request, config = CONFIG) {
         type: "config_result", revision: "1", config, config_issue: null,
         agent_status: { state: "not_set_up", harness_version: null, message: "Set up an AI harness." },
         adapter_issue: null, adapter_warnings: [],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       };
     case "load_note":
       return {
@@ -168,6 +182,7 @@ async function install({
   intercept = () => null, workerReply = () => undefined, agentStatus = NOT_SET_UP,
   executeScript = async () => { throw new Error("Cannot access contents of the page"); },
   local = new Map(), session = new Map(),
+  localStorage = memoryStorage(),
   script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
 }) {
   const elements = pageElements();
@@ -180,7 +195,7 @@ async function install({
     contains,
     config: structuredClone(config), revision: "1", configIssue, adapterIssue,
     workerStatus: { ...statusFor(), ...workerStatus }, requests: [], workerRequests: [],
-    created: [], scripts: [],
+    created: [], scripts: [], copied: [], localStorage,
     counts: new Map(),
     added: [],
     removed: [],
@@ -200,9 +215,22 @@ async function install({
   };
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
     locks: { request: async (_name, _options, action) => action() },
+    clipboard: { async writeText(text) { state.copied.push(text); } },
   } });
+  let close;
   globalThis.window = {
-    addEventListener(type, listener) { if (type === "pagehide") teardown.push(listener); },
+    localStorage,
+    addEventListener(type, listener) {
+      if (type === "pagehide") {
+        let closed = false;
+        close = () => {
+          if (closed) return;
+          closed = true;
+          listener();
+        };
+        teardown.push(close);
+      }
+    },
     confirm: () => false,
   };
   const tabActivated = listeners();
@@ -229,6 +257,7 @@ async function install({
       connectNative() {
         const messageListeners = [];
         const disconnectListeners = [];
+        let disconnected = false;
         const port = {
           onMessage: { addListener(listener) { messageListeners.push(listener); } },
           onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
@@ -261,12 +290,12 @@ async function install({
                 reply = { type: "note_saved", revision: "saved", key: request.expected_key, outcome: "created", relative_path: "pages/note.md" };
               }
               reply ??= hostReply(request);
-              for (const listener of messageListeners) {
+              for (const listener of disconnected ? [] : messageListeners) {
                 listener({ ...reply, protocol_version: PROTOCOL_VERSION, request_id: request.request_id });
               }
             }, 0);
           },
-          disconnect() {},
+          disconnect() { disconnected = true; },
         };
         state.ports.push(port);
         return port;
@@ -321,6 +350,7 @@ async function install({
   await import(`../dist/panel.js?load=${loads}`);
   return {
     state,
+    close: () => close(),
     created: state.created,
     navigate(url, id = state.tab?.id ?? 1) {
       state.tab = { ...state.tab, url, id, incognito: false };
@@ -385,6 +415,144 @@ async function until(condition, what) {
 
 // The panel has settled once its first tab refresh rendered the page area.
 const shownTitle = (page) => page.el("page-title").textContent;
+
+for (const phase of ["before hello", "during policy install", "after startup", "before policy failure"]) {
+  test(`Recent loads once when opened ${phase}`, async () => {
+    const waitForHello = phase.startsWith("before");
+    let releaseHello;
+    const hello = new Promise((resolve) => { releaseHello = resolve; });
+    let releasePolicy;
+    const policy = new Promise((resolve) => { releasePolicy = resolve; });
+    globalThis.Option = class extends FakeElement {
+      constructor(text, value) {
+        super("option");
+        this.textContent = text;
+        this.value = value;
+      }
+    };
+    const page = await install({
+      tab: { id: 1, url: "https://new.example/a", title: "A" },
+      intercept(request) {
+        if (request.type === "hello" && waitForHello) return hello;
+        if (request.type === "list_artifacts") return {
+          type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+          items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
+            url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+            background_seconds: 20, opens: 1, why: null }],
+        };
+        if (request.type === "worklog") return {
+          type: "worklog_result", text: "Reviewed the release", artifact_count: 1,
+          start_date: request.start_date, end_date: request.end_date,
+        };
+        return null;
+      },
+      workerReply(request) {
+        if (request.kind === "install_policy" && phase === "during policy install") return policy;
+        if (request.kind === "install_policy" && phase === "before policy failure") {
+          return { ok: false, error: "Worker policy install failed" };
+        }
+      },
+    });
+    if (phase === "during policy install") {
+      await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy"), "policy installation");
+    } else if (phase === "after startup") {
+      await until(() => page.sent("load_note").length > 0 && page.el("note-body").disabled === false, "connected note");
+    }
+    page.el("tab-recent").click();
+    try {
+      if (waitForHello) {
+        assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+        assert.equal(page.el("worklog-text").textContent, "Waiting for the host…");
+        assert.equal(page.el("copy-worklog").disabled, true);
+        assert.equal(page.sent("list_artifacts").length, 0);
+        assert.equal(page.sent("worklog").length, 0);
+      }
+    } finally {
+      releaseHello(hostReply({ type: "hello" }));
+      releasePolicy({ ok: true, value: statusFor() });
+      // Drain startup even if the waiting-state assertions fail.
+      if (phase === "before policy failure") {
+        await until(() => page.el("status").textContent.includes("Worker policy install failed"), "policy error");
+      } else {
+        await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+      }
+    }
+    await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog result");
+    await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent result");
+    assert.equal(page.sent("list_artifacts").length, 1);
+    assert.equal(page.sent("worklog").length, 1);
+    assert.equal(page.el("copy-worklog").disabled, false);
+  });
+}
+
+test("Recent opened before hello loads once configuration arrives, while policy installation is still pending", async () => {
+  let releaseHello;
+  const hello = new Promise((resolve) => { releaseHello = resolve; });
+  let releasePolicy;
+  const policy = new Promise((resolve) => { releasePolicy = resolve; });
+  globalThis.Option = class extends FakeElement {
+    constructor(text, value) {
+      super("option");
+      this.textContent = text;
+      this.value = value;
+    }
+  };
+  const page = await install({
+    tab: { id: 1, url: "https://new.example/a", title: "A" },
+    intercept(request) {
+      if (request.type === "hello") return hello;
+      if (request.type === "list_artifacts") return {
+        type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+        items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
+          url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+          background_seconds: 20, opens: 1, why: null }],
+      };
+      if (request.type === "worklog") return {
+        type: "worklog_result", text: "Reviewed the release", artifact_count: 1,
+        start_date: request.start_date, end_date: request.end_date,
+      };
+      return null;
+    },
+    workerReply(request) {
+      if (request.kind === "install_policy") return policy;
+    },
+  });
+  page.el("tab-recent").click();
+  assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+  releaseHello(hostReply({ type: "hello" }));
+  try {
+    await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy"), "policy installation");
+    await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog before policy install finishes");
+    await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent before policy install finishes");
+  } finally {
+    releasePolicy({ ok: true, value: statusFor() });
+  }
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+  assert.equal(page.sent("list_artifacts").length, 1);
+  assert.equal(page.sent("worklog").length, 1);
+});
+
+test("Recent replaces its startup wait with setup guidance when no home folder is chosen", async () => {
+  let releaseHello;
+  const hello = new Promise((resolve) => { releaseHello = resolve; });
+  const page = await install({
+    tab: { id: 1, url: "https://new.example/a", title: "A" },
+    config: { ...CONFIG, storage: null },
+    intercept: (request) => request.type === "hello" ? hello : null,
+  });
+  page.el("tab-recent").click();
+  assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+  releaseHello(hostReply({ type: "hello" }));
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+  for (const clickAgain of [false, true]) {
+    if (clickAgain) page.el("tab-recent").click();
+    assert.match(page.el("recent-status").textContent, /home folder.*settings/i);
+    assert.match(page.el("worklog-text").textContent, /home folder.*settings/i);
+    assert.equal(page.el("copy-worklog").disabled, true);
+  }
+  assert.equal(page.sent("list_artifacts").length, 0);
+  assert.equal(page.sent("worklog").length, 0);
+});
 
 test("an HTTP(S) tab shows the note editor and no grant or address warning", async () => {
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: true });
@@ -654,32 +822,83 @@ test("Capture Site recognizes OneDrive document routes without scope or JSON", a
   assert.equal(updates(page)[0].config.adapters.artifacts[0].id, "sharepoint:{host}/{doc}");
 });
 
-test("GitHub requires separate inline scopes and saves exactly the selected kinds", async () => {
+test("Capture Site pre-fills the organization from the current GitHub page", async () => {
   const page = await captureReview(GITHUB_URL);
   assert.equal(page.el("capture-site-github").hidden, false);
-  assert.equal(page.el("capture-site-save").disabled, true);
-  page.el("capture-site-pr-orgs").value = "Acme-Corp";
-  page.el("capture-site-pr-orgs").dispatch("input");
-  assert.equal(page.el("capture-site-save").disabled, true, "issue scope is a separate choice");
-  page.el("capture-site-issue-orgs").value = "other-org";
-  page.el("capture-site-issue-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-orgs").value, "acme-corp");
+  assert.equal(page.el("capture-site-repos").checked, true);
+  assert.equal(page.el("capture-site-prs").checked, true);
+  assert.equal(page.el("capture-site-issues").checked, true);
   assert.equal(page.el("capture-site-save").disabled, false);
-  assert.match(page.el("capture-site-preview").textContent, /pull requests: acme-corp/);
-  assert.match(page.el("capture-site-preview").textContent, /issues: other-org/);
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
+  await saveCapture(page);
+  assert.equal(updates(page)[0].config.adapters.artifacts.length, 3);
+  for (const artifact of updates(page)[0].config.adapters.artifacts) {
+    assert.deepEqual(artifact.scope, { owner: ["acme-corp"] });
+  }
+});
+
+test("editing the pre-filled organization keeps the user's edit, not the page's owner", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-orgs").value = "other-org";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /owned by: other-org\./);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["other-org"] });
+});
+
+test("unchecking repositories omits the repo adapter", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type),
+    ["github.pr", "github.issue"]);
+});
+
+test("the confirmation line names only the checked types, truthfully and in a fixed order", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-prs").checked = false;
+  page.el("capture-site-prs").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records issues owned by: acme-corp\./);
+
+  page.el("capture-site-repos").checked = true;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-prs").checked = true;
+  page.el("capture-site-prs").dispatch("input");
   page.el("capture-site-issues").checked = false;
   page.el("capture-site-issues").dispatch("input");
-  assert.equal(page.el("capture-site-issue-orgs").disabled, true);
-  await saveCapture(page);
-  assert.equal(updates(page)[0].config.adapters.artifacts.length, 1);
-  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["acme-corp"] });
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories and pull requests owned by: acme-corp\./);
+
+  page.el("capture-site-issues").checked = true;
+  page.el("capture-site-issues").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
+});
+
+test("unchecking every GitHub kind disables save, and clearing the organization blocks it", async () => {
+  const page = await captureReview(GITHUB_URL);
+  for (const id of ["capture-site-repos", "capture-site-prs", "capture-site-issues"]) {
+    page.el(id).checked = false;
+    page.el(id).dispatch("input");
+  }
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(page.el("capture-site-orgs").disabled, true);
+  page.el("capture-site-repos").checked = true;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-orgs").value = "";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
 });
 
 test("canceling and switching tabs clear a review without changing capture", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-pr-orgs").value = "sensitive-org";
+  page.el("capture-site-orgs").value = "sensitive-org";
   page.el("capture-site-cancel").click();
   assert.equal(page.el("capture-site-review").hidden, true);
-  assert.equal(page.el("capture-site-pr-orgs").value, "");
+  assert.equal(page.el("capture-site-orgs").value, "");
   assert.equal(updates(page).length, 0);
   page.el("capture-site").click();
   page.navigate(JIRA_URL, 2);
@@ -1559,7 +1778,11 @@ test("a copied scope is not echoed into check_site_draft and still saves", async
   const { checkDraftedSave } = await import("../dist/capture-site-panel.js");
   const { ConfigSession } = await import("../dist/settings.js");
   const GITHUB = "https://github.com";
-  const existing = starterOffers(GITHUB, ["acme-corp"]).map((offer) => offer.adapter);
+  // Pull request and issue rules only: a repository rule's catch-all would
+  // also cover the drafted route, which the host drops as an overlap.
+  const existing = starterOffers(GITHUB, ["acme-corp"])
+    .filter((offer) => offer.artifact_type !== "github.repo")
+    .map(({ adapter: { within: _within, ...adapter } }) => adapter);
   const config = { ...CONFIG, adapters: { format: 1, artifacts: existing } };
   const table = { type: "github.issues", origin: GITHUB, match: [{ path: "/{owner:name|lower}/issues/{num:int}" }], id: "github.issues:{host}/{owner}/{num}" };
   const draft = {
@@ -1801,8 +2024,27 @@ function artifact(id, title, why = null) {
     artifact_id: id, artifact_type: "doc", title, url: `https://docs.example/${id}`,
     first_seen: "2026-10-01", last_seen: "2026-10-27", focused_seconds: 60,
     background_seconds: 0, opens: 1, days_opened: 1, last_mode: null, why, linked_count: 0,
+    within: null, contained: [],
   };
 }
+
+test("artifact shape validation requires the container fields", () => {
+  const result = (value) => isResponseShape(recognized(value));
+  const repo = { artifact_id: "github.repo:github.com/acme/widgets", artifact_type: "github.repo",
+    title: "acme/widgets", url: "https://github.com/acme/widgets" };
+  const child = { artifact_id: "github.pr:github.com/acme/widgets/7", artifact_type: "github.pr",
+    title: "Fix", url: "https://github.com/acme/widgets/pull/7", focused_seconds: 60 };
+  assert.equal(result(artifact("doc:a", "A")), true);
+  assert.equal(result({ ...artifact("doc:a", "A"), within: repo }), true);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: [child] }), true);
+  const { contained: _contained, ...missingContained } = artifact("doc:a", "A");
+  assert.equal(result(missingContained), false);
+  const { within: _within, ...missingWithin } = artifact("doc:a", "A");
+  assert.equal(result(missingWithin), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), within: { ...repo, url: 7 } }), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: [{ ...child, focused_seconds: -1 }] }), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: Array(21).fill(child) }), false);
+});
 
 const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value });
 const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -2013,6 +2255,66 @@ test("Save why stays disabled while a local pause waits for the host", async () 
   await settle();
   assert.equal(page.sent("record_why").length, 0);
   assert.match(page.el("status").textContent, /Use Pause capture to finish/);
+});
+
+// --- Artifact card: container and contents -----------------------------------
+
+const REPO = {
+  artifact_id: "github.repo:github.com/acme-corp/widgets",
+  artifact_type: "github.repo",
+  title: "acme-corp/widgets",
+  url: "https://github.com/acme-corp/widgets",
+};
+
+test("artifact card links a PR to its repository", async () => {
+  const pr = { ...artifact("github.pr:github.com/acme-corp/widgets/7", "Fix the thing"), within: REPO };
+  const page = await install({
+    tab: { id: 1, url: "https://github.com/acme-corp/widgets/pull/7", title: "Fix the thing" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(pr) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-within").hidden, false);
+  assert.equal(page.el("artifact-within").textContent, "In acme-corp/widgets");
+  const link = page.el("artifact-within").querySelector("a");
+  assert.equal(link.href, REPO.url);
+});
+
+test("repository card lists contained work", async () => {
+  const pr = { artifact_id: "github.pr:github.com/acme-corp/widgets/7", artifact_type: "github.pr",
+    title: "Fix the thing", url: "https://github.com/acme-corp/widgets/pull/7", focused_seconds: 125 };
+  const issue = { artifact_id: "github.issue:github.com/acme-corp/widgets/3", artifact_type: "github.issue",
+    title: "Flaky test", url: "https://github.com/acme-corp/widgets/issues/3", focused_seconds: 40 };
+  const repo = { ...artifact("github.repo:github.com/acme-corp/widgets", "acme-corp/widgets"), contained: [pr, issue] };
+  const page = await install({
+    tab: { id: 1, url: REPO.url, title: "acme-corp/widgets" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(repo) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-contained").hidden, false);
+  assert.equal(page.el("artifact-contained-heading").textContent, "Worked on inside");
+  const rows = page.el("artifact-contained-list").children;
+  assert.equal(rows.length, 2, "one row per contained artifact");
+  const firstLink = rows[0].querySelector("a");
+  assert.equal(firstLink.textContent, "Fix the thing · 2 min");
+  assert.equal(firstLink.href, pr.url);
+  const secondLink = rows[1].querySelector("a");
+  assert.equal(secondLink.textContent, "Flaky test · 40 sec");
+  assert.equal(secondLink.href, issue.url);
+});
+
+test("card hides container rows when absent", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-within").hidden, true);
+  assert.equal(page.el("artifact-within").textContent, "");
+  assert.equal(page.el("artifact-contained").hidden, true);
+  assert.equal(page.el("artifact-contained-list").children.length, 0);
 });
 
 // --- Summarize & log (plan Task 39) -----------------------------------------
@@ -2395,8 +2697,6 @@ test("the panel restores run cards on load and shows a run the shortcut started"
 
 // --- Response shape validation: Capture Site drafting ------------------------
 
-const { isResponseShape } = await import("../dist/protocol-shape.js");
-
 function previewRow(source = "visited") {
   return {
     source, shape: "/issue/{num}", url: "https://work.example/issue/1",
@@ -2481,4 +2781,88 @@ test("site_drafted with an extra key or an unbounded list fails the response sha
     mutate(checked);
     assert.equal(isResponseShape(checked), false, mutate.toString());
   }
+});
+
+const RECOVERY_TAB = { id: 1, url: "https://docs.example/a", title: "A" };
+async function notePanel(options = {}) {
+  const page = await install({ tab: RECOVERY_TAB, ...options });
+  await until(() => page.sent("load_note").length > 0 && !page.el("note-body").disabled,
+    "the note editor to load");
+  return page;
+}
+function editNote(page, text) {
+  page.el("note-body").value = text;
+  page.el("note-body").dispatch("input");
+}
+
+test("closing the built panel before debounce restores copy-only text and supports explicit Copy and Discard", async () => {
+  const first = await notePanel();
+  editNote(first, "pending <img src=x> text");
+  assert.equal(first.state.localStorage.length, 1, "recovery is synchronous before pagehide");
+  first.close();
+  const reopened = await notePanel({ localStorage: first.state.localStorage });
+  assert.equal(reopened.el("note-conflict").hidden, false);
+  assert.equal(reopened.el("note-unsaved").value, "pending <img src=x> text");
+  assert.equal(reopened.el("note-body").value, "");
+  assert.equal(reopened.sent("save_note").length, 0, "no automatic replay");
+  reopened.el("copy-unsaved").click();
+  assert.deepEqual(reopened.state.copied, ["pending <img src=x> text"]);
+  reopened.el("discard-unsaved").click();
+  assert.equal(reopened.el("note-conflict").hidden, true);
+  assert.equal(reopened.state.localStorage.length, 0);
+});
+
+test("closing during a built-panel save preserves newer typing after the old host save completes", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const first = await notePanel({ intercept: (request) => request.type === "save_note" ? held : undefined });
+  editNote(first, "first save");
+  await until(() => first.sent("save_note").length === 1, "the first autosave to start");
+  editNote(first, "first save plus newer typing");
+  first.close();
+  release({
+    type: "note_saved", revision: "r2", key: { kind: "url", value: RECOVERY_TAB.url },
+    outcome: "created", relative_path: "notes/a.md",
+  });
+  const reopened = await notePanel({
+    localStorage: first.state.localStorage,
+    intercept: (request) => request.type === "load_note" ? {
+      type: "note_loaded", exists: true, revision: "r2", title: "A", body: "first save",
+      key: { kind: "url", value: RECOVERY_TAB.url }, older_notes: [],
+    } : undefined,
+  });
+  assert.equal(reopened.el("note-body").value, "first save");
+  assert.equal(reopened.el("note-unsaved").value, "first save plus newer typing");
+  assert.equal(reopened.sent("save_note").length, 0);
+});
+
+test("a built-panel conflict including an empty deletion survives reopen and later confirmed edits", async () => {
+  const first = await notePanel({ intercept: (request) => request.type === "save_note" ? {
+    type: "note_conflict", revision: "other-r2", body: "another window's note", exists: true, title: "A",
+    key: { kind: "url", value: RECOVERY_TAB.url }, reason: "stale",
+  } : undefined });
+  editNote(first, "");
+  await until(() => !first.el("note-conflict").hidden, "the conflict copy to show");
+  assert.equal(first.el("note-unsaved").value, "");
+  first.close();
+  const reopened = await notePanel({ localStorage: first.state.localStorage });
+  assert.equal(reopened.el("note-conflict").hidden, false);
+  assert.equal(reopened.el("note-unsaved").value, "");
+  editNote(reopened, "a fresh edit");
+  await until(() => reopened.el("note-status").textContent === "Saved", "a confirmed new save");
+  assert.equal(reopened.state.localStorage.length, 1, "the conflict stays until explicit discard");
+  reopened.el("discard-unsaved").click();
+  assert.equal(reopened.state.localStorage.length, 0);
+});
+
+test("the built panel warns about recovery quota without preventing native autosave", async () => {
+  const localStorage = memoryStorage();
+  localStorage.setItem = () => { throw new Error("quota full"); };
+  const page = await notePanel({ localStorage });
+  editNote(page, "save through host");
+  assert.equal(page.el("note-recovery-warning").hidden, false);
+  assert.match(page.el("note-recovery-warning").textContent, /quota full/);
+  await until(() => page.el("note-status").textContent === "Saved", "the native save");
+  assert.equal(page.sent("save_note")[0].body, "save through host");
+  assert.equal(page.el("note-recovery-warning").hidden, false);
 });
