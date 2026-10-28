@@ -346,15 +346,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
   original bytes and canonical cache identity without rewriting logs or
   weakening intent/hash/tail validation. Discovered during the UUID fix (see
   Shipped).
-- [ ] `brwr-w4k` **Use as artifact note records the migration route as the
-  note's URL.** `use_as_artifact_note` (host/src/note.rs ~622) renders the new
-  note with `destination_url`, while `save_keyed_note` keeps the note's
-  original URL. Keep the older note's URL. Re-check against #70 (note identity,
-  merged at 7a929ce), which changed which older notes are offered.
-- [ ] `brwr-v5t` **Use as artifact note is offered when it must fail.** The
-  panel adds the Use button for every older note (extension/panel.ts ~222-246)
-  even when the artifact note already exists, where `use_as_artifact_note`
-  (host/src/note.rs ~597) always refuses. Show only View in that case.
 
 
 ### Cross-PR seam review defects (lane C2, 2026-10-27)
@@ -487,6 +478,9 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Offer older-note migration only while the shared note is absent (2026-10-28).** Completed assigned `brwr-v5t`. Older URL notes keep read-only View; Use as artifact note appears only when the host reports no artifact note. Confirmed saves and stale-save responses update availability without reloading or disturbing copy-out recovery. **Metrics:** 882 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files green; five new extension regressions across this batch, including both rendered action sets and read-only viewing.
+- **Category:** Bug Fix. **Preserve the original URL when migrating an older note (2026-10-28).** Completed assigned `brwr-w4k`. The migration renders the shared artifact note with the verified source note's creation URL, retaining identity evidence even when the action was clicked from another route. The host regression checks the stored URL, source removal and a later save from the destination route; existing ownership and no-clobber checks remain in force. **Metrics:** Full required local gate green; 882 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files, and 10,696 inert Markdown corpus renderings.
 
 - [x] `brwr-smr` **The smoke detects an extension rebuilt underneath it (2026-10-27).** PR #135's `timed out waiting for a new run card` and `Panel shows: null` stops came from `extension/dist` being rebuilt during the run by a codex review in the same worktree, not from CPU load or a product race. One build at the click reproduced the timeout exactly, with the panel saying it could not read the page, because `vendor/readability.js` was gone. One build at panel reopen reproduced the missing panel page. The smoke now refuses to start while `extension/.build` exists, and fails or annotates a run whose `dist` files changed. The run-card wait stops at once with the panel's own failure line. TESTING.md documents the rule. After PR 4 (#96) merged, `cardIn`, which PR 4's t53 `summarizeWithCodex()` also uses, moved onto `waitUntil`; on timeout it reports what the service says about the run. **Metrics:** before, 11 of 11 passed under load without a rebuild (6 at full load, 5 at 3x); after, 10 consecutive passes (5 idle, 5 under full load), and 11 more on the tree merged with PR 4 (5 idle, 6 under full load).
 - **Category:** Bug Fix. **Keep captured activity and context after rebuilding history (2026-10-28).** Activity and Why log payloads now use the same canonical UUID as their marker hash and immediate index update. Uppercase and unhyphenated valid IDs survive reindex without losing measurements or context or double-counting work, and batch replies echo the request ID so acknowledgements still correlate. Completes assigned `brwr-q7e`; historical marker and partial-intent recovery remains `brwr-smu`. **Metrics:** Three new UUID regression matrices plus a test-first batch-reply assertion; full gate green, 755 exercised Rust tests and 43 explicit IPC skips, all 15 extension and two script files.
@@ -827,9 +821,9 @@ stop product work, and no history reset or production IPC change is called for.
   request ID. Raw log payload assertions and rebuild checks caught the loss;
   checking cache totals alone could have hidden it. Old noncanonical records
   and partial intents are preserved for the focused `brwr-smu` follow-up.
-- Continue the authoritative assigned queue next: `brwr-v5t` and `brwr-w4k`
-  concern the same older-note migration flow and make a useful small batch.
-  Do not displace them with further internal capture hardening or claim Lane A.
+- The next assigned older-note batch (`brwr-v5t`, `brwr-w4k`) completed on
+  2026-10-28. Continue `bd ready --label assigned`; `brwr-09c` and `brwr-5nq`
+  are next in the driver order. Do not claim Lane A's work.
 - The existing `brwr-ppn` worklog-curation proposal remains a valuable later
   capability: let someone select the work to share and annotate its purpose
   before copying. Reuse Recent and keep recorded measurements intact, with
@@ -840,3 +834,35 @@ stop product work, and no history reset or production IPC change is called for.
   calls. The driver's independent reviewer remains required. Final logs are
   in `target/overnight-health/cycle-20261028/review-final-*.log`; 43 Rust IPC
   skips are explicit, and macOS headless smoke refuses Linux.
+
+
+### 2026-10-28 — Assigned older-note migration batch
+
+- Opening health was clean on `33d1a310`: no quarantine file or unfinished
+  diff. Added failing regressions first, implemented both fixes, reviewed the
+  complete diff and ran the required gate plus README checks. The first final
+  format check caught one Rust wrapping difference; `cargo fmt` fixed it and
+  the entire gate then passed. No production code changed after that pass.
+- Existence comes from the host flag, not note-body emptiness. First saves,
+  concurrent creation and deletion can change migration availability while
+  the panel stays open. Recovery remains copy-only and immutable-snapshot
+  cleanup is unchanged. Migration retains a source URL already checked by
+  the ownership parser; it accepts no new extension identity or path.
+- Validation: 882 exercised Rust tests, 43 explicit socket-denial skips,
+  15 extension files and two script files passed. macOS headless smoke
+  refuses Linux. Logs and failing-first evidence are in
+  `target/overnight-health/older-notes-20261028/`. Reviewed the full local
+  diff manually; the external Codex review was not invoked because this run
+  forbids live external API calls. The driver's independent review remains.
+- Beads export also retains pre-existing database metadata on closed
+  `brwr-1hj` (its driver-applied assigned label and cleared expired lease).
+  Cookie changed only the statuses of `brwr-v5t` and `brwr-w4k`; the remaining
+  ten assigned bugs stay open. No human gate was closed.
+- Product direction after assigned work: prioritize the existing curated
+  worklog (`brwr-ppn`) and named focus-session (`brwr-ued`) proposals. They
+  turn captured cross-tool activity into an intentional account of work,
+  which adds more visible value than another capture-health diagnostic.
+- Commit handoff: the one git add/commit attempt could not create
+  `.git/index.lock` on the read-only Git mount. The complete green diff is
+  left uncommitted for the driver; `.bosun_commit_msg` contains the exact
+  subject and body. No retry, push or service action was attempted.
