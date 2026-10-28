@@ -4,6 +4,8 @@
 //! fragments or configured tracking parameters. A stable lock outside the
 //! chosen home folder covers the event-ID check, append, and file sync.
 
+mod legacy;
+
 use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -101,7 +103,7 @@ struct BatchEntry {
     payload_hash: String,
     timestamp: OffsetDateTime,
     entry: String,
-    legacy_entry: Option<String>,
+    legacy_entries: Vec<String>,
     urls_within_bound: bool,
     overflow: bool,
 }
@@ -708,7 +710,7 @@ impl CaptureStore {
             payload_hash: sha256_hex(entry.as_bytes()),
             timestamp,
             entry,
-            legacy_entry: None,
+            legacy_entries: Vec::new(),
             urls_within_bound: true,
             overflow: true,
         })
@@ -790,7 +792,7 @@ impl CaptureStore {
             "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
             event.occurred_at, marker_metadata
         );
-        let legacy_entry = pre_sanitizer_entry(&entry, event, false);
+        let legacy_entries = legacy_entries(&entry, event, false);
         let payload_hash = visit_payload_hash(&event_id, &normalized, event, &marker_metadata);
         Ok(BatchEntry {
             // Replies correlate to the original request; only durable identity
@@ -800,7 +802,7 @@ impl CaptureStore {
             payload_hash,
             timestamp,
             entry,
-            legacy_entry,
+            legacy_entries,
             urls_within_bound,
             overflow,
         })
@@ -1063,7 +1065,7 @@ impl CaptureStore {
             rendering.marker_metadata.unwrap_or(""),
         );
         if let Some(intent) = read_intent(&journal_path)? {
-            let legacy_entry = pre_sanitizer_entry(
+            let legacy_entries = legacy_entries(
                 &entry,
                 event,
                 rendering
@@ -1074,7 +1076,7 @@ impl CaptureStore {
                 &intent,
                 &event_hash,
                 entry.as_bytes(),
-                legacy_entry.as_deref(),
+                &legacy_entries,
                 &payload_hash,
                 rendering.exact_replay,
             );
@@ -1231,7 +1233,7 @@ impl CaptureStore {
         intent: &VisitIntent,
         event_hash: &str,
         entry: &[u8],
-        legacy_entry: Option<&str>,
+        legacy_entries: &[String],
         payload_hash: &str,
         exact: bool,
     ) -> Result<CaptureOutcome> {
@@ -1250,8 +1252,9 @@ impl CaptureStore {
             intent.payload_hash.as_deref() == Some(payload_hash)
         } else {
             intent.entry_hash == sha256_hex(entry)
-                || legacy_entry
-                    .is_some_and(|legacy| intent.entry_hash == sha256_hex(legacy.as_bytes()))
+                || legacy_entries
+                    .iter()
+                    .any(|legacy| intent.entry_hash == sha256_hex(legacy.as_bytes()))
         };
         if exact {
             if self.root_identity != intent.root_identity {
@@ -1310,16 +1313,17 @@ impl CaptureStore {
             bail!("queued visit changed after a partial write; manual repair is required");
         }
         // V2 intents retain their exact prepared bytes, independent of the
-        // current renderer. V1 intents hash presentation bytes: for a pre-sanitizer
-        // append, accept only the exact older rendering whose complete hash
+        // current renderer. V1 intents hash presentation bytes: accept only
+        // the exact historical rendering whose complete hash
         // matches the durable intent. Complete markers above still dedupe,
         // and the tail check below must match this same historical entry.
         let entry = if let Some(prepared) = &intent.entry {
             prepared.as_bytes()
         } else if intent.entry_hash == sha256_hex(entry) {
             entry
-        } else if let Some(legacy) = legacy_entry
-            && intent.entry_hash == sha256_hex(legacy.as_bytes())
+        } else if let Some(legacy) = legacy_entries
+            .iter()
+            .find(|legacy| intent.entry_hash == sha256_hex(legacy.as_bytes()))
         {
             legacy.as_bytes()
         } else {
@@ -1374,7 +1378,7 @@ impl CaptureStore {
                     &intent,
                     &entry.event_hash,
                     entry.entry.as_bytes(),
-                    entry.legacy_entry.as_deref(),
+                    &entry.legacy_entries,
                     &entry.payload_hash,
                     false,
                 )?);
@@ -2274,13 +2278,11 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
     Some((id, url, at))
 }
 
-/// Reconstruct only the text prefix changed by the sanitizer upgrade, keeping
-/// the URL, measurements, and encoded marker payload byte-exact. The caller
-/// must verify the hash of this entire candidate against a durable v1 intent;
-/// it is never used for a new append. This also permits completion of old text
-/// containing formatting characters, just as compact batch recovery retains
-/// its original prepared bytes. Do not use this frozen renderer for display.
-fn pre_sanitizer_entry(entry: &str, event: &VisitEvent, why: bool) -> Option<String> {
+/// Reconstruct the two frozen historical text prefixes, keeping the URL,
+/// measurements and encoded marker payload byte-exact. Only a whole-entry
+/// hash matching a durable v1 intent may select one for recovery; neither
+/// generation is used for new appends or display.
+fn legacy_entries(entry: &str, event: &VisitEvent, why: bool) -> Vec<String> {
     let limit = if why { 500 } else { 300 };
     let label = if why { "Why: " } else { "" };
     let prefix = format!("\n- {} — {label}", event.occurred_at);
@@ -2288,29 +2290,13 @@ fn pre_sanitizer_entry(entry: &str, event: &VisitEvent, why: bool) -> Option<Str
         "{prefix}{}",
         safe_markdown_line(event.title.as_deref(), limit)
     );
-    let suffix = entry.strip_prefix(&current)?;
-    let mut text = String::new();
-    for ch in event
-        .title
-        .as_deref()
-        .unwrap_or("Untitled")
-        .trim()
-        .chars()
-        .take(limit)
-    {
-        if ch.is_control() {
-            text.push(' ');
-        } else {
-            if matches!(ch, '\\' | '[' | ']' | '<' | '>' | '*' | '_' | '`' | '|') {
-                text.push('\\');
-            }
-            text.push(ch);
-        }
-    }
-    if text.trim().is_empty() {
-        text = "Untitled".into();
-    }
-    Some(format!("{prefix}{text}{suffix}"))
+    let Some(suffix) = entry.strip_prefix(&current) else {
+        return Vec::new();
+    };
+    legacy::lines(event.title.as_deref().unwrap_or("Untitled"), limit)
+        .into_iter()
+        .map(|text| format!("{prefix}{text}{suffix}"))
+        .collect()
 }
 
 fn safe_title(value: Option<&str>) -> String {
@@ -2320,7 +2306,7 @@ fn safe_title(value: Option<&str>) -> String {
 /// An optional visit field as one escaped line, `Untitled` when absent;
 /// present-only fields go straight through `markdown::inline`.
 fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
-    crate::presentation::markdown_line(value.unwrap_or("Untitled"), limit)
+    crate::markdown::inline(value.unwrap_or("Untitled"), limit)
 }
 
 /// Recent, stable event timestamps shared by capture and native tests. Only
@@ -3177,6 +3163,189 @@ mod tests {
         let intent = read_intent(&journal).unwrap().unwrap();
         assert!(intent.entry.as_ref().unwrap().len() <= MAX_VISIT_ENTRY_BYTES);
         assert!(fs::metadata(journal).unwrap().len() <= MAX_VISIT_INTENT_BYTES as u64);
+    }
+
+    #[test]
+    fn daily_log_titles_and_why_neutralize_math_and_code() {
+        for (kind, batched) in [
+            ("visit", false),
+            ("visit", true),
+            ("activity", false),
+            ("activity", true),
+            ("why", false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let mut source = activity();
+            source.title = Some("Budget $x$ $$y$$ `=query` ~~~    end".into());
+            let CaptureOutcome::Persisted { relative_path } =
+                deliver_presentation_fixture(&store, kind, batched, &source)
+            else {
+                panic!("expected {kind} fixture, batched={batched}");
+            };
+            let log = fs::read_to_string(root.path().join(relative_path)).unwrap();
+            let row = log.lines().find(|line| line.starts_with("- ")).unwrap();
+            assert!(row.contains(
+                r"Budget &#36;x&#36; &#36;&#36;y&#36;&#36; &#96;\=query&#96; &#126;&#126;&#126;   &#32;end"
+            ), "{kind}, batched={batched}: {row}");
+            assert!(!row.contains(['$', '`', '~']));
+            // Escaping affects presentation only, never the machine payload.
+            if kind != "visit" {
+                let encoded = log
+                    .split_once(" data=")
+                    .unwrap()
+                    .1
+                    .split(' ')
+                    .next()
+                    .unwrap();
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+                let field = if kind == "why" { "text" } else { "title" };
+                assert_eq!(payload[field], source.title.as_deref().unwrap());
+            }
+        }
+    }
+
+    fn deliver_presentation_fixture(
+        store: &CaptureStore,
+        kind: &str,
+        batched: bool,
+        source: &ActivityEvent,
+    ) -> CaptureOutcome {
+        let visit = VisitEvent {
+            event_id: source.event_id.clone(),
+            url: source.url.clone(),
+            title: source.title.clone(),
+            occurred_at: source.occurred_at.clone(),
+            incognito: false,
+        };
+        let origins = ["https://example.com".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        if batched {
+            let event = match kind {
+                "visit" => CaptureBatchEvent::Visit(&visit),
+                "activity" => CaptureBatchEvent::Activity(source),
+                _ => unreachable!(),
+            };
+            store
+                .record_batch(policy, &Uuid::new_v4().to_string(), &[event], None)
+                .events
+                .remove(0)
+                .1
+        } else {
+            match kind {
+                "visit" => store.record(policy, &visit),
+                "activity" => store.record_activity(policy, source),
+                "why" => store.record_why(
+                    policy,
+                    &WhyEvent {
+                        event_id: source.event_id.clone(),
+                        artifact_id: source.artifact_id.clone(),
+                        url: source.url.clone(),
+                        occurred_at: source.occurred_at.clone(),
+                        incognito: false,
+                        text: source.title.clone().unwrap(),
+                    },
+                ),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn both_frozen_v1_renderers_recover_exact_titles_and_why_after_restart() {
+        // Independent historical literals: neither expected output calls a
+        // production renderer. Include characters changed by both upgrades.
+        for historical in [
+            "\u{202e}Budget $x$ \\`=q\\` ~~~    café %%hide%% #tag",
+            "Budget $x$ \\`\\=q\\` ~~~    café \\%\\%hide\\%\\% \\#tag",
+        ] {
+            for (kind, batched) in [
+                ("visit", false),
+                ("visit", true),
+                ("activity", false),
+                ("activity", true),
+                ("why", false),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let config = storage(root.path(), "log");
+                let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+                let mut source = activity();
+                source.title = Some(" \u{202e}Budget $x$ `=q` ~~~    café %%hide%% #tag ".into());
+                // Keep an unrelated complete row before the interrupted one.
+                let CaptureOutcome::Persisted { relative_path } = record(&store, &event()) else {
+                    panic!("expected earlier row");
+                };
+                let log = root.path().join(&relative_path);
+                let earlier = fs::read(&log).unwrap();
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, false, &source),
+                    CaptureOutcome::Persisted { .. }
+                ));
+                let current = fs::read_to_string(&log).unwrap();
+                // Retain exact measurements, URL, and encoded machine marker.
+                let entry = &current[earlier.len()..];
+                let suffix_start = if kind == "activity" {
+                    " — focused"
+                } else {
+                    " — <"
+                };
+                let suffix = &entry[entry.find(suffix_start).unwrap()..];
+                let label = if kind == "why" { "Why: " } else { "" };
+                let previous = format!("\n- {} — {label}{historical}{suffix}", source.occurred_at);
+                let hash = sha256_hex(source.event_id.as_bytes());
+                let intent = store
+                    .legacy_intent(&relative_path, &previous, earlier.len() as u64)
+                    .unwrap();
+                fs::write(
+                    store.journal_path(&hash),
+                    serde_json::to_vec(&intent).unwrap(),
+                )
+                .unwrap();
+                // Tear inside a multibyte title, before its marker exists.
+                let cut = previous.find('é').unwrap() + 1;
+                let mut torn = earlier.clone();
+                torn.extend_from_slice(&previous.as_bytes()[..cut]);
+                fs::write(&log, &torn).unwrap();
+                drop(store);
+                let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+                let mut changed = source.clone();
+                changed.title.as_mut().unwrap().push('!');
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &changed),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), torn);
+                let mut edited = torn.clone();
+                *edited.last_mut().unwrap() = b'X';
+                fs::write(&log, &edited).unwrap();
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &source),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), edited);
+                fs::write(&log, &torn).unwrap();
+                let outcome = deliver_presentation_fixture(&store, kind, batched, &source);
+                assert!(
+                    matches!(outcome, CaptureOutcome::Persisted { .. }),
+                    "{kind}, batched={batched}: {outcome:?}"
+                );
+                let mut expected = earlier;
+                expected.extend_from_slice(previous.as_bytes());
+                assert_eq!(fs::read(&log).unwrap(), expected);
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &source),
+                    CaptureOutcome::Suppressed { .. }
+                ));
+            }
+        }
     }
 
     #[test]

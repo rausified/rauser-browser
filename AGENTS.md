@@ -286,8 +286,11 @@ Single-event recovery (`brwr-3cc`, 2026-10-28): new per-event intents use
 format 2 with prepared bytes (512 KiB cap), their hash and a renderer-independent
 payload hash; the full JSON journal is capped at 1 MiB. Single and batch
 retries check that identity and exact torn bytes before resuming. V1 hash-only
-intents retain frozen pre-sanitizer recovery; never remove that compatibility
-when changing presentation. Complete visit markers still deduplicate by ID;
+intents retain two frozen renderer generations in `host/src/capture/legacy.rs`:
+before the presentation sanitizer, and before inline math/code escaping
+(`brwr-2za`). New daily-log titles and Why text use `markdown::inline`. Never
+remove the frozen recovery compatibility when changing presentation.
+Complete visit markers still deduplicate by ID;
 summary retries require the same payload and selected folder too.
 
 Incoming navigation (`brwr-1g2`, 2026-10-28): protocol version 8 adds required

@@ -77,6 +77,17 @@ budgets. Existing pre-sanitizer and normalized-URL fixtures explicitly retain
 v1 hash-only journals, so new fixtures cannot silently replace legacy coverage.
 All use disposable directories and no browser, network or user configuration.
 
+`daily_log_titles_and_why_neutralize_math_and_code` verifies new visit,
+activity and Why rows through every applicable delivery path, including exact
+entity output and unchanged machine payloads. The regression reproduced live
+math before the fix. `both_frozen_v1_renderers_recover_exact_titles_and_why_after_restart`
+uses independent historical text literals for both v1 renderer generations,
+with Unicode formatting, math, code, tags, comments and space runs. After a
+restart, it refuses changed payloads and edited tails without writing, then
+finishes the original bytes torn inside a multibyte title, retains an earlier
+row and deduplicates a retry. It covers single delivery for all three kinds
+and batch delivery for visits/activity (Why is not a batch event).
+
 ## Standalone overflow delivery
 
 `extension/tests/worker.test.mjs` fills the byte-capped queue with one final

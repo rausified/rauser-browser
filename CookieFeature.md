@@ -464,3 +464,24 @@ Repeated control refreshes retain unchanged status text to avoid repeating
 screen-reader announcements. Fourteen new composed-panel cases cover these
 states and their actions, bringing the individually exercised panel suite to
 158 passing cases. Real macOS Chrome interaction remains human verification.
+
+## 2026-10-28 — Keep daily-log page titles and Why context as text
+
+A page title or the context someone adds with Why can contain dollar signs,
+backticks or Markdown-like text. New daily-log rows now run those fields
+through the same inline escaping used by summaries, so a Markdown viewer
+shows them as text instead of interpreting math or code. This applies to
+older queued visit events and current hourly activity, delivered individually
+or in a batch, as well as Why context. The structured event payload retains
+its original text for indexing and regeneration.
+
+Changing the written bytes also needed care for an interrupted older write.
+Newer journals already store their prepared bytes, but v1 journals only
+stored a hash. Brauser now retains two immutable historical renderers: the
+original text escaper and the later Unicode-aware sanitizer before math/code
+escaping. Recovery completes a historical row only when its whole-entry hash
+and exact torn bytes agree with the journal. It never rewrites completed rows.
+Two regressions cover fifteen new-write/recovery scenarios, including restart,
+a cut inside a multibyte title, refused changed text and edited tails, retained
+unrelated rows and duplicate retries. All required local checks pass; the
+macOS browser smoke runner cannot run on this Linux VM (`brwr-2za`).
