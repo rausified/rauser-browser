@@ -169,6 +169,21 @@ add patterns again; pausing or removing the site clears them and stops sampling.
 
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows is in scope but has no accepted run yet (DESIGN.md §13, §14); the public package remains a later release milestone.
 
+### Diagnostics
+
+The native host, the service, and the `brauser` CLI keep local JSON-lines logs (`host.jsonl`, `service.jsonl`, `cli.jsonl`, each rotated at 5 MiB, three copies) in `~/Library/Logs/Brauser/` on macOS and `%LOCALAPPDATA%\Brauser\data\logs\` on Windows. They never hold page text, notes, prompts, answers, or `agent.env` values, record URLs only as their origin, and never leave the computer (DESIGN.md §15). `BRAUSER_LOG=debug` logs more; `BRAUSER_LOG_DIR` moves the directory. Read them with:
+
+```sh
+npm run logs                                    # everything, merged by time
+npm run logs -- --errors --since 1h             # recent warnings and errors
+npm run logs -- --request 0f8e7d6c              # one panel request, end to end
+npm run logs -- --run a1b2c3d4                  # one summary run in the service
+npm run logs -- --proc service --follow         # tail the service
+npm run logs -- --extension diagnostics.jsonl   # add the settings page's Copy diagnostics export
+```
+
+Add `--json` for the raw lines. See TESTING.md "Observing a run's logs" for keeping logs from test and smoke runs.
+
 ## License
 
 This repository is licensed under the [Apache License 2.0](LICENSE). The design specifies Apache-2.0 for the planned software as well.
