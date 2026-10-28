@@ -1,0 +1,64 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.invite",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/invite/{h:hex(32)}"
+        }
+      ],
+      "id": "tools.invite:{host}/{h}"
+    },
+    {
+      "type": "tools.reset",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/reset/{u:uuid}"
+        }
+      ],
+      "id": "tools.reset:{host}/{u}"
+    },
+    {
+      "type": "tools.password",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/password/reset/{h:hex(64)}"
+        }
+      ],
+      "id": "tools.password:{host}/{h}"
+    },
+    {
+      "type": "tools.verify",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/verify/{t:token(1,128)}"
+        }
+      ],
+      "id": "tools.verify:{host}/{t}"
+    },
+    {
+      "type": "tools.confirm",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/confirm/{n:int}"
+        }
+      ],
+      "id": "tools.confirm:{host}/{n}"
+    }
+  ]
+}

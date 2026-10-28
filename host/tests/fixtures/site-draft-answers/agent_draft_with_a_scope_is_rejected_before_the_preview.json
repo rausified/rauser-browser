@@ -1,0 +1,40 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.scoped",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/notes/{n:int}"
+        }
+      ],
+      "id": "tools.scoped:{host}/{n}",
+      "scope": {
+        "n": [
+          "1"
+        ]
+      }
+    },
+    {
+      "type": "tools.unscoped",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/items/{n:int}"
+        }
+      ],
+      "id": "tools.unscoped:{host}/{n}",
+      "unscoped": "acknowledged"
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.fields",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/notes/{n:int}"
+        }
+      ],
+      "id": "tools.fields:{host}/{n}",
+      "fields": {
+        "author": "{n}"
+      }
+    },
+    {
+      "type": "tools.alias",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/wiki/{n:int}"
+        }
+      ],
+      "id": "tools.alias:{host}/{n}",
+      "alias": {
+        "capture": "n"
+      }
+    },
+    {
+      "type": "tools.case",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/items/{n:int}"
+        }
+      ],
+      "id": "tools.case:{host}/{n}",
+      "path_case": "insensitive"
+    }
+  ]
+}

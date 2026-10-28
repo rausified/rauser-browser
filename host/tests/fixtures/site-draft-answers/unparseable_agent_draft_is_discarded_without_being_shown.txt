@@ -1,0 +1,6 @@
+Here is the improved draft for tools.example.com:
+
+- /docs/{n:int} for documents
+- /tickets/{k:jira_key} for tickets
+
+Let me know if you want more rules.

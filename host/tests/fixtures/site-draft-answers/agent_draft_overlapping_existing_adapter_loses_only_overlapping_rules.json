@@ -1,0 +1,27 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        },
+        {
+          "path": "/docs/{n:int}/history"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.tickets",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/tickets/{k:jira_key}"
+        }
+      ],
+      "id": "tools.tickets:{host}/{k}"
+    }
+  ]
+}

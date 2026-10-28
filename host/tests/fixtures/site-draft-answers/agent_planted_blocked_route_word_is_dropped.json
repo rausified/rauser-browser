@@ -1,0 +1,118 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.blocked",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/search/{n:int}"
+        },
+        {
+          "path": "/query/{n:int}"
+        },
+        {
+          "path": "/filter/{n:int}"
+        },
+        {
+          "path": "/login/{n:int}"
+        },
+        {
+          "path": "/home/{n:int}"
+        },
+        {
+          "path": "/dashboard/{n:int}"
+        },
+        {
+          "path": "/invite/{n:int}"
+        },
+        {
+          "path": "/reset/{n:int}"
+        },
+        {
+          "path": "/password/{n:int}"
+        },
+        {
+          "path": "/verify/{n:int}"
+        },
+        {
+          "path": "/confirm/{n:int}"
+        },
+        {
+          "path": "/share/{n:int}"
+        },
+        {
+          "path": "/magic/{n:int}"
+        },
+        {
+          "path": "/token/{n:int}"
+        },
+        {
+          "path": "/oauth/{n:int}"
+        },
+        {
+          "path": "/auth/{n:int}"
+        }
+      ],
+      "id": "tools.blocked:{host}/{n}"
+    },
+    {
+      "type": "tools.blocked2",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/signin/{n:int}"
+        },
+        {
+          "path": "/signup/{n:int}"
+        },
+        {
+          "path": "/logout/{n:int}"
+        },
+        {
+          "path": "/unsubscribe/{n:int}"
+        },
+        {
+          "path": "/invitation/{n:int}"
+        },
+        {
+          "path": "/callback/{n:int}"
+        },
+        {
+          "path": "/authorize/{n:int}"
+        },
+        {
+          "path": "/sso/{n:int}"
+        },
+        {
+          "path": "/saml/{n:int}"
+        },
+        {
+          "path": "/join/{n:int}"
+        },
+        {
+          "path": "/activate/{n:int}"
+        },
+        {
+          "path": "/activation/{n:int}"
+        },
+        {
+          "path": "/verification/{n:int}"
+        },
+        {
+          "path": "/tools/(docs|share)/{n:int}"
+        }
+      ],
+      "id": "tools.blocked2:{host}/{n}"
+    }
+  ]
+}
