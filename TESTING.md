@@ -862,3 +862,24 @@ and `node extension/tests/panel.test.mjs` separately for detailed case counts.
 The macOS smoke's refused-save check reads the first recovery-card textarea;
 its steps and expected dialog count are unchanged.
 Actual Chrome layout and clipboard behavior still need macOS verification.
+
+## Worklog capture gaps
+
+`cargo test --locked -p brauser index::tests` covers gap date intersection in
+recorded offsets (including a range spanning multiple days), overlapping
+notices without summed counts, duplicated marker IDs, full-count preservation,
+32-notice truncation, malformed/unowned logs, real attached and standalone
+capture batches, lost-ack retries, restart, reindex and format-7 checkpoints
+that had skipped overflow. Attached fixtures include a long URL and a log time
+outside the missing range, so the reader must use the loss payload rather than
+the anchor. Old-format migration cases keep event checkpoints while testing the
+one-time bounded gap rescan and partial-pass recovery. Source logs stay unchanged;
+system notices never create artifacts or measures.
+
+`extension/tests/panel.test.mjs` loads the built panel against mocked transport
+and DOM, with a private clipboard stub. It checks visible notices, exact preview
+Copy with inclusion on/off, preserving that choice across period changes,
+truncation, response validation, failed/mismatched periods and late replies.
+The existing native overflow regression also queries the new worklog report and
+the unchanged original worklog. No real accounts, model, clipboard or browser
+profile are used. Actual Chrome acceptance stays in the macOS smoke gate.
