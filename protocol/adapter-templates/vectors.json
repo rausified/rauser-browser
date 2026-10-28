@@ -19089,6 +19089,44 @@
       "url": "https://github.com/other/widgets"
     },
     {
+      "id": "eval.namespace.bound_foo",
+      "kind": "evaluate",
+      "why": "§8.1: a captured alternation in the ID keeps equal numbers under two namespaces apart (drafted namespaces, DESIGN 5.1)",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "tools.discussions",
+            "origin": "https://tools.example.com",
+            "match": [{"path": "/{space:(bar|foo)}/discussions/{num:int}"}],
+            "id": "tools.discussions:{host}/{space}/{num}"
+          }
+        ]
+      },
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "tools.discussions", "captures": {"space": "foo", "num": "7"}, "artifact_id": "tools.discussions:tools.example.com/foo/7", "mode": null},
+      "url": "https://tools.example.com/foo/discussions/7"
+    },
+    {
+      "id": "eval.namespace.bound_bar",
+      "kind": "evaluate",
+      "why": "§8.1: a captured alternation in the ID keeps equal numbers under two namespaces apart (drafted namespaces, DESIGN 5.1)",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "tools.discussions",
+            "origin": "https://tools.example.com",
+            "match": [{"path": "/{space:(bar|foo)}/discussions/{num:int}"}],
+            "id": "tools.discussions:{host}/{space}/{num}"
+          }
+        ]
+      },
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "tools.discussions", "captures": {"space": "bar", "num": "7"}, "artifact_id": "tools.discussions:tools.example.com/bar/7", "mode": null},
+      "url": "https://tools.example.com/bar/discussions/7"
+    },
+    {
       "id": "eval.github.pr_files_case",
       "kind": "evaluate",
       "why": "§5.1: FILES is not the literal files, so it goes to the rest",
@@ -26367,6 +26405,16 @@
       "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/(a|b)/{id:int}"}], "id": "x:{host}/{id}"},
       "provenance": ["drafted", "drafted"],
       "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_no_leading_literal"}]}
+    },
+    {
+      "id": "draft_rules.bound_namespace_is_kept",
+      "kind": "draft_rules",
+      "why": "§10.4: a drafted namespace bound as a captured alternation behind a literal is kept; the alternation capture is not an identifier",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "tools.discussions", "origin": "https://tools.example.com", "match": [{"path": "/{space:(bar|foo)}/discussions/{num:int}"}], "id": "tools.discussions:{host}/{space}/{num}"},
+      "provenance": ["drafted"],
+      "expect": {"scope": "not_shared", "rules": ["kept"]}
     },
     {
       "id": "draft_rules.pending_scope_without_scoped_adapters",

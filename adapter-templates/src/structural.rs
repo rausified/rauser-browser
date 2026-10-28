@@ -1075,17 +1075,158 @@ fn drop_rule(rule: &MappedRule, reason: DropReason, dropped: &mut Vec<Dropped>) 
 /// set of capture types instead of widening a rule. A link-only tail rule
 /// that shadows a visited hex rule is then dropped by the overlap check.
 fn map(kind: &Kind, shared: Option<&SharedOrigin>, policy: &DraftPolicy) -> Vec<Candidate> {
+    namespaces(kind, policy)
+        .into_iter()
+        .flat_map(|(group, bind)| map_group(&group, bind, shared, policy))
+        .collect()
+}
+
+/// Whether the kind has a `uuid` or `hexN` identifier, so only those enter
+/// the ID.
+fn has_fixed_shape(kind: &Kind) -> bool {
+    kind.base
+        .iter()
+        .filter_map(|p| match p {
+            Part::Class(class) => Some(*class),
+            _ => None,
+        })
+        .chain(kind.query.iter().map(|(_, class)| *class))
+        .any(is_fixed_shape)
+}
+
+/// A varying position the ID binds, and the words its capture admits.
+#[derive(Clone, Debug)]
+struct Bind {
+    at: usize,
+    words: Vec<String>,
+}
+
+/// The route words a rule has at the varying position.
+fn words_at(rule: &KindRule, at: usize) -> BTreeSet<String> {
+    match rule.path.get(at) {
+        Some(Part::Literal(word)) => BTreeSet::from([word.clone()]),
+        Some(Part::Alternation(words)) => words.iter().cloned().collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// Step 4a, Namespaces. Route words that differ at the varying position
+/// name namespaces of the kind's identifiers: equal numbers under
+/// `/foo/discussions/7` and `/bar/discussions/7` are two pages. So the
+/// kind's rules group by the words they hold there:
+///
+/// - a rule holding one word is in that word's group, whose ID is the one
+///   the kind would have with that word alone;
+/// - rules holding the same several words, an alternation after a route
+///   word (step 2), form one group whose ID binds the position as
+///   `{space:(…)}`, and so do visited words seen with the same visited
+///   rules. Same-named captures share one type, so a group never mixes
+///   word sets, and no visited rule is widened to a word it was not seen
+///   with;
+/// - a bound capture is never a draft's anchor (adapter-templates §10.4),
+///   so words bind only when another route word anchors the rules.
+///
+/// A rule's words are visited words or link-only words, never a mix (step
+/// 2), so a planted link never changes the groups or IDs of visited pages.
+/// Mode words name views of one page, so a kind whose words are all mode
+/// words stays one group. Each group is returned with the position its ID
+/// binds, if any.
+fn namespaces(kind: &Kind, policy: &DraftPolicy) -> Vec<(Kind, Option<Bind>)> {
+    let Some(at) = kind.varying else {
+        return vec![(kind.clone(), None)];
+    };
+    let is_mode = |w: &String| policy.mode_words.iter().any(|(m, _)| m == w);
+    let all: BTreeSet<String> = kind.rules.iter().flat_map(|r| words_at(r, at)).collect();
+    if all.len() < 2 || all.iter().all(is_mode) {
+        return vec![(kind.clone(), None)];
+    }
+    let fixed = has_fixed_shape(kind);
+    let first_id = kind
+        .base
+        .iter()
+        .position(
+            |p| matches!(p, Part::Class(c) if p.is_identifier() && (!fixed || is_fixed_shape(*c))),
+        )
+        .unwrap_or(kind.base.len());
+    let anchored_elsewhere = at > first_id
+        || kind.base[..first_id]
+            .iter()
+            .enumerate()
+            .any(|(i, p)| i != at && matches!(p, Part::Literal(_)));
+    let mut groups: BTreeMap<Vec<String>, Vec<KindRule>> = BTreeMap::new();
+    for rule in &kind.rules {
+        groups
+            .entry(words_at(rule, at).into_iter().collect())
+            .or_default()
+            .push(rule.clone());
+    }
+    // Words seen with the same visited rules, but for the word, bind as one
+    // group, so one kind still covers the site's namespaces. Their link-only
+    // rules come along and start unchecked.
+    if anchored_elsewhere {
+        let mask = |rule: &KindRule| {
+            let mut path = rule.path.clone();
+            path[at] = Part::Rest;
+            render(&path, &rule.query)
+        };
+        let mut by_profile: BTreeMap<BTreeSet<String>, Vec<String>> = BTreeMap::new();
+        for (words, rules) in &groups {
+            if let [word] = words.as_slice()
+                && !is_mode(word)
+            {
+                let profile: BTreeSet<String> =
+                    rules.iter().filter(|r| !r.link_only()).map(mask).collect();
+                if !profile.is_empty() {
+                    by_profile.entry(profile).or_default().push(word.clone());
+                }
+            }
+        }
+        // One alternation holds at most 16 words (adapter-templates §4.1).
+        for words in by_profile
+            .into_values()
+            .filter(|w| (2..=crate::ctype::MAX_ALTERNATIVES).contains(&w.len()))
+        {
+            let rules: Vec<KindRule> = words
+                .iter()
+                .flat_map(|w| groups.remove(std::slice::from_ref(w)).unwrap_or_default())
+                .collect();
+            groups.entry(words).or_default().extend(rules);
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(words, rules)| {
+            let (word, bind) = match words.as_slice() {
+                [word] => (Some(word.clone()), None),
+                _ if anchored_elsewhere && !words.iter().all(is_mode) => {
+                    (None, Some(Bind { at, words }))
+                }
+                _ => (None, None),
+            };
+            let group = Kind {
+                rules,
+                visited_word: word,
+                ..kind.clone()
+            };
+            (group, bind)
+        })
+        .collect()
+}
+
+/// [`map`] for one group of [`namespaces`]; `bind` is the varying position
+/// when the ID binds it.
+fn map_group(
+    kind: &Kind,
+    bind: Option<Bind>,
+    shared: Option<&SharedOrigin>,
+    policy: &DraftPolicy,
+) -> Vec<Candidate> {
     let tenant_capture = shared.and_then(|s| s.tenant.as_ref()).map(|(_, c)| c);
     let tenant_at = kind.base.iter().position(|p| *p == Part::Tenant);
     let first_id = kind.base.iter().position(Part::is_identifier);
-    let path_classes = kind.base.iter().filter_map(|p| match p {
-        Part::Class(class) => Some(*class),
-        _ => None,
-    });
-    let fixed = path_classes
-        .chain(kind.query.iter().map(|(_, class)| *class))
-        .any(is_fixed_shape);
+    let fixed = has_fixed_shape(kind);
     let in_id = |class: ShapeClass| !fixed || is_fixed_shape(class);
+    let bound = |at: usize| bind.as_ref().is_some_and(|b| b.at == at);
 
     let mut used: Vec<String> = tenant_capture.into_iter().cloned().collect();
     let mut id_names = Vec::new();
@@ -1093,6 +1234,7 @@ fn map(kind: &Kind, shared: Option<&SharedOrigin>, policy: &DraftPolicy) -> Vec<
     let mut names: Vec<Option<String>> = Vec::with_capacity(kind.base.len());
     for (at, part) in kind.base.iter().enumerate() {
         let name = match part {
+            _ if bound(at) => Some(unique_name(capture_base(ShapeClass::Slug), &mut used)),
             Part::Tenant => tenant_capture.cloned(),
             Part::Class(ShapeClass::Slug)
                 if tenant_at.is_some_and(|t| at > t) && first_id.is_none_or(|f| at < f) =>
@@ -1153,6 +1295,10 @@ fn map(kind: &Kind, shared: Option<&SharedOrigin>, policy: &DraftPolicy) -> Vec<
             let in_key = at < kind.base.len();
             let named = names.get(at).and_then(Option::as_deref).filter(|_| in_key);
             let segment = match part {
+                _ if bound(at) => {
+                    let words = bind.as_ref().map(|b| b.words.join("|")).unwrap_or_default();
+                    format!("{{{}:({words})}}", named.unwrap_or("_"))
+                }
                 Part::Empty => String::new(),
                 Part::Literal(word) if !in_key && modes.is_empty() && mode_of(word).is_some() => {
                     modes.extend(mode_of(word));
@@ -2472,15 +2618,18 @@ mod tests {
         };
         let draft = site(TOOLS, &Document::default(), &shapes, &[]);
         // The planted `/wiki/blog/{num}` link does not rename the visited
-        // kind: it is named as it would be without the link.
-        assert_eq!(types(&draft), ["tools.pages", "tools.b", "tools.a"]);
+        // kind: it is named as it would be without the link, and its other
+        // namespace is a link-only kind of its own.
+        assert_eq!(
+            types(&draft),
+            ["tools.pages", "tools.b", "tools.a", "tools.blog"]
+        );
         let wiki = &draft.adapters[0];
         assert_eq!(
             rule_texts(&wiki.adapter),
             [
                 "/wiki/pages/{num:int}/history",
                 "/wiki/pages/{num:int}",
-                "/wiki/blog/{num:int}",
                 "/wiki/pages/{num:int}/{*}",
             ]
         );
@@ -2491,14 +2640,14 @@ mod tests {
             .collect();
         assert_eq!(
             counts,
-            [
-                (0, 2, 0, false),
-                (1, 1, 0, false),
-                (2, 0, 9, true),
-                (3, 0, 3, true)
-            ]
+            [(0, 2, 0, false), (1, 1, 0, false), (2, 0, 3, true)]
         );
         assert!(draft.adapters[2].rules[0].link_only);
+        assert_eq!(
+            rule_texts(&draft.adapters[3].adapter),
+            ["/wiki/blog/{num:int}"]
+        );
+        assert!(draft.adapters[3].rules[0].link_only);
     }
 
     #[test]
@@ -2682,9 +2831,10 @@ mod tests {
         }
 
         // Before the checks every rule is still there: `/wiki/` and `/x/`
-        // are one kind split by route word, and `/x/{id}` is its own adapter.
+        // are one kind split by route word into two adapters, since the
+        // word is their only anchor, and `/x/{id}` is its own adapter.
         let kinds = draft_kinds(TOOLS, &existing, &[], &shapes, &test_catalog(), &[]);
-        assert_eq!(kinds.adapters.len(), 3);
+        assert_eq!(kinds.adapters.len(), 4);
         let mut texts = all_rule_texts(&kinds);
         texts.sort();
         assert_eq!(
@@ -2786,9 +2936,10 @@ mod tests {
             &input(&["/wiki/pages/{num}"], &["/wiki/zzz/{num}"]),
             &[],
         );
+        // It is a namespace of its own, so it never shares their IDs.
         assert_eq!(types(&alone), ["tools.pages"]);
-        assert_eq!(types(&planted), ["tools.pages"]);
-        assert_eq!(ids(&planted), ids(&alone));
+        assert_eq!(types(&planted), ["tools.pages", "tools.zzz"]);
+        assert_eq!(ids(&planted)[0], ids(&alone)[0]);
         // Visited shapes that differ there still name nothing by that word.
         let both = site(
             TOOLS,
@@ -2799,7 +2950,13 @@ mod tests {
             ),
             &[],
         );
-        assert_eq!(types(&both), ["tools.wiki"]);
+        // The ID binds the visited words; the link's word is its own kind.
+        assert_eq!(types(&both), ["tools.wiki", "tools.zzz"]);
+        assert_eq!(ids(&both)[0], "tools.wiki:{host}/{space}/{num}");
+        assert_eq!(
+            rule_texts(&both.adapters[0].adapter),
+            ["/wiki/{space:(blog|pages)}/{num:int}"]
+        );
     }
 
     /// `?id=1&id=abc` shapes to `id={id}&id={num}`: one key cannot hold two

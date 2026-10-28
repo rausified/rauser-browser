@@ -928,7 +928,13 @@ fn planted_alternative_on_visited_rule_is_a_separate_unchecked_rule() {
         &["/wiki/doc/{num}"],
         &["/wiki/page/{num}", "/wiki/doc/{num}/{slug}/{slug}"],
     );
-    assert_eq!(site.adapters.len(), 1, "{site:?}");
+    // The planted route word is a namespace of its own: a link-only kind,
+    // whose IDs never meet the visited pages'.
+    assert_eq!(site.adapters.len(), 2, "{site:?}");
+    let planted = &site.adapters[1];
+    assert_eq!(rules(planted), ["/wiki/page/{num:int}"]);
+    assert!(planted.rules[0].link_only);
+    assert_ne!(id_template(planted), id_template(&site.adapters[0]));
     let adapter = &site.adapters[0];
     let texts = rules(adapter);
     assert_eq!(texts[0], "/wiki/doc/{num:int}", "visited rule ranks first");
@@ -941,10 +947,6 @@ fn planted_alternative_on_visited_rule_is_a_separate_unchecked_rule() {
         assert!(rule.links > 0);
         assert!(!text.starts_with("/wiki/doc/{num:int}") || text.len() > texts[0].len());
     }
-    assert!(
-        texts.contains(&"/wiki/page/{num:int}".to_owned()),
-        "{texts:?}"
-    );
     // The planted alternative is never an alternation on the visited rule.
     assert!(
         texts
@@ -1078,4 +1080,111 @@ fn drafted_rules_pass_the_draft_checks_again_and_never_match_the_root() {
         }
     }
     assert!(drafted > 10, "the corpus drafts rules: {drafted}");
+}
+
+/// Route words that differ before the kind's word are namespaces: equal
+/// numbers under two of them are two pages, so the ID binds the namespace
+/// when another route word anchors the rule, and the kind splits per word
+/// when that word is the only anchor.
+#[test]
+fn equal_numbers_under_two_route_words_get_different_ids() {
+    let urls = [
+        "https://tools.example.com/foo/discussions/7",
+        "https://tools.example.com/bar/discussions/7",
+    ];
+    let site = draft(
+        TOOLS,
+        &empty(),
+        &["/foo/discussions/{num}", "/bar/discussions/{num}"],
+        &[],
+    );
+    assert!(site.dropped.is_empty(), "{site:?}");
+    let [adapter] = &site.adapters[..] else {
+        panic!("one adapter covers both namespaces: {site:?}")
+    };
+    assert_eq!(kind(adapter), "tools.discussions");
+    assert_eq!(
+        id_template(adapter),
+        "tools.discussions:{host}/{space}/{num}"
+    );
+    let doc = drafted_document(&site);
+    let ids: Vec<String> = urls
+        .iter()
+        .map(|url| doc.evaluate(url, None).expect("matched").artifact_id)
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "tools.discussions:tools.example.com/foo/7",
+            "tools.discussions:tools.example.com/bar/7"
+        ]
+    );
+
+    // After a literal the words alternate, and the ID still binds them.
+    let site = draft(
+        TOOLS,
+        &empty(),
+        &["/wiki/pages/{num}", "/wiki/blog/{num}"],
+        &[],
+    );
+    let doc = drafted_document(&site);
+    let a = doc.evaluate("https://tools.example.com/wiki/pages/7", None);
+    let b = doc.evaluate("https://tools.example.com/wiki/blog/7", None);
+    assert_ne!(a.expect("pages").artifact_id, b.expect("blog").artifact_id);
+
+    // With no other route word, each word is its own kind.
+    let site = draft(TOOLS, &empty(), &["/pages/{num}", "/blog/{num}"], &[]);
+    let mut types: Vec<&str> = site.adapters.iter().map(kind).collect();
+    types.sort_unstable();
+    assert_eq!(types, ["tools.blog", "tools.pages"], "{site:?}");
+    let doc = drafted_document(&site);
+    let a = doc.evaluate("https://tools.example.com/pages/7", None);
+    let b = doc.evaluate("https://tools.example.com/blog/7", None);
+    assert_ne!(a.expect("pages").artifact_id, b.expect("blog").artifact_id);
+
+    // A link under another namespace never shares the visited pages' IDs,
+    // and never changes their ID scheme.
+    let alone = draft(TOOLS, &empty(), &["/foo/discussions/{num}"], &[]);
+    let planted = draft(
+        TOOLS,
+        &empty(),
+        &["/foo/discussions/{num}"],
+        &["/bar/discussions/{num}"],
+    );
+    assert_eq!(
+        id_template(&alone.adapters[0]),
+        "tools.discussions:{host}/{num}"
+    );
+    assert_eq!(
+        id_template(&planted.adapters[0]),
+        id_template(&alone.adapters[0])
+    );
+    let doc = drafted_document(&planted);
+    let a = doc.evaluate(urls[0], None).expect("visited");
+    let b = doc.evaluate(urls[1], None).expect("link");
+    assert_ne!(a.artifact_id, b.artifact_id);
+}
+
+/// One alternation holds at most 16 words, so more namespaces than that
+/// never bind into one invalid rule: each stays a kind of its own.
+#[test]
+fn more_namespaces_than_one_alternation_holds_split_per_word() {
+    let shapes: Vec<String> = (b'a'..=b'q')
+        .map(|c| format!("/w{}/discussions/{{num}}", char::from(c)))
+        .collect();
+    let visited: Vec<&str> = shapes.iter().map(String::as_str).collect();
+    let site = draft(TOOLS, &empty(), &visited, &[]);
+    assert!(
+        site.dropped.iter().all(|d| d.reason == DropReason::Limit),
+        "{:?}",
+        site.dropped
+    );
+    assert!(!site.adapters.is_empty());
+    for adapter in &site.adapters {
+        assert!(
+            !id_template(adapter).contains("{space}"),
+            "{}",
+            id_template(adapter)
+        );
+    }
 }
