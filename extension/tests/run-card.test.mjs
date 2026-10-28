@@ -110,7 +110,7 @@ const ANSWER = {
 
 // `reply(request)` answers each host call; a HostError it throws (or returns)
 // is the host's error answer.
-function setup({ reply = () => null, visible = true, storage = storageArea() } = {}) {
+function setup({ reply = () => null, visible = true, storage = storageArea(), summarySaved } = {}) {
   globalThis.document = { createElement: (tag) => new FakeElement(tag) };
   const requests = [];
   const copied = [];
@@ -133,6 +133,7 @@ function setup({ reply = () => null, visible = true, storage = storageArea() } =
     visible: () => state.visible,
     storage,
     openSettings: () => { state.settingsOpened += 1; },
+    ...(summarySaved ? { summarySaved } : {}),
   });
   return { container, runCards, requests, copied, state, storage, sent: (type) => requests.filter((r) => r.type === type) };
 }
@@ -449,6 +450,208 @@ test("service_unavailable shows setup instructions", async () => {
   assert.ok(page.container.textContent.includes(message));
   button(page.container, "Open settings").click();
   assert.equal(page.state.settingsOpened, 1);
+  page.runCards.dispose();
+});
+
+const SAVED = {
+  summarized_at: "2026-10-27T16:00:10.000000000Z", document_type: "report", category: "news",
+  importance: "high", summary_path: "Summaries/read.example/a.summary.md", harness: "codex",
+};
+
+test("a succeeded card shows the saved summary line and opens it", async () => {
+  const running = view();
+  const saved = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER,
+    summary_path: SAVED.summary_path, written_record_key: running.record_key,
+  });
+  let current = running;
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SAVED };
+      if (request.type === "open_summary") return { type: "summary_opened", relative_path: SAVED.summary_path };
+      return null;
+    },
+  });
+  page.runCards.show(running);
+  await settle();
+  const [card] = cards(page.container);
+  assert.equal(page.sent("get_artifact").length, 0);
+  assert.ok(!buttonTexts(card).includes("Open summary"));
+
+  current = saved;
+  await tick();
+  assert.deepEqual(page.sent("get_artifact").map((r) => [r.url, r.title]), [[saved.url, saved.title]]);
+  assert.match(card.textContent, /report · news · high importance/);
+  // Agent text is set as text, never as child nodes or HTML.
+  let line = null;
+  walk(card, (child) => { if (child.className === "run-card-summary") line = child; });
+  assert.ok(line && !line.hidden);
+  assert.deepEqual(line.children, []);
+
+  button(card, "Open summary").click();
+  await settle();
+  // By the file the run wrote, not only its URL.
+  assert.deepEqual(page.sent("open_summary").map((r) => [r.url, r.summary_path]), [[saved.url, SAVED.summary_path]]);
+  assert.ok(!card.textContent.includes("Could not open"));
+
+  // Once per saved file: later updates and polls ask nothing more.
+  page.runCards.show(saved);
+  await tick(POLL_MS * 4);
+  assert.equal(page.sent("get_artifact").length, 1);
+  page.runCards.dispose();
+});
+
+test("a run seen succeeding tells the panel once, so its page summary refreshes", async () => {
+  const running = view();
+  const saved = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER,
+    summary_path: SAVED.summary_path, written_record_key: running.record_key,
+  });
+  let current = running;
+  const told = [];
+  const page = setup({
+    summarySaved: (run) => told.push(run.run_id),
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SAVED };
+      return null;
+    },
+  });
+  page.runCards.show(running);
+  await settle();
+  assert.deepEqual(told, []);
+  current = saved;
+  await tick();
+  assert.deepEqual(told, [saved.run_id]);
+  page.runCards.show(saved);
+  await tick(POLL_MS * 3);
+  assert.deepEqual(told, [saved.run_id]);
+  // A card restored already succeeded changes nothing on the page.
+  const other = view({ ...saved, run_id: "00000000-0000-4000-8000-000000000041" });
+  page.runCards.show(other);
+  await tick();
+  assert.deepEqual(told, [saved.run_id]);
+  page.runCards.dispose();
+});
+
+test("a save failure no retry can fix offers no Retry save but opens the saved file", async () => {
+  const failed = view({
+    state: "failed", finished_at: "2026-10-27T16:00:10Z", error_kind: "save_failed",
+    error: "The day's daily log is full, so this summary cannot be logged. The summary file was saved.",
+    summary_path: SAVED.summary_path, can_retry_save: false, answer: ANSWER,
+  });
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: failed, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "open_summary") return { type: "summary_opened", relative_path: SAVED.summary_path };
+      return null;
+    },
+  });
+  page.runCards.show(failed);
+  await tick();
+  const [card] = cards(page.container);
+  assert.ok(!buttonTexts(card).includes("Retry save"));
+  // No log event, so no saved line is asked for.
+  assert.equal(page.sent("get_artifact").length, 0);
+  button(card, "Open summary").click();
+  await settle();
+  // By the file the run wrote, not only its URL.
+  assert.deepEqual(page.sent("open_summary").map((r) => [r.url, r.summary_path]), [[failed.url, SAVED.summary_path]]);
+  page.runCards.dispose();
+});
+
+test("a succeeded card without summary_path makes no get_artifact call", async () => {
+  const done = view({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER });
+  const page = setup({
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  page.runCards.show(done);
+  await tick(POLL_MS * 3);
+  const [card] = cards(page.container);
+  assert.equal(page.sent("get_artifact").length, 0);
+  assert.ok(!buttonTexts(card).includes("Open summary"));
+  page.runCards.dispose();
+});
+
+test("a restored card with an untitled page asks with a null title, and an open failure shows in the card", async () => {
+  const done = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER, title: "",
+    summary_path: SAVED.summary_path,
+  });
+  const page = setup({
+    visible: false,
+    reply: (request) => {
+      if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SAVED };
+      if (request.type === "open_summary") return new HostError("conflict", "The file at the summary path is not a Brauser summary.");
+      return null;
+    },
+  });
+  page.runCards.show(done);
+  await settle();
+  // The card asks once even while the panel is hidden, since it does not poll for it.
+  assert.deepEqual(page.sent("get_artifact").map((r) => [r.url, r.title]), [[done.url, null]]);
+  const [card] = cards(page.container);
+  assert.match(card.textContent, /report · news · high importance/);
+  button(card, "Open summary").click();
+  await settle();
+  assert.match(card.textContent, /Could not open the summary: The file at the summary path is not a Brauser summary\./);
+  page.runCards.dispose();
+});
+
+test("a failed get_artifact keeps Open summary and shows no saved line", async () => {
+  const done = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER, summary_path: SAVED.summary_path,
+  });
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "get_artifact") return new HostError("internal", "The index is busy.");
+      return null;
+    },
+  });
+  page.runCards.show(done);
+  await settle();
+  const [card] = cards(page.container);
+  assert.deepEqual(page.sent("get_artifact").map((r) => [r.url, r.title]), [[done.url, done.title]]);
+  assert.ok(!card.textContent.includes("importance"));
+  assert.ok(buttonTexts(card).includes("Open summary"));
+  // One retry on a later poll, then no more.
+  await tick();
+  assert.equal(page.sent("get_artifact").length, 2);
+  await tick(POLL_MS * 4);
+  assert.equal(page.sent("get_artifact").length, 2);
+  assert.ok(!card.textContent.includes("importance"));
+  page.runCards.dispose();
+});
+
+test("a get_artifact that fails once is retried on a later poll and shows the saved line", async () => {
+  const done = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER, summary_path: SAVED.summary_path,
+  });
+  const replies = [
+    new HostError("internal", "The index is busy."),
+    { type: "artifact_result", recognized: false, artifact: null, summary: SAVED },
+  ];
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "get_artifact") return replies.shift();
+      return null;
+    },
+  });
+  page.runCards.show(done);
+  await settle();
+  const [card] = cards(page.container);
+  assert.equal(page.sent("get_artifact").length, 1);
+  assert.ok(!card.textContent.includes("importance"));
+  await tick();
+  assert.equal(page.sent("get_artifact").length, 2);
+  assert.match(card.textContent, /report · news · high importance/);
+  await tick(POLL_MS * 4);
+  assert.equal(page.sent("get_artifact").length, 2);
   page.runCards.dispose();
 });
 

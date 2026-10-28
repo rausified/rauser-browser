@@ -202,6 +202,9 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
+            first_answered_at: None,
+            save_final: false,
         }
     }
 

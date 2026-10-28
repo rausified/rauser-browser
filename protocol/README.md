@@ -112,6 +112,12 @@ Totals are unchanged in meaning: a contained artifact's seconds count in its
 own view and once in its container's, and recent and worklog totals still
 count each second once. No message is added or removed.
 
+Version 7 also carries summary outputs (open access PR 4), all additive:
+`SummaryView`; a required, nullable `summary` on `ArtifactListItem` and
+`ArtifactResult`; `RunView`'s `summary_path`, `written_record_key`, and
+`can_retry_save`; and the `open_summary` request with its `summary_opened`
+answer. Each is described below.
+
 Downgrading after adding repositories is unsupported: older hosts reject
 `within` in the adapter config and in adapter history.
 
@@ -222,6 +228,15 @@ and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
 validation, `answer` is a `RunAnswer` (`document_type`, `category`,
 `importance` as an `ImportanceLevel` of `high`, `medium`, or `low`, and
 `importance_reason`); before that, or when validation failed, it is null.
+`summary_path` is the home-relative path of the summary file a save
+wrote (`summaries/<note stem>.summary.md`): set when a save succeeds, and
+also when a `save_failed` save wrote the file before failing (the daily log
+refused or could not take its event, or the index could not name its
+artifact), whether or not `can_retry_save` is true, so the file can still be
+opened; null otherwise.
+`written_record_key` is the key the save resolved under the configuration
+current at finish. `can_retry_save` is true only for a `save_failed` run
+whose kept answer is on disk and whose failure a retry can fix.
 
 `service_hello` and `service_ready` pass only between the host and the
 service: before forwarding, the host sends `service_hello` and the service
@@ -253,6 +268,50 @@ artifact-keyed note exists, publishing without clobber before removing the
 source. `get_artifact`, `list_artifacts`, and `worklog` expose bounded derived
 index views; `refresh_artifacts` runs the owned-file regeneration pass and
 returns bounded conflict paths for unrelated occupants it did not replace.
+Both `ArtifactListItem` and `ArtifactResult` carry a required, nullable
+`summary` (`SummaryView`): on a list row, that local day's latest summary of
+the artifact; on `get_artifact`, the artifact's latest summary. An
+unrecognized page answers `recognized: false` and a null `artifact`, but its
+`summary` is still the latest one logged under the key its note uses (the
+page's `web.page` identity, or a removed adapter's recorded artifact); a
+failed lookup there leaves `summary` null rather than erroring. A summary is
+never counted as an open, so it adds to no worklog or Recent open count.
+
+`open_summary` names a page `url` and a required, nullable `summary_path`, and
+is answered by the native host on every platform. With `summary_path` null,
+the host resolves the record key the page's note uses and opens that record's
+summary file (`summaries/<note stem>.summary.md`). With a `summary_path` (a
+`SummaryView`'s or `RunView`'s own, home-relative with `/` separators), it
+opens that file whatever record the URL now resolves to, so a Recent row or
+run card opens the summary it shows after an adapter or `strip_params`
+change; the file must be a summary whose `brauser:` block names one record,
+at exactly that record's summary path. Either way the host uses the desktop
+opener and answers `summary_opened` with the file's home-folder relative
+`relative_path` (`/` separators). Only a file whose `brauser:` block is its
+record's `summary` is opened: no file is `invalid_request` "This page has no
+summary yet." (with a `summary_path`, "This summary file no longer exists."),
+a `summary_path` that is not a summary path is `invalid_request`, and
+anything else at the name is `conflict` "The file at the summary path is not
+a Brauser summary." Where there is no opener (off macOS)
+the answer is `invalid_request` "Opening is only supported on macOS.", the
+same wording as `open_path`. These messages and `summary_path` were added in version 7.
+
+`SummaryView` has `summarized_at` (RFC 3339 in the offset of the click that
+requested it, at most 32 characters), `document_type` and `category` (1 to 64
+characters), `importance` (an `ImportanceLevel`), `summary_path` (relative to
+the home folder, `/` separators, at most 1,024 bytes), and `harness` (a
+`HarnessId`). It is read from the daily log's `summary` events, which are not
+protocol messages but use the same owned-marker scheme as `activity` and
+`why`: the marker is `kind=summary data=<hex JSON>`, and the JSON has
+`event_id` (the run ID), `url` (normalized by the host), `title`,
+`occurred_at`, `document_type`, `category`, `importance`, `summary_path`,
+`record_key` (a `RecordKey`), `artifact_type`, `harness`, and the
+host-derived `artifact_id`, with no other field. A `url` record key is the
+page's own `web.page` artifact (`web:<host>/<url_id>`, and the key must be
+that URL's hash); an `artifact` key names the adapter artifact itself, never
+a `web:` ID, with a type other than `web.page`. Any other combination is
+refused before the log is written. Summary markers first have a writer with
+the format-6 index cache (PR 4); a format-5 build skips one as malformed.
 
 Harness setup is two messages, answered by the Brauser service (the native
 host forwards them; off macOS they answer `service_unavailable`), and has no

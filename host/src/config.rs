@@ -71,6 +71,11 @@ const ADOPTED_CONTRACTS_FORMAT: u32 = 1;
 /// Moving it aside forgets its contracts, like a config repair.
 const ADOPTED_CONTRACTS_REPAIR: &str = "Choose Forget recorded adapters in Brauser settings, which backs the file up and starts a fresh record, or fix the file, to restore notes on pages the current adapters do not recognize; once it is forgotten, notes from adapters removed by hand may need Use as artifact note again.";
 
+/// How every refusal of a note key while the adopted-contract state file
+/// cannot be used begins (`ConfigStore::adopted_contracts_unavailable`).
+pub(crate) const ADOPTED_CONTRACTS_PAUSED: &str =
+    "Notes on this page are paused to protect note identity";
+
 /// The host-owned record of every adapter contract a host has adopted under
 /// the config lock (see `AdoptedContracts`). It lives beside config.toml in
 /// the OS config directory, or beside an injected test config; like the rest
@@ -389,7 +394,7 @@ impl ConfigStore {
         result
     }
 
-    fn load_from(path: PathBuf) -> Self {
+    pub(crate) fn load_from(path: PathBuf) -> Self {
         // The folder may have moved since setup. Keep the config available for
         // repair through update_config, but never use it for vault I/O until a
         // fresh validation succeeds.
@@ -431,8 +436,8 @@ impl ConfigStore {
     }
 
     /// Best-effort startup cleanup of temporaries a killed host left behind,
-    /// in the config directory and, once the folder is trusted, the page
-    /// notes directory. Failures are logged; they never block serving.
+    /// in the config directory and, once the folder is trusted, the notes
+    /// and summaries folders. Failures are logged; they never block serving.
     pub fn sweep_stale_temporaries(&self) {
         if let Some(parent) = self.path.parent()
             && let Err(error) = sweep_config_temporaries(parent)
@@ -448,7 +453,9 @@ impl ConfigStore {
         if let Err(error) = Vault::open_checked(storage, self.root_identity())
             .and_then(|vault| vault.sweep_stale_temporaries())
         {
-            eprintln!("{NAMESPACE}: warning: could not sweep page-note temporaries: {error:#}");
+            eprintln!(
+                "{NAMESPACE}: warning: could not sweep page-note and summary temporaries: {error:#}"
+            );
         }
         // A host killed during an artifact pass leaves its temporaries.
         if let Err(error) = self.cache_dir().and_then(|cache_dir| {
@@ -638,7 +645,7 @@ impl ConfigStore {
             |dir| adopted_contracts_path(dir).display().to_string(),
         );
         format!(
-            "Notes on this page are paused to protect note identity: Brauser's record of the adapters it has used ({state}) cannot be read. {ADOPTED_CONTRACTS_REPAIR}"
+            "{ADOPTED_CONTRACTS_PAUSED}: Brauser's record of the adapters it has used ({state}) cannot be read. {ADOPTED_CONTRACTS_REPAIR}"
         )
     }
 

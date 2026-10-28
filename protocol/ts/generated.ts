@@ -363,6 +363,15 @@ export interface ContainedArtifactView {
   focused_seconds: number;
 }
 
+export interface SummaryView {
+  summarized_at: string;
+  document_type: string;
+  category: string;
+  importance: ImportanceLevel;
+  summary_path: string;
+  harness: HarnessId;
+}
+
 export interface ArtifactListItem {
   local_date: string;
   artifact_id: string;
@@ -373,6 +382,7 @@ export interface ArtifactListItem {
   background_seconds: number;
   opens: number;
   why: string | null;
+  summary: SummaryView | null;
 }
 
 export interface ArtifactResult {
@@ -381,6 +391,7 @@ export interface ArtifactResult {
   request_id: string;
   recognized: boolean;
   artifact: ArtifactView | null;
+  summary: SummaryView | null;
 }
 
 export interface ArtifactListResult {
@@ -642,6 +653,21 @@ export interface PathOpened {
   request_id: string;
 }
 
+export interface OpenSummaryRequest {
+  type: "open_summary";
+  protocol_version: 7;
+  request_id: string;
+  url: string;
+  summary_path: string | null;
+}
+
+export interface SummaryOpened {
+  type: "summary_opened";
+  protocol_version: 7;
+  request_id: string;
+  relative_path: string;
+}
+
 export interface GetAgentEnvRequest {
   type: "get_agent_env";
   protocol_version: 7;
@@ -669,6 +695,6 @@ export interface ServiceReady {
   build_id: string;
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | GetAgentEnvRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
-export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | AgentEnvListed | ServiceReady | ErrorResponse;
+export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | ServiceReady | ErrorResponse;

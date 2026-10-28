@@ -3,10 +3,11 @@
 // run; a card only shows it, so closing the panel loses nothing, and the next
 // panel restores the cards from list_runs. Agent text is untrusted and is
 // rendered as text only (textContent), never as HTML.
-import type { RunAnswer, RunView } from "../protocol/ts/generated.js";
+import type { RunAnswer, RunView, SummaryView } from "../protocol/ts/generated.js";
 import { serviceSetupText } from "./agent.js";
 import { storageKey } from "./brand.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
+import { summaryLine } from "./summary-text.js";
 
 export const POLL_MS = 1000;
 export const RESTORE_FINISHED_WITHIN_MS = 24 * 60 * 60 * 1000;
@@ -27,6 +28,10 @@ export interface RunCardDeps {
   visible(): boolean;
   storage: ChromeStorageArea;
   openSettings(): void;
+  /** A card saw its run succeed and save a summary, so the page's own
+   * Summary line can refresh: a summary event does not change the
+   * worker's delivery count the panel otherwise refreshes on. */
+  summarySaved?(run: RunView): void;
 }
 
 function isTerminal(run: RunView): boolean {
@@ -155,6 +160,7 @@ class RunCard {
   private readonly titleLine: HTMLParagraphElement;
   private readonly stateLine: HTMLParagraphElement;
   private readonly answerText: HTMLParagraphElement;
+  private readonly savedText: HTMLParagraphElement;
   private readonly streamText: HTMLPreElement;
   private readonly problemLine: HTMLParagraphElement;
   private readonly actions: HTMLDivElement;
@@ -170,6 +176,14 @@ class RunCard {
   private gone = false;
   private disposed = false;
   private problem: string | null = null;
+  // The summary file the card last asked get_artifact about, so it asks once
+  // per saved file, and the page's saved summary that call returned. A
+  // failed call is retried once, a poll interval later (`summaryRetried`
+  // names the file it was retried for).
+  private summaryAskedFor: string | null = null;
+  private summaryRetried: string | null = null;
+  private summaryTimer: ReturnType<typeof setTimeout> | null = null;
+  private saved: SummaryView | null = null;
 
   constructor(
     private view: RunView,
@@ -181,13 +195,16 @@ class RunCard {
     this.titleLine = make("p", "run-card-title");
     this.stateLine = make("p", "run-card-state");
     this.answerText = make("p", "run-card-answer");
+    this.savedText = make("p", "run-card-summary");
     this.streamText = make("pre", "run-card-stream");
     this.problemLine = make("p", "run-card-problem warning");
     this.actions = make("div", "run-card-actions");
     this.element.append(
-      this.titleLine, this.stateLine, this.answerText, this.streamText, this.problemLine, this.actions,
+      this.titleLine, this.stateLine, this.answerText, this.savedText, this.streamText, this.problemLine,
+      this.actions,
     );
     this.render();
+    void this.loadSavedSummary();
   }
 
   get runId(): string {
@@ -208,6 +225,8 @@ class RunCard {
     this.disposed = true;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
+    if (this.summaryTimer !== null) clearTimeout(this.summaryTimer);
+    this.summaryTimer = null;
   }
 
   private done(): boolean {
@@ -219,7 +238,44 @@ class RunCard {
   // another.
   private setView(run: RunView): void {
     if (isTerminal(this.view) && !isTerminal(run)) return;
+    const before = this.savedPath();
     this.view = run;
+    if (before === null && this.savedPath() !== null) this.deps.summarySaved?.(run);
+    void this.loadSavedSummary();
+  }
+
+  /** The summary file a succeeded run saved, or null. */
+  private savedPath(): string | null {
+    return this.view.state === "succeeded" ? this.view.summary_path : null;
+  }
+
+  /** Asks get_artifact once for the page's saved summary when the run has
+   * saved one, retrying a failure once on a later poll. A failure leaves
+   * only the line out: Open summary still works from the run's url. */
+  private async loadSavedSummary(): Promise<void> {
+    const path = this.savedPath();
+    if (path === null || path === this.summaryAskedFor || this.disposed) return;
+    this.summaryAskedFor = path;
+    this.saved = null;
+    try {
+      const result = await this.deps.host.call({
+        type: "get_artifact", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        url: this.view.url, title: this.view.title || null,
+      }, "artifact_result");
+      if (this.disposed || this.summaryAskedFor !== path) return;
+      this.saved = result.summary;
+    } catch {
+      if (this.disposed || this.summaryAskedFor !== path || this.summaryRetried === path) return;
+      this.summaryRetried = path;
+      this.summaryTimer = setTimeout(() => {
+        this.summaryTimer = null;
+        if (this.summaryAskedFor !== path) return;
+        this.summaryAskedFor = null;
+        void this.loadSavedSummary();
+      }, POLL_MS);
+      return;
+    }
+    this.render();
   }
 
   private schedule(): void {
@@ -319,6 +375,16 @@ class RunCard {
     }, "Could not open Codex");
   }
 
+  private openSummary(): void {
+    void this.act(async () => {
+      await this.deps.host.call({
+        type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        // The file this run wrote, whatever record its URL resolves to now.
+        url: this.view.url, summary_path: this.view.summary_path,
+      }, "summary_opened");
+    }, "Could not open the summary");
+  }
+
   private copy(text: string): void {
     void this.act(() => this.deps.copy(text), "Could not copy");
   }
@@ -331,6 +397,10 @@ class RunCard {
     const answer = run.state === "succeeded" && run.answer ? answerLine(run.answer) : "";
     this.answerText.textContent = answer;
     this.answerText.hidden = answer === "";
+    const savedPath = this.savedPath();
+    const saved = savedPath !== null && this.saved ? summaryLine(this.saved) : "";
+    this.savedText.textContent = saved;
+    this.savedText.hidden = saved === "";
     this.streamText.textContent = this.stream;
     this.streamText.hidden = this.stream === "";
     this.problemLine.textContent = this.problem ?? "";
@@ -338,6 +408,11 @@ class RunCard {
 
     const buttons: HTMLButtonElement[] = [];
     if (!isTerminal(run)) buttons.push(actionButton("Cancel", () => this.cancel()));
+    // A failed save can still have written the file (the daily log then
+    // refused its event); the run keeps its path, so it opens too.
+    if (isTerminal(run) && run.summary_path !== null) {
+      buttons.push(actionButton("Open summary", () => this.openSummary()));
+    }
     if (run.harness === "codex" && run.thread_id) {
       buttons.push(actionButton("Open in Codex", () => this.openInCodex()));
     }
