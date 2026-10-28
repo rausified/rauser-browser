@@ -683,6 +683,16 @@ Template variables: `{page.title}`, `{page.url}`, `{page.content}`, `{selection}
 
 The panel is about the page in the active tab. Capture housekeeping collapses into a one-line strip at the bottom, and configuration stays on the settings page.
 
+The enabled-capture status describes sites with adapters, including when none
+are configured. An unreadable tab (including a Chrome page or withdrawn site
+access) has no artifact verdict; a readable page the host does not recognize
+still says "Not an artifact". The current card refreshes when the host becomes
+reachable again and whenever any worker-status read observes a different
+`delivered_batches` generation, including reads made by Pause, Discard and
+Dismiss. An unchanged generation does not request another lookup. Refreshes
+keep unsaved context for the same artifact and use the existing coalescing
+refresher so only the current page's response can render.
+
 ```
 ┌────────────────────────────────────────────┐
 │ Rauser Browser Assistant                ⚙  │  gear opens settings

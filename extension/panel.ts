@@ -8,7 +8,7 @@ import {
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, describe, element, setupProblem, worker } from "./settings.js";
+import { ConfigSession, captureStateText, describe, element, setupProblem, worker } from "./settings.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
@@ -147,6 +147,10 @@ let tabRefreshSeq = 0;
 let followedTabId: number | null = null;
 let currentPage: { url: string; title: string; tabId: number | undefined } | null = null;
 let currentArtifact: ArtifactView | null = null;
+// Observe session changes here rather than in individual status readers:
+// Pause, Discard and Dismiss can see a delivery before the next poll does.
+let artifactHostConnected = false;
+let artifactDeliveryGeneration: number | null = null;
 let olderNoteEntries: OlderNote[] = [];
 // Tracks the artifact the "Why I'm here" field was last rendered for, so an
 // unrelated tab/title refresh for the SAME artifact never overwrites text the
@@ -265,11 +269,11 @@ function renderContained(contained: readonly ContainedArtifactView[]): void {
   artifactContainedList.append(...contained.map(containedRow));
 }
 
-function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null = null): void {
+function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
   artifactCard.hidden = artifact === null;
-  artifactStatus.textContent = recognized ? "● Artifact recognized" : "○ Not an artifact";
+  artifactStatus.textContent = pageUrl === null ? "" : recognized ? "● Artifact recognized" : "○ Not an artifact";
   if (!artifact) {
     whyArtifactId = null;
     whyEdited = false;
@@ -354,7 +358,7 @@ function refreshArtifact(force = false): Promise<void> {
   if (!page || !session.config?.storage) {
     artifactRefresher.clear();
     renderPageSummary(null, null);
-    renderArtifact(null, false);
+    renderArtifact(null, false, null);
     return Promise.resolve();
   }
   return artifactRefresher.refresh(force);
@@ -591,10 +595,18 @@ function renderQueue(state: WorkerStatus): void {
 }
 
 function render(): void {
+  const connected = session.connected;
+  const reconnected = connected && !artifactHostConnected;
+  const generation = session.status?.delivered_batches ?? null;
+  const delivered = generation !== null && deliveredSince(artifactDeliveryGeneration, generation);
+  // Advance before asking the host: its response can notify us again.
+  artifactHostConnected = connected;
+  artifactDeliveryGeneration = generation;
   renderSetupWarning();
   if (session.status) renderQueue(session.status);
   updateControls();
   retryWaitingHistory();
+  if (!closed && (reconnected || delivered)) void refreshArtifact(true);
 }
 
 // History needs only the host configuration, not the worker policy, so
@@ -625,7 +637,7 @@ async function reloadConfig(): Promise<void> {
     show(response.config_issue ?? response.adapter_issue ?? "Adapter policy is invalid.", true);
   }
   else show(session.config!.capture_enabled
-    ? "Capture is enabled for the listed sites."
+    ? captureStateText(session.config!)
     : "Capture is paused. Resume it in settings.");
   if (session.status?.pause_pending && session.config?.capture_enabled &&
       !session.configIssue && !session.adapterIssue) {
@@ -680,10 +692,7 @@ async function panelTick(): Promise<void> {
   tickRunning = true;
   updateControls();
   try {
-    const previous = session.status?.delivered_batches ?? null;
-    const state = await session.refreshStatus();
-    // A background sync delivered activity; the card's totals may be stale.
-    if (deliveredSince(previous, state.delivered_batches)) void refreshArtifact(true);
+    await session.refreshStatus();
   } catch (error) {
     show(`Panel refresh failed: ${describe(error)}`, true);
   } finally {
