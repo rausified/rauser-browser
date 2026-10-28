@@ -1163,6 +1163,22 @@ function wikiDraft(revision = "1") {
   };
 }
 
+function notionDraft(revision = "1") {
+  return {
+    type: "site_drafted", revision, drafter: "structural",
+    adapters: [{
+      adapter: {
+        type: "notion.page", origin: "https://www.notion.so",
+        match: [{ path: "/{workspace:name|lower}/{hex:hex(32)@tail}" }],
+        id: "notion.page:{host}/{workspace}/{hex}",
+      },
+      scope: "pending", tenant: { segment: 0, capture: "workspace" },
+      rules: [draftRule(0, "https://www.notion.so/example/0123456789abcdef0123456789abcdef")],
+    }],
+    dropped: [], preview: [], taken_types: [], remapped: 0,
+  };
+}
+
 function linearDraft(revision = "1") {
   return {
     type: "site_drafted", revision, drafter: "structural",
@@ -1428,6 +1444,26 @@ test("a shared origin pre-fills this tab's tenant as Capture for <tenant> and sa
     "This site holds many workspaces and accounts. Choose which ones Brauser remembers.");
   assert.equal(invite.el("capture-site-save").disabled, true);
   assert.match(invite.el("capture-site-message").textContent, /workspaces or accounts/);
+
+  // An app route at the tenant position is no tenant either: no drafted
+  // rule records linear.app/settings/account, so nothing is pre-filled.
+  const settings = await draftReview("https://linear.app/settings/account", { draft: () => linearDraft(),
+    script: async () => ({ current: "/{slug}/{slug}", links: [] }) });
+  await drafted(settings);
+  assert.equal(settings.el("capture-site-scope-values").value, "");
+  assert.equal(settings.el("capture-site-scoped").checked, false);
+  assert.doesNotMatch(settings.el("capture-site-scope-intro").textContent, /filled in/);
+  assert.equal(settings.el("capture-site-save").disabled, true);
+
+  // A workspace-less Notion page: its title slug is no workspace.
+  const hex = "0123456789abcdef0123456789abcdef";
+  const notion = await draftReview(`https://www.notion.so/Meeting-Notes-${hex}`, { draft: () => notionDraft(),
+    script: async () => ({ current: "/{tailhex32}", links: [] }) });
+  await drafted(notion);
+  assert.equal(notion.el("capture-site-scope-values").value, "");
+  assert.equal(notion.el("capture-site-scoped").checked, false);
+  assert.doesNotMatch(notion.el("capture-site-scope-intro").textContent, /filled in/);
+  assert.equal(notion.el("capture-site-save").disabled, true);
 
   // A not-shared origin shows no scope controls.
   const wiki = await draftReview();

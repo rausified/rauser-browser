@@ -447,11 +447,12 @@ export class CaptureSitePanel {
     const unscopedOnly = draft.adapters.some((view) => view.scope === "unscoped_only");
     this.scopeArea.hidden = !pending && !unscopedOnly;
     for (const node of [this.scopedLabel, this.scoped, this.scopeValuesLabel, this.scopeValues]) node.hidden = !pending;
-    // The tenant is read from this tab's own URL at the host's position and
+    // The tenant is read from this tab's own URL at the host's position,
+    // only when a kept drafted rule records this page with it, and
     // pre-filled as "Capture for <tenant>", already chosen: Save is the
     // one-click confirmation, and the list stays editable. With no tenant in
     // the URL the user still chooses (John, 2026-10-27; DESIGN §5.1).
-    const prefill = pending ? tenantPrefill(target.url, pending.tenant) : "";
+    const prefill = pending ? tenantPrefill(target.url, pending) : "";
     this.scopeValues.value = prefill;
     this.scoped.checked = prefill !== "";
     this.unscoped.checked = false;

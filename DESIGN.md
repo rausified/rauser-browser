@@ -224,7 +224,7 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
     6. **Rank.** Rules backed by a visited shape come first, ordered by visit count, then rules backed only by link shapes, ordered by link count. At most 16 rules are kept per adapter, and at most 8 adapters per draft.
   - **Shared origins.** The host's shared-origin list (adapter-templates.md §6) records, per origin, the path position and capture name of the tenant, where the URL has one. Examples are `owner` in the first segment on `github.com`, and `workspace` in the first segment on `www.notion.so` and `linear.app`.
     - The drafter makes that position a `{<name>:name|lower}` capture, even when the shaper kept it as a route word, and the ID includes it.
-    - If the origin already has scoped adapters that all scope that capture name to the same values, the draft copies the scope. Otherwise scope is pending, and the review pre-fills the current tab's tenant, read from the page's own URL, and shows it as "Capture for `<tenant>`", already chosen: one click on Save confirms it. The list stays editable, and `unscoped` with its statement (§7.2) stays the alternative, except for a rule whose only anchor is the tenant. When the URL names no tenant at that position, nothing is pre-filled and the user chooses.
+    - If the origin already has scoped adapters that all scope that capture name to the same values, the draft copies the scope. Otherwise scope is pending, and the review pre-fills the current tab's tenant, read from the page's own URL when a kept drafted rule records this page with it, and shows it as "Capture for `<tenant>`", already chosen: one click on Save confirms it. The list stays editable, and `unscoped` with its statement (§7.2) stays the alternative, except for a rule whose only anchor is the tenant. When the URL names no tenant at that position, nothing is pre-filled and the user chooses.
     - Where the list records no tenant position, as for `docs.google.com` and `www.figma.com`, only `unscoped` is offered.
     - This choice is part of the draft flow and does not count as a user edit; every safety check still applies.
     - **Superseded 2026-10-27 (John: "make adapter creation as easy as possible and do the work on our side").** This step said "Enable stays disabled until the user chooses", with the prefilled list unchosen. The tenant is now pre-filled from the real page URL and chosen, as "Capture for `<tenant>`", for the user to confirm with Save; Save stays disabled only when no tenant could be read or the user clears it. This reuses the GitHub starter's pre-fill (#126), whose organization field is filled from the URL and confirmed by a line in the review.
@@ -373,8 +373,11 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
     GitHub through the starter's owner reading, which also rules out
     GitHub's own routes) and checks "Capture for `<tenant>`", so Save is a
     one-click confirmation; the list stays editable and the review adds
-    "Records pages only for: `<tenants>`." When the URL names no tenant
-    there, nothing is pre-filled and Save stays disabled until the user
+    "Records pages only for: `<tenants>`." A value counts only when one of
+    the adapter's kept drafted rules, scoped to that value, records this
+    tab's page with it as the tenant, so a page slug or app route at that
+    position (`linear.app/settings/account`, a workspace-less Notion page)
+    is no tenant. When the URL names no tenant there, nothing is pre-filled and Save stays disabled until the user
     enters values or checks the every-account statement. A rule whose only
     anchor is the tenant cannot be saved unscoped: the panel says so, and
     `check_site_draft` refuses it as `draft_scope_choice`. Where the catalog

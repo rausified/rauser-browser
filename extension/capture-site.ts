@@ -3,7 +3,7 @@
 // private URL shapes, and this module turns the review's selection into the
 // checked tables and the document to save.
 import type {
-  AdapterDocument, ConfigSnapshot, DraftDropReason, DraftScopeState, DraftTenantView, RuleProvenance,
+  AdapterDocument, ConfigSnapshot, DraftDropReason, DraftedAdapterView, DraftScopeState, RuleProvenance,
   ScopeChoiceView, ShapeCount, SiteDrafted,
 } from "../protocol/ts/generated.js";
 import { canonicalCapture, compileDocument, evaluate, urlSegments } from "./adapter-templates.js";
@@ -210,9 +210,13 @@ export function draftRequest(origin: string, patterns: SitePatterns, samples: re
 
 /** The tenant at the drafted tenant position of the panel's own current
  * URL, as a `name|lower` value, or "" when there is none. The host supplies
- * only the position; the value never comes from the host. */
-export function tenantPrefill(url: string, tenant: DraftTenantView | null): string {
-  if (!tenant) return "";
+ * only the position; the value never comes from the host. A value counts
+ * only when this tab is a page one of the adapter's kept drafted rules
+ * records with that value as its tenant, so a page slug or an app route
+ * (`/settings`, a workspace-less page) at that position is never offered. */
+export function tenantPrefill(url: string, view: DraftedAdapterView | null): string {
+  const tenant = view?.tenant;
+  if (!view || !tenant) return "";
   let parsed: URL;
   let segments: string[] | null;
   try {
@@ -228,7 +232,17 @@ export function tenantPrefill(url: string, tenant: DraftTenantView | null): stri
   // On GitHub the starter's owner reading (#126) also knows GitHub's own
   // routes (settings, notifications, …), which are never an organization.
   if (starterKind(parsed.origin) === "github" && githubOwnerFromUrl(url) !== canonical) return "";
-  return canonical;
+  // The kept drafted rules, scoped to this one candidate, must record this
+  // page with the candidate as its tenant.
+  const match = view.adapter.match;
+  if (!Array.isArray(match)) return "";
+  const kept = view.rules.filter((entry) => entry.checked && entry.rule < match.length).map((entry) => match[entry.rule]);
+  if (!kept.length) return "";
+  // A drafted table carries no scope overlay; one that did fails closed.
+  const compiled = compileDocument({ format: 1, artifacts: [{ ...view.adapter, match: kept, scope: { [tenant.capture]: [canonical] } }] });
+  if (!compiled.ok) return "";
+  const result = evaluate(compiled.doc, url);
+  return result.match && result.captures[tenant.capture] === canonical ? canonical : "";
 }
 
 const IDENTIFIER_TYPES = new Set(["int", "hex", "uuid", "jira_key", "token"]);

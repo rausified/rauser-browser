@@ -270,7 +270,8 @@ than a refusal. Before a drafted rule's first identifier the anchor is a
 literal or the scoped shared-origin tenant (#126's scoped-capture anchor;
 `scope_anchored` rules cannot be saved unscoped). The review pre-fills the
 tenant from the tab's URL as "Capture for <tenant>", already chosen, so Save
-confirms it in one click (John, 2026-10-27). The probe paths, search and paging keys, blocked route words,
+confirms it in one click (John, 2026-10-27), but only when a kept drafted rule
+scoped to that value records the tab's page (`tenantPrefill`). The probe paths, search and paging keys, blocked route words,
 mode words, fill values, starter types and shared-origin tenant/account-index
 positions are one host-owned catalog, `protocol/capture-site/catalog.json`,
 that the extension's tests pin. The panel's review is plain language with the

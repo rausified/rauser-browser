@@ -305,22 +305,24 @@ test("unscoped-only origins offer only the unscoped statement", () => {
 });
 
 test("scope prefill comes from the current tab's tenant position, never from the host", () => {
-  const { tenant, rules } = linearDraft().adapters[0];
-  assert.equal(tenantPrefill(`${LINEAR}/Acme-Labs/issue/ABC-12`, tenant), "acme-labs");
-  assert.notEqual(tenantPrefill(rules[0].example, tenant), tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, tenant));
-  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, { segment: 4, capture: "workspace" }), "");
+  const view = linearDraft().adapters[0];
+  assert.equal(tenantPrefill(`${LINEAR}/Acme-Labs/issue/ABC-12`, view), "acme-labs");
+  assert.notEqual(tenantPrefill(view.rules[0].example, view), tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, view));
+  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, { ...view, tenant: { segment: 4, capture: "workspace" } }), "");
+  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, { ...view, tenant: null }), "");
   assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, null), "");
-  assert.equal(tenantPrefill(`${LINEAR}/a%20b/issue/ABC-12`, tenant), "");
-  assert.equal(tenantPrefill("not a URL", tenant), "");
+  assert.equal(tenantPrefill(`${LINEAR}/a%20b/issue/ABC-12`, view), "");
+  assert.equal(tenantPrefill("not a URL", view), "");
   // A sign-in, invite or sharing route at the tenant position is no tenant.
   for (const route of ["auth", "invite", "share", "login", "sign-in", "invitations"]) {
-    assert.equal(tenantPrefill(`${LINEAR}/${route}/callback/abc`, tenant), "", route);
+    assert.equal(tenantPrefill(`${LINEAR}/${route}/callback/abc`, view), "", route);
+    assert.equal(tenantPrefill(`${LINEAR}/${route}/issue/ABC-12`, view), "", route);
   }
   // On GitHub, #126's owner reading also rules out GitHub's own routes.
-  const owner = { segment: 0, capture: "owner" };
-  assert.equal(tenantPrefill(`${GITHUB}/Acme-Corp/widgets/issues/7`, owner), "acme-corp");
+  const github = githubDraft().adapters[0];
+  assert.equal(tenantPrefill(`${GITHUB}/Acme-Corp/issues/7`, github), "acme-corp");
   for (const route of ["settings", "notifications", "orgs", "marketplace"]) {
-    assert.equal(tenantPrefill(`${GITHUB}/${route}/acme`, owner), "", route);
+    assert.equal(tenantPrefill(`${GITHUB}/${route}/issues/7`, github), "", route);
   }
 });
 
@@ -335,6 +337,28 @@ const notionDraft = () => drafted([{
   rules: [rule(0, `${NOTION}/example/0123456789abcdef0123456789abcdef`)],
 }]);
 
+test("scope prefill needs this tab to be a page a kept drafted rule records", () => {
+  // An app route at the tenant position is not a tenant: no drafted rule
+  // records linear.app/settings/account.
+  const linear = linearDraft().adapters[0];
+  for (const path of ["/settings/account", "/settings", "/acme/projects/all", "/acme/issue/not-a-key"]) {
+    assert.equal(tenantPrefill(`${LINEAR}${path}`, linear), "", path);
+  }
+  // A workspace-less Notion page's slug or ID is no workspace, nor are
+  // Notion's own routes.
+  const notion = notionDraft().adapters[0];
+  const hex = "0123456789abcdef0123456789abcdef";
+  for (const path of [`/Meeting-Notes-${hex}`, `/${hex}`, "/settings", "/my-integrations"]) {
+    assert.equal(tenantPrefill(`${NOTION}${path}`, notion), "", path);
+  }
+  assert.equal(tenantPrefill(`${NOTION}/Acme/Meeting-Notes-${hex}`, notion), "acme");
+  // Only the rules the review keeps count: an unchecked rule pre-fills nothing.
+  const unchecked = { ...linear, rules: linear.rules.map((entry) => ({ ...entry, checked: false })) };
+  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, unchecked), "");
+  // A rule the review cannot read pre-fills nothing.
+  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, { ...linear, adapter: { ...linear.adapter, match: "x" } }), "");
+});
+
 test("a tenant-anchored rule is saved only for the workspaces chosen, never unscoped", () => {
   assert.equal(tenantAnchoredRule({ path: "/{workspace:name|lower}/{hex:hex(32)@tail}" }), true);
   assert.equal(tenantAnchoredRule({ path: "/{workspace:name|lower}/issue/{key:jira_key}" }), false);
@@ -342,7 +366,7 @@ test("a tenant-anchored rule is saved only for the workspaces chosen, never unsc
   assert.equal(tenantAnchoredRule({ path: "/pages/{num:int}" }), false);
   const draft = notionDraft();
   const url = `${NOTION}/acme/Release-Plan-0123456789abcdef0123456789abcdef`;
-  const scoped = drafts(draft, select(draft, { scope: [{ values: tenantPrefill(url, draft.adapters[0].tenant) }] }), url);
+  const scoped = drafts(draft, select(draft, { scope: [{ values: tenantPrefill(url, draft.adapters[0]) }] }), url);
   assert.deepEqual(added(scoped)[0].scope, { workspace: ["acme"] });
   assert.equal(scoped.current.result.match, true);
   const unscoped = drafting(draft, select(draft, { scope: ["unscoped"] }), url);
