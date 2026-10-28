@@ -4,13 +4,29 @@ use anyhow::{Result, bail};
 #[cfg(unix)]
 use brauser_host::service;
 use brauser_host::{
-    adapters, brand::NAMESPACE, config::ConfigStore, dialog, index::ArtifactIndex, native,
+    adapters, brand::NAMESPACE, config::ConfigStore, diag, dialog, index::ArtifactIndex, native,
 };
 
 fn main() {
+    let _diagnostics = diag::init(process_kind(std::env::args().nth(1).as_deref()));
     if let Err(error) = run() {
-        eprintln!("{NAMESPACE}: {error:#}");
+        tracing::error!(
+            error = format!("{error:#}"),
+            "{NAMESPACE} exited with an error"
+        );
         std::process::exit(1);
+    }
+}
+
+/// Which diagnostics file a command logs to (diag.rs).
+fn process_kind(command: Option<&str>) -> diag::Process {
+    match command {
+        None | Some("serve") => diag::Process::Host,
+        Some(origin) if origin.starts_with("chrome-extension://") => diag::Process::Host,
+        Some(command) if command == dialog::PICK_FOLDER_COMMAND => diag::Process::Host,
+        #[cfg(unix)]
+        Some(service::COMMAND) => diag::Process::Service,
+        Some(_) => diag::Process::Cli,
     }
 }
 

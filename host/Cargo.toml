@@ -27,6 +27,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 toml = "0.8"
+# Local diagnostics only (diag.rs): JSON-lines logs and spans, no exporter.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "json", "env-filter", "registry"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 url = "2.5"
 uuid = { version = "1", features = ["v4"] }

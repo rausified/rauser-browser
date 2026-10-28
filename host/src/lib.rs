@@ -22,6 +22,7 @@ pub mod capture;
 pub mod capture_site;
 pub mod config;
 pub mod consent;
+pub mod diag;
 pub mod dialog;
 pub mod frame;
 pub mod harness;
