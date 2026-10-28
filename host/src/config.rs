@@ -2609,6 +2609,11 @@ fn validate_adapter_transition_with_history(
         .filter(|contract| !current_contracts.contains(contract))
         .cloned()
         .collect();
+    let unchanged: Vec<_> = next_contracts
+        .iter()
+        .filter(|contract| current_contracts.contains(contract))
+        .cloned()
+        .collect();
     let (removed, _added) = adapter_contract_delta_between(current_contracts, next_contracts);
     for candidate in &changed {
         // A contract that cannot be read back may be the one this adapter
@@ -2630,33 +2635,57 @@ fn validate_adapter_transition_with_history(
                 ),
             }
         }
-        let Some((origin, id)) = adapter_contract_identity(candidate) else {
-            continue;
-        };
-        let Some(artifact_type) = adapter_contract_type(candidate) else {
-            continue;
-        };
         let earlier: Vec<&serde_json::Value> = retired
             .iter()
             .chain(&removed)
             .chain(&by_hand.contracts)
             .collect();
-        for previous in earlier.iter().copied() {
-            let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
-                continue;
-            };
-            let Some(previous_type) = adapter_contract_type(previous) else {
-                continue;
-            };
-            if origin == previous_origin
-                && (id != previous_id || artifact_type != previous_type)
-                && adapter_contracts_overlap(previous, candidate)?
-                && !declares_container(previous, next, &earlier, (artifact_type, id))
-            {
-                bail!(
-                    "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
-                );
-            }
+        refuse_rekeyed_routes(candidate, next, &earlier)?;
+    }
+    // Removing a contract also exposes its routes to the unchanged contracts
+    // after it: a rule ahead of a catch-all hands its pages to the catch-all
+    // even though the catch-all itself did not change. That is the same
+    // re-key as adding the catch-all after the rule's removal, so the
+    // unchanged contracts are checked against the contracts this save
+    // removes (earlier retirements were checked when each was added).
+    let removed_here: Vec<&serde_json::Value> = removed.iter().collect();
+    if !removed_here.is_empty() {
+        for candidate in &unchanged {
+            refuse_rekeyed_routes(candidate, next, &removed_here)?;
+        }
+    }
+    Ok(())
+}
+
+/// Refuse `candidate` when it overlaps a contract in `earlier` on its origin
+/// under another type or ID, unless that contract declared `candidate` as its
+/// container: the routes the earlier contract keyed would change record key.
+fn refuse_rekeyed_routes(
+    candidate: &serde_json::Value,
+    next: &ConfigSnapshot,
+    earlier: &[&serde_json::Value],
+) -> Result<()> {
+    let Some((origin, id)) = adapter_contract_identity(candidate) else {
+        return Ok(());
+    };
+    let Some(artifact_type) = adapter_contract_type(candidate) else {
+        return Ok(());
+    };
+    for previous in earlier.iter().copied() {
+        let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
+            continue;
+        };
+        let Some(previous_type) = adapter_contract_type(previous) else {
+            continue;
+        };
+        if origin == previous_origin
+            && (id != previous_id || artifact_type != previous_type)
+            && adapter_contracts_overlap(previous, candidate)?
+            && !declares_container(previous, next, earlier, (artifact_type, id))
+        {
+            bail!(
+                "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+            );
         }
     }
     Ok(())
@@ -4944,6 +4973,49 @@ mod tests {
             error.contains("cannot change until artifact migrations"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn removing_an_unlinked_rule_ahead_of_a_catch_all_is_refused() {
+        // A pull request rule that never declared the repository container
+        // sits ahead of the repository catch-all. Removing it leaves the
+        // catch-all unchanged, yet its pull request routes would fall through
+        // to repository IDs: the same re-key as adding the catch-all after
+        // the rule was removed, so it is refused the same way.
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = github_pr_adapter(&["a"]);
+        let repo = github_repo_adapter(&["a"]);
+        let revision = store
+            .update(adapter_config(vec![pr, repo.clone()]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let error = store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn removing_a_linked_rule_ahead_of_its_container_is_allowed() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let repo = github_repo_adapter(&["a"]);
+        let revision = store
+            .update(adapter_config(vec![pr, repo.clone()]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap()
+            .unwrap();
     }
 
     #[test]

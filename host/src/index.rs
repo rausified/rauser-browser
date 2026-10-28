@@ -352,6 +352,11 @@ struct ArtifactRow {
     /// Instants of M1 visit entries, each one cold open with no measures.
     legacy_visits: Vec<OffsetDateTime>,
     latest_at: OffsetDateTime,
+    /// The record holds activity rolled up from artifacts within it. Its
+    /// file says so (`brauser.rollup: true`), so a rebuild without the
+    /// cache's `container_files` can still find a container file whose
+    /// record no longer derives and remove it.
+    rolled_up: bool,
 }
 
 #[derive(Clone)]
@@ -619,13 +624,23 @@ impl ArtifactIndex {
     /// A history larger than one pass's read bound is read in several
     /// bounded passes, each saving its progress, within this one call.
     pub fn reindex(&self) -> Result<RegenerationReport> {
-        let (mut state, _) = loop {
+        let (mut state, previous) = loop {
             if let Some(rescanned) = self.rescan_logs(false)? {
                 break rescanned;
             }
         };
         let derived = self.derive(&state);
         state.dirty = derived.artifacts.keys().cloned().collect();
+        // A rebuilt state knows no container files, so a container that no
+        // longer derives a record would keep its file. Take them from the
+        // published cache and from the owned files on disk.
+        let mut known = previous
+            .map(|previous| previous.container_files)
+            .unwrap_or_default();
+        for (id, path) in self.owned_rollup_files() {
+            known.entry(id).or_insert(path);
+        }
+        adopt_vanished_container_files(&mut state, &derived, known);
         self.publish_state_and_database(&state)?;
         self.regenerate_state(state, false)
     }
@@ -887,8 +902,20 @@ impl ArtifactIndex {
         else {
             bail!(INCOMPLETE_CATCH_UP);
         };
-        if reconcile && let Some(previous) = previous {
-            self.keep_unchanged_files_clean(&mut state, *previous);
+        match previous {
+            Some(previous) if reconcile => self.keep_unchanged_files_clean(&mut state, *previous),
+            // A rebuild starts with no container files; carry the cache's,
+            // or, without a usable cache, find them on disk, so a container
+            // that no longer derives a record still has its file removed.
+            Some(previous) if rebuild => {
+                let derived = self.derive(&state);
+                adopt_vanished_container_files(&mut state, &derived, previous.container_files);
+            }
+            None if rebuild => {
+                let derived = self.derive(&state);
+                adopt_vanished_container_files(&mut state, &derived, self.owned_rollup_files());
+            }
+            _ => {}
         }
         // Ref resolution follows the current adapters, so a policy change
         // republishes index.db's edges even when no log changed.
@@ -962,6 +989,61 @@ impl ArtifactIndex {
             changed: pass.changed,
             previous,
         })
+    }
+
+    /// Owned artifact files on disk marked `brauser.rollup: true`, by
+    /// artifact ID, relative to the home folder. Best effort: an unreadable
+    /// folder or file is skipped (with a warning for a folder), since this
+    /// only recovers cleanup a lost cache would otherwise miss.
+    fn owned_rollup_files(&self) -> BTreeMap<String, PathBuf> {
+        match self.scan_rollup_files() {
+            Ok(found) => found,
+            Err(error) => {
+                eprintln!(
+                    "{NAMESPACE}: warning: could not look for container files to clean up: {error:#}"
+                );
+                BTreeMap::new()
+            }
+        }
+    }
+
+    fn scan_rollup_files(&self) -> Result<BTreeMap<String, PathBuf>> {
+        let mut found = BTreeMap::new();
+        let (root, _) =
+            open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
+        let base = checked_relative_dir(&self.storage.artifacts_dir)?;
+        let artifacts = match root.open_dir(&base) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+            Err(error) => return Err(error).context("opening artifacts directory"),
+        };
+        // Artifact files live exactly at `<type>/<site>/` (`artifact_path`).
+        for (type_name, types) in named_subdirectories(&artifacts)? {
+            for (site_name, sites) in named_subdirectories(&types)? {
+                for entry in sites.entries().context("listing artifacts directory")? {
+                    let entry = entry.context("listing artifacts directory")?;
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    if !name.ends_with(".md") || !entry.file_type().is_ok_and(|kind| kind.is_file())
+                    {
+                        continue;
+                    }
+                    let Ok(file) = sites.open(name) else { continue };
+                    let mut head = Vec::new();
+                    if Read::by_ref(&mut { file })
+                        .take(ROLLUP_SCAN_BYTES)
+                        .read_to_end(&mut head)
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    if let Some(id) = rollup_artifact_id(&head) {
+                        found.insert(id, base.join(&type_name).join(&site_name).join(name));
+                    }
+                }
+            }
+        }
+        Ok(found)
     }
 
     fn pending_path(&self) -> PathBuf {
@@ -1646,6 +1728,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         summaries: Vec::new(),
                         legacy_visits: Vec::new(),
                         latest_at: at,
+                        rolled_up: false,
                     });
                 row.focused_secs = row
                     .focused_secs
@@ -1792,6 +1875,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         summaries: Vec::new(),
                         legacy_visits: Vec::new(),
                         latest_at: at,
+                        rolled_up: false,
                     });
                 // An M1 visit entry recorded one navigation to the page:
                 // count it as one open, with no measured time.
@@ -1870,6 +1954,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                         summaries: Vec::new(),
                         legacy_visits: Vec::new(),
                         latest_at: at,
+                        rolled_up: false,
                     });
                 row.days.insert(day.clone());
                 if day < row.first_seen {
@@ -2093,7 +2178,9 @@ fn roll_up(
             summaries: Vec::new(),
             legacy_visits: Vec::new(),
             latest_at: visit.at,
+            rolled_up: false,
         });
+    row.rolled_up = true;
     row.focused_secs = row.focused_secs.saturating_add(visit.focused);
     row.background_secs = row.background_secs.saturating_add(visit.background);
     row.opens = row.opens.saturating_add(visit.opens);
@@ -2554,6 +2641,75 @@ fn subdirectories(dir: &Dir) -> Result<Vec<Dir>> {
     Ok(found)
 }
 
+/// Subdirectories of `dir` with their names, not following symlinks.
+fn named_subdirectories(dir: &Dir) -> Result<Vec<(String, Dir)>> {
+    let mut found = Vec::new();
+    for entry in dir.entries().context("listing artifacts directory")? {
+        let entry = entry.context("listing artifacts directory")?;
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        found.push((
+            name,
+            entry.open_dir().context("opening artifacts directory")?,
+        ));
+    }
+    Ok(found)
+}
+
+/// How much of an artifact file `scan_rollup_files` reads: enough for the
+/// frontmatter, whose title and URL are bounded well below this.
+const ROLLUP_SCAN_BYTES: u64 = 64 * 1024;
+
+/// The artifact ID of an owned artifact file (`owned_artifact`) whose
+/// frontmatter marks a roll-up (`brauser.rollup: true`), from its leading
+/// bytes.
+fn rollup_artifact_id(head: &[u8]) -> Option<String> {
+    // The read may end inside a multi-byte character after the
+    // frontmatter, which is all that is read.
+    let text = String::from_utf8_lossy(head);
+    let frontmatter = text.strip_prefix("---\n")?.split_once("\n---\n")?.0;
+    let mut in_brauser = false;
+    let mut id = None;
+    let mut rollups = 0;
+    for line in frontmatter.lines() {
+        if !line.starts_with(' ') {
+            in_brauser = line == "brauser:";
+            continue;
+        }
+        if !in_brauser {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("  artifact_id: ") {
+            id = serde_json::from_str::<String>(value).ok();
+        } else if line == "  rollup: true" {
+            rollups += 1;
+        }
+    }
+    let id = id?;
+    (rollups == 1 && owned_artifact(text.as_bytes(), &id)).then_some(id)
+}
+
+/// Add each of `known`'s container files whose record `derived` no longer
+/// has to `state`, dirty, so the next regeneration pass removes it (only if
+/// it is still Brauser's file for that ID).
+fn adopt_vanished_container_files(
+    state: &mut IndexState,
+    derived: &Derived,
+    known: BTreeMap<String, PathBuf>,
+) {
+    for (id, path) in known {
+        if derived.artifacts.contains_key(&id) {
+            continue;
+        }
+        state.dirty.insert(id.clone());
+        state.container_files.entry(id).or_insert(path);
+    }
+}
+
 fn sweep_temporaries_in(dir: &Dir, prefix: &str) -> Result<usize> {
     let now = SystemTime::now();
     let mut removed = 0;
@@ -2694,6 +2850,9 @@ fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> String {
     out.push_str(&format!("  days_opened: {}\n", artifact.days.len()));
     if let Some(mode) = &artifact.last_mode {
         out.push_str(&format!("  last_mode: {}\n", yaml_string(mode)));
+    }
+    if artifact.rolled_up {
+        out.push_str("  rollup: true\n");
     }
     out.push_str("---\n\n");
     if let Some(why) = &artifact.why {
@@ -5514,6 +5673,90 @@ print(json.dumps([tables,row]))"#;
         // The pass is complete: a second one has nothing left to do.
         let again = new.regenerate_dirty().unwrap();
         assert_eq!((again.written, again.conflicts), (0, 0), "{again:?}");
+    }
+
+    /// A container whose only activity was a roll-up, rebuilt by
+    /// `brauser reindex` (`clear_cache`: or after its cache was deleted)
+    /// under adapters that no longer make that roll-up. Returns the
+    /// container file's path and whether it is still there.
+    fn reindex_after_losing_the_only_roll_up(clear_cache: bool, replace: bool) -> (PathBuf, bool) {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(true);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        old.record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        assert_eq!(old.regenerate_dirty().unwrap().written, 2);
+        let repo = artifact_files(root.path())
+            .into_iter()
+            .find(|path| path.to_string_lossy().contains("github-repo"))
+            .unwrap();
+        if replace {
+            fs::write(&repo, "my own notes\n").unwrap();
+        }
+        if clear_cache {
+            for entry in fs::read_dir(cache.path()).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    fs::remove_dir_all(path).unwrap();
+                } else {
+                    fs::remove_file(path).unwrap();
+                }
+            }
+        }
+        let after = scoped_github_document(true, &["other-org"]);
+        let new = index(&root, &cache).with_adapters(Some(&after));
+        new.reindex().unwrap();
+        assert!(new.artifact(GITHUB_REPO_ID).unwrap().is_none());
+        let exists = repo.exists();
+        if replace && exists {
+            assert_eq!(fs::read_to_string(&repo).unwrap(), "my own notes\n");
+        }
+        (repo, exists)
+    }
+
+    #[test]
+    fn reindex_after_losing_the_only_roll_up_removes_the_container_file() {
+        let (repo, exists) = reindex_after_losing_the_only_roll_up(false, false);
+        assert!(!exists, "{repo:?}");
+    }
+
+    #[test]
+    fn reindex_without_a_cache_still_removes_a_vanished_container_file() {
+        let (repo, exists) = reindex_after_losing_the_only_roll_up(true, false);
+        assert!(!exists, "{repo:?}");
+    }
+
+    #[test]
+    fn a_cache_rebuild_still_removes_a_vanished_container_file() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let before = github_document(true);
+        let old = index(&root, &cache).with_adapters(Some(&before));
+        old.record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        assert_eq!(old.regenerate_dirty().unwrap().written, 2);
+        let is_repo = |path: &PathBuf| path.to_string_lossy().contains("github-repo");
+        for entry in fs::read_dir(cache.path()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        let after = scoped_github_document(true, &["other-org"]);
+        let new = index(&root, &cache).with_adapters(Some(&after));
+        new.regenerate_dirty().unwrap();
+        let files = artifact_files(root.path());
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(!files.iter().any(is_repo), "{files:?}");
+    }
+
+    #[test]
+    fn reindex_leaves_a_replaced_vanished_container_file_alone() {
+        for clear_cache in [false, true] {
+            let (repo, exists) = reindex_after_losing_the_only_roll_up(clear_cache, true);
+            assert!(exists, "{repo:?}");
+        }
     }
 
     /// A vanished container's path no longer holding Brauser's file (the
