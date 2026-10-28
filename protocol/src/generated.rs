@@ -487,6 +487,17 @@ pub struct ContainedArtifactView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SummaryView {
+    pub summarized_at: String,
+    pub document_type: String,
+    pub category: String,
+    pub importance: ImportanceLevel,
+    pub summary_path: String,
+    pub harness: HarnessId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactListItem {
     pub local_date: String,
     pub artifact_id: String,
@@ -498,6 +509,8 @@ pub struct ArtifactListItem {
     pub opens: u32,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub why: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary: Option<SummaryView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -508,6 +521,8 @@ pub struct ArtifactResult {
     pub recognized: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub artifact: Option<ArtifactView>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary: Option<SummaryView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,6 +906,24 @@ pub struct PathOpened {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OpenSummaryRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryOpened {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetAgentEnvRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1180,6 +1213,7 @@ pub enum Request {
     CancelRun(CancelRunRequest),
     RetrySave(RetrySaveRequest),
     OpenPath(OpenPathRequest),
+    OpenSummary(OpenSummaryRequest),
     GetAgentEnv(GetAgentEnvRequest),
     DraftSite(DraftSiteRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
@@ -1214,6 +1248,7 @@ impl Request {
             Self::CancelRun(value) => value.protocol_version,
             Self::RetrySave(value) => value.protocol_version,
             Self::OpenPath(value) => value.protocol_version,
+            Self::OpenSummary(value) => value.protocol_version,
             Self::GetAgentEnv(value) => value.protocol_version,
             Self::DraftSite(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
@@ -1248,6 +1283,7 @@ impl Request {
             Self::CancelRun(value) => &value.request_id,
             Self::RetrySave(value) => &value.request_id,
             Self::OpenPath(value) => &value.request_id,
+            Self::OpenSummary(value) => &value.request_id,
             Self::GetAgentEnv(value) => &value.request_id,
             Self::DraftSite(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
@@ -1282,6 +1318,7 @@ pub enum Response {
     RunsListed(RunsListed),
     RunUpdated(RunUpdated),
     PathOpened(PathOpened),
+    SummaryOpened(SummaryOpened),
     AgentEnvListed(AgentEnvListed),
     SiteDrafted(SiteDrafted),
     SiteDraftChecked(SiteDraftChecked),
@@ -1313,6 +1350,7 @@ impl Response {
             Self::RunsListed(value) => value.protocol_version,
             Self::RunUpdated(value) => value.protocol_version,
             Self::PathOpened(value) => value.protocol_version,
+            Self::SummaryOpened(value) => value.protocol_version,
             Self::AgentEnvListed(value) => value.protocol_version,
             Self::SiteDrafted(value) => value.protocol_version,
             Self::SiteDraftChecked(value) => value.protocol_version,
@@ -1344,6 +1382,7 @@ impl Response {
             Self::RunsListed(value) => &value.request_id,
             Self::RunUpdated(value) => &value.request_id,
             Self::PathOpened(value) => &value.request_id,
+            Self::SummaryOpened(value) => &value.request_id,
             Self::AgentEnvListed(value) => &value.request_id,
             Self::SiteDrafted(value) => &value.request_id,
             Self::SiteDraftChecked(value) => &value.request_id,

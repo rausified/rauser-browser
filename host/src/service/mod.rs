@@ -8,6 +8,7 @@ pub mod claude;
 pub mod client;
 pub mod codex;
 pub mod command_runner;
+pub mod finisher;
 pub mod harness_api;
 pub mod maintenance;
 pub mod open;
@@ -25,11 +26,12 @@ use anyhow::{Result, bail};
 
 use crate::brand::NAMESPACE;
 use crate::config::ConfigStore;
+use finisher::SummaryFinisher;
 use harness_api::HarnessRegistry;
 use paths::ServicePaths;
 use record::RunStore;
 use server::ServeExit;
-use supervisor::{DEFAULT_RUN_TIMEOUT, ServiceOptions, Supervisor, VaultCheckFinisher};
+use supervisor::{DEFAULT_RUN_TIMEOUT, ServiceOptions, Supervisor};
 
 /// The `brauser service` subcommand (launchd runs it on macOS).
 pub const COMMAND: &str = "service";
@@ -41,12 +43,15 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if let Some(extra) = args.next() {
         bail!("unexpected argument to {COMMAND}: {extra}");
     }
+    let config_path = ConfigStore::default_path()?;
     let config = ConfigStore::load()?;
     let paths = ServicePaths::for_config(&config)?;
     let options = options(&paths, &config);
     let exit = server::serve(&paths, config, &options, || {
         let store = RunStore::open(paths.runs())?;
-        let finisher = VaultCheckFinisher::new(ConfigStore::load()?);
+        // It reads config.toml again at each save, so a summary follows
+        // the configuration current when its run finishes.
+        let finisher = SummaryFinisher::new(config_path.clone());
         Ok(Supervisor::new(
             store,
             HarnessRegistry::from_environment(),

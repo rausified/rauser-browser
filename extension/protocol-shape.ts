@@ -176,13 +176,33 @@ function isArtifact(value: unknown): boolean {
     artifact.contained.every(isContainedArtifact);
 }
 
+/** Exactly the v6 `SummaryView` keys; the host bounds the strings. */
+const SUMMARY_VIEW_KEYS: readonly string[] = [
+  "summarized_at", "document_type", "category", "importance", "summary_path", "harness",
+];
+
+export function isSummaryView(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const summary = value as Record<string, unknown>;
+  return hasExactKeys(summary, SUMMARY_VIEW_KEYS) &&
+    typeof summary.summarized_at === "string" && typeof summary.document_type === "string" &&
+    typeof summary.category === "string" &&
+    typeof summary.importance === "string" && IMPORTANCE_LEVELS.has(summary.importance) &&
+    typeof summary.summary_path === "string" && isHarnessId(summary.harness);
+}
+
+/** `summary` is required and may be null. */
+function hasSummary(value: Record<string, unknown>): boolean {
+  return Object.hasOwn(value, "summary") && (value.summary === null || isSummaryView(value.summary));
+}
+
 function isArtifactListItem(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
   return ["local_date", "artifact_id", "artifact_type", "title", "url"]
     .every((key) => typeof item[key] === "string") &&
     ["focused_seconds", "background_seconds", "opens"]
-      .every((key) => isUnsignedInteger(item[key])) && stringOrNull(item.why);
+      .every((key) => isUnsignedInteger(item[key])) && stringOrNull(item.why) && hasSummary(item);
 }
 
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
@@ -380,7 +400,7 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         isRecordKey(value.key) && ["stale", "key_changed"].includes(String(value.reason));
     case "artifact_result":
       return typeof value.recognized === "boolean" &&
-        (value.artifact === null || isArtifact(value.artifact));
+        (value.artifact === null || isArtifact(value.artifact)) && hasSummary(value);
     case "artifact_list_result":
       return Array.isArray(value.items) && value.items.length <= 32 &&
         value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
@@ -407,6 +427,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return isRunView(value.run);
     case "path_opened":
       return true;
+    case "summary_opened":
+      return typeof value.relative_path === "string";
     case "agent_env_listed":
       return Array.isArray(value.names) && value.names.length <= 64 &&
         isStringArray(value.names) && stringOrNull(value.problem);

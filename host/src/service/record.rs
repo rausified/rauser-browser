@@ -139,12 +139,35 @@ pub struct RunStatusFile {
     pub run_timeout_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vocabulary: Option<SummaryVocabulary>,
+    /// When the validated answer was kept, stamped once before its first
+    /// save, so every save of the run (a retry included) writes the same
+    /// event time. An older record gets it on its first retry, and a retry
+    /// re-stamps one the daily log's window no longer accepts.
+    ///
+    /// Like the two fields above, this is optional but not forward
+    /// compatible: `deny_unknown_fields` means a service built before it
+    /// cannot read a record that has it. `STATUS_VERSION` stays 1 because
+    /// none of these has been released.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<String>,
+    /// The first `answered_at`, kept when a retry re-stamps it, so a save
+    /// is still ordered (and its summary file dated) by when the answer was
+    /// kept, and a re-stamped old answer never replaces a newer summary;
+    /// the re-stamp is only the log event's time. Optional, and not forward
+    /// compatible, as the fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_answered_at: Option<String>,
+    /// The last save failed in a way no retry can fix (the day's daily log
+    /// is full, say), so the run offers no Retry save. Optional, and not
+    /// forward compatible, as the fields above.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub save_final: bool,
 }
 
 impl RunStatusFile {
     /// The protocol view of this run, with `result` its kept `result.json`.
-    /// Retry save is offered only for a save failure whose validated answer
-    /// is still on disk. A result that is not a [`SummaryAnswer`] (a PR 2
+    /// Retry save is offered only for a save failure a retry can fix whose
+    /// validated answer is still on disk. A result that is not a [`SummaryAnswer`] (a PR 2
     /// record) shows no answer.
     pub fn view(&self, stream_bytes: u32, result: Option<&serde_json::Value>) -> RunView {
         let answer = result
@@ -175,6 +198,7 @@ impl RunStatusFile {
             stream_bytes,
             can_retry_save: self.state == RunState::Failed
                 && self.error_kind == Some(RunErrorKind::SaveFailed)
+                && !self.save_final
                 && result.is_some(),
             answer,
         }
@@ -555,6 +579,9 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
+            first_answered_at: None,
+            save_final: false,
         }
     }
 
@@ -813,6 +840,11 @@ mod tests {
         assert!(!status.view(12, Some(&kept)).can_retry_save);
         status.error_kind = Some(RunErrorKind::SaveFailed);
         status.state = RunState::Succeeded;
+        assert!(!status.view(12, Some(&kept)).can_retry_save);
+        // A save failure no retry can fix offers none.
+        status.state = RunState::Failed;
+        assert!(status.view(12, Some(&kept)).can_retry_save);
+        status.save_final = true;
         assert!(!status.view(12, Some(&kept)).can_retry_save);
     }
 

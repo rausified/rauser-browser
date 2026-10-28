@@ -586,9 +586,16 @@ pub fn use_as_artifact_note(
     )?;
     // The response has no outcome field; the move itself succeeded.
     for warning in &moved.warnings {
-        let crate::vault::PostPublishWarning::DirectorySync(error) = warning;
+        let what = match warning {
+            crate::vault::PostPublishWarning::DirectorySync(error) => {
+                format!("syncing its folder failed: {error}")
+            }
+            crate::vault::PostPublishWarning::TemporaryCleanup(error) => {
+                format!("removing its temporary failed: {error}")
+            }
+        };
         eprintln!(
-            "{}: warning: the note was moved, but syncing its folder failed: {error}",
+            "{}: warning: the note was moved, but {what}",
             crate::brand::NAMESPACE
         );
     }

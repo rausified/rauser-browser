@@ -1991,9 +1991,10 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 ### Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links
 
 **Files:**
-- Create: `host/src/markdown.rs`
+- Create: `host/src/markdown.rs`, `host/src/markdown_corpus.rs` (test-only), `host/tests/fixtures/markdown-neutralize-corpus.json`, `scripts/check-markdown-neutralizer.mjs`
 - Modify:
-  - `host/src/lib.rs` (`pub(crate) mod markdown;`)
+  - `host/src/lib.rs` (`pub(crate) mod markdown;`, `#[cfg(test)] mod markdown_corpus;`)
+  - `package.json` (exact-pinned `markdown-it`, `micromark`, `micromark-extension-gfm` and `marked` devDependencies; `test:markdown-neutralizer`) and `.github/workflows/ci.yml` (a step after `test:extension`)
   - `host/src/index.rs`: move `yaml_string` and `safe_markdown` into `markdown.rs`; `render_artifact` calls `markdown::inline(.., 2048)`; `fn relative_artifact_link` builds its link with `markdown::relative_link`.
   - `host/src/capture.rs`: `fn relative_log_link` is deleted, and `record_summary` calls `markdown::relative_link(&day_dir, ..)`.
 
@@ -2004,28 +2005,41 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 - `pub(crate) enum LinkStyle { Relative, Wikilink }` and `pub(crate) fn link_style(profile: &str) -> LinkStyle`
 - `pub(crate) fn relative_link(from_dir: &Path, to: &Path) -> String`: percent-encodes each segment except unreserved characters. No new crate.
 - `pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String`: strips `[ ] | # ^` and control characters.
-- The neutralizer is a **hand-written scanner over chars**. The host has no `regex` crate, and none is added.
+- The neutralizer is a **context-free escape** (revised 2026-10-27; it replaced a scanner that turned each construct into a code span and had to mirror each viewer's parser, which three review rounds kept defeating). For every agent-sourced text written into a summary body: every `<` becomes `&lt;` (an entity never creates HTML structure in CommonMark or GFM, so no tag, autolink, comment, CDATA section, processing instruction or declaration can form in any context); every `!` directly before `[` becomes `\!` unless an odd run of backslashes already escapes it (no inline, reference, collapsed or shortcut image, and no `![[embed]]`); a `!` at the end of the input is escaped the same way and a trailing odd run of backslashes gets one more, so neutralized fragments can be joined with each other and with host text. Revised again 2026-10-27: every backtick, `$` and tab becomes a numeric entity (`&#96;`, `&#36;`, `&#9;`), a form feed or vertical tab becomes `&#32;`, every `~` in a run of three or more becomes `&#126;`, and every space from the fourth of a run on becomes `&#32;`, so no code span, fence, indented code block or math can form (Obsidian hands those to Mermaid, Dataview and math engines; a backslash escaping a backtick, `$` or `~` is dropped, since the entity already shows the plain character, and one before a whitespace entity is doubled so it stays visible instead of escaping the `&`); a trailing run of `~` or spaces is written as entities whatever its length, so joins cannot form a fence or indented code either. Numeric entities, not backslashes, because agent backslashes cannot undo them; every renderer decodes them to the plain characters outside code. Nothing else changes. Agent prose loses code formatting by design (Mermaid, Dataview and math run in Obsidian code spans, fences and `$`), lines indented four or more spaces lose their structure, and autolinks show as text, which is accepted. `markdown::inline` writes backticks, `$` and `~` as the same entities, and each space from the fourth of a run on as `&#32;`, so a field placed after a list marker cannot make indented code. No `regex` crate is added.
+- `yaml_string` also writes `<` and an image `!` as JSON `\u` escapes, so the raw front matter holds neither while a YAML reader gets the same value. `wikilink` also strips `<`, `>`, backticks and `$`, so a viewer without wikilinks forms no tag, code span or math inside the brackets. The corpus check renders every input as `inline` and `wikilink` output too, with no `<code>` or `<pre>` allowed.
 - The daily-log line and the artifact file's `Summary:` line keep #59's bracketed `[..](<link>)` form. Only the destination changes: it is now encoded, so a `summaries_dir` with a space gives `%20`. `validate_page_summary` keeps rejecting `<`, `>`, `#`, `?` and control characters.
 
 - [ ] Write the failing tests:
   ```rust
-  #[test] fn every_remote_construct_becomes_an_inert_code_span_with_its_url_visible() {
+  #[test] fn every_lt_becomes_an_entity_and_every_image_bang_is_escaped() {
       for (input, expected) in [
-          ("see ![x](https://e.example/a.png) now", "see `![x](https://e.example/a.png)` now"),
-          ("![x](https://e.example/a.png \"t\")", "`![x](https://e.example/a.png \"t\")`"),
-          ("![x][r]\n\n[r]: https://e.example/b.png", "`![x][r]`\n\n`[r]: https://e.example/b.png`"),
-          ("![x][]", "`![x][]`"), ("![x]", "`![x]`"),
-          ("<img src=https://e.example/c.png>", "`<img src=https://e.example/c.png>`"),
-          ("<IFRAME src=x></IFRAME>", "`<IFRAME src=x>``</IFRAME>`"),
-      ] { assert_eq!(neutralize_remote(input), expected); }
-      for tag in ["video", "audio", "object", "embed", "link", "style", "svg", "picture", "source"] {
-          assert!(neutralize_remote(&format!("<{tag} src=u>")).starts_with('`'));
-      }
+          ("see ![x](https://e.example/a.png) now", "see \\![x](https://e.example/a.png) now"),
+          ("![x][r]\n\n[r]: https://e.example/b.png", "\\![x][r]\n\n[r]: https://e.example/b.png"),
+          ("![x][]", "\\![x][]"), ("![x]", "\\![x]"), ("![[https://e.example/x.png]]", "\\![[https://e.example/x.png]]"),
+          ("<IFRAME src=x></IFRAME>", "&lt;IFRAME src=x>&lt;/IFRAME>"),
+          ("<!-- c --><img src=u>", "&lt;!-- c -->&lt;img src=u>"),
+          ("```\n<img src=u>\n```", "&#96;&#96;&#96;\n&lt;img src=u>\n&#96;&#96;&#96;"),
+          ("`$= dv.current()` $x$", "&#96;&#36;= dv.current()&#96; &#36;x&#36;"),
+          ("~~~mermaid\nA@{ img: \"u\" }\n~~~", "&#126;&#126;&#126;mermaid\nA@{ img: \"u\" }\n&#126;&#126;&#126;"),
+          ("    = this.file.name", "   &#32;= this.file.name"),
+          ("\\\\![x](u)", "\\\\\\![x](u)"),
+          // ... every input the earlier scanner's tests used (backticks, multi-line constructs,
+          // indented and under-indented fences, table cells, reference definitions, CDATA, PIs).
+      ] { assert_eq!(neutralize_remote(input), expected, "{input:?}"); }
   }
-  #[test] fn backticks_inside_a_construct_get_a_longer_fence() { assert_eq!(neutralize_remote("![`a`](u)"), "``![`a`](u)``"); }
+  #[test] fn every_tag_in_the_list_is_escaped_in_any_case() { /* img iframe video audio object embed link style svg picture source script image */ }
   #[test] fn ordinary_markdown_is_left_alone() {
-      for text in ["[a](https://x.example)", "a < b and c > d", "```\n<img src=u>\n```", "`<img>`"] { assert_eq!(neutralize_remote(text), text); }
+      for text in ["[a](https://x.example)", "- [ ] open\n- [x] done", "| a | b |\n|---|---|\n| 1 | 2 |"] { assert_eq!(neutralize_remote(text), text); }
   }
+  // host/src/markdown_corpus.rs: over host/tests/fixtures/markdown-neutralize-corpus.json, no output holds a
+  // raw `<`, an unescaped `![`, a backtick, `$`, tab, run of three `~` or run of four spaces, and nothing
+  // else changes; with BRAUSER_NEUTRALIZE_CORPUS_OUT set it writes the outputs for
+  // scripts/check-markdown-neutralizer.mjs (`npm run test:markdown-neutralizer`, a CI step after
+  // test:extension), which renders them with markdown-it, micromark+GFM and marked and fails on any
+  // element outside an inert allowlist, and on any <code> or <pre> in neutralized body text. The corpus
+  // includes Mermaid `@{ img: … }`, dataview/dataviewjs and math fences (backtick and tilde, indented 1-3
+  // spaces, in lists and quotes), Dataview inline queries, `$x$` / `$$\href{…}$$` math, backslashes before
+  // backticks and `$`, and double-backtick spans.
   #[test] fn relative_links_climb_and_percent_encode() {
       assert_eq!(relative_link(Path::new("summaries"), Path::new("pages/a b.md")), "../pages/a%20b.md");
       assert_eq!(relative_link(Path::new("log/2026/10"), Path::new("summaries/x.summary.md")), "../../../summaries/x.summary.md");
@@ -2034,11 +2048,7 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
   ```
 - [ ] Change the expectation of `a_summary_path_with_a_space_still_produces_a_bracket_delimited_link` in `capture.rs` to `[summary](<../../../My%20Summaries/hn-item.summary.md>)`. Add `the_artifact_summary_link_is_percent_encoded` in `index.rs`, modeled on `summary_event_appends_once_on_a_page_no_adapter_covers`, with a `summary_path` of `My Summaries/hn-item.summary.md`.
 - [ ] Run `cargo test --locked -p brauser -- markdown:: summary_path_with_a_space artifact_summary_link`. Expect FAIL.
-- [ ] Implement `neutralize_remote` line by line:
-  - Lines inside a ``` or ~~~ fence pass through unchanged.
-  - A link reference definition (up to 3 spaces, `[label]:`, whitespace, then non-space) is wrapped whole.
-  - Otherwise, outside existing inline code spans, wrap each `![…](…)`, `![…][…]` or `![…]`, and each `<` followed by an ASCII letter, `/` or `!`, up to the next `>` on the line.
-  - The fence is one backtick longer than the longest backtick run inside, padded with a space when the content starts or ends with a backtick.
+- [ ] Implement `neutralize_remote` as one pass over chars: `<` becomes `&lt;`; `!` followed by `[`, or at the end of the input, becomes `\!` when the run of backslashes before it is even; backticks, `$` and tabs become `&#96;`, `&#36;`, `&#9;`, a `~` run of three or more (or at the end) becomes `&#126;` each, spaces from the fourth of a run on (or a run at the end) become `&#32;`, and a backslash escaping a backtick, `$` or `~` that becomes an entity is dropped; a trailing odd run of backslashes gets one more; every other character is copied. The two end-of-input rules make outputs safe to join: neither a following fragment nor host text can re-form `![` or cancel a leading `\!`.
 
   Move `yaml_string` and `safe_markdown` (as `inline`) unchanged. Switch both #59 link sites to `relative_link`.
 - [ ] Run `cargo test --locked -p brauser markdown:: && cargo test --locked -p brauser index:: && cargo test --locked -p brauser capture::`. Expect PASS, including #59's `summary_event_appends_once_on_a_page_no_adapter_covers` unchanged (its path has no reserved characters).
@@ -2064,6 +2074,8 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 
 ### Task 45: Summary file rendering and the checked summary write
 
+> **As built (2026-10-27).** The fixed layout (§6.1) replaced a configurable summaries folder: `Vault`'s `summaries_dir` is the fixed `summaries` folder once the layout move is done, and a vault opened from an older config still names its old folder until the move finishes. `find_summary` returns `FoundSummary::Owned` with the file's `summarized_at` and (device, inode), used by the finisher's newer-summary check and `open_summary`'s re-check.
+
 **Files:**
 - Modify: `host/src/summary.rs`. It already exists from #59; add the file rendering and ownership check beside #59's event types, and rewrite its module comment, which says this module "never writes a summary file".
 - Modify: `host/src/vault.rs` (`Vault` gains `summaries_dir: Option<PathBuf>`, set in `open_checked`; `sweep_stale_temporaries` also sweeps the summaries dir)
@@ -2087,8 +2099,8 @@ impl Vault {
 ```
 - Rendering:
   - Frontmatter values go through `yaml_string`, and entity lists are flow sequences of JSON strings.
-  - Single-line agent text goes through `inline(.., 200)`. In the `Wikilink` style, entities and related notes use `wikilink` instead.
-  - `description` and `assessment` go through `neutralize_remote`.
+  - Single-line agent text (type, category, importance reason, entity names, related notes) goes through `inline(.., 200)`. It backslash-escapes `<`, `!`, `[`, `]` and `\` as well as Obsidian's `#` tags, `%%` comments, `==` highlights and `|`, so no tag, image, embed, Obsidian tag, comment or highlight can form, and its output never ends in an unescaped `!` or an odd run of backslashes. In the `Wikilink` style, entities and related notes use `wikilink` instead.
+  - `description` and `assessment` go through `neutralize_remote`, each placed at the start of a line after a host-written newline (after `## Summary\n`), never after a list marker or other prefix ending in a space (DESIGN.md §5.2 step 6's joining contract; marked can make a code block otherwise).
   - Empty entity groups are omitted. The Entities line goes when all groups are empty, and Related goes when the list is empty.
 - `summary_relative_path` always yields a path that #59's `validate_page_summary` accepts: relative, ending `.summary.md`, and free of `..`, `<`, `>`, `#`, `?` and control characters.
 
@@ -2104,6 +2116,7 @@ impl Vault {
   - `claude_runs_record_the_session_not_a_thread`
   - `obsidian_style_uses_wikilinks`
   - `agent_text_cannot_forge_identity_or_fetch_remote_resources`
+  - `neutralized_text_starts_at_column_zero`: in the rendered file, every line holding `description` or `assessment` text starts with that text, never after host text ending in a space.
   - `summary_name_never_equals_the_note_name`
   - `summary_paths_pass_the_summary_event_path_check`: for a URL key, an artifact key and a page title with `#`, `?` and `<`, `validate_page_summary` accepts the `summary_relative_path`.
   - `write_summary_never_adopts_a_note_or_foreign_summary`
@@ -2166,6 +2179,8 @@ impl CaptureStore {
 
 ### Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache
 
+> **As built (2026-10-27).** main moved to cache format 5 first, so this task shipped as **format 6** (`STATE_VERSION = 6`): a format-5 cache migrates in place (`migrate_v5_state`, which marks every artifact dirty so files whose rendering changed are rewritten) and a format-4 cache migrates through 5 to 6. The rescan test below became `a_version_5_state_cache_is_migrated`. Summaries with the same whole-second stamp keep their append order, not run-ID order. `web_summaries_never_redirect_note_keys` shipped as `a_web_summary_url_stays_with_its_own_web_artifact`.
+
 **Files:**
 - Modify `host/src/index.rs`: the Summary arm of `fn derive`, `fn render_artifact`, `STATE_VERSION`, and `fn artifact_candidates_for_url` (tests only).
 
@@ -2217,6 +2232,8 @@ impl CaptureStore {
 
 ### Task 49: `SummaryFinisher`: write under the configuration current at finish
 
+> **As built (2026-10-27).** The fixed layout replaced the "No summaries folder is set" reason with `LAYOUT_MOVING` ("Your notes folders are moving to the fixed layout. Open Brauser settings to finish the move, then Retry save."), and `a_summaries_dir_changed_mid_run_receives_the_file` became `a_summaries_dir_changed_mid_run_waits_for_the_layout_move`. `save` returns `Result<SavedRun, SaveFailure>`: a reason no retry can fix (full or refusing daily log, an interrupted entry that changed, an invalid stored answer, a newer summary already saved) is final, so the run offers no Retry save, and keeps the written file's `summary_path` when there is one (as does a retryable failure after the write, since review). A retry that re-stamps an answer outside the daily log's window keeps the first stamp in `first_answered_at`, which dates the file and orders it against a newer summary; a summary's already-logged duplicate counts only for the exact entry in the current home folder. `summary_artifact` returns `None` when it needs the index and the index cannot answer, and the save then asks for Retry save. Daily-log refusals have their own reasons (step 7), not one "could not be written (<reason>)" sentence.
+
 **Files:**
 - Create: `host/src/service/finisher.rs`
 - Modify: `host/src/service/mod.rs` (`service::run` uses `SummaryFinisher::new(ConfigStore::default_path()?)`; delete `VaultCheckFinisher` from `supervisor.rs`); `host/src/config.rs` (`fn load_from` becomes `pub(crate)`)
@@ -2267,6 +2284,8 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 - [ ] Commit: `git add host/src/service host/src/config.rs && git commit -m "feat(service): write the summary and log event under the config current at finish"`
 
 ### Task 50: `open_summary`: open a page's owned summary file
+
+> **As built (2026-10-27).** The off-macOS answer reuses `open::UNSUPPORTED_MESSAGE`, "Opening is only supported on macOS.", the same wording as `open_path`, not "Opening files is only supported on macOS.". After review, `OpenSummaryRequest` gained a required, nullable `summary_path`: Recent rows, the page's summary line and run cards send the summary they show, and the host opens that file only if it is the summary of the record its own front matter names, at that record's summary path (`Vault::find_summary_at`), so a URL that now resolves to another record still opens the right file. `openSummary(url, summaryPath)` takes it; the wire test is `open_summary_requires_url_and_a_nullable_summary_path`.
 
 **Files:**
 - Modify: `protocol/schema.json` (add `OpenSummaryRequest {type:"open_summary", …, url}` and `SummaryOpened {type:"summary_opened", …, relative_path}`, then regenerate)
@@ -2331,12 +2350,12 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 **Files:**
 - Modify `scripts/smoke-macos.mjs`:
-  - The fake harnesses gain a `summary` mode. It emits a §6.4 answer with `document_type: "specification"`, `category: "technical specification"` and `importance: {level: "high", reason: "Fixture reason"}`, an entity `<img src=https://evil.example/x.png>`, and a description containing `![t](https://evil.example/t.png)`.
+  - The fake harnesses gain a `summary` mode. It emits a §6.4 answer with `document_type: "specification"`, `category: "technical specification"` and `importance: {level: "high", reason: "Fixture reason"}`, an entity `<img src=https://evil.example/x.png>`, and a description containing `![t](https://evil.example/t.png)`, `<img src=https://evil.example/d.png>`, a Mermaid fence (```` ```mermaid ```` with `A@{ img: "https://evil.example/m.png" }`) and a Dataview inline query (`` `$= dv.el("img", "", {attr: {src: "https://evil.example/q.png"}})` ``).
   - `BRAUSER_OPEN_LOG` is already passed (Task 41).
 
 - [ ] Add the steps:
   1. Write a page note on an unrecognized fixture page, then summarize it. Expect `succeeded`, with the page note's bytes unchanged.
-  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. It contains "`![t](https://evil.example/t.png)`" and no raw `<img`.
+  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. From the description (`neutralize_remote`) it contains `\![t](https://evil.example/t.png)` and `&lt;img src=https://evil.example/d.png>`. The entity is written by `inline` as `\<img src=https://evil.example/x.png\>` in the neutral profile, or by `wikilink` as `[[img src=https://evil.example/x.png]]` in the obsidian profile. From the Mermaid fence and Dataview query it contains `&#96;&#96;&#96;mermaid` and `&#96;&#36;= dv.el(`, and the summary body holds no raw backtick fence (no line starting with three backticks) and no raw `` `$= ``; backticks and `$` are written as entities because Obsidian runs Mermaid, Dataview and math from code spans, fences and `$`, so agent prose loses code formatting by design. No `<img` appears that is not backslash-escaped (front matter values write `<` as a JSON `\u` escape; neutral-profile single-line fields write `\<img`).
   3. Today's daily log has exactly one ` kind=summary ` line, and its payload has `harness: "codex"` and a `url` record key.
   4. `list_artifacts` returns a `web.page` item with `summary.importance === "high"`.
   5. `worklog` contains `Summarized: <fixture title> — specification, high importance`.
@@ -2352,7 +2371,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 **Files:**
 - Modify `DESIGN.md`:
-  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's construct list.
+  - §5.2: steps 5-6 as built. A summary now appends a `summary` log event and creates or attaches an artifact, which reverses "never creates a log entry". Replace #59's interim parenthetical in step 5 ("Storage-layer support for this lands ahead of the full Summarize & log feature…") with the shipped behavior. Record the neutralizer's escape rule (done in Task 43's 2026-10-27 revision), and the date and result of the manual Obsidian (`\![[embed]]`) and VS Code preview check once it is performed.
   - §6.2: the `Summary` fields.
   - §6.6: the §7.1 layout and the two-key identity encoding.
   - §6.7: the Summary line and the date-ordered Timeline summary lines.
