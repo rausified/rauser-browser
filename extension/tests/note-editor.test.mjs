@@ -158,7 +158,9 @@ test("text that fails to save before a tab switch is kept for the user", async (
   (await h.next("load")).resolve(loaded("a"));
   await switched;
   assert.equal(h.view.body, "a");
+  assert.ok(h.view.unsaved[0].id);
   assert.deepEqual(h.view.unsaved, [{
+    id: h.view.unsaved[0].id,
     url: "https://p.test/",
     text: "p unsaved",
     reason: "Could not save: Native host is not connected",
@@ -514,7 +516,7 @@ test("a conflicted copy survives reopening and later successful edits until expl
   assert.deepEqual(recovery.list().map((entry) => entry.text), ["mine"]);
   const reopened = harness(60_000, recovery);
   assert.equal(reopened.view.unsaved[0].text, "mine");
-  reopened.editor.discardUnsaved();
+  reopened.editor.discardUnsaved(reopened.view.unsaved[0].id);
   assert.deepEqual(recovery.list(), []);
   assert.deepEqual(reopened.view.unsaved, []);
 });
@@ -529,7 +531,7 @@ test("independent panels and stale discard never erase a newer recovery snapshot
   b.type("B");
   const viewer = harness(60_000, recovery); // Holds A and B's earlier versions.
   a.type("A newer");
-  viewer.editor.discardUnsaved();
+  for (const entry of viewer.view.unsaved) viewer.editor.discardUnsaved(entry.id);
   assert.deepEqual(recovery.list().map((entry) => entry.text), ["A newer"]);
   const saving = b.editor.flush();
   (await b.next("save")).resolve({ type: "note_saved", revision: "b-rev" });
@@ -571,7 +573,7 @@ test("failed recovery discard leaves the displayed text available for copy", asy
   recovery.write({ url: "https://p.test/", text: "still needed", reason: "pending" });
   const h = harness(60_000, recovery);
   storage.removeItem = () => { throw new Error("storage blocked"); };
-  h.editor.discardUnsaved();
+  h.editor.discardUnsaved(h.view.unsaved[0].id);
   assert.equal(h.view.unsaved[0].text, "still needed");
   assert.match(h.view.recoveryWarning, /storage blocked/);
   assert.equal(recovery.list().length, 1);
@@ -626,4 +628,43 @@ test("a recovered identity-conflict draft cannot autosave into the newly derived
   await reopened.editor.flush();
   assert.equal(reopened.view.unsaved[0].text, "edit under the old key");
   assert.equal(reopened.calls.filter((call) => call.kind === "save").length, 0);
+});
+
+
+test("discard selects immutable recovery IDs even when copies have identical contents", () => {
+  const { recovery } = recoveryFixture();
+  const copy = { url: "https://p.test/", text: "same", reason: "pending" };
+  const a = recovery.write(copy);
+  const b = recovery.write(copy);
+  const h = harness(60_000, recovery);
+  assert.notEqual(a.id, b.id);
+  h.editor.discardUnsaved(h.view.unsaved[1].id);
+  assert.deepEqual(recovery.list(), [a]);
+  assert.deepEqual(h.view.unsaved, [a]);
+  h.editor.discardUnsaved(b.id); // A repeated event cannot remove A by index.
+  assert.deepEqual(recovery.list(), [a]);
+  assert.deepEqual(h.view.unsaved, [a]);
+  assert.equal(h.calls.length, 0);
+});
+
+test("individual discard also selects memory-only conflicts without dropping empty edits", async () => {
+  const h = harness(); // No local recovery store available.
+  await open(h, "https://p.test/", "saved P");
+  h.type("P conflict");
+  const saveP = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_conflict", exists: true, revision: "p2", body: "other P" });
+  await saveP;
+  await open(h, "https://b.test/", "saved B");
+  h.type("");
+  const saveB = h.editor.flush();
+  (await h.next("save")).resolve({ type: "note_conflict", exists: true, revision: "b2", body: "other B" });
+  await saveB;
+  const [p, b] = h.view.unsaved;
+  assert.ok(p.id && b.id && p.id !== b.id);
+  const calls = h.calls.length;
+  h.editor.discardUnsaved(p.id);
+  assert.deepEqual(h.view.unsaved, [b]);
+  assert.equal(b.text, "");
+  assert.equal(h.view.body, "other B");
+  assert.equal(h.calls.length, calls, "discard never contacts the host");
 });

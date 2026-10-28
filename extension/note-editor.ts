@@ -43,7 +43,7 @@ export interface NoteView {
   writeBody(body: string): void;
   setEditable(editable: boolean): void;
   setStatus(message: string, warning?: boolean): void;
-  showUnsaved(entries: readonly UnsavedText[]): void;
+  showUnsaved(entries: readonly RecoveryText[]): void;
   setRecoveryWarning?(message: string): void;
   showOlderNotes?(entries: readonly OlderNote[], canUseAsArtifactNote: boolean): void;
 }
@@ -64,7 +64,7 @@ export class NoteEditor {
   private target: NotePage = null;
   private token = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly unsaved: UnsavedText[] = [];
+  private readonly unsaved: RecoveryText[] = [];
   // The note the editor is bound to. Only queued work changes these.
   private url: string | null = null;
   private title = "";
@@ -162,14 +162,14 @@ export class NoteEditor {
     return this.showPage(page);
   }
 
-  /** Explicit discard affects only the displayed copies, never live edits in
+  /** Explicit discard affects only the selected copy, never live edits in
    * this panel or a newer snapshot written by another panel. */
-  discardUnsaved(): void {
+  discardUnsaved(id: string): void {
+    const index = this.unsaved.findIndex((entry) => entry.id === id);
+    if (index === -1) return;
     try {
-      for (const entry of this.unsaved) {
-        if ("id" in entry) this.recovery?.remove(entry as RecoveryText);
-      }
-      this.unsaved.length = 0;
+      this.recovery?.remove(this.unsaved[index]!);
+      this.unsaved.splice(index, 1);
       this.view.showUnsaved(this.unsaved);
     } catch (error) {
       this.recoveryFailed(error);
@@ -216,7 +216,7 @@ export class NoteEditor {
   private keepUnsaved(url: string, text: string, reason: string): void {
     this.rememberDraft(text, reason);
     this.unsaved.push(this.draft?.text === text && this.draft.url === url && this.draft.reason === reason
-      ? this.draft : { url, text, reason });
+      ? this.draft : { id: crypto.randomUUID(), url, text, reason });
     this.draft = null; // Later edits must not replace this copy-out.
     this.view.showUnsaved(this.unsaved);
   }

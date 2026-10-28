@@ -141,3 +141,12 @@
   Two regressions cover fifteen delivery/recovery scenarios, and the full
   required/README gate passes (`brwr-2za`). macOS browser verification remains
   outside this Linux run.
+
+- **Brauser — individual recovered-note review:** The panel now shows each
+  recovered copy with its page address, read-only text and separate Copy and
+  Discard controls, so recovering one page never requires handling every
+  unsaved note. Empty edits are clearly labelled, Copy keeps exact text, and
+  Discard targets only the immutable snapshot selected. Live typing, other
+  copies and newer snapshots from another panel stay intact; recovery never
+  automatically fills or saves a note, and clipboard/storage failures remain
+  visible and retryable. Completes assigned `brwr-kws`.
