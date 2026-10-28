@@ -141,9 +141,10 @@ or more and code-length space runs as numeric entities), single-line fields
 through `markdown::inline` or wikilinks, and front matter through
 `markdown::yaml_string` with no entities; `npm run test:markdown-neutralizer`
 renders the shared corpus with markdown-it, micromark and marked, in CI too.
-The index cache is format 6 (`STATE_VERSION`; a format-5 cache migrates in
-place); summaries never count as opens or opened days, artifact files gain a
-Summary line and date-ordered Timeline summary lines, and Recent rows,
+The index cache is format 7 (`STATE_VERSION`; older formats 4–6 migrate in
+place, with unknown URL provenance for old records); summaries never count as
+opens or opened days, artifact files gain a Summary line and date-ordered
+Timeline summary lines, and Recent rows,
 `get_artifact` (an unrecognized page included, quietly null on a failed
 lookup), and the worklog carry them. `open_summary` opens only the record's
 owned summary file through the native host's `SetupContext.open` (PR 3's
@@ -292,6 +293,20 @@ before the presentation sanitizer, and before inline math/code escaping
 remove the frozen recovery compatibility when changing presentation.
 Complete visit markers still deduplicate by ID;
 summary retries require the same payload and selected folder too.
+
+Stripped-parameter provenance (`brwr-srp`, 2026-10-28): canonicalization
+records the sorted, distinct decoded names actually removed, never values.
+New daily markers add `stripped=<hex JSON>` with main/mode/trail evidence;
+wire event shapes and the daily-log header are unchanged. Cache format 7
+keeps it beside each event and SQLite's `url_provenance` table exposes it
+(JSON arrays, SQL NULL for legacy unknown). Notes and summaries record
+`brauser.stripped_params`; note saves and migrations preserve creation
+evidence, including a legacy missing field. Older-note discovery/view/migration
+rejects evidence that removed any current or recorded contract's query/absent
+key on that origin. It never chooses a primary autosave key. New single-event
+intents are v3 and bind that evidence; retain the frozen v2 hash and all three
+pre-provenance v1 presentation candidates for exact recovery. Provenance must
+never retain removed values or an extra raw URL.
 
 Incoming navigation (`brwr-1g2`, 2026-10-28): protocol version 8 adds required
 `ArtifactView.incoming_trails`, up to five host-derived source/transition pairs

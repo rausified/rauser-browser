@@ -1062,8 +1062,48 @@ revision-checked save. A conflict whose only reader is a retired or adopted
 contract is refused on add but is not shown, because those contracts never
 reach the extension; a known gap, accepted to avoid a protocol change, so
 such a config.toml keeps its colliding stripped URLs until the entry is
-removed by hand. Stored URLs do not record which parameters were
-stripped from them.
+removed by hand.
+
+**Names beside stored URLs (2026-10-28, `brwr-srp`).** New daily-log markers
+carry a host-derived `stripped=<hex JSON>` field beside the existing marker
+payload. Its `url` is the sorted, distinct list of decoded parameter names
+actually removed, preserving their case; `modes` and `trails` hold positional
+lists for each activity mode and optional trail source. This evidence retains
+neither removed values nor original URLs. The canonical URL still preserves
+untouched raw query segments. A known empty list means no query parameter was removed;
+a missing field on an older record means unknown. The log header and event
+payload shapes stay compatible, and old rows are never rewritten.
+
+Index cache format 7 keeps that evidence beside each event and writes the
+SQLite `url_provenance(event_id, artifact_id, role, url, stripped_params)` table
+(`role` is `url`, `mode:<index>`, or `trail:<index>`; the last column is a JSON
+array or SQL NULL for legacy unknown). Trail sources never become URLs for
+the destination artifact's note discovery. V4/V5/V6 caches and V5/V6 saved
+catch-up passes migrate in place with their log checkpoints; records lacking
+evidence stay unknown. Reindex reads both old and new markers; malformed or
+misaligned evidence is skipped rather than guessed, and an unusable cache
+is rebuilt. The existing cache read and publication bounds remain in force.
+
+New page notes and saved summaries write `brauser.stripped_params` beside
+their canonical URL. A page note's creation URL and its evidence survive
+later saves from alternate routes and explicit re-keying; a legacy note
+keeps its missing field instead of acquiring today's evidence. Older-note
+discovery, View and Use as artifact note refuse a candidate whose recorded
+removed names intersect query or absent keys read by a current, retired or
+adopted contract on that origin. Unrelated tracking names still allow
+contract-verified discovery. Missing legacy evidence keeps the existing
+contract-only checks; it never supplies proof of lossless normalization.
+Explicit preserved-note viewing remains read-only and uses address equality
+only to view, and artifact autosave keys still come exclusively from contracts.
+
+New single-event intents use format 3: the stable payload hash also binds
+names-only evidence. V2 hashes remain frozen and resume their exact prepared
+bytes; V1 hashes can select the pre-provenance current renderer or either
+frozen historical presentation renderer, only with a matching full hash and
+exact torn tail. Batch journals already retain prepared bytes and keep their
+format. A v3 retry with changed removed names refuses without touching the
+log. Downgrading with a pending v3 intent is unsupported; older hosts cannot
+recover it.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing; since PR 4 a changed key is followed, not refused, and the run records the key it wrote (§5.2 step 7).
 

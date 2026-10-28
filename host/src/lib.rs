@@ -43,4 +43,5 @@ mod presentation;
 #[cfg(unix)]
 pub mod service;
 mod summary;
+pub mod url_provenance;
 pub mod vault;

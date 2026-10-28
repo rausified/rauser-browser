@@ -301,6 +301,7 @@ pub enum SessionLink {
 pub struct SummaryDocument<'a> {
     pub key: &'a RecordKey,
     pub canonical_url: &'a str,
+    pub stripped_params: Option<&'a [String]>,
     pub title: &'a str,
     pub summarized_at: &'a str,
     pub harness: HarnessId,
@@ -453,6 +454,12 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
         yaml_string(doc.canonical_url)
     ));
     out.push_str(&format!("  {id_key}: {}\n", yaml_string(&doc.key.value)));
+    if let Some(names) = doc.stripped_params {
+        out.push_str(&format!(
+            "  stripped_params: {}\n",
+            serde_json::to_string(names).expect("query names")
+        ));
+    }
     out.push_str(&format!(
         "canonical_url: {}\n",
         yaml_string(doc.canonical_url)
@@ -1228,6 +1235,7 @@ mod tests {
         SummaryDocument {
             key,
             canonical_url: PAGE_URL,
+            stripped_params: None,
             title: "Widget spec",
             summarized_at: "2026-10-26T14:05:00-07:00",
             harness: HarnessId::Codex,

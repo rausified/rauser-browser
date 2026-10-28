@@ -89,6 +89,7 @@ struct ParsedNote {
     created: String,
     body: String,
     canonical_url: String,
+    stripped_params: Option<Vec<String>>,
 }
 
 pub fn load_note(vault: &Vault, canonical_url: &str) -> Result<LoadedNote, NoteRequestError> {
@@ -161,6 +162,37 @@ pub fn save_keyed_note(
     body: &str,
     expected_revision: &str,
 ) -> Result<SaveOutcome, NoteRequestError> {
+    save_keyed_note_with_provenance(
+        vault,
+        &crate::url_provenance::StoredUrl {
+            url: canonical_url.into(),
+            stripped_params: None,
+        },
+        key,
+        title,
+        body,
+        expected_revision,
+    )
+}
+
+pub fn save_keyed_note_with_provenance(
+    vault: &Vault,
+    stored: &crate::url_provenance::StoredUrl,
+    key: &RecordKey,
+    title: &str,
+    body: &str,
+    expected_revision: &str,
+) -> Result<SaveOutcome, NoteRequestError> {
+    let canonical_url = stored.url.as_str();
+    if stored
+        .stripped_params
+        .as_ref()
+        .is_some_and(|names| !crate::url_provenance::valid_names(names))
+    {
+        return Err(NoteRequestError::Internal(anyhow::anyhow!(
+            "invalid stripped parameter evidence"
+        )));
+    }
     if body.len() > MAX_BODY_BYTES || !body_fits_panel(body) {
         return Err(NoteRequestError::TooLarge(
             "note is too long to save".into(),
@@ -229,6 +261,11 @@ pub fn save_keyed_note(
     let markdown = render_note(
         key,
         &effective_canonical_url,
+        parsed
+            .as_ref()
+            .map_or(stored.stripped_params.as_deref(), |note| {
+                note.stripped_params.as_deref()
+            }),
         &effective_title,
         body,
         &created,
@@ -323,6 +360,7 @@ fn revision_for(contents: &str) -> String {
 fn render_note(
     key: &RecordKey,
     canonical_url: &str,
+    stripped_params: Option<&[String]>,
     title: &str,
     body: &str,
     created: &str,
@@ -344,10 +382,18 @@ fn render_note(
             format!("  artifact_id: {id_json}\n")
         }
     };
+    let provenance = stripped_params
+        .map(|names| {
+            format!(
+                "  stripped_params: {}\n",
+                serde_json::to_string(names).expect("query names")
+            )
+        })
+        .unwrap_or_default();
     // The body is stored verbatim; parse_owned_note removes only the one
     // newline written after it.
     Ok(format!(
-        "---\ntitle: {title_json}\nurl: {url_json}\n{FRONTMATTER_KEY}\n  canonical_url: {url_json}\n{key_line}  created: {created}\n  updated: {updated}\n---\n\n{body}\n"
+        "---\ntitle: {title_json}\nurl: {url_json}\n{FRONTMATTER_KEY}\n  canonical_url: {url_json}\n{key_line}{provenance}  created: {created}\n  updated: {updated}\n---\n\n{body}\n"
     ))
 }
 
@@ -367,6 +413,8 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
     let mut created: Option<String> = None;
     let mut kind: Option<String> = None;
     let mut in_block = false;
+    let mut stripped_params = None;
+    let mut saw_provenance = false;
     for line in frontmatter.lines() {
         if line == FRONTMATTER_KEY {
             in_block = true;
@@ -377,6 +425,16 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
                 in_block = false;
             } else if let Some(value) = line.strip_prefix("  canonical_url: ") {
                 fm_canonical = unquote(value);
+            } else if let Some(value) = line.strip_prefix("  stripped_params: ") {
+                if saw_provenance {
+                    return None;
+                }
+                saw_provenance = true;
+                let names: Vec<String> = serde_json::from_str(value).ok()?;
+                if !crate::url_provenance::valid_names(&names) {
+                    return None;
+                }
+                stripped_params = Some(names);
             } else if let Some(value) = line.strip_prefix("  url_id: ") {
                 fm_url_id = unquote(value);
             } else if let Some(value) = line.strip_prefix("  artifact_id: ") {
@@ -422,20 +480,29 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
         created,
         body: body.to_owned(),
         canonical_url: fm_canonical,
+        stripped_params,
     })
 }
 
 /// The creation URL is durable evidence for older-note discovery even when
 /// no activity was ever delivered on that route and its adapter is gone.
 pub fn artifact_keyed_note_url(contents: &str, key: &RecordKey) -> Option<String> {
+    artifact_keyed_note_evidence(contents, key).map(|stored| stored.url)
+}
+
+pub fn artifact_keyed_note_evidence(
+    contents: &str,
+    key: &RecordKey,
+) -> Option<crate::url_provenance::StoredUrl> {
     if key.kind != RecordKeyKind::Artifact {
         return None;
     }
-    // Artifact ownership is checked by ID; the supplied URL is deliberately
-    // unused by parse_owned_note for this key kind.
     let parsed = parse_owned_note(key, "", contents)?;
     crate::vault::url_record_key(&parsed.canonical_url).ok()?;
-    Some(parsed.canonical_url)
+    Some(crate::url_provenance::StoredUrl {
+        url: parsed.canonical_url,
+        stripped_params: parsed.stripped_params,
+    })
 }
 
 /// Identity for explicit read-only discovery, never for resolving a page's
@@ -574,6 +641,16 @@ pub fn url_keyed_note_url(contents: &str) -> Option<String> {
     (url_id.as_deref() == Some(expected.value.as_str())).then_some(canonical)
 }
 
+pub fn url_keyed_note_evidence(contents: &str) -> Option<crate::url_provenance::StoredUrl> {
+    let url = url_keyed_note_url(contents)?;
+    let key = crate::vault::url_record_key(&url).ok()?;
+    let parsed = parse_owned_note(&key, &url, contents)?;
+    Some(crate::url_provenance::StoredUrl {
+        url,
+        stripped_params: parsed.stripped_params,
+    })
+}
+
 fn older_notes(
     vault: &Vault,
     primary_key: &RecordKey,
@@ -670,6 +747,7 @@ pub fn use_as_artifact_note(
     let markdown = render_note(
         artifact_key,
         &parsed.canonical_url,
+        parsed.stripped_params.as_deref(),
         &parsed.title,
         &parsed.body,
         &parsed.created,
@@ -724,6 +802,71 @@ mod tests {
         };
         let vault = Vault::open(&storage).unwrap();
         (root, vault)
+    }
+
+    #[test]
+    fn note_provenance_survives_migration_and_saves_without_inventing_legacy_evidence() {
+        use crate::url_provenance::StoredUrl;
+        let (_root, vault) = vault();
+        let stored = crate::capture::canonical_url_with_provenance(
+            "https://example.com/a?utm_source=private-value",
+            &["utm_*".into()],
+        )
+        .unwrap();
+        let key = crate::vault::url_record_key(&stored.url).unwrap();
+        save_keyed_note_with_provenance(&vault, &stored, &key, "Title", "original", "missing")
+            .unwrap();
+        let contents = vault.read_note(&key, &stored.url).unwrap().unwrap();
+        assert_eq!(url_keyed_note_evidence(&contents), Some(stored.clone()));
+        assert!(!contents.contains("private-value"));
+        let artifact = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "doc:example/a".into(),
+        };
+        let revision = load_note(&vault, &stored.url).unwrap().revision;
+        let migrated =
+            use_as_artifact_note(&vault, &stored.url, &artifact, &stored.url, &revision).unwrap();
+        let alternate = StoredUrl {
+            url: "https://example.com/a/edit".into(),
+            stripped_params: Some(vec!["utm_campaign".into()]),
+        };
+        save_keyed_note_with_provenance(
+            &vault,
+            &alternate,
+            &artifact,
+            "Ignore",
+            "edited",
+            &migrated.revision,
+        )
+        .unwrap();
+        let contents = vault.read_note(&artifact, &alternate.url).unwrap().unwrap();
+        assert_eq!(
+            artifact_keyed_note_evidence(&contents, &artifact),
+            Some(stored)
+        );
+        assert!(!contents.contains("utm_campaign"));
+        // A legacy note's unknown evidence stays unknown after a new save.
+        let legacy = "https://example.com/legacy";
+        save_note(&vault, legacy, "Legacy", "old", "missing").unwrap();
+        let current = load_note(&vault, legacy).unwrap();
+        save_keyed_note_with_provenance(
+            &vault,
+            &StoredUrl {
+                url: legacy.into(),
+                stripped_params: Some(Vec::new()),
+            },
+            &current.key,
+            "Legacy",
+            "new",
+            &current.revision,
+        )
+        .unwrap();
+        let contents = vault.read_note(&current.key, legacy).unwrap().unwrap();
+        assert!(!contents.contains("stripped_params:"));
+        assert_eq!(
+            url_keyed_note_evidence(&contents).unwrap().stripped_params,
+            None
+        );
     }
 
     #[test]
