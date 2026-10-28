@@ -822,6 +822,25 @@ The host works on two record types. A `PageNote` has `url`, `canonical_url`, a r
 
 Because `artifact_id` is the record key below, an `id` template is durable. The adapter template `format` number versions the language, and a later format never changes how a template in an older format builds an ID. Changing the `id` template of an adapter that has recorded activity is a **migration**: the host shows how many artifacts are affected and, on confirmation, writes one `alias` event from each old ID to its new one, so no history, note, or summary is orphaned (adapter-templates.md §8.2). Aliases arrive in M1.5b, so until then the host refuses an `id` change on an adapter with recorded activity. Removing an adapter or changing its recognition rules does not erase this constraint: `config.toml` keeps a host-owned, extension-invisible history of every superseded recognition contract and ID. The same ID may be restored, and a genuinely disjoint route may introduce a new ID, but an overlapping route cannot return under a different type or ID until migrations exist. Only restoring the exact historical contract removes that redundant history entry; a disjoint adapter that happens to reuse the same ID does not.
 
+**Retired history budget (2026-10-28, `brwr-2iz`).** Growing
+`[[adapter_id_history]]` is limited to 32 KiB of pretty-serialized TOML inside
+the existing 64 KiB config cap, reserving room for active adapters and settings.
+A legacy history already over budget may stay unchanged or shrink, so pausing
+capture and other unrelated edits still save while the total file fits.
+An adapter change prunes exact duplicate history entries and entries whose
+exact contract is restored as an active adapter; no distinct contract is
+discarded to make room. The normal ID freeze still applies during restoration:
+restore the old contracts before removing newer adapters, rather than replacing
+one ID with another in a single update. A save or Capture Site preflight that
+grows history past its budget refuses with an actionable message: turn Capture
+off without removing adapters, or restore exact old rules and IDs in settings
+to reclaim history budget. At the total-file cap, a refusal reports history's
+byte cost and asks to reduce optional adapter metadata or summary vocabulary;
+restoring an adapter moves its contract out of history but does not remove it
+from the total file. Both size refusals reach settings as `invalid_config`
+before config replacement or layout I/O. History stays host-only, and the
+adopted-contracts record and note ownership rules remain unchanged.
+
 Before a starter Capture Site review enables Save or promises that saving enables
 its pages, it sends the proposed adapter document and reviewed config revision
 to the host's read-only `check_capture_site` (2026-10-28, `brwr-t8m`). Under
