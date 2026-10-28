@@ -899,6 +899,41 @@ impl ConfigStore {
             .collect()
     }
 
+    /// A stripped parameter read by any note contract can make a canonical
+    /// URL satisfy a different query/absence rule. Such evidence may be
+    /// viewed explicitly, but cannot authorize older-note discovery or migration.
+    pub(crate) fn note_url_evidence_is_safe(
+        &self,
+        stored: &crate::url_provenance::StoredUrl,
+    ) -> bool {
+        let Some(names) = &stored.stripped_params else {
+            return true;
+        };
+        if !crate::url_provenance::valid_names(names) {
+            return false;
+        }
+        let Ok(url) = url::Url::parse(&stored.url) else {
+            return false;
+        };
+        let origin = url.origin().ascii_serialization();
+        let adopted: &[serde_json::Value] = match &self.adopted {
+            AdoptedContracts::Read { contracts, .. } => contracts,
+            AdoptedContracts::Unread | AdoptedContracts::Unreadable { .. } => &[],
+        };
+        !self
+            .config
+            .adapters
+            .artifacts
+            .iter()
+            .chain(&self.retired_adapter_contracts)
+            .chain(adopted)
+            .filter(|adapter| {
+                adapter.get("origin").and_then(serde_json::Value::as_str) == Some(origin.as_str())
+            })
+            .flat_map(query_keys_read)
+            .any(|(_, key)| names.iter().any(|name| name.eq_ignore_ascii_case(key)))
+    }
+
     /// The compiled note-only contracts `note_key_rule` reads: retired
     /// `[[adapter_id_history]]` entries, contracts removed from config.toml
     /// by hand, and the current document while it is inert. Each names

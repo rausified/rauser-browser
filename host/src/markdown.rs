@@ -22,6 +22,13 @@ pub(crate) fn yaml_string(value: &str) -> String {
     json.replace('<', "\\u003c").replace("![", "\\u0021[")
 }
 
+/// A JSON-compatible YAML array whose values retain their exact spelling
+/// without exposing HTML or image syntax in a plain Markdown viewer.
+pub(crate) fn yaml_strings(values: &[String]) -> String {
+    let values: Vec<_> = values.iter().map(|value| yaml_string(value)).collect();
+    format!("[{}]", values.join(","))
+}
+
 /// One line of escaped Markdown, at most `limit` characters before escaping.
 /// On top of `markdown_line`'s backslash escapes, every backtick, `$` and `~`
 /// is written as a numeric entity, as in `neutralize_remote`, so no code span

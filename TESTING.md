@@ -64,7 +64,8 @@ use disposable local directories; no browser or network is used.
 ## Single-event recovery across renderer upgrades
 
 `cargo test --locked -p brauser capture::tests` includes independently prepared
-historical prose with unchanged machine markers in real v2 journals. A restart
+historical prose with unchanged machine markers in prepared-byte journals
+(v3 for new events, plus explicit pre-provenance v2 fixtures). A restart
 recovers a tail torn inside a multibyte character through both single and batch
 delivery, preserving unrelated rows and deduplicating completed markers. Changes
 past the title display limit, a different selected root, and edited tails are
@@ -191,6 +192,39 @@ The fake DOM does not initialize `disabled` from HTML: waits must observe a
 sent `load_note` as well as an enabled editor before interacting with it.
 Actual Chrome disclosure styling and keyboard interaction still need the
 separate macOS interactive check; these tests do not claim that acceptance.
+
+## Stripped-parameter provenance coverage
+
+`cargo test --locked -p brauser --lib` exercises actual removed names
+(including encoded keys, repeated names, case, wildcard rules and known empty
+lists), names-only activity markers, canonical note creation and a later
+absence-rule collision, plus SQLite evidence before and after reindex.
+`note::tests::note_provenance_survives_migration_and_saves_without_inventing_legacy_evidence`
+checks re-keying, alternate-route saves and preservation of missing legacy
+metadata. The index test preserves v6 cache checkpoints with unknown evidence
+and rebuilds malformed positional evidence. Existing fixtures continue to
+parse legacy activity, Why, summaries and M1 markers.
+
+`capture::tests::pre_provenance_v2_intents_resume_exact_bytes_through_single_and_batch_delivery`
+seeds the frozen v2 hash tuple and pre-provenance bytes, restarts the store,
+and verifies single/batch recovery, changed-payload refusal and untouched
+edited tails. The v1 frozen-renderer fixtures omit the new metadata explicitly.
+`capture::tests::new_intents_bind_removed_names_and_keep_removed_values_private`
+checks v3 evidence binding without retaining removed values. These are local
+filesystem tests; they need no browser or real agent. No smoke step or dialog
+count changed, and real Chrome/macOS acceptance remains separate. The summary
+finisher test checks names-only evidence in the file, daily log and index.
+`provenance_keeps_invalid_activity_urls_terminal_in_single_and_batch_delivery`
+failed first during review and protects the existing terminal-rejection
+semantics for malformed main, mode and trail URLs.
+
+Independent review added failing-first coverage for page-controlled HTML and
+image syntax in stripped names: note creation round-trips the exact names
+through escaped front matter, and every summary corpus case now also supplies
+a stripped name. The shared renderer check exercises those summary fields.
+`pre_provenance_v1_summary_and_overflow_intents_resume_exact_bytes` covers
+interrupted v1 events without visit-title prose, preserving exact old bytes,
+refusing changed payloads and edited tails, and deduplicating after recovery.
 
 ## Page-note recovery coverage
 

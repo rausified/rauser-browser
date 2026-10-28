@@ -1290,6 +1290,7 @@ fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
 /// not a `Response`, so callers pay for the large `Response` enum only once.
 struct NoteContext {
     canonical: String,
+    stripped_params: Option<Vec<String>>,
     vault: Vault,
     key: RecordKey,
     older_urls: Vec<String>,
@@ -1314,6 +1315,7 @@ pub(crate) fn resolve_record_key(
 /// it without opening the vault or matching adapters a second time.
 struct KeyParts {
     canonical: String,
+    stripped_params: Option<Vec<String>>,
     vault: Vault,
     key: RecordKey,
 }
@@ -1354,8 +1356,10 @@ fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Re
             "choose a home folder first".into(),
         ));
     };
-    let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
-        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
+    let stored =
+        crate::capture::canonical_url_with_provenance(url, &config.snapshot().strip_params)
+            .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
+    let canonical = stored.url;
     let vault = Vault::open_checked(storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))?;
     // Match on the original URL, not the stripped canonical form: capture
@@ -1403,6 +1407,7 @@ fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Re
     };
     Ok(KeyParts {
         canonical,
+        stripped_params: stored.stripped_params,
         vault,
         key,
     })
@@ -1415,6 +1420,7 @@ fn note_context(
 ) -> Result<NoteContext, Refusal> {
     let KeyParts {
         canonical,
+        stripped_params,
         vault,
         key,
     } = resolve_key_parts(config, url)?;
@@ -1444,7 +1450,11 @@ fn note_context(
         }
     };
     let mut older_urls = Vec::new();
-    if names_artifact(&canonical) {
+    if config.note_url_evidence_is_safe(&crate::url_provenance::StoredUrl {
+        url: canonical.clone(),
+        stripped_params: stripped_params.clone(),
+    }) && names_artifact(&canonical)
+    {
         older_urls.push(canonical.clone());
     }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
@@ -1456,29 +1466,52 @@ fn note_context(
         };
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = open_index(config, storage, &cache_dir)
-            && let Ok(urls) = index.artifact_urls(&key.value)
+            && let Ok(urls) = index.artifact_url_evidence(&key.value)
         {
-            older_urls.extend(urls.into_iter().filter(|url| names_artifact(url)));
+            older_urls.extend(
+                urls.into_iter()
+                    .filter(|stored| {
+                        config.note_url_evidence_is_safe(stored) && names_artifact(&stored.url)
+                    })
+                    .map(|stored| stored.url),
+            );
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
                 let candidates = [
-                    note::artifact_keyed_note_url(&contents, &key),
-                    note::url_keyed_note_url(&contents),
+                    note::artifact_keyed_note_evidence(&contents, &key),
+                    note::url_keyed_note_evidence(&contents),
                 ];
                 older_urls.extend(
                     candidates
                         .into_iter()
                         .flatten()
-                        .filter(|candidate| names_artifact(candidate)),
+                        .filter(|candidate| {
+                            config.note_url_evidence_is_safe(candidate)
+                                && names_artifact(&candidate.url)
+                        })
+                        .map(|candidate| candidate.url),
                 );
             }
         }
         older_urls.sort();
         older_urls.dedup();
     }
+    if include_older_notes {
+        older_urls.retain(|url| {
+            let Ok(key) = crate::vault::url_record_key(url) else {
+                return false;
+            };
+            let Ok(Some(contents)) = vault.read_note(&key, url) else {
+                return false;
+            };
+            note::url_keyed_note_evidence(&contents)
+                .is_some_and(|stored| config.note_url_evidence_is_safe(&stored))
+        });
+    }
     Ok(NoteContext {
         canonical,
+        stripped_params,
         vault,
         key,
         older_urls,
@@ -1577,9 +1610,12 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             Err(note_error_value) => note_error(&value.request_id, note_error_value),
         };
     }
-    match note::save_keyed_note(
+    match note::save_keyed_note_with_provenance(
         &context.vault,
-        &context.canonical,
+        &crate::url_provenance::StoredUrl {
+            url: context.canonical.clone(),
+            stripped_params: context.stripped_params.clone(),
+        },
         &context.key,
         &value.title,
         &value.body,
@@ -3012,6 +3048,76 @@ id = "gdoc:{host}/{id}"
         let loaded = note_load(&mut config, edit);
         assert_eq!(loaded.key, first.key);
         assert_eq!(loaded.body, "same document");
+    }
+
+    #[test]
+    fn stripped_note_creation_evidence_cannot_authorize_a_colliding_older_note() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "strip_params = [\"selected\", \"utm_*\"]",
+            "",
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let raw = "https://work.example/items/7?selected=private-value&utm_source=private-campaign";
+        let initial = note_load(&mut config, raw);
+        assert!(matches!(
+            note_save(
+                &mut config,
+                raw,
+                "do not migrate",
+                &initial.revision,
+                initial.key.clone()
+            ),
+            Response::NoteSaved(_)
+        ));
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        let relative = vault.note_relative_path(&initial.key, url).unwrap();
+        let original = std::fs::read_to_string(root.join(&relative)).unwrap();
+        assert!(original.contains("  stripped_params: [\"selected\",\"utm_source\"]"));
+        assert!(!original.contains("private-value"));
+        assert!(!original.contains("private-campaign"));
+        // The later adapter interprets an absent selected parameter as the
+        // item itself. The old stripped note actually belonged to a modal.
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}", absent = ["selected"] }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let loaded = note_load(&mut config, url);
+        assert_eq!(loaded.key.kind, RecordKeyKind::Artifact);
+        assert!(
+            loaded.older_notes.is_empty(),
+            "stripped absence conditions must not identify an older note"
+        );
+        let response = use_artifact_note(
+            brauser_protocol::UseArtifactNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "collision".into(),
+                url: url.into(),
+                source_url: url.into(),
+                expected_revision: initial.revision,
+            },
+            &mut config,
+        );
+        assert!(
+            matches!(response, Response::Error(value) if value.code == ErrorCode::Unauthorized)
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(relative)).unwrap(),
+            original
+        );
     }
 
     #[test]
