@@ -1432,11 +1432,12 @@ stop product work, and no history reset or production IPC change is called for.
   Establish the runner's exact wait before changing it; no engine was touched.
 
 
-### Platform evidence handoff (2026-10-28, rechecked at 8916bfc6)
+### Platform evidence handoff (2026-10-28, rechecked at 003a85c6)
 
-- Health began clean: no quarantine notice or working-tree changes. All
-  required local commands passed: protocol generation check, workspace build,
-  fmt, both Clippy configurations, npm installation, typecheck, lint,
+- Health at `003a85c6` began clean: no quarantine notice or working-tree
+  changes. All required local commands passed: protocol generation check,
+  workspace build, fmt, both Clippy configurations, npm installation,
+  typecheck, lint,
   extension build, all 15 extension test files and workspace Rust tests.
   Rust reported 997 successful outcomes: 954 executed and 43 explicit
   sandbox IPC early skips; these do not establish platform execution.
@@ -1457,5 +1458,11 @@ stop product work, and no history reset or production IPC change is called for.
   blocker. Obtain platform results or assign runnable work before launching
   again. Existing focus sessions (`brwr-ued`) and curated worklogs (`brwr-ppn`)
   remain useful later product work; no duplicate proposal or unrelated
-  implementation was added ahead of this queue. This handoff updates the
-  previous platform-evidence summary instead of adding another duplicate.
+  implementation was added ahead of this queue. The next platform run should
+  name its tested commit, Windows/macOS job results and macOS smoke outcome
+  so these two items can be closed without another Linux-only recheck.
+  This handoff updates the previous platform-evidence summary instead of
+  adding another duplicate.
+- The single commit attempt failed creating `.git/index.lock` because Git
+  metadata is read-only. No retry ran. The reviewed queue/documentation diff
+  and excluded `.bosun_commit_msg` are ready for the driver to commit.
