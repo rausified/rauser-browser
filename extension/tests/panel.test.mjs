@@ -999,6 +999,34 @@ test("restore response validation and host refusals never fall back to fresh rul
   }
 });
 
+test("GitHub starter edits cannot bypass a failed recorded-rule review", async () => {
+  let refuse = true;
+  const page = await captureReview(GITHUB_URL, { intercept(request) {
+    if (request.type === "get_site_restore" && refuse) return {
+      type: "error", code: "invalid_config", message: "Recorded rules overlap. Review them in settings.",
+    };
+  } });
+  const refusal = page.el("capture-site-message").textContent;
+  assert.match(refusal, /Could not review recorded rules/);
+  page.el("capture-site-orgs").value = "other-org";
+  page.el("capture-site-orgs").dispatch("input");
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  await settle();
+  assert.equal(page.el("capture-site-message").textContent, refusal);
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(page.sent("check_capture_site").length, 0);
+  assert.equal(updates(page).length, 0);
+
+  // A new review may offer starters once the host confirms no recorded rules.
+  refuse = false;
+  page.el("capture-site-cancel").click();
+  page.el("capture-site").click();
+  await until(() => !page.el("capture-site-save").disabled, "fresh review after repair");
+  assert.equal(page.sent("get_site_restore").length, 2);
+  assert.equal(page.sent("check_capture_site").length, 1);
+});
+
 for (const history of ["retired", "hand-removed"]) {
   test(`Capture Site refuses a starter conflicting with a ${history} contract before save`, async () => {
     const page = await captureReview(JIRA_URL, { intercept(request) {

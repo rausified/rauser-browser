@@ -193,7 +193,9 @@ export class CaptureSitePanel {
   private plan: CapturePlan | null = null;
   private restorePlan: RestorePlan | null = null;
   private restored: AdapterDocument | null = null;
-  private lookingForRestore = false;
+  // Fresh rules require a successful review reporting no recorded contracts.
+  // A failed review must stay blocked when starter inputs change.
+  private freshRulesAllowed = false;
   private starterCheck = 0;
   // The drafted flow. The link shapes (in `draftInput`) and the draft live
   // only here and are cleared by close().
@@ -350,14 +352,14 @@ export class CaptureSitePanel {
    * origin crosses this read boundary; page patterns are read only if the
    * host reports no recorded rules. */
   private async startReview(target: NonNullable<CaptureSitePanel["target"]>): Promise<void> {
-    this.lookingForRestore = true;
+    this.freshRulesAllowed = false;
     this.previewMessage = "Checking saved site identities…";
     this.updateControls(this.actions.isBusy());
     try {
       const recorded = await this.session.siteRestore(target.origin, target.revision);
       if (this.target !== target || !this.samePage(this.page, target) || this.session.revision !== target.revision) return;
-      this.lookingForRestore = false;
       if (!recorded.artifacts.length) {
+        this.freshRulesAllowed = true;
         if (target.mode === "draft") await this.startDraft(target);
         else this.updatePreview();
         return;
@@ -397,7 +399,6 @@ export class CaptureSitePanel {
         : "Restore these rules while keeping capture paused. Resume capture in settings when you are ready.";
     } catch (error) {
       if (this.target !== target) return;
-      this.lookingForRestore = false;
       this.restorePlan = null;
       this.previewMessage = `Could not review recorded rules: ${describe(error)}`;
     }
@@ -410,7 +411,7 @@ export class CaptureSitePanel {
     this.plan = null;
     this.restorePlan = null;
     this.restored = null;
-    this.lookingForRestore = false;
+    this.freshRulesAllowed = false;
     this.draft = null;
     this.draftInput = null;
     this.draftPlan = null;
@@ -699,7 +700,7 @@ export class CaptureSitePanel {
   }
 
   private updatePreview(): void {
-    if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving || this.lookingForRestore) return;
+    if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving || !this.freshRulesAllowed) return;
     this.preview.replaceChildren();
     const result = planCaptureSite(this.session.config, this.target.url, {
       organizations: this.orgs.value,
