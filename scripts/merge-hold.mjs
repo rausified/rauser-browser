@@ -6,8 +6,15 @@
 // stretches at once. Pending, not failure: the PR simply waits, and the
 // overnight driver, which only enables auto-merge, never sees a failed check.
 //
+// Merge queue: `merge-hold` is a required check, so it must also report on the
+// queue's temporary merge_group commit. A PR can only enter the queue once its
+// head passed the hold, so in a merge_group run (`--merge-group <sha>`) this
+// posts success on that commit and nothing else. A pending hold on a PR head
+// still keeps it out of the queue.
+//
 // Run by .github/workflows/merge-hold.yml with GITHUB_TOKEN and
-// GITHUB_REPOSITORY set; `decideStatuses` is the pure part the tests pin.
+// GITHUB_REPOSITORY set; `decideStatuses`, `mergeGroupStatus` and `parseArgs`
+// are the pure parts the tests pin.
 
 export const STATUS_CONTEXT = "merge-hold";
 export const HOLD_LABEL = "final-stretch";
@@ -35,6 +42,25 @@ export function decideStatuses(openPrs) {
   });
 }
 
+/** The `merge-hold` status for a merge queue entry's merge_group commit. */
+export function mergeGroupStatus(sha) {
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`merge_group needs a full commit SHA, got ${JSON.stringify(sha)}`);
+  return {
+    sha,
+    state: "success",
+    context: STATUS_CONTEXT,
+    description: "Merge queue entry: its PR passed the merge hold to be enqueued",
+  };
+}
+
+/** `[]` sweeps every open PR; `["--merge-group", sha]` reports one merge_group commit. */
+export function parseArgs(argv) {
+  if (argv.length === 0) return { mergeGroupSha: null };
+  if (argv[0] !== "--merge-group") throw new Error(`unknown argument ${JSON.stringify(argv[0])}`);
+  if (argv.length !== 2 || !argv[1]) throw new Error("--merge-group needs a commit SHA");
+  return { mergeGroupSha: argv[1] };
+}
+
 async function github(path, init = {}) {
   const response = await fetch(`https://api.github.com${path}`, {
     ...init,
@@ -49,22 +75,29 @@ async function github(path, init = {}) {
   return response.json();
 }
 
+async function post(repo, status) {
+  await github(`/repos/${repo}/statuses/${status.sha}`, {
+    method: "POST",
+    body: JSON.stringify({ state: status.state, context: status.context, description: status.description }),
+  });
+  console.log(`${status.sha.slice(0, 7)} ${status.state}: ${status.description}`);
+}
+
 async function main() {
+  const { mergeGroupSha } = parseArgs(process.argv.slice(2));
   const repo = process.env.GITHUB_REPOSITORY;
   if (!repo || !process.env.GITHUB_TOKEN) throw new Error("GITHUB_REPOSITORY and GITHUB_TOKEN are required");
+  if (mergeGroupSha !== null) {
+    await post(repo, mergeGroupStatus(mergeGroupSha));
+    return;
+  }
   const open = [];
   for (let page = 1; ; page += 1) {
     const batch = await github(`/repos/${repo}/pulls?state=open&per_page=100&page=${page}`);
     open.push(...batch);
     if (batch.length < 100) break;
   }
-  for (const status of decideStatuses(open)) {
-    await github(`/repos/${repo}/statuses/${status.sha}`, {
-      method: "POST",
-      body: JSON.stringify({ state: status.state, context: status.context, description: status.description }),
-    });
-    console.log(`${status.sha.slice(0, 7)} ${status.state}: ${status.description}`);
-  }
+  for (const status of decideStatuses(open)) await post(repo, status);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
