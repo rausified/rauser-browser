@@ -2079,7 +2079,7 @@ pub(crate) struct StripParamConflict {
 /// The query keys an adapter's rules read, each with its rule. Read from
 /// the raw document, so an inert or individually invalid adapter still
 /// counts.
-fn query_keys_read(adapter: &serde_json::Value) -> Vec<(&serde_json::Value, &str)> {
+pub(crate) fn query_keys_read(adapter: &serde_json::Value) -> Vec<(&serde_json::Value, &str)> {
     let mut keys = Vec::new();
     for rule in adapter
         .get("match")

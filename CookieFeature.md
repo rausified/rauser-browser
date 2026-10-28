@@ -555,3 +555,26 @@ exercise 33 cases through reindex, restart, single delivery and activity batch
 delivery, including duplicate retries and refusal paths. The full required
 and README gates pass; macOS browser acceptance remains outside this Linux
 run. Completes assigned `brwr-smu`.
+
+
+## 2026-10-28 — Rehearse artifact identity corrections before migration
+
+Brauser now has an offline developer command, `brauser adapters aliases-preview`,
+that shows what an artifact's identities would become under a proposed capture
+policy. Given old and proposed adapter documents and URL evidence, it derives
+the endpoint IDs itself and prints the resulting canonical groups and pending
+suggestions. A chain of moves stays one group, a move back makes the old key
+canonical again, and undoing a pair removes only that connection. Suggested
+links never merge records. Exact logical event retries are idempotent, while
+conflicting reuse refuses the preview.
+
+This gives developers and agents an inspectable first step toward Re-learn
+capture without risking existing notes. The command reads stdin only, creates
+no config or vault files, checks adapter scope and types, and refuses URL
+provenance that cannot establish a query-based identity. Its output describes
+only the supplied operations and cannot authorize a migration. The ID freeze
+remains until the remaining impact planner, durable migration and panel review
+are complete. Fifteen new tests include real binary isolation checks; the full
+required and README gates pass with 987 reported Rust outcomes and all 15
+extension files. `brwr-sq9` is complete; parent `brwr-6x2` continues with
+`brwr-hq8` under the four-stage plan in `docs/superpowers/plans/`.

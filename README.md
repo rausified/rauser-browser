@@ -35,6 +35,13 @@ npm run test:markdown-neutralizer
 npm run test:scripts
 ```
 
+To rehearse artifact identity changes offline, use
+`target/debug/brauser adapters aliases-preview < requests.jsonl`.
+It shows canonical groups and pending suggestions from supplied adapter
+documents and URL evidence, without opening your settings or vault. See the
+[JSON example and limits](docs/superpowers/plans/2026-10-28-capture-relearning.md#offline-command).
+Re-learn in the panel and applying migrations remain under development.
+
 ### Try the M1 development build
 
 1. Build the native host with `cargo build --locked -p brauser` and the extension with `npm ci --ignore-scripts && npm run build:extension`.
