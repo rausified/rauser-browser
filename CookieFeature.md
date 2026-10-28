@@ -645,3 +645,34 @@ The optional 5,000-case engine comparison is not counted as passed: its
 one-case probe timed out, and Node child pipes are denied by this sandbox.
 The run was stopped and recorded as brwr-wg5. Both adapter engines are
 unchanged; their ordinary vector tests passed in the required gate.
+
+
+## 2026-10-28 — Review the impact of re-learning capture rules
+
+Brauser can now show what a replacement capture policy would do to history
+that already exists. `brauser adapters relearn-plan` inspects the selected
+home folder's owned log markers, notes and summaries and returns a JSON
+review with unchanged and changed identities, splits, merges and unresolved
+cases. It also includes a repository whose history comes entirely from work
+inside it. This completes brwr-hq8, the second stage of capture re-learning;
+the panel action and actual migrations remain under the parent brwr-6x2.
+
+The report keeps existing notes and summaries on both sides visible without
+choosing one or overwriting either. It flags simultaneous swaps and reused
+keys that sequential aliases would incorrectly collapse, and refuses to
+infer identity when a query parameter may have been stripped. A URL note
+sharing an artifact's address remains a separate copy requiring an explicit
+choice. Config, recorded contracts, inspected evidence and proposal hashes
+bind the review so a later migration can reject stale decisions. The command
+writes only coordination locks; it leaves the cache, content and ID freeze
+unchanged. An optional absolute config path supports disposable fixtures.
+
+Twenty-one new tests cover this boundary, including actual capture markers,
+both-side files, provenance and the real CLI's rejection paths. A successful
+CLI fixture also preserved exact config/note bytes. The full required and
+README checks passed with 1,018 workspace Rust outcomes (43 explicit sandbox
+IPC skips), all 15 extension files, both Clippy builds, 880 scripted-dialog
+outcomes (53 IPC skips) and 10,696 inert Markdown renderings. Windows/macOS
+execution remains separate. The next concrete stage, brwr-wvi, records
+reviewed decisions in a durable journal with recovery before file/index or
+panel integration can enable migrations.

@@ -234,11 +234,11 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-hq8` **Plan re-learning impact before migrating identities.**
-  Next prerequisite of `brwr-6x2`: derive a revision-bound plan from recorded
-  evidence; report splits, merges and key reuse, reject insufficient query
-  provenance, and inspect existing notes/summaries without changing them.
-  The offline rehearsal is complete; durable apply remains later.
+- [ ] `brwr-wvi` **Journal reviewed re-key operations with crash-safe replay.**
+  Next prerequisite of `brwr-6x2`: persist host-owned reviewed decisions with
+  complete revision checks, stable IDs, exact retry identity and interrupted
+  transaction recovery. Keep config, file/index integration and panel apply
+  disabled until the remaining parent stages are complete.
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
   Windows CI, record an isolated real-Chrome run with source and OS/browser
   versions, native registration, the folder picker, standing HTTP(S) access,
@@ -331,8 +331,8 @@ strip_params note-identity follow-up has shipped (see Shipped).
 - [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
   Cookie claimed the highest-priority ready item after the coordinator cleared
   the assigned queue. The [four-stage plan](docs/superpowers/plans/2026-10-28-capture-relearning.md)
-  starts with offline alias rehearsal, then revision-bound impact planning,
-  durable migration/rebuild, and the panel review. The parent remains in
+  has completed offline alias rehearsal and revision-bound impact planning;
+  next are durable journal/rebuild (`brwr-wvi`) and panel review. The parent remains in
   progress: no migration is enabled and the ID freeze stays enforced.
 
 
@@ -371,6 +371,8 @@ strip_params note-identity follow-up has shipped (see Shipped).
 Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Review capture re-learning against recorded history (2026-10-28).** `brauser adapters relearn-plan` derives a read-only impact report from owned logs, notes and summaries, including repository roll-ups. Revision hashes bind the inspected inputs; splits, merges, simultaneous swaps, reused keys, missing query provenance and occupied destinations remain explicit. Existing copies stay visible and untouched, and URL notes never become an inferred autosave target. Completes `brwr-hq8`; durable migration and panel Re-learn remain with the parent. **Metrics:** 1,018 workspace Rust outcomes (+21 tests; 43 explicit IPC skips), 880 scripted outcomes (53 IPC skips), 15 extension files, both Clippy builds and the complete required/README gate green.
 
 - **Category:** New Capability. **Restore removed sites from their recorded capture rules (2026-10-28).** Completed assigned `brwr-cua`: Capture Site reviews usable recorded page kinds and account scope before a new starter or draft, then re-reads the set before an explicit revision-checked save. Custom identities, note bytes, other sites and global pauses stay intact; no page content or agent is needed. Damaged or overlapping history remains refused, with container identity review tracked in `brwr-7lq`. **Metrics:** 997 workspace Rust outcomes (+7 regressions; 43 documented IPC sandbox skips), 11 new panel cases and all 15 extension files, both Clippy configurations and 859 scripted-build outcomes green.
 
@@ -1433,30 +1435,54 @@ stop product work, and no history reset or production IPC change is called for.
   Establish the runner's exact wait before changing it; no engine was touched.
 
 
-### Platform evidence handoff (2026-10-28, rechecked at 8916bfc6)
+### Platform evidence check and queue update (2026-10-28, e5e1368b)
 
-- Health began clean: no quarantine notice or working-tree changes. All
-  required local commands passed: protocol generation check, workspace build,
-  fmt, both Clippy configurations, npm installation, typecheck, lint,
-  extension build, all 15 extension test files and workspace Rust tests.
-  Rust reported 997 successful outcomes: 954 executed and 43 explicit
-  sandbox IPC early skips; these do not establish platform execution.
-  Extras passed: current-state/queue checks, both script test files and 10,696 inert
-  Markdown renderings. The scripted-dialog test suite was not rerun this
-  cycle; its Clippy build passed.
-- Both assigned beads remain blocked. `brwr-bzx` needs current Windows/macOS
-  CI results against a named commit. `brwr-9xg` needs actual isolated macOS
-  Chrome execution: `npm run smoke:macos:headless` again refused Linux before
-  setup, and no Chrome/Chromium executable was found on PATH. The expected
-  dialog count stays 14. The operator/driver must supply these results;
-  implementation and skip-reason audit are already complete.
-- No feature or source change shipped. Existing bead notes were preserved,
-  current results appended and the queue exported. No assigned label, status
-  or human gate changed. Review covers the complete documentation/queue diff;
-  an API-based Codex review is prohibited by this run's no-live-API rule.
-- Scheduling observation: repeated Linux-only cycles cannot remove either
-  blocker. Obtain platform results or assign runnable work before launching
-  again. Existing focus sessions (`brwr-ued`) and curated worklogs (`brwr-ppn`)
-  remain useful later product work; no duplicate proposal or unrelated
-  implementation was added ahead of this queue. This handoff updates the
-  previous platform-evidence summary instead of adding another duplicate.
+- Opening health was clean, without a quarantine notice. The required Linux
+  gate passed 997 Rust-reported outcomes (43 explicit IPC early skips), all
+  15 extension files and both Clippy builds; README extras passed too.
+- `brwr-bzx` still needs current Windows/macOS green CI against a named
+  commit. `brwr-9xg` still needs real isolated macOS Chrome execution; the
+  existing smoke refused Linux before setup and Chrome/Chromium is absent.
+  Neither item is closed and the 14-dialog expectation is unchanged.
+- The live queue lost those two `assigned` labels during this run. Its history
+  records the change before Cookie's notes-only updates. Preserve that
+  coordinator decision; no label-changing command was run by Cookie. With
+  the assigned tier empty, P2 `brwr-hq8` became the selected ready work.
+
+### Re-learning impact handoff (2026-10-28, brwr-hq8)
+
+- Plan completed: authoritative log scan plus strict owned-path note/summary
+  inventory; host evaluation of current, retired and hand-removed contracts;
+  revision-bound impact JSON; developer CLI and regression coverage. Fresh
+  review covered the entire source/test/doc diff, including the new files.
+- Known sources are verified by their durable keys, never chosen by a shared
+  canonical address. A contained visit also reviews its container identity.
+  Both-side notes and summaries remain separate. Unowned paths are reported;
+  incomplete scans refuse instead of hiding a conflict. File lookup reuses
+  an indexed inventory rather than scanning it again for every source.
+- The required final Linux gate passed: 1,018 Rust-reported outcomes (+21),
+  975 executed and 43 explicit IPC early skips; all 15 extension files;
+  generation, builds, fmt, typecheck, lint and both Clippy builds. README
+  extras passed (two script files, 10,696 inert Markdown renderings). The
+  scripted-dialog suite passed 880 outcomes (827 executed, 53 IPC skips).
+  Evidence: `target/cookie-relearn-impact-gate.log`. The real CLI also
+  reviewed an isolated owned note successfully, retaining exact note/config
+  bytes and creating no cache or adopted state. No platform acceptance claim.
+- `brwr-hq8` is complete; parent `brwr-6x2` remains in progress. Next P2
+  `brwr-wvi` builds a durable journal and recovery, followed by actual file/
+  index integration and panel review. Recompute every revision and ownership
+  check before a future apply. Keep ID freezing and browser-local note
+  recovery unchanged until all parent acceptance holds.
+- Product observation: the impact plan now makes the cost of correcting a
+  learned rule inspectable before mutation. The next useful outcome is a
+  reviewed correction that preserves both copies, rather than another status
+  surface. Focus sessions and curated worklogs remain existing later ideas;
+  no duplicate proposal was added. External platform evidence still needs
+  operator/driver execution; do not spend later cycles repeating that check.
+- Local review replaces an API-based Codex pass because live APIs are
+  prohibited in this assignment. The driver supplies independent review.
+
+- Commit handoff: the single authorized add/commit attempt failed creating
+  `.git/index.lock` because Git metadata is read-only. No retry, push or merge
+  ran. The complete green source/tests/docs and exported queue remain ready
+  for the driver, with the exact message in excluded `.bosun_commit_msg`.
