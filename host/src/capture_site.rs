@@ -3707,7 +3707,15 @@ mod handler_tests {
             }
             // Each widened table alone, with no narrow rule before it that
             // would drop it as an overlap.
-            let cases: [(&str, &[&str], &[&str], &[&str], Option<DraftDropReason>); 3] = [
+            // (rule path, visited shapes, link shapes, planted URLs, drop)
+            type Case = (
+                &'static str,
+                &'static [&'static str],
+                &'static [&'static str],
+                &'static [&'static str],
+                Option<DraftDropReason>,
+            );
+            let cases: [Case; 3] = [
                 (
                     "/wiki/{n:int}/{*}",
                     &["/wiki/{num}"],

@@ -4192,7 +4192,14 @@ mod tests {
     #[test]
     fn agent_rule_widened_over_planted_link_shapes_is_dropped_or_starts_unchecked() {
         let policy = test_catalog();
-        let cases: [(&str, &[&str], &[&str], Option<DraftErrorCode>); 3] = [
+        // (rule path, visited shapes, link shapes, the drop expected)
+        type Case = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+            Option<DraftErrorCode>,
+        );
+        let cases: [Case; 3] = [
             (
                 "/wiki/{n:int}/{*}",
                 &["/wiki/{num}"],
