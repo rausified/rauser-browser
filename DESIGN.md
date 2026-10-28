@@ -1526,6 +1526,10 @@ The decision records below are in force. Superseded decisions, and decisions now
 
 The 2026-10-27 Capture Site drafting decisions (`brwr-t40`), now stated in §5.1: (history: [docs/history.md §14](docs/history.md#14-open-questions--history))
 
+Product direction decision (2026-10-28, John):
+
+- **Brauser is AI-first; there is no host-less "Lite" tier.** Brauser exists to use AI to improve the user's browsing at work, and its value has to be an experience a plain browser history cannot give. A tier that drops the native host and the agent service for a store-only install (notes, capture, Recent, and worklogs through the File System Access API and an in-extension SQLite index) was considered and rejected: without AI it is a glorified history and does not set Brauser apart. The native host and the local agent harness stay part of every install. Release work makes the two-part install (§11) easy and does not remove it. Judge new features by the AI-driven value they add, not by capture or recall alone.
+
 Summarize frames decision (2026-10-28, John: relax privacy rules):
 
 - **Summarize reads every frame (John: relax privacy rules).** Summarize & log injects Readability and the extractor into all of a tab's frames, so a document whose text lives in an embedded frame (Word for the web's `*.officeapps.live.com` editor) summarizes instead of failing as unreadable. The top frame's content wins when it holds at least 200 trimmed characters or the most text, unless Readability found no article there and a subframe holds five times its text; otherwise the longest subframe's is sent. A 10 s bound on the all-frames call falls back to the top frame alone. The title and the `page_changed` address check stay with the top frame, and failed frames are skipped. The link-shape and Tier 1 extractors stay top-frame only (§5.2).
