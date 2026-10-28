@@ -88,6 +88,13 @@ const olderNoteViewTitle = element<HTMLParagraphElement>("older-note-view-title"
 const olderNoteViewBody = element<HTMLTextAreaElement>("older-note-view-body");
 const copyOlderNoteViewButton = element<HTMLButtonElement>("copy-older-note-view");
 const closeOlderNoteViewButton = element<HTMLButtonElement>("close-older-note-view");
+const preservedNotes = element<HTMLDetailsElement>("preserved-notes");
+const preservedNotesStatus = element<HTMLParagraphElement>("preserved-notes-status");
+const preservedNoteList = element<HTMLUListElement>("preserved-note-list");
+const preservedNoteView = element<HTMLDivElement>("preserved-note-view");
+const preservedNoteTitle = element<HTMLParagraphElement>("preserved-note-title");
+const preservedNoteBody = element<HTMLTextAreaElement>("preserved-note-body");
+let preservedNotesSeq = 0;
 const pageTab = element<HTMLButtonElement>("tab-page");
 const recentTab = element<HTMLButtonElement>("tab-recent");
 const pageView = element<HTMLDivElement>("page-view");
@@ -479,6 +486,78 @@ function whySaveBlocked(): string | null {
   if (!artifactWhy.value.trim()) return "Type why you're here, then save.";
   if (changing()) return "Wait for the panel to finish its current task, then save.";
   return null;
+}
+
+function clearPreservedNoteView(): void {
+  preservedNoteView.hidden = true;
+  preservedNoteTitle.textContent = "";
+  preservedNoteBody.value = "";
+}
+
+function resetPreservedNotes(): void {
+  preservedNotesSeq++;
+  preservedNotes.open = false;
+  preservedNoteList.replaceChildren();
+  preservedNotesStatus.textContent = "";
+  clearPreservedNoteView();
+}
+
+async function listPreservedNotes(): Promise<void> {
+  const page = currentPage;
+  const seq = ++preservedNotesSeq;
+  preservedNoteList.replaceChildren();
+  clearPreservedNoteView();
+  if (!page || !preservedNotes.open) {
+    preservedNotesStatus.textContent = "";
+    return;
+  }
+  const current = () => seq === preservedNotesSeq && preservedNotes.open && currentPage?.url === page.url;
+  preservedNotesStatus.textContent = "Looking for preserved notes…";
+  try {
+    const response = await session.host.call({
+      type: "list_preserved_notes", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), url: page.url,
+    }, "preserved_notes_listed");
+    if (!current()) return;
+    preservedNotesStatus.textContent = response.notes.length
+      ? "Choose a note to view read only."
+      : "No matching preserved artifact notes found in this bounded search.";
+    for (const entry of response.notes) {
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = `${entry.title || entry.canonical_url} — ${entry.key.value} `;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary compact";
+      button.textContent = "View read only";
+      button.addEventListener("click", () => void viewPreservedNote(entry, page.url));
+      item.append(label, button);
+      preservedNoteList.append(item);
+    }
+  } catch (error) {
+    if (current()) preservedNotesStatus.textContent = `Could not find preserved notes: ${describe(error)}`;
+  }
+}
+
+async function viewPreservedNote(entry: OlderNote, url: string): Promise<void> {
+  if (!preservedNotes.open || currentPage?.url !== url) return;
+  const seq = ++preservedNotesSeq;
+  const current = () => seq === preservedNotesSeq && preservedNotes.open && currentPage?.url === url;
+  clearPreservedNoteView();
+  preservedNotesStatus.textContent = "Opening preserved note…";
+  try {
+    const response = await session.host.call({
+      type: "view_preserved_note", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), url, key: entry.key,
+    }, "note_loaded");
+    if (!current()) return;
+    preservedNoteTitle.textContent = `${response.title || entry.canonical_url} — ${entry.key.value}`;
+    preservedNoteBody.value = response.body;
+    preservedNoteView.hidden = false;
+    preservedNotesStatus.textContent = "Read only. This page's editable note is unchanged.";
+  } catch (error) {
+    if (current()) preservedNotesStatus.textContent = `Could not open preserved note: ${describe(error)}`;
+  }
 }
 
 function renderOlderNotes(entries: readonly OlderNote[], canUseAsArtifactNote: boolean): void {
@@ -1194,9 +1273,11 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
   pageUnusable.hidden = state !== "unusable";
   siteAccessWarning.hidden = state !== "site-access";
   noteEditor.hidden = state !== "note";
+  preservedNotes.hidden = state !== "note";
 }
 
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
+  resetPreservedNotes();
   currentPage = null;
   updateControls();
   void refreshArtifact();
@@ -1246,6 +1327,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
   showPageArea("note");
+  if (currentPage?.url !== tab.url || currentPage.tabId !== tab.id) resetPreservedNotes();
   currentPage = { url: tab.url, title, tabId: tab.id };
   // Another page's summary line, and its Open summary, go now rather than
   // when this page's lookup returns.
@@ -1287,6 +1369,17 @@ olderNoteList.addEventListener("click", (event) => {
 });
 copyOlderNoteViewButton.addEventListener("click", copyOlderNoteView);
 closeOlderNoteViewButton.addEventListener("click", closeOlderNoteView);
+preservedNotes.addEventListener("toggle", () => void listPreservedNotes());
+element<HTMLButtonElement>("close-preserved-note").addEventListener("click", () => {
+  preservedNotesSeq++;
+  clearPreservedNoteView();
+  preservedNotesStatus.textContent = "Choose a note to view read only.";
+});
+element<HTMLButtonElement>("copy-preserved-note").addEventListener("click", () => {
+  void navigator.clipboard.writeText(preservedNoteBody.value).catch((error: unknown) => {
+    preservedNotesStatus.textContent = `Could not copy: ${describe(error)}`;
+  });
+});
 pageTab.addEventListener("click", () => selectView("page"));
 recentTab.addEventListener("click", () => selectView("recent"));
 recentType.addEventListener("change", () => void loadRecent());

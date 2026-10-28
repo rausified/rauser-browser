@@ -398,3 +398,31 @@ at 1 MiB, with a maximum-field activity fixture checking those budgets. Older
 v1 journals retain the frozen-renderer compatibility, and unknown historical
 renderings still need manual repair rather than a guessed append. Four new
 regressions pass alongside the full local gate. No live service was touched.
+
+## 2026-10-28 — Read preserved artifact notes separately
+
+When capture rules disappear or several historical artifacts share the same
+stored address, Brauser keeps the notes but cannot safely choose one for
+editing. The panel now offers **Preserved notes at this address** below the
+editor. Expanding it searches the notes folder and lists matching titles
+with their artifact IDs, so notes with similar names remain distinguishable.
+**View read only** opens one in a separate text-only viewer with Copy and
+Close. The current editable note keeps its original key and revision, even
+when that address already has its own URL note. Viewing never migrates a
+file or restores capture.
+
+The host checks both Brauser ownership and the exact recorded creation
+address at the key's actual file path, then repeats those checks when the
+person opens a result. It rejects unowned or malformed files and reuses the
+existing limited scan, showing at most 24 notes. The operation does not need
+index.db or recorded adapter contracts; a broken history cache therefore
+cannot hide otherwise readable matching notes or choose an autosave target.
+The search can omit files beyond its budget and cannot find a creation
+address that today's stripping rules no longer produce. Collapse and
+navigation clear the viewer, and late replies cannot bring its text back.
+
+Six native regressions, one wire test and eight panel cases cover ambiguity,
+an occupied URL note, missing history, ownership changes, response bounds,
+copying, autosave identity and asynchronous navigation. The full required and
+README gates pass, including all 144 panel cases. macOS Chrome interaction
+remains a separate human check; no live service or external API was touched.

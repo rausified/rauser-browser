@@ -222,6 +222,17 @@ history, or adopted contract) is refused as `invalid_config`
 already has one still loads and saves, and settings derives the warning from
 the snapshot and offers **Stop stripping**.
 
+Explicit preserved-note viewing (`brwr-r88`, 2026-10-28) is separate from
+note-key resolution. The panel's **Preserved notes at this address** disclosure
+uses additive protocol-v8 `list_preserved_notes` / `preserved_notes_listed`
+and `view_preserved_note` (answered by `note_loaded`). It uses the existing
+bounded vault scan, verifies an artifact note at its owned path and exact
+stored canonical address, and lists at most 24 titles/IDs. The viewer is
+read-only and copyable; it never enters NoteEditor, migrates a file, restores
+capture, or treats a canonical address as autosave identity. No index or
+recorded contracts are needed; ordinary uncovered-page note loads still do
+no scan. Collapse/navigation clear results and invalidate pending reads.
+
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety

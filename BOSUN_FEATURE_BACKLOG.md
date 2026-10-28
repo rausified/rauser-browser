@@ -360,11 +360,6 @@ shipped (see Shipped).
   scope and an unmatched page rule, with the relevant settings/review action.
   Link patterns must never become evidence that a page was visited.
 
-- [ ] `brwr-r88` **Show ambiguous historical notes for explicit read-only viewing.**
-  When several artifacts share a canonical URL after removal, list the
-  verified preserved notes in the panel so a person can read one deliberately.
-  Keep the primary autosave key, separate URL note, ownership checks and
-  capture policy unchanged; never turn a read-only choice into a migration.
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -423,6 +418,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Browse preserved artifact notes without changing autosave (2026-10-28).** Completed assigned `brwr-r88`. Added an explicit panel disclosure listing verified note titles and artifact IDs when multiple historical notes share a stored address. Each opens in a separate text-only, copyable read-only viewer; the occupied URL note, primary autosave key, migrations and capture policy stay unchanged. The host rechecks ownership and address on open, uses the existing bounded scan with at most 24 results, and works without the history cache or recorded contracts. **Metrics:** 955 Rust outcomes (43 explicit IPC skips; 7 new tests), all 15 extension files, 144 panel cases (+8), two script files, and 10,696 inert Markdown renderings.
 
 - **Category:** Reliability. **Recover interrupted log entries across renderer upgrades (2026-10-28).** Completed assigned `brwr-3cc`. New single-event journals retain bounded prepared bytes plus a hash of unrendered normalized event fields, so visits, activity, Why and summaries resume the original append after presentation changes. Single and batch retries preserve edited tails, unrelated rows, changed-folder refusals and complete-marker deduplication; v1 frozen-renderer recovery remains covered explicitly. **Metrics:** Four new Rust regressions; 52 capture tests and 923 workspace Rust outcomes (43 explicit IPC sandbox skips), all 15 extension and two script files, full required/README gate and 10,696 inert Markdown renderings green.
 
@@ -1157,3 +1154,36 @@ stop product work, and no history reset or production IPC change is called for.
   cannot be created on this read-only mount. No retry or remote operation:
   the completed green diff, closed/exported bead and excluded
   `.bosun_commit_msg` are ready for the driver.
+
+### Cookie cycle — preserved artifact-note viewing (2026-10-28)
+
+- Began from a clean tree without a quarantine report; every required health
+  check passed. Claimed and completed the first ready assigned bead,
+  `brwr-r88`. Read the complete code, tests, generated protocol and doc diff
+  fresh, and reused existing response validators and vault scan boundaries.
+- The explicit read-only lookup is intentionally independent of note identity:
+  canonical-address equality is useful for a person choosing what to read but
+  remains insufficient evidence for an autosave or migration. No new ordinary
+  note-load scan or dependency on index.db was introduced. The limitation is
+  documented: today's stripped page address must equal the stored creation
+  address, and the bounded scan can omit notes.
+- Required and README gates passed: 955 Rust outcomes (912 exercised and 43
+  explicit IPC skips), all 15 extension files, 144 panel cases exercised
+  individually, two script files and 10,696 inert Markdown renderings. No
+  remote Codex review ran under the no-live-API instruction; the driver
+  supplies independent review. Interactive macOS Chrome styling and keyboard
+  acceptance remain human work, not claimed by the mocked panel checks.
+- Test development exposed two fixture assumptions, both corrected: fake DOM
+  `disabled` does not initialize from HTML, and Serde does not enforce schema
+  array caps. Panel waits now observe an actual note request; wire bounds use
+  the existing schema validator. These are recorded in TESTING.md.
+- Continue assigned work with `bd ready --label assigned`; `brwr-3rt` is next
+  unless the driver changes the queue. Existing `brwr-kws` individual recovery
+  review and `brwr-vny` capture explanations remain useful visible follow-ups;
+  prefer those over another internal robustness idea. A future search view
+  should reuse this deliberate read-only boundary instead of changing note
+  identity from a selected search result. No duplicate proposal was added.
+- The single commit attempt failed at `git add`: `.git/index.lock` is on a
+  read-only mount. No retry or remote operation was attempted. The completed
+  green diff, closed/exported bead and excluded `.bosun_commit_msg` are ready
+  for the driver to commit with Cookie as author.
