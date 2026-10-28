@@ -374,9 +374,9 @@ async function install({
     tabUpdated(changeInfo, id = state.tab?.id ?? 1) {
       for (const listener of tabUpdated.registered) listener(id, changeInfo, { ...state.tab, id });
     },
-    policyChanged() {
+    policyChanged(lease = null) {
       for (const listener of chrome.storage.onChanged.registered) {
-        listener({ [POLICY_STORAGE_KEY]: { newValue: null } }, "local");
+        listener({ [POLICY_STORAGE_KEY]: { newValue: lease } }, "local");
       }
     },
     el(id) {
@@ -2042,6 +2042,96 @@ function editNote(page, text) {
   page.el("note-body").value = text;
   page.el("note-body").dispatch("input");
 }
+
+// A policy revision written by settings or another window's panel. The
+// host owns note identity; the fake host models its URL-to-artifact change.
+function installExternalAdapter(page) {
+  page.state.config.adapters = { format: 1, artifacts: [starterOffersFor(new URL(JIRA_URL).origin, [])[0].adapter] };
+  page.state.revision = "2";
+  page.policyChanged({
+    revision: "2", expires_at: Date.now() + 60_000, capture_enabled: false,
+    adapters: page.state.config.adapters,
+  });
+}
+
+const EXTERNAL_NOTE_KEY = { kind: "artifact", value: "jira:acme.atlassian.net/PROJ-42" };
+function externalNoteReply(request, state) {
+  if (request.type === "load_note" && state.revision === "2") return {
+    type: "note_loaded", exists: true, revision: "artifact-r1", title: "Issue", body: "Shared note",
+    key: EXTERNAL_NOTE_KEY, older_notes: [],
+  };
+  if (request.type === "save_note" && state.revision === "2" && request.expected_key.kind === "url") return {
+    type: "note_conflict", exists: true, revision: "artifact-r1", title: "Issue", body: "Shared note",
+    key: EXTERNAL_NOTE_KEY, reason: "key_changed",
+  };
+  return null;
+}
+
+test("an external adapter revision reloads the note before the next edit uses its new key", async () => {
+  const page = await notePanel({ tab: { id: 1, url: JIRA_URL, title: "Issue" }, intercept: externalNoteReply });
+  assert.equal(page.sent("load_note").length, 1);
+  installExternalAdapter(page);
+  await until(() => page.sent("load_note").length === 2 && !page.el("note-body").disabled,
+    "the external revision to reload note identity");
+  assert.equal(page.sent("load_note")[1].url, JIRA_URL);
+  assert.equal(page.el("note-body").value, "Shared note");
+  editNote(page, "Shared note with my next edit");
+  await until(() => page.el("note-status").textContent === "Saved", "the artifact autosave");
+  const [save] = page.sent("save_note");
+  assert.deepEqual(save.expected_key, EXTERNAL_NOTE_KEY);
+  assert.equal(save.expected_revision, "artifact-r1");
+  assert.equal(save.body, "Shared note with my next edit");
+  assert.equal(page.el("note-conflict").hidden, true);
+});
+
+for (const inFlight of [false, true]) {
+  test(`an external revision preserves a ${inFlight ? "saving" : "pending"} note draft in copy-out`, async () => {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    const page = await notePanel({ tab: { id: 1, url: JIRA_URL, title: "Issue" }, intercept(request, state) {
+      if (request.type === "save_note" && request.expected_key.kind === "url") return held;
+      return externalNoteReply(request, state);
+    } });
+    const draft = inFlight ? "Draft already saving plus newer typing" : "Draft still pending";
+    if (inFlight) {
+      editNote(page, "Draft already saving");
+      await until(() => page.sent("save_note").length === 1, "the old-key autosave");
+    }
+    editNote(page, draft);
+    installExternalAdapter(page);
+    const reads = page.sent("get_config").length;
+    await until(() => page.sent("get_config").length > reads, "the config refresh during save");
+    await settle();
+    assert.equal(page.sent("save_note").length, 1);
+    assert.equal(page.sent("save_note")[0].expected_key.kind, "url");
+    assert.equal(page.sent("load_note").length, 1, "note reload must wait for the old-key save");
+    assert.equal(page.el("note-body").disabled, true, "stop edits while rebinding the note");
+    release(externalNoteReply({ type: "save_note", expected_key: { kind: "url" } }, page.state));
+    await until(() => page.el("note-body").value === "Shared note" && !page.el("note-body").disabled,
+      "the current artifact note");
+    assert.equal(page.el("note-conflict").hidden, false);
+    assert.equal(page.el("note-unsaved").value, draft);
+    assert.equal(page.sent("save_note").length, 1, "no automatic replay of the refused draft");
+    assert.ok(page.state.localStorage.length > 0, "keep the unacknowledged draft in durable recovery");
+    editNote(page, "A fresh artifact edit");
+    await until(() => page.el("note-status").textContent === "Saved", "the next artifact edit to save");
+    assert.deepEqual(page.sent("save_note").at(-1).expected_key, EXTERNAL_NOTE_KEY);
+    assert.equal(page.el("note-unsaved").value, draft);
+    assert.ok(page.state.localStorage.length > 0, "acknowledging a new edit must keep the conflict copy");
+  });
+}
+
+test("a policy refresh with the same host revision keeps the editor and pending draft", async () => {
+  const page = await notePanel();
+  editNote(page, "Still typing");
+  const lookups = page.sent("get_artifact").length;
+  page.policyChanged(); // The worker invalidated its lease; the host revision is unchanged.
+  await until(() => page.sent("get_artifact").length > lookups, "the refresh to finish");
+  await settle();
+  assert.equal(page.sent("load_note").length, 1);
+  assert.equal(page.el("note-body").value, "Still typing");
+  assert.equal(page.sent("save_note").length, 0, "an unchanged refresh must not flush the debounce early");
+});
 
 test("closing the built panel before debounce restores copy-only text and supports explicit Copy and Discard", async () => {
   const first = await notePanel();

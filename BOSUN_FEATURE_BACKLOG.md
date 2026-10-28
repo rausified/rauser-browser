@@ -347,11 +347,6 @@ first, show it fails, then fix, one cycle each; if it does not fail, check the
 item off as "not reproduced" and say why. The UUID findings 18 and 25 have
 shipped (see Shipped).
 
-- [ ] `brwr-jdi` **An adapter change made elsewhere costs the next note edit.**
-  `scheduleReload` (extension/panel.ts ~507) calls `notes.retry()`, which only
-  reloads after a failed load (note-editor.ts ~127), so the editor keeps the
-  old record key and the next autosave gets `key_changed`. Reload the note
-  when the config revision changed.
 - [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
   Original report: host/src/service/supervisor.rs ~116/~119; use
   `server::NOT_CONFIGURED`. **2026-10-28 triage:** the named type and wording
@@ -444,6 +439,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Reload the current note after an external adapter change (2026-10-28).** Completed assigned `brwr-jdi`. The panel compares host config revisions and reloads the note through the editor's serialized save/load queue before the next edit uses its current key. Pending and in-flight drafts retain old-key conflict copy-out and durable recovery, including newer typing; a successful later save keeps the conflict copy. An unchanged revision leaves the editor and debounce alone. **Metrics:** 4 new panel cases; 159 panel/editor cases and all 15 extension files pass; 927 Rust outcomes (884 exercised, 43 explicit sandbox IPC skips); complete local build, format, clippy, typecheck, lint, script and Markdown gates green.
 
 - **Category:** Bug Fix. **Keep adapter repair available for preserved invalid configs (2026-10-28).** Completed assigned `brwr-5nq`. The response guard accepts format 0 and more than 64 artifact objects so the host's policy issue and revision reach settings. Repair reset remains available; malformed artifact entries are refused and the adapter engine still rejects these documents as new policy. **Metrics:** Three shared host-reply cases, two failing-first cases; 884 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files green.
 - **Category:** User Experience. **Explain pending pauses when the host cannot answer (2026-10-28).** Completed assigned `brwr-gob`. The Why hint names Pause capture only when it is usable, explains a host outage and asks to reopen the panel, and restores the normal hint when the host returns. The reload status avoids retaining a pointer to a control that can later be disabled. **Metrics:** One failing-first panel regression covers outage and recovery; full required gate green, plus 10,696 inert Markdown renderings.
@@ -918,3 +915,36 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` on the read-only mount. The reviewed green diff and
   excluded `.bosun_commit_msg` are ready for the driver; no retry or remote
   action was attempted.
+
+
+- **2026-10-28 assigned note-identity cycle (`brwr-jdi`).** Opening health
+  on `dd8ff6795678` was clean with no quarantine report. Added the panel
+  regression before the fix and read the full code/test/doc diff afterward.
+  The change uses the existing save/load queue; no new identity computation,
+  recovery replay or protocol surface was introduced. Full local gate green,
+  with details under `target/cookie-jdi-20261028/`. The macOS smoke runner
+  refuses Linux. Manual review completed; external `codex exec review` was
+  not invoked because this run forbids live external APIs. The driver's
+  independent review remains the publication gate.
+- **Next assigned work:** `brwr-t8m` remains ready. Starter planning sees
+  only active adapters, whereas host transition checks also use retired and
+  hand-removed contracts. Reproduce both the host removal-then-starter case
+  and the panel promise before implementing a pre-save history check. Keep
+  the host's frozen-ID refusal authoritative and name the conflicting
+  contract in the panel. Do not reuse a retired identity by guessing.
+- **Obsolete assigned criteria:** `brwr-iqx` remains open with appended
+  evidence, since its `VaultCheckFinisher` and obsolete wording are gone.
+  The replacement SummaryFinisher's existing missing-folder regression
+  passed again. The operator should reconcile the deleted-type criteria;
+  Cookie did not close the assignment or change its labels.
+- **Product direction after assignments and plan gates:** the existing
+  `brwr-ued` focus-session proposal offers more value than more status
+  wording: a person could connect the issue, document and pull request they
+  used for one task and recover that context later. The current fix also
+  reinforces `brwr-kws`: recovered text should stay a deliberate, individual
+  copy/discard action, separate from the current host note. Keep those
+  proposals queued behind assigned work and the ordered DESIGN plan.
+- **Commit handoff:** the one `git add -A`/commit attempt was refused while
+  creating `.git/index.lock` on the read-only mount. No retry was attempted;
+  the green diff, queue export and excluded `.bosun_commit_msg` are ready for
+  the driver.

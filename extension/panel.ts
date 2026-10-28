@@ -668,13 +668,17 @@ function scheduleReload(): void {
     }
     busy = true;
     updateControls();
+    const previousRevision = session.revision;
     void reloadConfig()
       .catch((error: unknown) => show(`Could not refresh settings: ${describe(error)}`, true))
       .finally(() => {
         busy = false;
         updateControls();
-        // A note that could not load before (say, no folder yet) may load now.
-        void notes.retry();
+        // Another page's adapter edit may have changed this URL's note key.
+        // Reload through the editor's save/load queue so pending edits retain
+        // the old key and any key_changed refusal remains in copy-out.
+        if (session.revision !== previousRevision) void notes.reload();
+        else void notes.retry();
         void refreshArtifact(true);
       });
   }, 250);
