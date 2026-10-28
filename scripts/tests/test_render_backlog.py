@@ -433,6 +433,41 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertIn("<<<<<<<", text)
         self.assertIn("`brwr-a1`", text)
 
+        # The user resolves the prose by hand and reruns, as the message says:
+        # the rerun keeps that resolution instead of re-merging the stages.
+        start, end = text.index("<<<<<<<"), text.index(">>>>>>>")
+        end = text.index("\n", end) + 1
+        resolved = text[:start] + "Agreed wording.\n" + text[end:]
+        (self.repo / "BOSUN_FEATURE_BACKLOG.md").write_text(resolved, encoding="utf-8")
+        result = self.run_script("--resolve")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        text = (self.repo / "BOSUN_FEATURE_BACKLOG.md").read_text(encoding="utf-8")
+        self.assertIn("Agreed wording.", text)
+        self.assertNotIn("<<<<<<<", text)
+        self.assertEqual(git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout, "")
+
+    def test_resolve_keeps_a_hand_resolved_bead_on_rerun(self) -> None:
+        git(self.repo, "checkout", "-qb", "side")
+        self.write_queue(bead("brwr-a1", title="Side title", metadata={"backlog_section": "plan"}))
+        git(self.repo, "commit", "-qam", "side")
+        git(self.repo, "checkout", "-q", "main")
+        self.write_queue(bead("brwr-a1", title="Main title", metadata={"backlog_section": "plan"}))
+        git(self.repo, "commit", "-qam", "main")
+        git(self.repo, "merge", "side", check=False)
+        result = self.run_script("--resolve")
+        self.assertEqual(result.returncode, 1)
+        queue = self.repo / ".beads" / "issues.jsonl"
+        self.assertIn("<<<<<<<", queue.read_text(encoding="utf-8"))
+
+        gate = bead("brwr-gate", status="deferred")
+        queue.write_text(jsonl(gate, bead("brwr-a1", title="Agreed title",
+                                          metadata={"backlog_section": "plan"})), encoding="utf-8")
+        result = self.run_script("--resolve")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Agreed title", queue.read_text(encoding="utf-8"))
+        self.assertIn("Agreed title", (self.repo / "BOSUN_FEATURE_BACKLOG.md").read_text(encoding="utf-8"))
+        self.assertEqual(git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout, "")
+
 
 class QueueCheckTests(unittest.TestCase):
     def check(self, backlog: str, *records: dict[str, object]) -> list[str]:

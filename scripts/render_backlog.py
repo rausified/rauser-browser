@@ -465,6 +465,21 @@ def write(path: pathlib.Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
+CONFLICT_MARKER_PATTERN = re.compile(r"^(<{7}|={7}|>{7}|\|{7})( |$)", re.MULTILINE)
+
+
+def hand_resolved(path: pathlib.Path) -> bool:
+    """True when a conflicted file's working copy no longer has conflict markers.
+
+    A rerun after the user fixed the markers by hand must keep that fix rather
+    than merge the index stages again.
+    """
+    try:
+        return not CONFLICT_MARKER_PATTERN.search(path.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+
+
 def resolve(root: pathlib.Path) -> int:
     """Finish a merge, rebase or cherry-pick whose queue or backlog conflicted."""
     conflicted = unmerged(root)
@@ -472,7 +487,11 @@ def resolve(root: pathlib.Path) -> int:
     backlog_file = root / BACKLOG_PATH
     status = 0
 
-    if QUEUE_PATH in conflicted:
+    if QUEUE_PATH in conflicted and hand_resolved(queue_file):
+        load_issues(queue_file)  # a hand resolution must still parse
+        git("add", "--", QUEUE_PATH, cwd=root)
+        print(f"{QUEUE_PATH}: kept your resolution")
+    elif QUEUE_PATH in conflicted:
         text, conflicts = merge_jsonl(
             stage(root, 1, QUEUE_PATH), stage(root, 2, QUEUE_PATH), stage(root, 3, QUEUE_PATH)
         )
@@ -489,7 +508,11 @@ def resolve(root: pathlib.Path) -> int:
 
     issues = load_issues(queue_file)
 
-    if BACKLOG_PATH in conflicted:
+    if BACKLOG_PATH in conflicted and hand_resolved(backlog_file):
+        write(backlog_file, render(backlog_file.read_text(encoding="utf-8"), issues))
+        git("add", "--", BACKLOG_PATH, cwd=root)
+        print(f"{BACKLOG_PATH}: kept your resolution, generated sections re-rendered")
+    elif BACKLOG_PATH in conflicted:
         skeletons = [strip_generated(stage(root, number, BACKLOG_PATH)) for number in (1, 2, 3)]
         merged, prose_conflicts = merge_text(root, *skeletons)
         try:
