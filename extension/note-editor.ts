@@ -45,14 +45,14 @@ export interface NoteView {
   setStatus(message: string, warning?: boolean): void;
   showUnsaved(entries: readonly UnsavedText[]): void;
   setRecoveryWarning?(message: string): void;
-  showOlderNotes?(entries: readonly OlderNote[]): void;
+  showOlderNotes?(entries: readonly OlderNote[], canUseAsArtifactNote: boolean): void;
 }
 
 export interface NoteHost {
   load(url: string): Promise<{ exists: boolean; revision: string; body: string; key: RecordKey; older_notes: OlderNote[] }>;
   save(request: { url: string; title: string; body: string; expected_revision: string; expected_key: RecordKey }): Promise<
     { type: "note_saved"; revision: string; key: RecordKey } |
-    { type: "note_conflict"; revision: string; body: string; key: RecordKey; reason: string }
+    { type: "note_conflict"; exists: boolean; revision: string; body: string; key: RecordKey; reason: string }
   >;
 }
 
@@ -70,6 +70,8 @@ export class NoteEditor {
   private title = "";
   private revision: string | null = null;
   private key: RecordKey | null = null;
+  private olderNotes: readonly OlderNote[] = [];
+  private canUseOlderNote = false;
   private loaded = false;
   private loadFailed = false;
   private dirty = false;
@@ -231,20 +233,24 @@ export class NoteEditor {
     this.title = page !== null && this.target?.url === page.url ? this.target.title : page?.title ?? "";
     this.revision = null;
     this.key = null;
+    this.olderNotes = [];
+    this.canUseOlderNote = false;
     this.loaded = false;
     this.loadFailed = false;
     this.dirty = false;
     this.view.setEditable(false);
     this.view.writeBody("");
     this.view.setStatus("");
-    this.view.showOlderNotes?.([]);
+    this.view.showOlderNotes?.([], false);
     if (page === null || token !== this.token) return;
     try {
       const response = await this.host.load(page.url);
       if (token !== this.token) return;
       this.revision = response.revision;
       this.key = response.key;
-      this.view.showOlderNotes?.(response.older_notes);
+      this.olderNotes = response.older_notes;
+      this.canUseOlderNote = response.key.kind === "artifact" && !response.exists;
+      this.view.showOlderNotes?.(this.olderNotes, this.canUseOlderNote);
       this.view.writeBody(response.body);
       this.loaded = true;
       this.view.setEditable(true);
@@ -282,6 +288,14 @@ export class NoteEditor {
     }
     this.revision = response.revision;
     this.key = response.key ?? this.key;
+    // Creating the shared note (here or in another panel) makes migration
+    // unavailable immediately. A stale save may also report a deletion.
+    const canUseOlderNote = this.key.kind === "artifact" && response.type === "note_conflict" &&
+      response.reason !== "key_changed" && !response.exists;
+    if (canUseOlderNote !== this.canUseOlderNote) {
+      this.canUseOlderNote = canUseOlderNote;
+      this.view.showOlderNotes?.(this.olderNotes, canUseOlderNote);
+    }
     if (response.type === "note_saved") {
       if (draft) {
         try {

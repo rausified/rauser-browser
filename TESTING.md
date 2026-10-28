@@ -19,6 +19,22 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Older-note migration coverage
+
+The panel tests load an artifact with and without its shared note and check
+that older notes offer **View** in both cases, and **Use as artifact note**
+only when the shared note is absent. They open the older note read-only and
+verify that viewing neither changes the editor nor sends a save or migration.
+The note-editor tests cover migration availability after a first save, a
+conflict with another writer, and deletion elsewhere, retaining conflict text
+for copy-out. The host's
+`url_keyed_note_is_listed_and_can_become_the_artifact_note` regression migrates
+from a board modal to an item route, checks the original URL in the file and
+through `artifact_keyed_note_url`, then saves from the item route and checks
+that URL again. Existing ownership, stale-revision and occupied-destination
+tests still guard the move. All of these use local fixtures and mocked host
+transport; interactive Chrome acceptance remains separate.
+
 ## Page-note recovery coverage
 
 `extension/tests/note-editor.test.mjs` drives the real recovery store with
