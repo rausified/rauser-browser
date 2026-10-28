@@ -131,6 +131,23 @@ export function parseHostLine(line, proc) {
 }
 
 /**
+ * The export without its first line when that line is the settings page's
+ * header (`{type: "brauser_diagnostics", exported_at, ...}`), which is not
+ * an event and so is not malformed either.
+ */
+export function withoutExportHeader(text) {
+  const end = text.indexOf("\n");
+  const first = end === -1 ? text : text.slice(0, end);
+  try {
+    const header = JSON.parse(first);
+    if (isObject(header) && header.type === "brauser_diagnostics") return end === -1 ? "" : text.slice(end + 1);
+  } catch {
+    // Not a header; every line is parsed as an entry.
+  }
+  return text;
+}
+
+/**
  * Normalizes one line of the options page's "Copy diagnostics" export
  * (`{ts, level, ctx, event, fields}`) into an event of proc `ext`, or null.
  */
@@ -311,12 +328,17 @@ export async function readAll({ dir, procs = PROCESSES, extension = null }) {
   const groups = [];
   const malformed = {};
   const files = [];
+  const offsets = new Map();
   for (const proc of PROCESSES.filter((name) => procs.includes(name))) {
     for (const name of logFileNames(proc)) {
       const file = path.join(dir, name);
-      const text = await readOptional(file);
-      if (text === null) continue;
+      const read = await readOptional(file);
+      if (read === null) continue;
       files.push(file);
+      // A live file's last line may still be being written; leave it, and
+      // everything after it, to `follow`, which starts at this offset.
+      const text = name === `${proc}.jsonl` ? read.slice(0, read.lastIndexOf("\n") + 1) : read;
+      if (name === `${proc}.jsonl`) offsets.set(file, Buffer.byteLength(text));
       const parsed = parseText(text, (line) => parseHostLine(line, proc));
       groups.push(parsed.events);
       if (parsed.malformed > 0) malformed[name] = parsed.malformed;
@@ -325,11 +347,11 @@ export async function readAll({ dir, procs = PROCESSES, extension = null }) {
   if (extension) {
     const text = await readFile(extension, "utf8");
     files.push(extension);
-    const parsed = parseText(text, parseExtensionLine);
+    const parsed = parseText(withoutExportHeader(text), parseExtensionLine);
     groups.push(parsed.events);
     if (parsed.malformed > 0) malformed[path.basename(extension)] = parsed.malformed;
   }
-  return { events: mergeEvents(groups), malformed, files };
+  return { events: mergeEvents(groups), malformed, files, offsets };
 }
 
 /** A summary line for malformed counts, or null when there were none. */
@@ -357,12 +379,14 @@ export async function readRange(file, start, end) {
  * partial last line for the next poll, and starts over when a file shrinks
  * (rotated by the writer). Yields each new batch of events, merged.
  */
-export async function* follow({ dir, procs = PROCESSES, intervalMs = 1000, signal, statFile = stat, read = readRange }) {
+export async function* follow({ dir, procs = PROCESSES, intervalMs = 1000, signal, statFile = stat, read = readRange, offsets = new Map() }) {
   const state = new Map();
   for (const proc of PROCESSES.filter((name) => procs.includes(name))) {
     const file = path.join(dir, `${proc}.jsonl`);
-    const size = await statFile(file).then((info) => info.size, () => 0);
-    state.set(file, { proc, offset: size, partial: Buffer.alloc(0) });
+    // Start where the snapshot stopped, so nothing appended between the
+    // snapshot and the first poll is skipped.
+    const offset = offsets.get(file) ?? await statFile(file).then((info) => info.size, () => 0);
+    state.set(file, { proc, offset, partial: Buffer.alloc(0) });
   }
   while (!signal?.aborted) {
     const groups = [];
@@ -416,14 +440,14 @@ export async function main(argv, deps = {}) {
   const print = (event) => {
     if (matches(event, options.filters)) out(options.json ? event.raw : formatEvent(event, { utc: options.utc }));
   };
-  const { events, malformed, files } = await readAll({ dir, procs, extension: options.extension });
+  const { events, malformed, files, offsets } = await readAll({ dir, procs, extension: options.extension });
   for (const event of events) print(event);
   const summary = malformedSummary(malformed);
   if (summary) err(summary);
   if (files.length === 0 && !options.follow) err(`brauser-logs: no log files in ${dir}`);
   if (options.follow) {
     let skipped = 0;
-    for await (const batch of follow({ dir, procs, intervalMs: deps.intervalMs ?? 1000, signal: deps.signal })) {
+    for await (const batch of follow({ dir, procs, intervalMs: deps.intervalMs ?? 1000, signal: deps.signal, offsets })) {
       for (const event of batch.events) print(event);
       if (batch.malformed > 0) {
         skipped += batch.malformed;

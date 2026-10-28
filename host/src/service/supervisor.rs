@@ -1148,7 +1148,14 @@ impl Inner {
         let mut session = match runner.start(&spec, &control.slot) {
             Ok(session) => session,
             Err(error) => {
-                tracing::warn!(error = format!("{error:#}"), "harness did not start");
+                // The error can quote what the harness sent (a Codex
+                // handshake reply), so the log names only an I/O failure's
+                // kind; the run keeps the full reason (DESIGN.md §15).
+                let io_error = error
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                    .map(|cause| format!("{:?}", cause.kind()));
+                tracing::warn!(io_error, "harness did not start");
                 return Driven::Failed(format!("starting the harness: {error:#}"));
             }
         };
@@ -2129,6 +2136,69 @@ mod tests {
         );
         let _ = supervisor.set(fixture.supervisor.clone());
         (fixture, turns)
+    }
+
+    /// A harness that fails before its first turn, with an error quoting
+    /// what the harness sent (as a Codex JSON-RPC handshake error does).
+    struct FailingStartRunner(&'static str);
+
+    impl HarnessRunner for FailingStartRunner {
+        fn harness(&self) -> HarnessId {
+            HarnessId::Codex
+        }
+
+        fn start(
+            &self,
+            _spec: &RunSpec,
+            _slot: &ProcessSlot,
+        ) -> anyhow::Result<Box<dyn HarnessSession>> {
+            Err(anyhow::anyhow!("thread/start: {}", self.0))
+        }
+    }
+
+    /// A harness that fails to start keeps its error in the run, where the
+    /// panel shows it; the service log gets only that it did not start.
+    #[test]
+    fn a_harness_that_fails_to_start_is_logged_without_its_output() {
+        const HARNESS_TEXT: &str = "sentinel-handshake-body-91fe";
+        #[derive(Clone, Default)]
+        struct Lines(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Lines {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+        let view = tracing::subscriber::with_default(subscriber, || {
+            let fixture = Fixture::build(
+                tempfile::tempdir().unwrap(),
+                HarnessRegistry::of(vec![Box::new(FailingStartRunner(HARNESS_TEXT))]),
+                DEFAULT_RUN_TIMEOUT,
+                None,
+                None,
+                None,
+            );
+            let id = fixture.start("fails-to-start");
+            fixture.wait_finished(id)
+        });
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert!(
+            view.error.as_deref().unwrap_or("").contains(HARNESS_TEXT),
+            "{view:?}"
+        );
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("harness did not start"), "{text}");
+        assert!(!text.contains(HARNESS_TEXT), "{text}");
     }
 
     /// Stop every run as `reason`, as cancel or the watchdog would, without

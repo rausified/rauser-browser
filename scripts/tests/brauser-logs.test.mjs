@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   defaultLogDir, fieldOf, follow, formatEvent, logFileNames, main, malformedSummary,
   matches, mergeEvents, parseArgs, parseExtensionLine, parseHostLine, parseSince, parseText, readAll,
+  withoutExportHeader,
 } from "../brauser-logs.mjs";
 
 const REQUEST = "0f8e7d6c-1111-4222-8333-444455556666";
@@ -201,4 +202,32 @@ test("follow yields appended lines, waits for a partial line, and survives rotat
   assert.deepEqual(messages(await next()), ["after"]);
   controller.abort();
   assert.equal((await batches.next()).done, true);
+});
+
+test("the settings page's export header is skipped, not counted as malformed", async (t) => {
+  const dir = await logDir(t);
+  const extension = path.join(dir, "export.jsonl");
+  const header = JSON.stringify({ type: "brauser_diagnostics", exported_at: "2026-10-28T12:00:00Z", entries: 1 });
+  const entry = JSON.stringify({ ts: "2026-10-28T12:00:01Z", level: "warn", ctx: "worker", event: "host sync failed" });
+  await writeFile(extension, `${header}\n${entry}\nnot json\n`);
+  const { events, malformed } = await readAll({ dir, procs: [], extension });
+  assert.deepEqual(events.map((event) => event.message), ["host sync failed"]);
+  assert.deepEqual(malformed, { "export.jsonl": 1 });
+  assert.equal(withoutExportHeader(entry), entry, "an export without a header keeps its first entry");
+});
+
+test("follow starts where the snapshot stopped, so a line appended in between is not lost", async (t) => {
+  const dir = await logDir(t);
+  const live = path.join(dir, "host.jsonl");
+  const partial = hostLine({ ts: "2026-10-28T12:00:01Z", message: "between" });
+  await writeFile(live, `${hostLine({ ts: "2026-10-28T12:00:00Z", message: "old" })}\n${partial.slice(0, 20)}`);
+  const { events, offsets } = await readAll({ dir, procs: ["host"] });
+  assert.deepEqual(events.map((event) => event.message), ["old"], "a half-written last line is left for follow");
+  // Written after the snapshot, before follow's first poll.
+  await appendFile(live, `${partial.slice(20)}\n`);
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const batches = follow({ dir, procs: ["host"], intervalMs: 5, signal: controller.signal, offsets });
+  assert.deepEqual((await batches.next()).value.events.map((event) => event.message), ["between"]);
+  controller.abort();
 });

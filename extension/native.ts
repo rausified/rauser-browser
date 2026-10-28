@@ -53,7 +53,10 @@ function logRequest(request: Request, started: number, settled: Response | Error
     const code = settled instanceof HostError ? settled.code : "post_failed";
     diag.warn("native request failed", { ...fields, outcome: code, error: settled.message });
   } else if (settled.type === "error") {
-    diag.info("native request failed", { ...fields, outcome: settled.code, error: settled.message });
+    // A failed harness setup's message can quote the probe's stderr; as in
+    // the host and service logs, only its code is kept (DESIGN.md §15).
+    const error = request.type === "set_up_harness" ? {} : { error: settled.message };
+    diag.info("native request failed", { ...fields, outcome: settled.code, ...error });
   } else {
     diag.debug("native request", { ...fields, outcome: "ok" });
   }

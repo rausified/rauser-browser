@@ -275,8 +275,12 @@ fn dispatch_json(
         elapsed_ms = tracing::field::Empty,
     );
     let _entered = span.enter();
+    // A failed harness setup's message can quote the probe's stderr; log
+    // only its code (DESIGN.md §15), as the service does.
+    let mut quotes_output = false;
     let response = match parse_envelope(body) {
         Ok((request_id, request)) => {
+            quotes_output = matches!(request, Request::SetUpHarness(_));
             span.record("request_id", request_id.as_str());
             span.record("kind", request_kind(&request));
             record_run_fields(&span, request_run_fields(&request));
@@ -295,10 +299,11 @@ fn dispatch_json(
         Response::Error(refused) => {
             let outcome = error_code_name(refused.code);
             span.record("outcome", outcome);
+            let error = (!quotes_output).then_some(refused.message.as_str());
             if error_code_is_failure(refused.code) {
-                tracing::warn!(outcome, elapsed_ms, error = %refused.message, "request done");
+                tracing::warn!(outcome, elapsed_ms, error, "request done");
             } else {
-                tracing::info!(outcome, elapsed_ms, error = %refused.message, "request done");
+                tracing::info!(outcome, elapsed_ms, error, "request done");
             }
         }
         _ => {
@@ -9198,6 +9203,57 @@ title = "{title} - Jira"
                 &SetupContext::new(),
             );
             assert_eq!(refused(&response).0, ErrorCode::ServiceUnavailable);
+        }
+
+        /// A failed harness setup's message can quote the probe's stderr,
+        /// so its log lines carry only the outcome code (DESIGN.md §15).
+        #[test]
+        fn a_failed_setup_logs_its_code_but_not_the_probe_output() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            const PROBE_STDERR: &str = "sentinel-probe-stderr-77a2";
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let _service = FakeService::listen(
+                &socket,
+                Arc::new(|request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::SetUpHarness(value) => error(
+                        &value.request_id,
+                        ErrorCode::InvalidConfig,
+                        &format!("Codex failed its test run ({PROBE_STDERR}); summaries stay off"),
+                    ),
+                    _ => fake::runs_listed(request),
+                }),
+            );
+            let link = link(socket, never);
+            let context = SetupContext {
+                service: Some(&link),
+                ..SetupContext::new()
+            };
+            let body = serde_json::to_vec(&Request::SetUpHarness(
+                brauser_protocol::SetUpHarnessRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "setup-diag".into(),
+                    expected_revision: config.revision().to_owned(),
+                    harness: brauser_protocol::HarnessId::Codex,
+                    timeout_secs: None,
+                    summaries_dir: None,
+                },
+            ))
+            .unwrap();
+            let (response, lines, text) = crate::diag::test_capture::capture(|| {
+                dispatch_json(&body, &mut config, &mut ConsentAuthority::new(), &context)
+            });
+            // The extension still gets the full reason to show the user.
+            assert!(refused(&response).1.contains(PROBE_STDERR));
+            let done = crate::diag::test_capture::events(&lines, "request done");
+            assert_eq!(done.len(), 1, "{text}");
+            assert_eq!(done[0]["fields"]["outcome"], "invalid_config");
+            assert!(!text.contains(PROBE_STDERR), "{text}");
         }
 
         /// open_path and get_agent_env act on the service's own directory,

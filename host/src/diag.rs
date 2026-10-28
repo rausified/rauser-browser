@@ -237,6 +237,24 @@ fn rotated(path: &Path, index: usize) -> PathBuf {
 }
 
 impl Rotating {
+    /// Whether the live path no longer names the file this process has
+    /// open (Unix; elsewhere only the size check below rotates).
+    fn replaced(&self) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            match (fs::metadata(&self.path), self.file.metadata()) {
+                (Ok(live), Ok(open)) => live.dev() != open.dev() || live.ino() != open.ino(),
+                (Err(_), _) => true,
+                (_, Err(_)) => false,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
     fn rotate(&mut self) -> io::Result<()> {
         // Another process may have rotated first; follow the live file when
         // it is already small again instead of rotating it a second time.
@@ -263,6 +281,10 @@ impl Write for RotatingFile {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.written >= MAX_FILE_BYTES {
             inner.rotate()?;
+        } else if inner.replaced() {
+            // Another process rotated the live file away; follow it rather
+            // than keep appending to the rotated copy.
+            (inner.file, inner.written) = open_append(&inner.path)?;
         }
         // One write per event line keeps O_APPEND lines from interleaving.
         inner.file.write_all(buf)?;
@@ -429,6 +451,27 @@ mod tests {
         let live = dir.path().join("x.jsonl");
         assert_eq!(fs::read(&live).unwrap(), b"xy");
         assert!(!rotated(&live, 2).exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_process_below_the_cap_follows_another_process_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = RotatingFile::open(dir.path(), "x.jsonl").unwrap();
+        let mut second = RotatingFile::open(dir.path(), "x.jsonl").unwrap();
+        first
+            .write_all(&vec![b'a'; MAX_FILE_BYTES as usize])
+            .unwrap();
+        first.write_all(b"x").unwrap();
+        // `second` has written nothing, so its own count is far below the
+        // cap; it still writes to the new live file, not to `.1`.
+        second.write_all(b"y").unwrap();
+        let live = dir.path().join("x.jsonl");
+        assert_eq!(fs::read(&live).unwrap(), b"xy");
+        assert_eq!(
+            fs::metadata(rotated(&live, 1)).unwrap().len(),
+            MAX_FILE_BYTES
+        );
     }
 
     #[test]

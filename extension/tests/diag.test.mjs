@@ -332,3 +332,23 @@ test("a host that exits mid-request is logged as disconnected", async () => {
   assert.equal(fields(dropped).answered, true);
   assert.equal(fields(dropped).pending, 1);
 });
+
+test("a failed harness setup is logged by its code only: its message can quote the probe's stderr", async () => {
+  const PROBE_STDERR = "sentinel-probe-stderr-77a2";
+  installHost((request) => request.type === "set_up_harness"
+    ? { type: "error", code: "invalid_config", message: `Codex failed its test run (${PROBE_STDERR}); summaries stay off` }
+    : null);
+  await diag.clear();
+  const host = new HostClient();
+  await assert.rejects(host.callAny({
+    type: "set_up_harness", protocol_version: PROTOCOL_VERSION, request_id: "req-setup",
+    expected_revision: "r1", harness: "codex",
+  }, ["config_updated"]), (error) => error instanceof HostError && error.message.includes(PROBE_STDERR));
+  host.disconnect();
+
+  const entries = await diag.entries();
+  const setup = entries.find((item) => fields(item).request_id === "req-setup");
+  assert.equal(fields(setup).outcome, "invalid_config");
+  assert.equal(fields(setup).error, undefined);
+  assert.equal(JSON.stringify(entries).includes(PROBE_STDERR), false);
+});
