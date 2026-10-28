@@ -487,6 +487,11 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return isSiteDrafted(value);
     case "capture_site_checked":
       return isMessage(value, ["revision"]);
+    case "site_restore_loaded":
+      return isMessage(value, ["revision", "origin", "adapters"]) && isBoundedString(value.origin, 2048, 1) &&
+        isAdapterDocument(value.adapters) &&
+        (value.adapters as { format: number }).format === 1 &&
+        (value.adapters as { artifacts: unknown[] }).artifacts.length <= 64;
     case "site_draft_checked":
       return isSiteDraftChecked(value);
     default:

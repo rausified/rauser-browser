@@ -300,13 +300,18 @@ strip_params note-identity follow-up has shipped (see Shipped).
 
 ### Cookie's own proposals (only after the plan work above)
 
-- [ ] `brwr-cua` **Restore a removed site's recorded capture rules from the panel.**
-  After a starter conflict, offer a plain-language review of usable recorded
-  rules, with their original identity and account scope, followed by an
-  explicit revision-checked save. Keep ambiguous or damaged history refused;
-  never silently replace a custom identity or erase recorded contracts. This
-  product follow-up surfaced in the starter preflight and waits behind
-  assigned/plan work.
+- [ ] `brwr-wg5` **Bound adapter comparisons when sandbox child pipes are denied.**
+  The optional 5,000-case differential check stalled; a one-case probe timed
+  out after 30 seconds, and the child-pipe guard reports EPERM. Establish the
+  exact wait and reuse explicit sandbox diagnostics with a bounded runner;
+  required CI mode must still fail on denial. No engine changed this cycle.
+
+- [ ] `brwr-7lq` **Restore overlapping recorded container groups with explicit identity review.**
+  The removed-site flow refuses overlapping repository/PR history because it
+  cannot establish one note identity. Extend the host's impact/alias planning
+  (`brwr-6x2`) with a deliberate review that retains notes and considers
+  intervening repository-only capture; never relax the freeze or infer a
+  primary key from a canonical address.
 
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
@@ -349,6 +354,8 @@ strip_params note-identity follow-up has shipped (see Shipped).
   **2026-10-28:** still awaiting actual macOS Chrome evidence. This Linux VM
   refuses `smoke:macos:headless` before launching Chrome; local built-panel
   tests pass. No browser acceptance or dialog-count evidence is claimed.
+  **This cycle:** marked blocked for isolated macOS Chrome execution; its
+  implementation is complete and must not be rebuilt in another Linux cycle.
 
 - [ ] `brwr-bzx` **Windows CI.** Add a `windows-latest` job for the host build,
   tests, and clippy, plus the extension checks. Fix code and tests that have
@@ -376,11 +383,18 @@ strip_params note-identity follow-up has shipped (see Shipped).
   intact; retain this item for current Windows/macOS evidence and the final
   Windows skip-reason audit.
 
+  **2026-10-28, this cycle:** skip-reason audit complete: POSIX mode denial,
+  symlink/inode and shell fixtures state their exclusions, and plist lint
+  names its macOS dependency. The bead is blocked only for current macOS and
+  Windows CI evidence, which this Linux/no-live-network cycle cannot obtain.
 
 
-- None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
+
+Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Restore removed sites from their recorded capture rules (2026-10-28).** Completed assigned `brwr-cua`: Capture Site reviews usable recorded page kinds and account scope before a new starter or draft, then re-reads the set before an explicit revision-checked save. Custom identities, note bytes, other sites and global pauses stay intact; no page content or agent is needed. Damaged or overlapping history remains refused, with container identity review tracked in `brwr-7lq`. **Metrics:** 997 workspace Rust outcomes (+7 regressions; 43 documented IPC sandbox skips), 11 new panel cases and all 15 extension files, both Clippy configurations and 859 scripted-build outcomes green.
 
 - **Category:** New Capability. **Review capture gaps before sharing worklogs (2026-10-28).** Completed assigned `brwr-9r7`. The worklog reviews durable overflow ranges and missing activity-hour record counts, with a checked-by-default choice to include an incompleteness note in the exact copied preview. Local-date intersections preserve full ranges/counts, overlapping notices stay separate, and retries deduplicate without inventing work. Attached and standalone markers survive restart, bounded cache upgrades and reindex; stale or failed reports cannot leave Copy enabled. **Metrics:** 990 workspace Rust outcomes (+3 regressions; 43 explicit IPC sandbox skips), six new panel cases and all 15 extension files, both Clippy configurations, 853 scripted-build outcomes, two script files and 10,696 inert Markdown renderings green.
 
@@ -1413,3 +1427,29 @@ stop product work, and no history reset or production IPC change is called for.
   read-only Git metadata. No retry or remote action ran. The green working
   tree, exported queue and excluded `.bosun_commit_msg` are ready for the
   driver to commit and independently review.
+
+- 2026-10-28 Cookie cycle (`brwr-cua`): the assigned plan now restores usable
+  recorded site recognition before offering new starters/drafts. Fresh diff
+  review kept all overlapping history refused, including declared containers:
+  note-only records can name multiple keys even when capture precedence was
+  originally valid. `brwr-7lq` records the product follow-up and should use the
+  existing `brwr-6x2` impact plan instead of another identity exception.
+- Platform acceptance is the remaining bottleneck for `brwr-bzx` and
+  `brwr-9xg`; they are blocked for external evidence. Future Linux cycles
+  should report that once, then advance runnable assigned work. Focus-session
+  grouping (`brwr-ued`) and curated worklogs (`brwr-ppn`) remain useful product
+  directions after assigned/ordered work; another internal robustness layer
+  does not outrank those user-visible capabilities.
+
+- Commit handoff (`brwr-cua`): the single authorized `git add -A` / commit
+  attempt failed creating `.git/index.lock` because Git metadata is read-only.
+  No retry, remote access or push occurred. The final required gate is green,
+  the queue is explicitly exported, and excluded `.bosun_commit_msg` contains
+  the exact subject/body for the driver's commit and independent review.
+
+- Supplemental validation limitation (`brwr-wg5`): the optional 5,000-case
+  adapter comparison was interrupted after several minutes without a result;
+  a bounded one-case probe timed out after 30 seconds. The existing IPC probe
+  reports `spawnSync /usr/bin/node EPERM`. This comparison is not counted as
+  passed; required gates, real Markdown renderers and script tests are green.
+  Establish the runner's exact wait before changing it; no engine was touched.

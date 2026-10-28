@@ -1486,6 +1486,7 @@ pub(crate) mod tests {
         assert!(warnings.is_empty());
     }
 
+    // Uses Unix symlink creation; Windows symlinks require separate privileges.
     #[cfg(unix)]
     #[test]
     fn an_occupant_swapped_after_inspection_is_a_conflict() {
@@ -1652,6 +1653,7 @@ pub(crate) mod tests {
         assert_eq!(vault.sweep_stale_temporaries().unwrap(), 0);
     }
 
+    // Uses Unix symlink creation; Windows symlinks require separate privileges.
     #[cfg(unix)]
     #[test]
     fn startup_sweep_does_not_follow_symlinks() {
@@ -1673,6 +1675,7 @@ pub(crate) mod tests {
         assert_eq!(fs::read_to_string(target).unwrap(), "outside");
     }
 
+    // Uses Unix symlink creation; Windows symlinks require separate privileges.
     #[cfg(unix)]
     #[test]
     fn configured_symlink_cannot_escape_the_vault() {
@@ -1690,6 +1693,7 @@ pub(crate) mod tests {
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
     }
 
+    // Checks Unix device/inode identity and symlinks, unavailable on Windows.
     #[cfg(unix)]
     #[test]
     fn same_file_refuses_a_swapped_or_symlinked_name() {

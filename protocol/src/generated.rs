@@ -1200,6 +1200,25 @@ pub enum ScopeChoiceView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct GetSiteRestoreRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub origin: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteRestoreLoaded {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub origin: String,
+    pub revision: String,
+    pub adapters: AdapterDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckCaptureSiteRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1294,6 +1313,7 @@ pub enum Request {
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
     CheckCaptureSite(CheckCaptureSiteRequest),
+    GetSiteRestore(GetSiteRestoreRequest),
     ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
     ServiceHello(ServiceHelloRequest),
 }
@@ -1333,6 +1353,7 @@ impl Request {
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
             Self::CheckCaptureSite(value) => value.protocol_version,
+            Self::GetSiteRestore(value) => value.protocol_version,
             Self::ForgetAdoptedContracts(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
@@ -1372,6 +1393,7 @@ impl Request {
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
             Self::CheckCaptureSite(value) => &value.request_id,
+            Self::GetSiteRestore(value) => &value.request_id,
             Self::ForgetAdoptedContracts(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
@@ -1410,6 +1432,7 @@ pub enum Response {
     SiteDraftChecked(SiteDraftChecked),
     WorklogReported(WorklogReported),
     CaptureSiteChecked(CaptureSiteChecked),
+    SiteRestoreLoaded(SiteRestoreLoaded),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
 }
@@ -1445,6 +1468,7 @@ impl Response {
             Self::SiteDraftChecked(value) => value.protocol_version,
             Self::WorklogReported(value) => value.protocol_version,
             Self::CaptureSiteChecked(value) => value.protocol_version,
+            Self::SiteRestoreLoaded(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
@@ -1480,6 +1504,7 @@ impl Response {
             Self::SiteDraftChecked(value) => &value.request_id,
             Self::WorklogReported(value) => &value.request_id,
             Self::CaptureSiteChecked(value) => &value.request_id,
+            Self::SiteRestoreLoaded(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }

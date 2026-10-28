@@ -107,6 +107,16 @@ confirmation, and an unscoped adapter still needs its `unscoped` acknowledgment.
 Version 8 is the current protocol. The host refuses version 7 and earlier
 requests with `unsupported_protocol_version`.
 
+Version 8 additive removed-site restoration: `get_site_restore` accepts only
+an exact HTTP(S) `origin` and `expected_revision`, answering `site_restore_loaded`
+with the same origin/revision and an `adapters` document of recorded recognition
+contracts (empty if none). This read never enables capture. It refuses configured
+origins, stale revisions, damaged history and overlapping contracts rather than
+choosing an identity. The panel re-reads the review before the existing
+revision-checked `update_config`; global pauses stay set. No page URL, title,
+content, folder path or save token is part of this pair. Historical title/ref
+extraction is not available. The host retains all existing identity guards.
+
 Version 8: incoming navigation. `ArtifactView.incoming_trails` is required
 and holds up to five `IncomingTrailView` entries: `source` is an
 `ArtifactRefView`, `transition` is a known Chrome transition other than

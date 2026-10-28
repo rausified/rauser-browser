@@ -190,3 +190,15 @@
   local log/reindex fixtures, six new panel cases and the full required/README
   gate green (990 workspace Rust outcomes, all 15 extension files). Actual
   platform acceptance remains separate.
+
+
+- **Brauser — restore removed-site capture rules:** Capture Site now reviews
+  usable host-recorded page kinds and account scope before proposing fresh
+  rules, preserving custom artifact identities and existing notes. Only an
+  explicit revision-checked save restores them; global pauses stay set and
+  stale or changed reviews refuse. No page content or agent is needed.
+  Damaged and overlapping history remains refused with repair guidance, and
+  historical title/ref extraction is not invented. Assigned brwr-cua ships
+  with seven Rust regressions, eleven panel cases, the full required Linux
+  gate green (997 Rust outcomes, all 15 extension files) and 859 scripted-build
+  outcomes. Platform evidence for brwr-bzx/brwr-9xg remains blocked externally.
