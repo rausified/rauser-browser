@@ -149,6 +149,14 @@
         </div>
       </section>
 
+      <section aria-labelledby="diagnostics-heading">
+        <h2 id="diagnostics-heading">Diagnostics</h2>
+        <p>{{APP_NAME}} keeps a short local log of its own requests and problems, up to 500 entries, to help diagnose them. It holds no page text, titles, notes, prompts, or answers, and addresses only as their site. Nothing leaves this computer unless you copy it. A native request's ID also appears in the host's own logs, so the two can be read together.</p>
+        <p id="diag-count" role="status">No diagnostics read yet.</p>
+        <button id="copy-diagnostics" type="button" class="secondary">Copy diagnostics</button>
+        <button id="clear-diagnostics" type="button" class="secondary">Clear</button>
+      </section>
+
       <footer>
         <p>{{APP_NAME}} runs locally. Pending visits and page notes are in the {{APP_NAME}} side panel.</p>
       </footer>
