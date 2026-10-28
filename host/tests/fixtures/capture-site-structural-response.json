@@ -1,0 +1,430 @@
+{
+  "adapters": [
+    {
+      "adapter": {
+        "id": "tools.docs:{host}/{num}",
+        "match": [
+          {
+            "path": "/docs/{num:int}"
+          },
+          {
+            "path": "/docs/{num:int}/{mode:(edit)}"
+          }
+        ],
+        "modes": {
+          "edit": "edit"
+        },
+        "origin": "https://tools.example.com",
+        "type": "tools.docs"
+      },
+      "rules": [
+        {
+          "checked": true,
+          "example": "https://tools.example.com/docs/123456",
+          "links": 0,
+          "rule": 0,
+          "unchecked_reason": null,
+          "visited": 1
+        },
+        {
+          "checked": true,
+          "example": "https://tools.example.com/docs/123456/edit",
+          "links": 0,
+          "rule": 1,
+          "unchecked_reason": null,
+          "visited": 1
+        }
+      ],
+      "scope": "not_shared",
+      "tenant": null
+    },
+    {
+      "adapter": {
+        "id": "tools.wiki:{host}/{uuid}",
+        "match": [
+          {
+            "path": "/wiki/{_}/{uuid:uuid}"
+          }
+        ],
+        "origin": "https://tools.example.com",
+        "type": "tools.wiki"
+      },
+      "rules": [
+        {
+          "checked": true,
+          "example": "https://tools.example.com/wiki/example-page/123e4567-e89b-12d3-a456-426614174000",
+          "links": 0,
+          "rule": 0,
+          "unchecked_reason": null,
+          "visited": 1
+        }
+      ],
+      "scope": "not_shared",
+      "tenant": null
+    },
+    {
+      "adapter": {
+        "id": "tools.boards:{host}/{num}",
+        "match": [
+          {
+            "path": "/boards/{num:int}"
+          }
+        ],
+        "origin": "https://tools.example.com",
+        "type": "tools.boards"
+      },
+      "rules": [
+        {
+          "checked": false,
+          "example": "https://tools.example.com/boards/123456",
+          "links": 1,
+          "rule": 0,
+          "unchecked_reason": "link_only",
+          "visited": 0
+        }
+      ],
+      "scope": "not_shared",
+      "tenant": null
+    },
+    {
+      "adapter": {
+        "id": "tools.teams:{host}/{key}",
+        "match": [
+          {
+            "path": "/teams/{key:jira_key}"
+          }
+        ],
+        "origin": "https://tools.example.com",
+        "type": "tools.teams"
+      },
+      "rules": [
+        {
+          "checked": false,
+          "example": "https://tools.example.com/teams/ABC-123",
+          "links": 1,
+          "rule": 0,
+          "unchecked_reason": "link_only",
+          "visited": 0
+        }
+      ],
+      "scope": "not_shared",
+      "tenant": null
+    }
+  ],
+  "drafter": "structural",
+  "dropped": [
+    {
+      "adapter": null,
+      "reason": "blocked_route",
+      "rule": null,
+      "shape": "/invite/{hex32}"
+    },
+    {
+      "adapter": null,
+      "reason": "already_recognized",
+      "rule": null,
+      "shape": "/items/{num}"
+    },
+    {
+      "adapter": null,
+      "reason": "probe",
+      "rule": null,
+      "shape": "/search?q={slug}"
+    }
+  ],
+  "preview": [
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/items/{num}",
+      "source": "visited",
+      "url": "https://tools.example.com/items/123456"
+    },
+    {
+      "adapter": 0,
+      "artifact_id": "tools.docs:tools.example.com/123456",
+      "rule": 0,
+      "shape": "/docs/{num}",
+      "source": "visited",
+      "url": "https://tools.example.com/docs/123456"
+    },
+    {
+      "adapter": 0,
+      "artifact_id": "tools.docs:tools.example.com/123456",
+      "rule": 1,
+      "shape": "/docs/{num}/edit",
+      "source": "visited",
+      "url": "https://tools.example.com/docs/123456/edit"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/search?q={slug}",
+      "source": "visited",
+      "url": "https://tools.example.com/search?q=example-page"
+    },
+    {
+      "adapter": 1,
+      "artifact_id": "tools.wiki:tools.example.com/123e4567-e89b-12d3-a456-426614174000",
+      "rule": 0,
+      "shape": "/wiki/{slug}/{uuid}",
+      "source": "visited",
+      "url": "https://tools.example.com/wiki/example-page/123e4567-e89b-12d3-a456-426614174000"
+    },
+    {
+      "adapter": 2,
+      "artifact_id": "tools.boards:tools.example.com/123456",
+      "rule": 0,
+      "shape": "/boards/{num}",
+      "source": "link",
+      "url": "https://tools.example.com/boards/123456"
+    },
+    {
+      "adapter": 3,
+      "artifact_id": "tools.teams:tools.example.com/ABC-123",
+      "rule": 0,
+      "shape": "/teams/{key}",
+      "source": "link",
+      "url": "https://tools.example.com/teams/ABC-123"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/invite/{hex32}",
+      "source": "link",
+      "url": "https://tools.example.com/invite/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/",
+      "source": "probe",
+      "url": "https://tools.example.com/"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/search?q=x",
+      "source": "probe",
+      "url": "https://tools.example.com/search?q=x"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/?q=x",
+      "source": "probe",
+      "url": "https://tools.example.com/?q=x"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/query",
+      "source": "probe",
+      "url": "https://tools.example.com/query"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/filter",
+      "source": "probe",
+      "url": "https://tools.example.com/filter"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/login",
+      "source": "probe",
+      "url": "https://tools.example.com/login"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/home",
+      "source": "probe",
+      "url": "https://tools.example.com/home"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/dashboard",
+      "source": "probe",
+      "url": "https://tools.example.com/dashboard"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/invite",
+      "source": "probe",
+      "url": "https://tools.example.com/invite"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/reset",
+      "source": "probe",
+      "url": "https://tools.example.com/reset"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/password",
+      "source": "probe",
+      "url": "https://tools.example.com/password"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/verify",
+      "source": "probe",
+      "url": "https://tools.example.com/verify"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/confirm",
+      "source": "probe",
+      "url": "https://tools.example.com/confirm"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/share",
+      "source": "probe",
+      "url": "https://tools.example.com/share"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/magic",
+      "source": "probe",
+      "url": "https://tools.example.com/magic"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/token",
+      "source": "probe",
+      "url": "https://tools.example.com/token"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/oauth",
+      "source": "probe",
+      "url": "https://tools.example.com/oauth"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/auth",
+      "source": "probe",
+      "url": "https://tools.example.com/auth"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/signin",
+      "source": "probe",
+      "url": "https://tools.example.com/signin"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/signup",
+      "source": "probe",
+      "url": "https://tools.example.com/signup"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/logout",
+      "source": "probe",
+      "url": "https://tools.example.com/logout"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/unsubscribe",
+      "source": "probe",
+      "url": "https://tools.example.com/unsubscribe"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/?search=x",
+      "source": "probe",
+      "url": "https://tools.example.com/?search=x"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/?query=x",
+      "source": "probe",
+      "url": "https://tools.example.com/?query=x"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/?q=x",
+      "source": "probe",
+      "url": "https://tools.example.com/?q=x"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/?jql=x",
+      "source": "probe",
+      "url": "https://tools.example.com/?jql=x"
+    },
+    {
+      "adapter": null,
+      "artifact_id": null,
+      "rule": null,
+      "shape": "/?filter=x",
+      "source": "probe",
+      "url": "https://tools.example.com/?filter=x"
+    }
+  ],
+  "protocol_version": 7,
+  "remapped": 0,
+  "request_id": "draft-1",
+  "revision": "<revision>",
+  "taken_types": [
+    "github.issue",
+    "github.pr",
+    "github.repo",
+    "jira.issue",
+    "sharepoint.doc",
+    "tools.item"
+  ],
+  "type": "site_drafted"
+}

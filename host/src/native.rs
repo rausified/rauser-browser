@@ -470,13 +470,17 @@ fn dispatch(
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
-        Request::DraftSite(value) => crate::capture_site::draft_site(value, config),
-        // Agent drafting is not wired yet: refuse it as an older host would.
-        Request::StartSiteDraft(value) => error(
-            &value.request_id,
-            ErrorCode::InvalidRequest,
-            "start_site_draft is not supported by this host yet",
-        ),
+        #[cfg(unix)]
+        Request::DraftSite(value) => {
+            crate::capture_site::draft_site(value, config, context.service)
+        }
+        // No service: a draft_site with a run_id answers service_unavailable.
+        #[cfg(not(unix))]
+        Request::DraftSite(value) => crate::capture_site::draft_site(value, config, None),
+        #[cfg(unix)]
+        Request::StartSiteDraft(value) => {
+            crate::capture_site::start_site_draft(value, config, context.service)
+        }
         Request::CheckSiteDraft(value) => crate::capture_site::check_site_draft(value, config),
         Request::CheckCaptureSite(value) => crate::capture_site::check_capture_site(value, config),
         Request::OpenSummary(value) => open_summary(value, config, context.open),
@@ -496,6 +500,7 @@ fn dispatch(
         | Request::GetAgentEnv(_)) => forward(&request, context.service),
         #[cfg(not(unix))]
         Request::StartRun(_)
+        | Request::StartSiteDraft(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
@@ -525,6 +530,18 @@ fn start_run(
     config: &mut ConfigStore,
     service: Option<&ServiceLink>,
 ) -> Response {
+    // Only the host makes a site-draft run (start_site_draft), from input it
+    // builds itself.
+    if value
+        .kind
+        .is_some_and(|kind| kind != brauser_protocol::RunKind::Summary)
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "kind is chosen by the host",
+        );
+    }
     if value.record_key.is_some() {
         return error(
             &value.request_id,
@@ -566,7 +583,7 @@ fn start_run(
 
 /// Send a run message to the service and return its answer as is.
 #[cfg(unix)]
-fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
+pub(crate) fn forward(request: &Request, service: Option<&ServiceLink>) -> Response {
     let id = request.request_id();
     let Some(service) = service else {
         return error(
@@ -7986,6 +8003,46 @@ id = "work:{host}/{id}"
                     "{requested_at}"
                 );
             }
+        }
+
+        /// The run kind is the host's to choose: only a start_site_draft
+        /// makes a site-draft run, and the host builds its input itself.
+        #[test]
+        fn start_run_from_the_extension_refuses_a_kind() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let Request::StartRun(mut value) = start_run("https://example.com/", None, &now())
+            else {
+                unreachable!()
+            };
+            value.kind = Some(brauser_protocol::RunKind::SiteDraft);
+            let response = call(&mut config, &link, Request::StartRun(value));
+            assert_eq!(
+                refused(&response),
+                (ErrorCode::InvalidRequest, "kind is chosen by the host")
+            );
+            // Dispatch routes start_site_draft to the host's own drafter,
+            // which needs the service.
+            let response = dispatch(
+                Request::StartSiteDraft(brauser_protocol::StartSiteDraftRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "site-1".into(),
+                    origin: "https://tools.example.com".into(),
+                    visited: vec![brauser_protocol::ShapeCount {
+                        shape: "/docs/{num}".into(),
+                        count: 1,
+                    }],
+                    links: Vec::new(),
+                    harness: None,
+                    requested_at: now(),
+                }),
+                &mut config,
+                &mut ConsentAuthority::new(),
+                &SetupContext::new(),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::ServiceUnavailable);
         }
 
         #[test]
