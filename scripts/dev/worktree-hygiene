@@ -1,0 +1,575 @@
+#!/usr/bin/env python3
+"""List and remove finished git worktrees, and clear stale index locks.
+
+AGENTS.md "PR ownership and handoff" explains why: sessions that die leave
+worktrees (and sometimes an index.lock) behind, and removing one that another
+session is still using loses work. This tool is conservative by design.
+
+A worktree is a removal candidate when either
+  * its tip was merged into the base (default origin/main) through a merge
+    commit: the tip is reachable from the base but not on the base's
+    first-parent line (a fresh branch cut from main sits on that line and has
+    no work of its own, so it is never a candidate on ancestry alone), or
+  * the GitHub PR for its branch is merged or closed, no PR for the branch is
+    still open, and the worktree's tip is the PR's head or an ancestor of it.
+
+A candidate is kept, with the reason printed, when it
+  * has uncommitted or untracked changes,
+  * has commits that are on no remote branch (and not in its closed PR's head),
+  * has any process with its cwd or an open file inside it (lsof),
+  * is named by the Chrome native-messaging manifest or the Brauser
+    LaunchAgent plist (a live install may be running from it),
+  * is locked (`git worktree lock`), is the main worktree, or is missing.
+If lsof cannot be run, every candidate is kept (fail closed).
+
+Nothing changes without --apply; removal is plain `git worktree remove`
+(never --force) and leaves the branch in place.
+
+--clear-locks also looks at the repository's index.lock and each worktree's
+index.lock. A lock is removed (with --apply) only when it is older than
+--min-lock-age seconds, no process holds it open, and no git process is
+running in, or naming, the repository or any of its worktrees.
+
+Usage:
+  scripts/dev/worktree-hygiene [--repo PATH] [--base REF] [--no-gh]
+                               [--clear-locks] [--apply]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Iterable, Optional
+
+HOME = Path.home()
+DEFAULT_MANIFESTS = [
+    HOME / "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.rauser.brauser.json",
+]
+DEFAULT_PLISTS = [HOME / "Library/LaunchAgents/com.rauser.brauser.service.plist"]
+
+
+class ProbeError(RuntimeError):
+    """A safety probe could not run; callers keep everything it guards."""
+
+
+# --------------------------------------------------------------------------
+# git helpers
+
+
+def git(cwd: Path | str, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+    )
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed in {cwd}: {proc.stderr.strip()}")
+    return proc
+
+
+@dataclass
+class Worktree:
+    path: Path
+    head: Optional[str] = None
+    branch: Optional[str] = None  # short name, e.g. feat/x
+    detached: bool = False
+    locked: bool = False
+    prunable: bool = False
+    bare: bool = False
+    main: bool = False
+
+
+def list_worktrees(repo: Path) -> list[Worktree]:
+    out = git(repo, "worktree", "list", "--porcelain").stdout
+    trees: list[Worktree] = []
+    current: Optional[Worktree] = None
+    for line in out.splitlines() + [""]:
+        if not line:
+            if current is not None:
+                trees.append(current)
+                current = None
+            continue
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            current = Worktree(path=Path(value))
+        elif current is None:
+            continue
+        elif key == "HEAD":
+            current.head = value
+        elif key == "branch":
+            current.branch = value.removeprefix("refs/heads/")
+        elif key == "detached":
+            current.detached = True
+        elif key == "locked":
+            current.locked = True
+        elif key == "prunable":
+            current.prunable = True
+        elif key == "bare":
+            current.bare = True
+    if trees:
+        trees[0].main = True
+    return trees
+
+
+def is_ancestor(repo: Path, a: str, b: str) -> bool:
+    return git(repo, "merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+
+
+def on_first_parent_line(repo: Path, commit: str, base: str) -> bool:
+    out = git(repo, "rev-list", "--first-parent", base).stdout.split()
+    return commit in set(out)
+
+
+def commit_exists(repo: Path, rev: str) -> bool:
+    return git(repo, "cat-file", "-e", f"{rev}^{{commit}}", check=False).returncode == 0
+
+
+# --------------------------------------------------------------------------
+# probes (injectable for tests)
+
+
+@dataclass
+class OpenFile:
+    pid: int
+    path: str
+    command: str = ""
+
+
+@dataclass
+class GitProcess:
+    pid: int
+    cwd: str
+    args: str
+
+
+class SystemProbe:
+    """Real lsof/ps probes. Every failure raises ProbeError (fail closed)."""
+
+    def open_files(self) -> list[OpenFile]:
+        # One system-wide listing (cwd included as fd "cwd") instead of
+        # `lsof +D` per worktree, which walks every file under target/.
+        try:
+            proc = subprocess.run(
+                ["lsof", "-n", "-P", "-w", "-F", "pcn"], capture_output=True, text=True
+            )
+        except FileNotFoundError as exc:
+            raise ProbeError("lsof is not installed") from exc
+        # lsof exits 1 when some entries could not be read; only no output is fatal.
+        if proc.returncode not in (0, 1) or not proc.stdout:
+            raise ProbeError(f"lsof failed: {proc.stderr.strip()}")
+        return parse_lsof(proc.stdout)
+
+    def holders(self, path: Path) -> list[OpenFile]:
+        try:
+            proc = subprocess.run(
+                ["lsof", "-n", "-P", "-w", "-F", "pcn", "--", str(path)],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise ProbeError("lsof is not installed") from exc
+        if proc.returncode == 0:
+            return parse_lsof(proc.stdout)
+        if proc.returncode == 1 and not proc.stdout.strip():
+            return []  # nobody holds it
+        raise ProbeError(f"lsof failed: {proc.stderr.strip()}")
+
+    def git_processes(self) -> list[GitProcess]:
+        try:
+            proc = subprocess.run(
+                ["ps", "-A", "-o", "pid=", "-o", "command="], capture_output=True, text=True
+            )
+        except FileNotFoundError as exc:
+            raise ProbeError("ps is not installed") from exc
+        if proc.returncode != 0:
+            raise ProbeError(f"ps failed: {proc.stderr.strip()}")
+        found = []
+        me = os.getpid()
+        for line in proc.stdout.splitlines():
+            pid_text, _, command = line.strip().partition(" ")
+            if not pid_text.isdigit() or int(pid_text) == me:
+                continue
+            argv0 = os.path.basename(command.split(" ", 1)[0]) if command else ""
+            if argv0 != "git" and not argv0.startswith("git-"):
+                continue
+            found.append(GitProcess(int(pid_text), self._cwd(int(pid_text)), command))
+        return found
+
+    def _cwd(self, pid: int) -> str:
+        proc = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-F", "n"], capture_output=True, text=True
+        )
+        for line in proc.stdout.splitlines():
+            if line.startswith("n"):
+                return line[1:]
+        return ""  # process gone or unreadable; its args are still checked
+
+
+def parse_lsof(text: str) -> list[OpenFile]:
+    files = []
+    pid, command = 0, ""
+    for line in text.splitlines():
+        if not line:
+            continue
+        tag, value = line[0], line[1:]
+        if tag == "p":
+            pid = int(value) if value.isdigit() else 0
+        elif tag == "c":
+            command = value
+        elif tag == "n":
+            files.append(OpenFile(pid, value, command))
+    return files
+
+
+# --------------------------------------------------------------------------
+# references from the live install
+
+
+def _strings(value) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            yield from _strings(k)
+            yield from _strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _strings(v)
+
+
+def referenced_strings(manifests: Iterable[Path], plists: Iterable[Path]) -> list[tuple[Path, str]]:
+    """Every string in the install files. Unreadable files raise ProbeError."""
+    found: list[tuple[Path, str]] = []
+    for path in manifests:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ProbeError(f"cannot read {path}: {exc}") from exc
+        found += [(path, s) for s in _strings(data)]
+    for path in plists:
+        if not path.exists():
+            continue
+        try:
+            with path.open("rb") as fh:
+                data = plistlib.load(fh)
+        except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+            raise ProbeError(f"cannot read {path}: {exc}") from exc
+        found += [(path, s) for s in _strings(data)]
+    return found
+
+
+def _forms(path: Path) -> set[str]:
+    forms = {str(path).rstrip("/")}
+    try:
+        forms.add(str(path.resolve()).rstrip("/"))
+    except OSError:
+        pass
+    return forms
+
+
+def inside(candidate: str, root: Path, resolve: bool = True) -> bool:
+    """Whether a path string names root or something under it.
+
+    lsof already reports resolved paths, so open files pass resolve=False
+    (resolving tens of thousands of them is slow); root is matched in both
+    its given and resolved forms either way.
+    """
+    if not candidate:
+        return False
+    texts = {candidate.rstrip("/")}
+    if resolve and candidate.startswith("/"):
+        try:
+            texts.add(str(Path(candidate).resolve()).rstrip("/"))
+        except OSError:
+            pass
+    for text in texts:
+        for form in _forms(root):
+            if text == form or text.startswith(form + "/"):
+                return True
+    return False
+
+
+def mentions(text: str, root: Path) -> bool:
+    """Whether free text (a command line) contains root as a path."""
+    for form in _forms(root):
+        idx = text.find(form)
+        while idx != -1:
+            end = idx + len(form)
+            if end == len(text) or text[end] in "/ \t\"'":
+                return True
+            idx = text.find(form, idx + 1)
+    return False
+
+
+# --------------------------------------------------------------------------
+# PR state
+
+
+PrLookup = Callable[[Path, str], Optional[list[dict]]]
+
+
+def gh_prs(repo: Path, branch: str) -> Optional[list[dict]]:
+    """PRs whose head is branch, or None when gh cannot answer."""
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", "20",
+             "--json", "number,state,headRefOid"],
+            cwd=repo, capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout or "[]")
+    except ValueError:
+        return None
+
+
+# --------------------------------------------------------------------------
+# the plan
+
+
+@dataclass
+class Verdict:
+    tree: Worktree
+    candidate: bool = False
+    why: str = ""  # why it is (or is not) a candidate
+    keep: list[str] = field(default_factory=list)
+    pr_head: Optional[str] = None
+
+    @property
+    def removable(self) -> bool:
+        return self.candidate and not self.keep
+
+
+def classify(repo: Path, tree: Worktree, base: str, pr_lookup: Optional[PrLookup]) -> Verdict:
+    v = Verdict(tree)
+    if tree.main or tree.bare:
+        v.why = "main worktree"
+        return v
+    if tree.prunable or not tree.path.exists():
+        v.why = "directory is missing (run `git worktree prune`)"
+        return v
+    head = tree.head
+    if not head:
+        v.why = "no HEAD"
+        return v
+    prs = pr_lookup(repo, tree.branch) if (pr_lookup and tree.branch) else None
+    if prs and any(p.get("state") == "OPEN" for p in prs):
+        nums = ", ".join(f"#{p['number']}" for p in prs if p.get("state") == "OPEN")
+        v.why = f"PR {nums} is open"
+        return v
+    if is_ancestor(repo, head, base):
+        if on_first_parent_line(repo, head, base):
+            # Fresh branch cut from main, or a fast-forward: no proof of
+            # finished work. Fall through to the PR check.
+            pass
+        else:
+            v.candidate, v.why = True, f"merged into {base}"
+            return v
+    for p in prs or []:
+        oid = p.get("headRefOid")
+        if p.get("state") in ("MERGED", "CLOSED") and oid and commit_exists(repo, oid) and (
+            oid == head or is_ancestor(repo, head, oid)
+        ):
+            v.candidate = True
+            v.why = f"PR #{p['number']} is {p['state'].lower()}"
+            v.pr_head = oid
+            return v
+    if is_ancestor(repo, head, base):
+        v.why = f"at {base} with no commits of its own (not proof it is finished)"
+    else:
+        v.why = "not merged" + ("" if pr_lookup else " (PR state not checked)")
+    return v
+
+
+def safety_checks(repo: Path, v: Verdict, open_files: Optional[list[OpenFile]],
+                  references: Optional[list[tuple[Path, str]]], probe_errors: list[str]) -> None:
+    tree = v.tree
+    if tree.locked:
+        v.keep.append("worktree is locked")
+    status = git(tree.path, "status", "--porcelain", "--untracked-files=all", check=False)
+    if status.returncode != 0:
+        v.keep.append("git status failed")
+    elif status.stdout.strip():
+        n = len(status.stdout.strip().splitlines())
+        v.keep.append(f"{n} uncommitted or untracked change(s)")
+    rev_args = ["rev-list", "--count", "HEAD"]
+    if v.pr_head:
+        rev_args.append(f"^{v.pr_head}")
+    rev_args += ["--not", "--remotes"]
+    unpushed = git(tree.path, *rev_args, check=False)
+    if unpushed.returncode != 0:
+        v.keep.append("could not count unpushed commits")
+    elif unpushed.stdout.strip() != "0":
+        v.keep.append(f"{unpushed.stdout.strip()} commit(s) on no remote branch")
+    v.keep.extend(probe_errors)
+    if open_files is not None:
+        users = sorted({f"{f.command or '?'}[{f.pid}]" for f in open_files if inside(f.path, tree.path, resolve=False)})
+        if users:
+            v.keep.append("in use by " + ", ".join(users[:5]) + (" ..." if len(users) > 5 else ""))
+    if references is not None:
+        refs = sorted({str(src) for src, s in references if inside(s, tree.path)})
+        if refs:
+            v.keep.append("referenced by " + ", ".join(refs))
+
+
+def plan(repo: Path, base: str, pr_lookup: Optional[PrLookup], probe, manifests, plists) -> list[Verdict]:
+    trees = list_worktrees(repo)
+    verdicts = [classify(repo, t, base, pr_lookup) for t in trees]
+    candidates = [v for v in verdicts if v.candidate]
+    if not candidates:
+        return verdicts
+    probe_errors: list[str] = []
+    open_files = references = None
+    try:
+        open_files = probe.open_files()
+    except ProbeError as exc:
+        probe_errors.append(f"cannot check open files ({exc})")
+    try:
+        references = referenced_strings(manifests, plists)
+    except ProbeError as exc:
+        probe_errors.append(f"cannot check the live install ({exc})")
+    for v in candidates:
+        safety_checks(repo, v, open_files, references, probe_errors)
+    return verdicts
+
+
+# --------------------------------------------------------------------------
+# stale locks
+
+
+@dataclass
+class LockVerdict:
+    path: Path
+    keep: list[str] = field(default_factory=list)
+
+
+def lock_files(repo: Path) -> list[Path]:
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+    locks = [common / "index.lock"]
+    wt_dir = common / "worktrees"
+    if wt_dir.is_dir():
+        locks += sorted(p / "index.lock" for p in wt_dir.iterdir() if p.is_dir())
+    return [p for p in locks if p.exists()]
+
+
+def check_locks(repo: Path, probe, min_age: float, now: Optional[float] = None) -> list[LockVerdict]:
+    locks = lock_files(repo)
+    if not locks:
+        return []
+    now = time.time() if now is None else now
+    roots = [t.path for t in list_worktrees(repo)]
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+    roots.append(common)
+    try:
+        busy = [
+            p for p in probe.git_processes()
+            if any(inside(p.cwd, r) or mentions(p.args, r) for r in roots)
+        ]
+        git_error = None
+    except ProbeError as exc:
+        busy, git_error = [], f"cannot list git processes ({exc})"
+    verdicts = []
+    for lock in locks:
+        v = LockVerdict(lock)
+        try:
+            age = now - lock.stat().st_mtime
+        except OSError:
+            continue  # vanished: git finished
+        if age < min_age:
+            v.keep.append(f"only {int(age)}s old (minimum {int(min_age)}s)")
+        try:
+            holders = probe.holders(lock)
+            if holders:
+                v.keep.append("held open by " + ", ".join(f"{h.command or '?'}[{h.pid}]" for h in holders))
+        except ProbeError as exc:
+            v.keep.append(f"cannot check holders ({exc})")
+        if git_error:
+            v.keep.append(git_error)
+        if busy:
+            v.keep.append("git is running for this repository: " + ", ".join(f"pid {p.pid}" for p in busy[:5]))
+        verdicts.append(v)
+    return verdicts
+
+
+# --------------------------------------------------------------------------
+# CLI
+
+
+def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLookup] = gh_prs,
+         out=sys.stdout) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--repo", default=".", help="any worktree of the repository (default: .)")
+    parser.add_argument("--base", default="origin/main", help="merge target (default: origin/main)")
+    parser.add_argument("--no-gh", action="store_true", help="do not ask GitHub for PR state")
+    parser.add_argument("--clear-locks", action="store_true", help="also check stale index.lock files")
+    parser.add_argument("--min-lock-age", type=float, default=60.0, help="seconds (default: 60)")
+    parser.add_argument("--native-host-manifest", action="append", type=Path,
+                        help="native-messaging manifest to honour (repeatable)")
+    parser.add_argument("--launch-agent-plist", action="append", type=Path,
+                        help="LaunchAgent plist to honour (repeatable)")
+    parser.add_argument("--apply", action="store_true", help="act; without it nothing changes")
+    args = parser.parse_args(argv)
+
+    repo = Path(args.repo).resolve()
+    probe = probe or SystemProbe()
+    lookup = None if args.no_gh else pr_lookup
+    manifests = args.native_host_manifest or DEFAULT_MANIFESTS
+    plists = args.launch_agent_plist or DEFAULT_PLISTS
+    base_sha = git(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}", check=False)
+    if base_sha.returncode != 0:
+        print(f"error: base {args.base} does not exist in {repo}", file=out)
+        return 2
+
+    mode = "apply" if args.apply else "dry run (pass --apply to act)"
+    print(f"worktree hygiene: {repo} against {args.base} {base_sha.stdout.strip()[:10]}, {mode}", file=out)
+    failed = False
+    for v in plan(repo, args.base, lookup, probe, manifests, plists):
+        label = v.tree.branch or ("detached " + (v.tree.head or "?")[:10])
+        if not v.candidate:
+            print(f"  skip    {v.tree.path} [{label}]: {v.why}", file=out)
+        elif v.keep:
+            print(f"  keep    {v.tree.path} [{label}]: {v.why}, but " + "; ".join(v.keep), file=out)
+        elif not args.apply:
+            print(f"  remove  {v.tree.path} [{label}]: {v.why} (dry run)", file=out)
+        else:
+            res = git(repo, "worktree", "remove", str(v.tree.path), check=False)
+            if res.returncode == 0:
+                print(f"  removed {v.tree.path} [{label}]: {v.why}", file=out)
+            else:
+                failed = True
+                print(f"  failed  {v.tree.path} [{label}]: {res.stderr.strip()}", file=out)
+
+    if args.clear_locks:
+        verdicts = check_locks(repo, probe, args.min_lock_age)
+        if not verdicts:
+            print("  no index.lock files", file=out)
+        for lv in verdicts:
+            if lv.keep:
+                print(f"  keep    {lv.path}: " + "; ".join(lv.keep), file=out)
+            elif not args.apply:
+                print(f"  clear   {lv.path}: stale (dry run)", file=out)
+            else:
+                try:
+                    lv.path.unlink()
+                    print(f"  cleared {lv.path}", file=out)
+                except OSError as exc:
+                    failed = True
+                    print(f"  failed  {lv.path}: {exc}", file=out)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
