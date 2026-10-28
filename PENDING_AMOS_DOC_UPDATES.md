@@ -179,3 +179,14 @@
   and the complete required/README gate pass (`brwr-sq9`). This is the first
   Re-learn prerequisite; impact planning (`brwr-hq8`), durable migration and
   panel review remain under parent `brwr-6x2`.
+
+- **Brauser — capture gaps in shared worklogs:** The daily/week worklog now
+  reviews recorded buffer-loss counts and full timestamp ranges, with an
+  explicit, checked-by-default choice to include a clear incompleteness note
+  in copied text. Copy matches the preview; notices remain visible when
+  excluded. Retries deduplicate, overlapping ranges are never summed, and
+  missing records never become measured work. Bounded cache upgrades and
+  reindex recover the same notices. Assigned `brwr-9r7` is complete with real
+  local log/reindex fixtures, six new panel cases and the full required/README
+  gate green (990 workspace Rust outcomes, all 15 extension files). Actual
+  platform acceptance remains separate.

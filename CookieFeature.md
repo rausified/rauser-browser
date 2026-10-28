@@ -578,3 +578,33 @@ are complete. Fifteen new tests include real binary isolation checks; the full
 required and README gates pass with 987 reported Rust outcomes and all 15
 extension files. `brwr-sq9` is complete; parent `brwr-6x2` continues with
 `brwr-hq8` under the four-stage plan in `docs/superpowers/plans/`.
+
+## 2026-10-28 — Review capture gaps before sharing a worklog
+
+Brauser now shows known capture gaps where a person prepares a daily or weekly
+worklog. If a full browser buffer dropped completed activity-hour records, the
+review lists the reported count and its original time range instead of making
+the worklog look silently complete. A checked-by-default “Include capture gaps
+in copied worklog” choice adds a plain incompleteness note to the preview.
+Clearing it leaves the notices visible for review and copies only the measured
+work. Copy always uses exactly the preview, and the choice remains in place
+when the period changes or new activity refreshes the view.
+
+The host derives notices from existing owned daily-log markers alongside the
+measured report. A range that intersects the chosen local dates is shown in
+full: the log does not say which missing records belong to which day, so the
+count is never prorated or turned into focus time. Retry copies appear once;
+different notices with overlapping ranges stay separate without a combined
+count. Notices work even when no artifact was recorded. Reindex restores the
+same evidence, and an older cache makes one bounded rescan to find overflow it
+previously skipped. Results are capped at 32 notices with explicit truncation.
+Loading, failed or stale replies cannot leave an earlier report available to Copy.
+
+Assigned `brwr-9r7` is complete. Real local capture/reindex fixtures cover both
+standalone and attached notices, including long anchor URLs, and six new panel
+cases use mocked transport and a private clipboard stub. The full required and
+README gates pass: 990 workspace Rust outcomes, all 15 extension test files,
+both Clippy builds, the scripted-dialogs suite, script checks and 10,696 inert
+Markdown renderings. IPC sandbox skips remain explicit. Actual macOS Chrome
+and current Windows/macOS CI acceptance remain with the existing platform gates;
+no real account, model, live service or user clipboard was used.

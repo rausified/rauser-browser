@@ -477,3 +477,20 @@ refused. These requests never authorize `save_note` or `use_artifact_note`:
 normal host-derived note identity still applies. A panel must keep the result
 outside the editor and clear it on navigation/collapse. No existing message
 changed shape; older v8 hosts may refuse these new requests.
+
+### Worklog capture-gap review (added within version 8)
+
+`worklog_report` takes the same inclusive `start_date` / `end_date` as
+`worklog` (one through seven local dates), and replies `worklog_reported` with
+`text`, `artifact_count`, `start_date`, `end_date`, `gaps` (up to 32 existing
+`OverflowMarker` shapes), and `gaps_truncated`, all from one index snapshot.
+The original request/reply shape remains unchanged. This is read-only; the
+request supplies no artifact ID, lost activity or page content.
+
+A notice's full count/range appears if the enclosing local dates of its two
+recorded offset-qualified endpoints intersect the requested period. Counts are
+not prorated, combined across overlapping ranges, or converted into work totals.
+Retry marker IDs deduplicate; distinct IDs remain separate. Results sort by
+first instant, last instant, then marker ID. See DESIGN.md §5.1 for copy choice,
+truncation and cache/reindex semantics. An older host returns `invalid_request`;
+the panel cannot copy a stale report after that refusal.

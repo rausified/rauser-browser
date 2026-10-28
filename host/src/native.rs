@@ -156,6 +156,7 @@ fn panel_request(body: &[u8]) -> bool {
                     | "record_why"
                     | "list_artifacts"
                     | "worklog"
+                    | "worklog_report"
             )
         )
     })
@@ -475,6 +476,16 @@ fn dispatch(
         Request::GetArtifact(value) => get_artifact(value, config),
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
+        Request::WorklogReport(value) => worklog_response(
+            brauser_protocol::WorklogRequest {
+                protocol_version: value.protocol_version,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+            },
+            config,
+            true,
+        ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         Request::DraftSite(value) => crate::capture_site::draft_site(value, config),
         Request::CheckSiteDraft(value) => crate::capture_site::check_site_draft(value, config),
@@ -2234,6 +2245,14 @@ fn list_artifacts(
 }
 
 fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) -> Response {
+    worklog_response(value, config, false)
+}
+
+fn worklog_response(
+    value: brauser_protocol::WorklogRequest,
+    config: &mut ConfigStore,
+    report: bool,
+) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
         Err(_) => {
@@ -2275,8 +2294,20 @@ fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) ->
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    match index.worklog(start, end) {
-        Ok((text, count)) => Response::WorklogResult(WorklogResult {
+    match index.worklog_report(start, end) {
+        Ok((text, count, gaps, gaps_truncated)) if report => {
+            Response::WorklogReported(brauser_protocol::WorklogReported {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+                text,
+                artifact_count: u32::try_from(count).unwrap_or(u32::MAX),
+                gaps,
+                gaps_truncated,
+            })
+        }
+        Ok((text, count, _, _)) => Response::WorklogResult(WorklogResult {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
             start_date: value.start_date,
@@ -7953,6 +7984,24 @@ id = "work:{host}/{id}"
                 assert_eq!(text.matches("kind=overflow").count(), 1);
                 assert_eq!(text.matches("2 completed activity hour(s)").count(), 1);
                 assert!(!text.contains("https://"));
+                let report_request = brauser_protocol::WorklogRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "gap-report".into(),
+                    start_date: at[..10].to_owned(),
+                    end_date: at[..10].to_owned(),
+                };
+                let Response::WorklogReported(report) =
+                    worklog_response(report_request.clone(), &mut config, true)
+                else {
+                    panic!("expected worklog gap report")
+                };
+                assert_eq!(report.gaps, vec![request.overflow.clone().unwrap()]);
+                assert_eq!(report.artifact_count, 0);
+                assert!(!report.gaps_truncated);
+                let Response::WorklogResult(original) = worklog(report_request, &mut config) else {
+                    panic!("original worklog remains available")
+                };
+                assert_eq!(original.text, report.text);
                 let mut empty = request.clone();
                 empty.overflow = None;
                 assert!(matches!(
