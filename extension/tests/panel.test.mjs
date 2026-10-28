@@ -7,6 +7,7 @@ const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { isResponseShape } = await import("../dist/protocol-shape.js");
 const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
 const { SETUP_WARNING } = await import("../dist/agent.js");
+const { NoteRecovery } = await import("../dist/note-recovery.js");
 const { storageKey } = await import("../dist/brand.js");
 const { EXTRACT_LIMITS } = await import("../dist/extract.js");
 const { starterOffers: starterOffersFor } = await import("../dist/starter-adapters.js");
@@ -1183,7 +1184,7 @@ test("a failed old-note save keeps a copy-out through capture setup", async () =
   page.el("note-body").dispatch("input");
   await saveCapture(page);
   assert.equal(page.el("note-conflict").hidden, false);
-  assert.equal(page.el("note-unsaved").value, "Never lose my edit");
+  assert.equal(recoveryBody(recoveryRows(page)[0]).value, "Never lose my edit");
   assert.equal(updates(page).length, 1);
 });
 
@@ -2260,13 +2261,13 @@ for (const inFlight of [false, true]) {
     await until(() => page.el("note-body").value === "Shared note" && !page.el("note-body").disabled,
       "the current artifact note");
     assert.equal(page.el("note-conflict").hidden, false);
-    assert.equal(page.el("note-unsaved").value, draft);
+    assert.equal(recoveryBody(recoveryRows(page)[0]).value, draft);
     assert.equal(page.sent("save_note").length, 1, "no automatic replay of the refused draft");
     assert.ok(page.state.localStorage.length > 0, "keep the unacknowledged draft in durable recovery");
     editNote(page, "A fresh artifact edit");
     await until(() => page.el("note-status").textContent === "Saved", "the next artifact edit to save");
     assert.deepEqual(page.sent("save_note").at(-1).expected_key, EXTERNAL_NOTE_KEY);
-    assert.equal(page.el("note-unsaved").value, draft);
+    assert.equal(recoveryBody(recoveryRows(page)[0]).value, draft);
     assert.ok(page.state.localStorage.length > 0, "acknowledging a new edit must keep the conflict copy");
   });
 }
@@ -2283,6 +2284,115 @@ test("a policy refresh with the same host revision keeps the editor and pending 
   assert.equal(page.sent("save_note").length, 0, "an unchanged refresh must not flush the debounce early");
 });
 
+function recoveryRows(page) {
+  return page.el("note-recovery-list").children;
+}
+function recoveryBody(row) {
+  return row.children.find((child) => child.tagName === "TEXTAREA");
+}
+function recoveryStorage(...entries) {
+  const localStorage = memoryStorage();
+  const recovery = new NoteRecovery(() => localStorage);
+  for (const entry of entries) recovery.write({ reason: "Not saved", ...entry });
+  return { localStorage, recovery };
+}
+
+test("individual recovery cards identify each page and copy or discard only the chosen text", async () => {
+  const urlA = "https://docs.example/a?title=<img>";
+  const urlB = "https://docs.example/b";
+  const { localStorage, recovery } = recoveryStorage(
+    { url: urlA, text: "First <script> copy" },
+    { url: urlB, text: "  Second copy\nwith whitespace  " },
+    { url: urlA, text: "" },
+  );
+  const page = await notePanel({ localStorage });
+  const [a, b, empty] = recoveryRows(page);
+  assert.equal(recoveryRows(page).length, 3);
+  assert.ok(a.textContent.includes(urlA));
+  assert.ok(b.textContent.includes(urlB));
+  assert.ok(a.textContent.includes("Not saved"));
+  assert.equal(recoveryBody(a).value, "First <script> copy");
+  assert.equal(recoveryBody(a).readOnly, true);
+  assert.ok(recoveryBody(a).getAttribute("aria-label").includes(urlA));
+  assert.match(empty.textContent, /empty edit.*clear the note/i);
+  buttonIn(b, "Copy").click();
+  buttonIn(empty, "Copy").click();
+  await settle();
+  assert.deepEqual(page.state.copied, ["  Second copy\nwith whitespace  ", ""]);
+  buttonIn(b, "Discard").click();
+  assert.deepEqual(recovery.list().map((entry) => entry.text), ["First <script> copy", ""]);
+  assert.equal(recoveryRows(page).length, 2);
+  buttonIn(b, "Discard").click(); // A stale control must not discard the next row.
+  assert.equal(recoveryRows(page).length, 2);
+  for (const row of [...recoveryRows(page)]) buttonIn(row, "Discard").click();
+  assert.equal(page.el("note-conflict").hidden, true);
+  assert.equal(localStorage.length, 0);
+  assert.equal(page.el("note-body").value, "");
+  assert.equal(page.sent("save_note").length, 0, "review never replays saves");
+});
+
+test("individual recovery discard preserves live typing and a newer snapshot from another panel", async () => {
+  const { localStorage, recovery } = recoveryStorage(
+    { url: RECOVERY_TAB.url, text: "old A" },
+    { url: "https://docs.example/b", text: "B" },
+  );
+  const page = await notePanel({ localStorage });
+  const [stale, b] = recoveryRows(page);
+  editNote(page, "live typing");
+  recovery.write({ url: RECOVERY_TAB.url, text: "new A from another panel", reason: "Not saved" });
+  buttonIn(stale, "Discard").click();
+  buttonIn(b, "Copy").click();
+  await settle();
+  assert.equal(page.el("note-body").value, "live typing");
+  assert.equal(page.el("note-body").disabled, false);
+  assert.deepEqual(recovery.list().map((entry) => entry.text), ["B", "live typing", "new A from another panel"]);
+  assert.equal(recoveryRows(page).length, 1);
+  assert.deepEqual(page.state.copied, ["B"]);
+  assert.equal(page.sent("save_note").length, 0, "review does not flush live typing");
+});
+
+test("individual recovery discard failure keeps the chosen copy readable and retryable", async () => {
+  const { localStorage, recovery } = recoveryStorage(
+    { url: RECOVERY_TAB.url, text: "A" },
+    { url: "https://docs.example/b", text: "B" },
+  );
+  const page = await notePanel({ localStorage });
+  const [a, b] = recoveryRows(page);
+  const remove = localStorage.removeItem;
+  localStorage.removeItem = () => { throw new Error("removal blocked"); };
+  buttonIn(a, "Discard").click();
+  assert.match(page.el("note-recovery-warning").textContent, /removal blocked/);
+  assert.equal(recoveryRows(page).length, 2);
+  assert.equal(recoveryBody(a).value, "A");
+  buttonIn(a, "Copy").click();
+  await settle();
+  assert.deepEqual(page.state.copied, ["A"]);
+  localStorage.removeItem = remove;
+  buttonIn(a, "Discard").click();
+  assert.deepEqual(recovery.list().map((entry) => entry.text), ["B"]);
+  assert.equal(recoveryBody(recoveryRows(page)[0]).value, recoveryBody(b).value);
+  assert.equal(page.sent("save_note").length, 0);
+});
+
+test("individual recovery copy reports clipboard failure beside the copy and can retry", async () => {
+  const { localStorage } = recoveryStorage({ url: RECOVERY_TAB.url, text: "keep me" });
+  const page = await notePanel({ localStorage });
+  const row = recoveryRows(page)[0];
+  navigator.clipboard.writeText = async () => { throw new Error("clipboard blocked"); };
+  buttonIn(row, "Copy").click();
+  await settle();
+  assert.match(row.textContent, /Could not copy.*clipboard blocked/);
+  assert.equal(localStorage.length, 1);
+  navigator.clipboard.writeText = async (text) => { page.state.copied.push(text); };
+  buttonIn(row, "Copy").click();
+  await settle();
+  assert.deepEqual(page.state.copied, ["keep me"]);
+  assert.match(row.textContent, /Copied/);
+  assert.doesNotMatch(row.textContent, /clipboard blocked/);
+  assert.equal(page.el("note-body").value, "");
+  assert.equal(page.sent("save_note").length, 0);
+});
+
 test("closing the built panel before debounce restores copy-only text and supports explicit Copy and Discard", async () => {
   const first = await notePanel();
   editNote(first, "pending <img src=x> text");
@@ -2290,12 +2400,12 @@ test("closing the built panel before debounce restores copy-only text and suppor
   first.close();
   const reopened = await notePanel({ localStorage: first.state.localStorage });
   assert.equal(reopened.el("note-conflict").hidden, false);
-  assert.equal(reopened.el("note-unsaved").value, "pending <img src=x> text");
+  assert.equal(recoveryBody(recoveryRows(reopened)[0]).value, "pending <img src=x> text");
   assert.equal(reopened.el("note-body").value, "");
   assert.equal(reopened.sent("save_note").length, 0, "no automatic replay");
-  reopened.el("copy-unsaved").click();
+  buttonIn(recoveryRows(reopened)[0], "Copy").click();
   assert.deepEqual(reopened.state.copied, ["pending <img src=x> text"]);
-  reopened.el("discard-unsaved").click();
+  buttonIn(recoveryRows(reopened)[0], "Discard").click();
   assert.equal(reopened.el("note-conflict").hidden, true);
   assert.equal(reopened.state.localStorage.length, 0);
 });
@@ -2320,7 +2430,7 @@ test("closing during a built-panel save preserves newer typing after the old hos
     } : undefined,
   });
   assert.equal(reopened.el("note-body").value, "first save");
-  assert.equal(reopened.el("note-unsaved").value, "first save plus newer typing");
+  assert.equal(recoveryBody(recoveryRows(reopened)[0]).value, "first save plus newer typing");
   assert.equal(reopened.sent("save_note").length, 0);
 });
 
@@ -2331,15 +2441,15 @@ test("a built-panel conflict including an empty deletion survives reopen and lat
   } : undefined });
   editNote(first, "");
   await until(() => !first.el("note-conflict").hidden, "the conflict copy to show");
-  assert.equal(first.el("note-unsaved").value, "");
+  assert.equal(recoveryBody(recoveryRows(first)[0]).value, "");
   first.close();
   const reopened = await notePanel({ localStorage: first.state.localStorage });
   assert.equal(reopened.el("note-conflict").hidden, false);
-  assert.equal(reopened.el("note-unsaved").value, "");
+  assert.equal(recoveryBody(recoveryRows(reopened)[0]).value, "");
   editNote(reopened, "a fresh edit");
   await until(() => reopened.el("note-status").textContent === "Saved", "a confirmed new save");
   assert.equal(reopened.state.localStorage.length, 1, "the conflict stays until explicit discard");
-  reopened.el("discard-unsaved").click();
+  buttonIn(recoveryRows(reopened)[0], "Discard").click();
   assert.equal(reopened.state.localStorage.length, 0);
 });
 

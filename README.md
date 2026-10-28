@@ -89,8 +89,10 @@ Page notes are replaced whole under a version the panel names on every save (`lo
 Unsaved note edits also have a local recovery copy in this browser profile,
 written as you type so closing the panel during a save does not lose newer
 typing. Reopening shows the current saved note and a separate recovery box:
-use **Copy** to recover the text yourself, or **Discard recovery copies** to
-remove the displayed copies. Recovery never overwrites a note automatically.
+each copy shows its page address and has its own **Copy** and **Discard**
+controls. Copy keeps just that note's exact text, and Discard removes only
+that copy. Empty edits are labelled clearly as clearing the note. Recovery
+never overwrites a note automatically.
 Confirmed saves clear their own draft; conflicted copies stay until discarded.
 These copies include note text and page addresses, stay outside the home folder,
 and are not synced by Brauser. If browser storage is blocked or full, the panel

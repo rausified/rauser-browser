@@ -339,12 +339,6 @@ shipped (see Shipped).
   product follow-up surfaced in the starter preflight and waits behind
   assigned/plan work.
 
-- [ ] `brwr-kws` **Review recovered note copies individually.** Let a person
-  recover one page's text or discard one copy without handling the whole set.
-  Keep copy-only recovery, explicit empty-edit wording and immutable snapshot
-  cleanup across panels. Discovered while restoring local note recovery; this optional
-  UX follow-up comes after assigned work.
-
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -403,6 +397,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** User Experience. **Review recovered notes one copy at a time (2026-10-28).** Completed assigned `brwr-kws`. Each recovered copy now shows its page address, reason and read-only text with individual Copy and Discard controls; empty edits are explicitly labelled. Copy preserves exact text, and Discard selects an immutable snapshot ID, leaving live typing, other copies and newer snapshots from another panel intact. Clipboard and storage failures remain visible and retryable, and review never fills or saves the editor automatically. **Metrics:** Six new regressions; 34 editor and 163 built-panel cases, all 15 extension files, 915 exercised Rust tests plus 43 explicit IPC skips, two script files, both Clippy configurations and 10,696 Markdown renderings pass.
 
 - **Category:** Security & Privacy. **Keep daily-log titles and context inert in Markdown (2026-10-28).** Completed assigned `brwr-2za`. New visit/activity titles and Why text use the shared inline escaper so page-supplied math and code stay text. Both historical v1 renderer generations are frozen for recovery, with whole-entry hash and exact torn-byte checks; machine markers and existing rows remain unchanged. **Metrics:** Two new Rust regressions cover 15 delivery/recovery scenarios; all 54 capture tests, 933 workspace Rust outcomes, 821 scripted-dialogs outcomes (plus one ignored doctest), 15 extension files, two script files and 10,696 Markdown renderings pass.
 
@@ -1251,3 +1247,23 @@ stop product work, and no history reset or production IPC change is called for.
   is on a read-only filesystem. No retry or remote operation was attempted.
   The green complete diff, closed/exported bead, cycle log and excluded
   `.bosun_commit_msg` are ready for the driver to commit as Cookie.
+
+
+- **2026-10-28 recovery review observation:** Individual copy review completes
+  the visible follow-up to durable note recovery (`brwr-kws`). Keep recovery
+  as a deliberate copy-out workspace; automatic Restore would have to resolve
+  changed host keys/revisions and risks blurring that boundary. For later
+  product cycles, the existing named focus sessions (`brwr-ued`) and curated
+  worklog sharing (`brwr-ppn`) offer larger user value than adding further
+  recovery infrastructure. Continue the remaining assigned queue first:
+  stripped-parameter provenance (`brwr-srp`) and historical UUID recovery
+  (`brwr-smu`); concurrent index work (`brwr-7vf`) remains dependency-blocked,
+  and the deleted-finisher wording report (`brwr-iqx`) needs operator
+  reconciliation. No new duplicate proposals or human gates were closed.
+
+- **2026-10-28 `brwr-kws` handoff:** The single git add/commit attempt
+  refused `.git/index.lock` on the read-only Git mount. The completed green
+  diff, closed/exported bead and excluded `.bosun_commit_msg` remain for the
+  driver; no commit retry or remote operation was attempted. Queue consistency
+  passes. The required and README gates passed before documentation-only
+  closure updates; the macOS smoke explicitly refused this Linux platform.

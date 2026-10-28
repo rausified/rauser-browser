@@ -1679,7 +1679,7 @@ async function run() {
         const hidden = await page.hidden("#note-conflict");
         requireCondition(hidden === false, "The conflict copy-out box did not appear");
       }), { timeout: 20_000 });
-      const [unsaved, shown] = await Promise.all([fieldValue("note-unsaved"), fieldValue("note-body")]);
+      const [unsaved, shown] = await Promise.all([onPanel((page) => page.evaluate('document.querySelector("#note-recovery-list textarea").value')), fieldValue("note-body")]);
       requireCondition(unsaved === unsavedLocalEdit, `Unsaved copy-out shows: ${unsaved}`);
       requireCondition(shown === externalBody, `Note editor shows: ${shown}`);
       const files = await markdownFiles(path.join(notesRoot, "notes"));

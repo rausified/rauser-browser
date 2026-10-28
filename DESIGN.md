@@ -627,8 +627,14 @@ The older M2 design follows.
   before the previous one is retired, and a native acknowledgement deletes only
   its own exact snapshot. Another panel's stale acknowledgement or discard
   cannot remove newer edits. On reopen, the current host note loads normally
-  and recovered text appears separately with **Copy** and **Discard recovery
-  copies**. Recovery never fills the editor or sends a save automatically,
+  and recovered text appears separately. Each copy has its page address,
+  reason, read-only text, and individual **Copy** and **Discard** controls
+  (2026-10-28, `brwr-kws`). An empty edit is explicitly labelled as clearing
+  the note; Copy preserves its exact empty text. Discard selects an immutable
+  snapshot ID, including for memory-only conflict copies, and leaves the
+  other displayed copies and live typing alone. Clipboard failures appear
+  beside that copy; a failed local discard leaves it available for retry.
+  Recovery never fills the editor or sends a save automatically,
   including when the note's revision or artifact identity changed. Conflicts,
   failed saves and empty deletions remain recoverable; conflict copies stay
   until explicit discard. Copies contain note text and URLs, stay local to
