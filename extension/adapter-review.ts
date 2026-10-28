@@ -237,6 +237,14 @@ export function exampleUrl(adapter: AdapterObject): string {
 function fillTemplate(template: string): string {
   let result = "";
   for (let index = 0; index < template.length;) {
+    // A bare alternation such as `(:w:|:x:)` previews as its first literal.
+    if (template[index] === "(") {
+      const close = template.indexOf(")", index + 1);
+      if (close < 0) return template;
+      result += template.slice(index + 1, close).split("|")[0];
+      index = close + 1;
+      continue;
+    }
     if (template[index] !== "{") {
       result += template[index];
       index += 1;

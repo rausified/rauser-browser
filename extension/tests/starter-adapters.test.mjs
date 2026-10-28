@@ -10,6 +10,7 @@ const {
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
+  starterRuleUpdate,
   withContainerLinks,
   containerLinks,
 } = await import("../dist/starter-adapters.js");
@@ -215,4 +216,82 @@ test("withContainerLinks links only rules whose linked copy compiles, and leaves
   assert.equal(linked[2], otherOrigin);
   assert.equal(linked[3], elsewhere);
   assert.deepEqual(containerLinks(artifacts, { ...repo, type: "github.other" }), { linked: 0, skipped: 0 });
+});
+
+const ONEDRIVE = "https://cisco-my.sharepoint.com";
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+// The SharePoint/OneDrive starter as saved before sharing links covered OneDrive.
+const staleOneDrive = () => ({
+  type: "sharepoint.doc",
+  origin: ONEDRIVE,
+  path_case: "insensitive",
+  match: [
+    { path: "/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+    { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+    { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+  ],
+  id: "sharepoint:{host}/{doc}",
+});
+
+const OLD_SHARE_RULE = { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+
+test("a saved earlier OneDrive starter swaps its retired rule for the current one and keeps a user rule", () => {
+  const extra = { path: "/:b:/r/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+  const saved = { ...staleOneDrive(), match: [...staleOneDrive().match, extra] };
+  const update = starterRuleUpdate(saved);
+  assert.ok(update);
+  assert.deepEqual(update.added, [SHARE_RULE]);
+  assert.deepEqual(update.removed, [OLD_SHARE_RULE]);
+  const [sites, , personal] = staleOneDrive().match;
+  assert.deepEqual(update.adapter, { ...saved, match: [sites, personal, extra, SHARE_RULE] });
+  assert.deepEqual(saved.match.slice(0, 3), staleOneDrive().match, "the saved adapter is not mutated");
+  assert.deepEqual(starterRuleUpdate(staleOneDrive()).adapter.match, [sites, personal, SHARE_RULE]);
+  // Already at the current rules: nothing to offer.
+  assert.equal(starterRuleUpdate(update.adapter), null);
+});
+
+test("the real OneDrive sharing link matches the updated adapter", () => {
+  const { adapter } = starterRuleUpdate(staleOneDrive());
+  const result = compileDocument({ format: 1, artifacts: [adapter] });
+  assert.equal(result.ok, true);
+  const url = `${ONEDRIVE}/:w:/r/personal/havishwa_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D&file=x.docx`;
+  const before = compileDocument({ format: 1, artifacts: [staleOneDrive()] });
+  assert.equal(evaluate(before.doc, url).match, false);
+  const found = evaluate(result.doc, url);
+  assert.equal(found.match, true);
+  assert.equal(found.artifact_id, "sharepoint:cisco-my.sharepoint.com/8baf1543-cdbf-4003-a48f-d4a939774fc0");
+});
+
+test("an up-to-date, narrowed, hand-written, or non-starter adapter has no update", () => {
+  for (const offer of [
+    ...starterOffers(ONEDRIVE, []),
+    ...starterOffers("https://acme.atlassian.net", []),
+    ...starterOffers("https://github.com", ["acme-corp"]),
+  ]) assert.equal(starterRuleUpdate(offer.adapter), null, offer.key);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), type: "sharepoint.page" }), null);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), id: "sharepoint:{doc}" }), null);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), origin: "https://example.com" }), null);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), match: "nonsense" }), null);
+  // An earlier SharePoint starter the user narrowed matches no known version.
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), match: staleOneDrive().match.slice(0, 2) }), null);
+  // A Jira starter whose user removed the board-modal rule stays narrowed.
+  const [jira] = starterOffers("https://acme.atlassian.net", []);
+  assert.equal(starterRuleUpdate({ ...jira.adapter, match: jira.adapter.match.slice(0, 1) }), null);
+  // A hand-written pull request adapter was never the starter, which has
+  // always had the mode-tab rule.
+  assert.equal(starterRuleUpdate({
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  }), null);
+});
+
+test("an update stays within 16 rules", () => {
+  const filler = Array.from({ length: 13 }, (_, at) =>
+    ({ path: `/extra${at}/_layouts/15/Doc.aspx`, query: { sourcedoc: "{doc:uuid}" } }));
+  const full = { ...staleOneDrive(), match: [...staleOneDrive().match, ...filler] };
+  assert.equal(full.match.length, 16);
+  const update = starterRuleUpdate(full);
+  assert.equal(update.adapter.match.length, 16);
+  assert.deepEqual(update.adapter.match.slice(2, 15), filler);
 });
