@@ -627,7 +627,8 @@ fn rule_verdict_view(verdict: RuleVerdict) -> RuleVerdictView {
 /// `check_site_draft`: re-checks the review's selection against the
 /// current config before the save. Each checked table is judged by
 /// `check_draft_rules` with its provenance and the earlier tables as
-/// accepted, then its scope choice by `resolve_scope_choice`. The choice
+/// accepted, then its scope choice by `resolve_scope_choice`, which refuses
+/// `unscoped` for a table with a rule anchored only by its tenant. The choice
 /// travels beside the table and is never merged into it, so a table that
 /// itself carries `title`, `scope` or `unscoped` with a drafted rule is
 /// still refused as `draft_forbidden_key`. It writes nothing.
@@ -681,21 +682,22 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
     let mut scope = Vec::with_capacity(tables.len());
     let mut previewed = Vec::with_capacity(tables.len());
     for ((table, provenance), choice) in tables.iter().zip(&value.scope) {
-        let verdicts = match check_draft_rules(existing, table, provenance, policy, &accepted) {
-            Ok(report) => {
-                accepted.extend(report.document);
-                report.rules
-            }
-            Err(outcome) => {
-                let code = match outcome {
-                    DraftOutcome::DraftError(code) => code,
-                    DraftOutcome::Invalid(_) | DraftOutcome::Ok { .. } => {
-                        DraftErrorCode::InvalidRule
-                    }
-                };
-                vec![RuleVerdict::Dropped(code); provenance.len()]
-            }
-        };
+        let (verdicts, scope_anchored) =
+            match check_draft_rules(existing, table, provenance, policy, &accepted) {
+                Ok(report) => {
+                    accepted.extend(report.document);
+                    (report.rules, report.scope_anchored)
+                }
+                Err(outcome) => {
+                    let code = match outcome {
+                        DraftOutcome::DraftError(code) => code,
+                        DraftOutcome::Invalid(_) | DraftOutcome::Ok { .. } => {
+                            DraftErrorCode::InvalidRule
+                        }
+                    };
+                    (vec![RuleVerdict::Dropped(code); provenance.len()], false)
+                }
+            };
         let keep: Vec<usize> = verdicts
             .iter()
             .enumerate()
@@ -704,7 +706,13 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
             .collect();
         previewed.push(preview_adapter(table, keep));
         rules.push(verdicts.into_iter().map(rule_verdict_view).collect());
-        let resolved = resolve_scope_choice(&state, &scope_choice(choice.as_ref()), policy);
+        // A rule anchored only by the scoped tenant cannot be saved unscoped.
+        let resolved = resolve_scope_choice(
+            &state,
+            &scope_choice(choice.as_ref()),
+            policy,
+            scope_anchored,
+        );
         scope.push(ScopeVerdictView {
             state: scope_state_view(&state),
             resolved: resolved.as_ref().ok().map(|r| match r {
@@ -810,6 +818,7 @@ mod handler_tests {
     use std::path::{Path, PathBuf};
 
     const TOOLS: &str = "https://tools.example.com";
+    const NOTION: &str = "https://www.notion.so";
     const LINEAR: &str = "https://linear.app";
     const FIGMA: &str = "https://www.figma.com";
     const TOOLS_ITEMS: &str = "[[artifacts]]\ntype = \"tools.item\"\norigin = \"https://tools.example.com\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"tools.item:{host}/{id}\"\n";
@@ -1853,6 +1862,60 @@ mod handler_tests {
         );
         assert!(
             response.rules[0]
+                .iter()
+                .all(|r| r.verdict == RuleVerdictKind::Kept),
+            "rule verdicts never depend on the scope choice"
+        );
+    }
+
+    #[test]
+    fn notion_workspace_pages_draft_with_the_tenant_as_anchor_and_refuse_unscoped() {
+        let mut s = setup("");
+        let site = drafted(draft_site(
+            request(NOTION, &["/acme/{tailhex32}", "/acme/{hex32}"], &[]),
+            &mut s.config,
+        ));
+        assert_eq!(site.adapters.len(), 1, "{site:?}");
+        let adapter = &site.adapters[0];
+        assert_eq!(adapter.scope, DraftScopeState::Pending);
+        assert_eq!(adapter.adapter["type"], json!("notion.page"));
+        assert_eq!(
+            adapter.adapter["match"],
+            json!([{"path": "/{workspace:name|lower}/{hex:hex(32)@tail}"}])
+        );
+        let table = adapter.adapter.clone();
+        let run = |s: &mut Setup, choice: Option<ScopeChoiceView>| {
+            checked(check_site_draft(
+                check(
+                    NOTION,
+                    &site.revision,
+                    vec![table.clone()],
+                    vec![drafted_rules(&table)],
+                    vec![choice],
+                ),
+                &mut s.config,
+            ))
+        };
+        let scoped = run(&mut s, values(&["acme"]));
+        assert!(
+            scoped.rules[0]
+                .iter()
+                .all(|r| r.verdict == RuleVerdictKind::Kept),
+            "{scoped:?}"
+        );
+        assert_eq!(scoped.scope[0].resolved, Some(ResolvedScopeKind::Scoped));
+        // The workspace is the rule's only anchor, so it cannot be unscoped.
+        let unscoped = run(
+            &mut s,
+            Some(ScopeChoiceView::UnscopedChoice(UnscopedChoice::Unscoped)),
+        );
+        assert_eq!(unscoped.scope[0].resolved, None);
+        assert_eq!(
+            unscoped.scope[0].reason.as_deref(),
+            Some("draft_scope_choice")
+        );
+        assert!(
+            unscoped.rules[0]
                 .iter()
                 .all(|r| r.verdict == RuleVerdictKind::Kept),
             "rule verdicts never depend on the scope choice"

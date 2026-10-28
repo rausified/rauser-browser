@@ -93,6 +93,10 @@ pub struct DraftRulesReport {
     /// the checks do; the saved scope comes from [`resolve_scope_choice`].
     /// `None` when no rule survives.
     pub document: Option<Document>,
+    /// Some surviving rule is anchored only by the scope's tenant capture
+    /// (step 4): it needs that scope, so [`resolve_scope_choice`] refuses
+    /// `unscoped` for it.
+    pub scope_anchored: bool,
 }
 
 /// The review's scope choice for a shared origin. It travels next to the
@@ -183,26 +187,52 @@ fn one_adapter_document(adapter: Value) -> Result<Document, ValidationError> {
     ]))
 }
 
-/// Step 4: a literal before the first identifier capture, then `{*}` not
-/// second (SQ-V18). Neither `{_}` nor a plain alternation is a capture or a
-/// literal (SQ28); a `name` capture or a captured alternation is a capture
-/// but not an identifier.
-fn rule_structure(rule: &Rule) -> Option<DraftErrorCode> {
+/// The segments of `rule` before its first identifier capture.
+fn before_first_identifier(rule: &Rule) -> &[Segment] {
     let segs = &rule.path.segments;
-    let first_capture = segs
+    let first = segs
         .iter()
         .position(is_identifier_capture)
         .unwrap_or(segs.len());
-    if !segs[..first_capture]
+    &segs[..first]
+}
+
+/// A required path capture that a `scope` key of `a` restricts to a list.
+/// It anchors a template as a literal does (adapter-templates §4.1, §6:
+/// the listed values pin it). An `unscoped` adapter has no such capture.
+fn scope_restricted(a: &Adapter, s: &Segment) -> bool {
+    matches!(s, Segment::Capture { name, optional: false, .. }
+        if a.scope.as_ref().is_some_and(|scope| scope.iter().any(|(key, _)| key == name)))
+}
+
+/// Step 4: an anchor before the first identifier capture, then `{*}` not
+/// second (SQ-V18). The anchor is a literal, or a required capture a scope
+/// key restricts (on a shared origin, the scoped tenant): the same rule
+/// that lets a hand-written template anchor on a scoped capture (§4.1), so
+/// the drafter keeps no tenant rule of its own. A draft is still stricter
+/// than §4.1 where its inputs are page-controlled: neither `{_}`, a plain
+/// alternation (SQ28) nor a fixed-shape capture anchors it, and a `name`
+/// capture or a captured alternation is a capture but not an identifier.
+fn rule_structure(a: &Adapter, rule: &Rule) -> Option<DraftErrorCode> {
+    if !before_first_identifier(rule)
         .iter()
-        .any(|s| matches!(s, Segment::Literal(_)))
+        .any(|s| matches!(s, Segment::Literal(_)) || scope_restricted(a, s))
     {
         return Some(DraftErrorCode::NoLeadingLiteral);
     }
-    if segs.get(1) == Some(&Segment::Rest) {
+    if rule.path.segments.get(1) == Some(&Segment::Rest) {
         return Some(DraftErrorCode::RestSecond);
     }
     None
+}
+
+/// Whether `rule`'s only anchor before its first identifier is the scoped
+/// capture: without that scope it would fail step 4, so it cannot be saved
+/// `unscoped` (see [`DraftRulesReport::scope_anchored`]).
+fn anchored_by_scope(rule: &Rule) -> bool {
+    !before_first_identifier(rule)
+        .iter()
+        .any(|s| matches!(s, Segment::Literal(_)))
 }
 
 /// Step 5: the ID uses at least one identifier capture; a `name` capture
@@ -290,7 +320,7 @@ pub fn check_draft(
     let a = &doc.adapters[0];
 
     // 4. Per rule: leading literal, then rest position.
-    if let Some(code) = a.rules.iter().find_map(rule_structure) {
+    if let Some(code) = a.rules.iter().find_map(|r| rule_structure(a, r)) {
         return DraftError(code);
     }
 
@@ -399,7 +429,7 @@ fn rule_check(
     existing: &Document,
     accepted: &[Document],
 ) -> Option<DraftErrorCode> {
-    if let Some(code) = rule_structure(rule) {
+    if let Some(code) = rule_structure(a, rule) {
         return Some(code);
     }
     if blocked_route(rule, policy) {
@@ -519,10 +549,13 @@ pub fn check_draft_rules(
     }
 
     // 4. Per-rule checks, then the survivors together.
+    let mut by_scope = vec![false; rule_values.len()];
     for (i, doc) in alone.iter().enumerate() {
         let Some(doc) = doc else { continue };
         let a = &doc.adapters[0];
-        if let Some(code) = rule_check(a, &a.rules[0], policy, existing, accepted) {
+        let rule = &a.rules[0];
+        by_scope[i] = rule_structure(a, rule).is_none() && anchored_by_scope(rule);
+        if let Some(code) = rule_check(a, rule, policy, existing, accepted) {
             fail(&mut rules, i, code);
         }
     }
@@ -555,10 +588,15 @@ pub fn check_draft_rules(
         }
     }
 
+    let scope_anchored = rules
+        .iter()
+        .zip(&by_scope)
+        .any(|(verdict, by_scope)| *by_scope && !matches!(verdict, RuleVerdict::Dropped(_)));
     Ok(DraftRulesReport {
         scope,
         rules,
         document,
+        scope_anchored,
     })
 }
 
@@ -568,13 +606,17 @@ pub fn check_draft_rules(
 /// blocked route words (a workspace named `auth` or `invite` is a sign-in
 /// or capability route), or unscoped. Unscoped-only accepts only unscoped,
 /// and copied or not-shared scope accepts no choice: a copied scope is the
-/// host's copy.
+/// host's copy. When `scope_anchored` (a kept rule is anchored only by the
+/// scoped tenant, [`DraftRulesReport::scope_anchored`]), `unscoped` is
+/// `draft_scope_choice` too: without the scope that rule has no anchor.
 pub fn resolve_scope_choice(
     state: &ScopeState,
     choice: &ScopeChoice,
     policy: &DraftPolicy,
+    scope_anchored: bool,
 ) -> Result<ResolvedScope, DraftErrorCode> {
     match (state, choice) {
+        (_, ScopeChoice::Unscoped) if scope_anchored => Err(DraftErrorCode::ScopeChoice),
         (ScopeState::NotShared, ScopeChoice::None) => Ok(ResolvedScope::NotShared),
         (ScopeState::Copied(scope), ScopeChoice::None) => Ok(ResolvedScope::Scoped(scope.clone())),
         (ScopeState::Pending { .. } | ScopeState::UnscopedOnly, ScopeChoice::Unscoped) => {
@@ -982,11 +1024,11 @@ mod tests {
     fn resolve_scope_choice_accepts_values_or_unscoped_for_pending_scope() {
         let values = ScopeChoice::Values(vec!["acme-corp".into(), "acme-labs".into()]);
         assert_eq!(
-            resolve_scope_choice(&pending(), &values, &catalog()),
+            resolve_scope_choice(&pending(), &values, &catalog(), false),
             Ok(ResolvedScope::Scoped(owner(&["acme-corp", "acme-labs"])))
         );
         assert_eq!(
-            resolve_scope_choice(&pending(), &ScopeChoice::Unscoped, &catalog()),
+            resolve_scope_choice(&pending(), &ScopeChoice::Unscoped, &catalog(), false),
             Ok(ResolvedScope::Unscoped)
         );
     }
@@ -995,21 +1037,21 @@ mod tests {
     fn resolve_scope_choice_refuses_missing_or_empty_scope_when_pending() {
         for choice in [ScopeChoice::None, ScopeChoice::Values(vec![])] {
             assert_eq!(
-                resolve_scope_choice(&pending(), &choice, &catalog()),
+                resolve_scope_choice(&pending(), &choice, &catalog(), false),
                 Err(C::ScopePending)
             );
         }
         for bad in ["Acme", "", "a/b", "a b"] {
             let choice = ScopeChoice::Values(vec![bad.into()]);
             assert_eq!(
-                resolve_scope_choice(&pending(), &choice, &catalog()),
+                resolve_scope_choice(&pending(), &choice, &catalog(), false),
                 Err(C::ScopeChoice),
                 "{bad:?}"
             );
         }
         let too_many = ScopeChoice::Values((0..65).map(|i| format!("org{i}")).collect());
         assert_eq!(
-            resolve_scope_choice(&pending(), &too_many, &catalog()),
+            resolve_scope_choice(&pending(), &too_many, &catalog(), false),
             Err(C::ScopeChoice)
         );
     }
@@ -1018,12 +1060,12 @@ mod tests {
     fn resolve_scope_choice_allows_only_unscoped_where_no_tenant_position() {
         let state = ScopeState::UnscopedOnly;
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::Unscoped, &catalog()),
+            resolve_scope_choice(&state, &ScopeChoice::Unscoped, &catalog(), false),
             Ok(ResolvedScope::Unscoped)
         );
         for choice in [ScopeChoice::None, ScopeChoice::Values(vec!["acme".into()])] {
             assert_eq!(
-                resolve_scope_choice(&state, &choice, &catalog()),
+                resolve_scope_choice(&state, &choice, &catalog(), false),
                 Err(C::ScopeChoice)
             );
         }
@@ -1033,7 +1075,7 @@ mod tests {
     fn resolve_scope_choice_keeps_copied_scope_fixed() {
         let state = ScopeState::Copied(owner(&["acme-corp"]));
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::None, &catalog()),
+            resolve_scope_choice(&state, &ScopeChoice::None, &catalog(), false),
             Ok(ResolvedScope::Scoped(owner(&["acme-corp"])))
         );
         for choice in [
@@ -1041,17 +1083,17 @@ mod tests {
             ScopeChoice::Values(vec!["other".into()]),
         ] {
             assert_eq!(
-                resolve_scope_choice(&state, &choice, &catalog()),
+                resolve_scope_choice(&state, &choice, &catalog(), false),
                 Err(C::ScopeChoice)
             );
         }
         let state = ScopeState::NotShared;
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::None, &catalog()),
+            resolve_scope_choice(&state, &ScopeChoice::None, &catalog(), false),
             Ok(ResolvedScope::NotShared)
         );
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::Unscoped, &catalog()),
+            resolve_scope_choice(&state, &ScopeChoice::Unscoped, &catalog(), false),
             Err(C::ScopeChoice)
         );
     }
@@ -1069,7 +1111,7 @@ mod tests {
             ScopeChoice::Values(vec!["acme-corp".into()]),
             ScopeChoice::None,
         ] {
-            let _ = resolve_scope_choice(&first.scope, &choice, &catalog());
+            let _ = resolve_scope_choice(&first.scope, &choice, &catalog(), false);
             let again = check(&empty(), draft.clone(), &[D, D]);
             assert_eq!(again.rules, first.rules);
             assert_eq!(again.scope, first.scope);
@@ -1092,12 +1134,12 @@ mod tests {
     }
 
     #[test]
-    fn notion_paths_without_route_word_are_refused_by_the_leading_literal_rule() {
+    fn notion_workspace_pages_are_anchored_by_the_scoped_tenant() {
         let draft = json!({
             "type": "notion.page",
             "origin": "https://www.notion.so",
             "match": [{"path": "/{workspace:name|lower}/{id:hex(32)@tail}"}],
-            "id": "notion:{host}/{id}"
+            "id": "notion:{host}/{workspace}/{id}"
         });
         let r = check(&empty(), draft, &[D]);
         assert_eq!(
@@ -1106,7 +1148,81 @@ mod tests {
                 capture: "workspace".into()
             }
         );
-        assert_eq!(r.rules, vec![Dropped(C::NoLeadingLiteral)]);
-        assert!(r.document.is_none());
+        // The tenant capture the review scopes is the rule's anchor
+        // (adapter-templates §4.1, §6), as it is for a hand-written adapter.
+        assert_eq!(r.rules, vec![Kept]);
+        assert!(r.document.is_some());
+        assert!(r.scope_anchored);
+        // Without the scope the rule has no anchor, so unscoped is refused.
+        assert_eq!(
+            resolve_scope_choice(
+                &r.scope,
+                &ScopeChoice::Unscoped,
+                &catalog(),
+                r.scope_anchored
+            ),
+            Err(C::ScopeChoice)
+        );
+        assert_eq!(
+            resolve_scope_choice(
+                &r.scope,
+                &ScopeChoice::Values(vec!["acme".into()]),
+                &catalog(),
+                r.scope_anchored
+            ),
+            Ok(ResolvedScope::Scoped(vec![(
+                "workspace".into(),
+                vec!["acme".into()]
+            )]))
+        );
+    }
+
+    #[test]
+    fn only_a_scope_restricted_capture_anchors_a_draft() {
+        // A rule with a route word does not depend on its scope.
+        let linear = json!({
+            "type": "linear.issue",
+            "origin": "https://linear.app",
+            "match": [{"path": "/{workspace:name|lower}/issue/{key:jira_key}"}],
+            "id": "linear.issue:{host}/{workspace}/{key}"
+        });
+        let r = check(&empty(), linear, &[D]);
+        assert_eq!(r.rules, vec![Kept]);
+        assert!(!r.scope_anchored);
+        assert_eq!(
+            resolve_scope_choice(
+                &r.scope,
+                &ScopeChoice::Unscoped,
+                &catalog(),
+                r.scope_anchored
+            ),
+            Ok(ResolvedScope::Unscoped)
+        );
+        // Off a shared origin a `name` capture is not scoped and anchors
+        // nothing, and neither does a fixed-shape capture.
+        for (path, id) in [
+            ("/{space:name|lower}/{id:hex(32)}", "x:{host}/{space}/{id}"),
+            ("/{id:hex(32)@tail}", "x:{host}/{id}"),
+        ] {
+            let draft = json!({
+                "type": "x.item", "origin": TOOLS,
+                "match": [{"path": path}], "id": id
+            });
+            let r = check(&empty(), draft, &[D]);
+            assert_eq!(r.rules, vec![Dropped(C::NoLeadingLiteral)], "{path}");
+            assert!(!r.scope_anchored);
+        }
+        // A copied scope anchors its capture too.
+        let existing = doc(json!({"format": 1, "artifacts": [github_scoped("acme-corp")]}));
+        let draft = json!({
+            "type": "github.thing",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{number:int}"}],
+            "id": "github.thing:{host}/{owner}/{number}"
+        });
+        let r = check(&existing, draft, &[D]);
+        assert!(matches!(r.scope, ScopeState::Copied(_)));
+        assert_eq!(r.rules, vec![Kept]);
+        assert!(r.scope_anchored);
     }
 }

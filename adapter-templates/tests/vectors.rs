@@ -226,6 +226,11 @@ fn run_draft_rules(case: &Json) -> Result<Json, String> {
         ));
     }
     let mut out = json!({"scope": scope, "rules": verdicts});
+    if report.scope_anchored {
+        out.as_object_mut()
+            .unwrap()
+            .insert("scope_anchored".into(), json!(true));
+    }
     if let Some(choice) = case.get("choice") {
         let choice = match choice {
             Json::Null => ScopeChoice::None,
@@ -235,12 +240,13 @@ fn run_draft_rules(case: &Json) -> Result<Json, String> {
             }
             other => return Err(format!("bad choice {other}")),
         };
-        let resolved = match resolve_scope_choice(&report.scope, &choice, &policy) {
-            Ok(ResolvedScope::NotShared) => json!("not_shared"),
-            Ok(ResolvedScope::Unscoped) => json!("unscoped"),
-            Ok(ResolvedScope::Scoped(s)) => json!({"scoped": scope_json(&s)}),
-            Err(code) => json!({"scope_error": code.as_str()}),
-        };
+        let resolved =
+            match resolve_scope_choice(&report.scope, &choice, &policy, report.scope_anchored) {
+                Ok(ResolvedScope::NotShared) => json!("not_shared"),
+                Ok(ResolvedScope::Unscoped) => json!("unscoped"),
+                Ok(ResolvedScope::Scoped(s)) => json!({"scoped": scope_json(&s)}),
+                Err(code) => json!({"scope_error": code.as_str()}),
+            };
         out.as_object_mut()
             .unwrap()
             .insert("resolved".into(), resolved);

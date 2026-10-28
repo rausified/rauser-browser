@@ -9238,6 +9238,38 @@
       "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
     },
     {
+      "id": "validate.drafted.tenant_anchored_scoped",
+      "kind": "validate",
+      "why": "§4.1, §6, DESIGN §5.1: a drafted shared-origin adapter whose only anchor is its tenant validates once the review scopes the tenant",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "linear.issue", "origin": "https://linear.app", "match": [{"path": "/{workspace:name|lower}/{key:jira_key}"}], "id": "linear.issue:{host}/{workspace}/{key}", "scope": {"workspace": ["acme"]}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.drafted.tenant_anchored_unscoped",
+      "kind": "validate",
+      "why": "§4.1: the same drafted adapter saved unscoped has no anchor",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "linear.issue", "origin": "https://linear.app", "match": [{"path": "/{workspace:name|lower}/{key:jira_key}"}], "id": "linear.issue:{host}/{workspace}/{key}", "unscoped": "acknowledged"}]},
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.drafted.notion_workspace_scoped",
+      "kind": "validate",
+      "why": "§4.1, §6, DESIGN §5.1 (brwr-gf1): the drafted Notion workspace page adapter, scoped to the workspace the review confirmed",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{hex:hex(32)@tail}"}], "id": "notion.page:{host}/{workspace}/{hex}", "scope": {"workspace": ["acme"]}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.drafted.id_less_rule",
+      "kind": "validate",
+      "why": "§8.1, DESIGN §5.1: a drafted rule that does not bind the ID's captures cannot be saved, so the per-rule checks drop it as draft_invalid_rule",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "tools.docs", "origin": "https://tools.example.com", "match": [{"path": "/docs/{num:int}"}, {"path": "/about/team"}], "id": "tools.docs:{host}/{num}"}]},
+      "expect": {"error": {"code": "id_unknown_capture", "adapter": 0, "rule": 1, "entry": null}}
+    },
+    {
       "id": "validate.path.alternation_counts_as_literal",
       "kind": "validate",
       "why": "§4.1: a plain alternation satisfies the literal rule",
@@ -26545,13 +26577,62 @@
       "expect": {"draft_error": "draft_id_needs_typed_capture"}
     },
     {
-      "id": "draft_rules.notion_paths_without_route_word_are_refused_by_the_leading_literal_rule",
+      "id": "draft_rules.notion_workspace_pages_are_anchored_by_the_scoped_tenant",
       "kind": "draft_rules",
-      "why": "§10.4: a Notion workspace page has no route word before its ID (brwr-gf1)",
+      "why": "§4.1, §6, §10.4: the scoped workspace tenant is a Notion workspace page's anchor before its ID (brwr-gf1, revisited 2026-10-27)",
       "impls": ["rust"],
       "existing": {"format": 1, "artifacts": []},
-      "draft": {"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{id:hex(32)@tail}"}], "id": "notion:{host}/{id}"},
-      "expect": {"scope": {"pending": "workspace"}, "rules": [{"dropped": "draft_no_leading_literal"}]}
+      "draft": {"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{id:hex(32)@tail}"}], "id": "notion:{host}/{workspace}/{id}"},
+      "choice": {"values": ["acme"]},
+      "expect": {"scope": {"pending": "workspace"}, "rules": ["kept"], "scope_anchored": true, "resolved": {"scoped": {"workspace": ["acme"]}}}
+    },
+    {
+      "id": "draft_rules.id_less_rule_is_dropped",
+      "kind": "draft_rules",
+      "why": "§8.1, DESIGN §5.1: a drafted rule that does not bind the ID's captures is dropped and the rest kept; validate.drafted.id_less_rule is the same table in both engines",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "tools.docs", "origin": "https://tools.example.com", "match": [{"path": "/docs/{num:int}"}, {"path": "/about/team"}], "id": "tools.docs:{host}/{num}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_invalid_rule"}]}
+    },
+    {
+      "id": "draft_rules.tenant_anchored_rule_refuses_unscoped",
+      "kind": "draft_rules",
+      "why": "§4.1, §10.4: unscoped would leave a tenant-anchored rule with no anchor",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{id:hex(32)@tail}"}], "id": "notion:{host}/{workspace}/{id}"},
+      "choice": "unscoped",
+      "expect": {"scope": {"pending": "workspace"}, "rules": ["kept"], "scope_anchored": true, "resolved": {"scope_error": "draft_scope_choice"}}
+    },
+    {
+      "id": "draft_rules.route_word_rule_may_be_unscoped",
+      "kind": "draft_rules",
+      "why": "§10.4: a rule with a route word before its ID does not depend on the tenant scope",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "linear.issue", "origin": "https://linear.app", "match": [{"path": "/{workspace:name|lower}/issue/{key:jira_key}"}], "id": "linear.issue:{host}/{workspace}/{key}"},
+      "choice": "unscoped",
+      "expect": {"scope": {"pending": "workspace"}, "rules": ["kept"], "resolved": "unscoped"}
+    },
+    {
+      "id": "draft_rules.tenant_anchor_needs_a_tenant_position",
+      "kind": "draft_rules",
+      "why": "§10.4: off a shared origin a name capture is not scoped, so it anchors nothing",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/{space:name|lower}/{id:hex(32)@tail}"}], "id": "x:{host}/{space}/{id}"},
+      "expect": {"scope": "not_shared", "rules": [{"dropped": "draft_no_leading_literal"}]}
+    },
+    {
+      "id": "draft_rules.copied_scope_anchors_its_capture",
+      "kind": "draft_rules",
+      "why": "§4.1, §10.4: a copied scope restricts its capture, which then anchors the rule",
+      "impls": ["rust"],
+      "existing": {"$fixture": "github_without_repo"},
+      "draft": {"type": "github.thing", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{number:int}"}], "id": "github.thing:{host}/{owner}/{number}"},
+      "choice": null,
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": ["kept"], "scope_anchored": true, "resolved": {"scoped": {"owner": ["acme-corp"]}}}
     },
     {
       "id": "draft_rules.resolve_pending_with_values",

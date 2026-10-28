@@ -196,16 +196,43 @@ fn reason_of(site: &SiteDraft, shape: &str) -> Option<DropReason> {
         .map(|d| d.reason)
 }
 
+/// The tenants the recorded fixture URLs name, for a draft whose only
+/// anchor is the tenant the review scopes.
+const FIXTURE_TENANTS: &[&str] = &["acme", "acme-corp"];
+
 /// The drafted adapter table as it would be evaluated: the checked table,
 /// unscoped while the scope is the review's to choose, so it matches without
-/// scope as the draft checks do, or with the copied scope.
+/// scope as the draft checks do, or with the copied scope. A pending draft
+/// anchored only by its tenant cannot be unscoped (adapter-templates §4.1),
+/// so it is scoped to the fixtures' tenants instead.
 fn evaluable(adapter: &DraftedAdapter) -> Value {
     let Value::Table(mut table) = adapter.adapter.clone() else {
         panic!("adapter table");
     };
     match &adapter.scope {
         ScopeState::NotShared => {}
-        ScopeState::Pending { .. } | ScopeState::UnscopedOnly => {
+        ScopeState::Pending { capture } => {
+            let mut unscoped = table.clone();
+            unscoped.push(("unscoped".into(), Value::String("acknowledged".into())));
+            let valid = Document::from_value(&Value::Table(vec![
+                ("format".into(), Value::Int(1)),
+                (
+                    "artifacts".into(),
+                    Value::Array(vec![Value::Table(unscoped.clone())]),
+                ),
+            ]))
+            .is_ok();
+            if valid {
+                table = unscoped;
+            } else {
+                let tenants = FIXTURE_TENANTS.iter().map(|t| Value::String((*t).into()));
+                table.push((
+                    "scope".into(),
+                    Value::Table(vec![(capture.clone(), Value::Array(tenants.collect()))]),
+                ));
+            }
+        }
+        ScopeState::UnscopedOnly => {
             table.push(("unscoped".into(), Value::String("acknowledged".into())));
         }
         ScopeState::Copied(scope) => table.push((
@@ -464,40 +491,58 @@ fn title_prefixed_and_bare_hex_pages_share_one_tail_id_behind_a_route_word() {
 }
 
 #[test]
-fn notion_workspace_pages_are_refused_without_a_route_word() {
-    let (_, prefixed) = fixture_row("Notion title-prefixed workspace page");
-    let (_, bare) = fixture_row("Notion bare workspace page");
+fn notion_workspace_pages_draft_behind_the_scoped_workspace() {
+    let (prefixed_url, prefixed) = fixture_row("Notion title-prefixed workspace page");
+    let (bare_url, bare) = fixture_row("Notion bare workspace page");
     let site = draft(NOTION, &empty(), &[&prefixed, &bare], &[]);
-    assert!(site.adapters.is_empty(), "{site:?}");
+    assert!(site.dropped.is_empty(), "{site:?}");
+    // One `hex(32)@tail` rule behind the workspace tenant, which the review
+    // scopes and which is then the rule's anchor (adapter-templates §4.1,
+    // §6). `www` does not name the kind.
+    let [adapter] = &site.adapters[..] else {
+        panic!("one adapter: {site:?}")
+    };
+    assert_eq!(kind(adapter), "notion.page");
     assert_eq!(
-        drops(&site),
-        [
-            ("/acme/{hex32}", DropReason::NoRouteWord),
-            ("/acme/{tailhex32}", DropReason::NoRouteWord),
-        ]
+        rules(adapter),
+        ["/{workspace:name|lower}/{hex:hex(32)@tail}"]
     );
-
-    // Grouped as the drafter would map them, the two forms are one
-    // `hex(32)@tail` rule behind only the tenant, and the per-rule checker
-    // refuses it for want of a leading literal: no checker is weakened.
-    let grouped = value(json!({
-        "type": "notion.page",
-        "origin": NOTION,
-        "match": [{"path": "/{workspace:name|lower}/{hex:hex(32)@tail}"}],
-        "id": "notion.page:{host}/{workspace}/{hex}",
-    }));
-    let report = check_draft_rules(&empty(), &grouped, &[Provenance::Drafted], &policy(), &[])
-        .expect("judged per rule");
     assert_eq!(
-        report.scope,
+        adapter.scope,
         ScopeState::Pending {
             capture: "workspace".into()
         }
     );
-    assert_eq!(
-        report.rules,
-        [RuleVerdict::Dropped(DraftErrorCode::NoLeadingLiteral)]
-    );
+    assert_eq!(adapter.tenant, Some((0, "workspace".to_owned())));
+    let report = check_draft_rules(
+        &empty(),
+        &adapter.adapter,
+        &[Provenance::Drafted],
+        &policy(),
+        &[],
+    )
+    .expect("judged per rule");
+    assert_eq!(report.rules, [RuleVerdict::Kept]);
+    assert!(report.scope_anchored, "unscoped would leave no anchor");
+    // Both forms are one page under one ID, scoped to the workspace.
+    let doc = drafted_document(&site);
+    let a = doc.evaluate(&prefixed_url, None).expect("prefixed matches");
+    let b = doc.evaluate(&bare_url, None).expect("bare matches");
+    assert_eq!(a.artifact_id, b.artifact_id);
+    // Scoped to the workspace, another workspace is not recorded. A page
+    // with no workspace segment has its ID where the tenant goes, so it is
+    // still not drafted (adapter-templates §13).
+    let Value::Table(mut scoped) = adapter.adapter.clone() else {
+        panic!("adapter table")
+    };
+    scoped.push(("scope".into(), value(json!({"workspace": ["acme"]}))));
+    let scoped = document(vec![Value::Table(scoped)]);
+    assert!(scoped.evaluate(&prefixed_url, None).is_ok());
+    let other = prefixed_url.replacen("/acme/", "/elsewhere/", 1);
+    assert!(scoped.evaluate(&other, None).is_err(), "{other}");
+    let rootless = draft(NOTION, &empty(), &["/{hex32}"], &[]);
+    assert!(rootless.adapters.is_empty(), "{rootless:?}");
+    assert_eq!(drops(&rootless), [("/{hex32}", DropReason::NoIdentifier)]);
 }
 
 #[test]

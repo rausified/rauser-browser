@@ -778,10 +778,14 @@ fn build_kind(builder: Builder<'_>) -> Kind {
     }
 }
 
-/// Step 3, Keep. A kind is a candidate when a route word comes before its
-/// first path identifier, or, when its identifiers are only in the query,
-/// when its path has any route word. The tenant position is never a route
-/// word.
+/// Step 3, Keep. A kind is a candidate when an anchor comes before its first
+/// path identifier, or, when its identifiers are only in the query, when its
+/// path has any anchor. An anchor is a route word or, on a shared origin
+/// with a tenant position, the tenant: the drafter scopes that capture, and a
+/// scope-restricted capture anchors a template as a literal does
+/// (adapter-templates §4.1, §6). The tenant is never a route word, so it
+/// never names a kind, and [`check_draft_rules`] then decides whether the
+/// scope it gets really restricts it.
 fn keep(kinds: Vec<Kind>, shared: Option<&SharedOrigin>) -> (Vec<Kind>, Vec<Dropped>) {
     let tenant = shared.and_then(|s| s.tenant.as_ref()).map(|(at, _)| *at);
     let mut kept = Vec::new();
@@ -792,10 +796,10 @@ fn keep(kinds: Vec<Kind>, shared: Option<&SharedOrigin>) -> (Vec<Kind>, Vec<Drop
             Some(DropReason::NoIdentifier)
         } else {
             let before = first.unwrap_or(kind.base.len());
-            let route_word = kind.base[..before].iter().enumerate().any(|(at, part)| {
-                Some(at) != tenant && matches!(part, Part::Literal(_) | Part::Alternation(_))
+            let anchored = kind.base[..before].iter().enumerate().any(|(at, part)| {
+                Some(at) == tenant || matches!(part, Part::Literal(_) | Part::Alternation(_))
             });
-            (!route_word).then_some(DropReason::NoRouteWord)
+            (!anchored).then_some(DropReason::NoRouteWord)
         };
         match reason {
             Some(reason) => dropped.extend(
@@ -1258,7 +1262,8 @@ fn label(raw: &str, fallback: &str) -> String {
     }
 }
 
-/// Step 5, Name. Each type is `<site>.<word>`, with a number appended when
+/// Step 5, Name. Each type is `<site>.<word>`, `<site>` being the host's
+/// first label after a leading `www`, with a number appended when
 /// the config, a starter, `taken` or an earlier kind already has it. The ID
 /// scheme is the type, so IDs never collide across kinds.
 fn name(
@@ -1272,7 +1277,14 @@ fn name(
         .ok()
         .and_then(|u| u.host_str().map(str::to_owned))
         .unwrap_or_default();
-    let site = label(host.split('.').next().unwrap_or_default(), "site");
+    // `www.notion.so` is named for `notion`, not `www`.
+    let mut labels = host.split('.');
+    let first = labels.next().unwrap_or_default();
+    let first = match labels.next() {
+        Some(next) if first == "www" && host.matches('.').count() >= 2 => next,
+        _ => first,
+    };
+    let site = label(first, "site");
     let mut used: BTreeSet<String> = taken
         .iter()
         .chain(&policy.starter_types)
@@ -1860,7 +1872,7 @@ mod tests {
     }
 
     #[test]
-    fn tenant_position_is_not_a_route_word() {
+    fn tenant_position_anchors_but_is_not_a_route_word() {
         let (kinds, dropped) = run(
             GITHUB,
             &Document::default(),
@@ -1874,16 +1886,18 @@ mod tests {
                 &[],
             ),
         );
-        // Tenants group as one position. A blocked route word at the
-        // tenant position is still a blocked route, never a tenant.
-        assert_eq!(texts(&kinds), [["/{tenant}/{slug}/issues/{num}"]]);
-        assert_eq!(kinds[0].rules[0].visited, 2);
+        // Tenants group as one position. The scoped tenant anchors a kind
+        // with no route word (adapter-templates §4.1, §6), so `/acme/{num}`
+        // is kept for the per-rule checks to judge. A blocked route word at
+        // the tenant position is still a blocked route, never a tenant.
+        assert_eq!(
+            texts(&kinds),
+            [["/{tenant}/{num}"], ["/{tenant}/{slug}/issues/{num}"]]
+        );
+        assert_eq!(kinds[1].rules[0].visited, 2);
         assert_eq!(
             drops(&dropped),
-            [
-                ("/acme/{num}", DropReason::NoRouteWord),
-                ("/share/{slug}/issues/{num}", DropReason::BlockedRoute),
-            ]
+            [("/share/{slug}/issues/{num}", DropReason::BlockedRoute)]
         );
 
         // Off a shared origin the same first segment is a route word.

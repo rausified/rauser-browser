@@ -207,7 +207,7 @@ The per-rule checks both Capture Site drafters use (DESIGN §5.1). A failing dra
   - The policy is the host catalog, `protocol/capture-site/catalog.json`. `extra_probe_paths` (optional) appends probe paths to its `probe_paths`.
   - `choice`: optional, the review's scope choice: `null`, `"unscoped"`, or `{"values": [..]}`.
 - **Expected result:** one of:
-  - `{"scope": S, "rules": [V, ..]}`, plus `"resolved": R` when `choice` is present;
+  - `{"scope": S, "rules": [V, ..]}`, plus `"scope_anchored": true` when a surviving rule is anchored only by its scoped capture (step 4), and `"resolved": R` when `choice` is present;
   - `{"draft_error": code}`, for a refusal of the whole draft;
   - `{"error": <validation error>}`, for an adapter-level validation failure (`rule` is `null`).
 - `S` is `"not_shared"`, `"unscoped_only"`, `{"pending": capture}`, or `{"copied": scope}`.
@@ -222,15 +222,18 @@ The host checks the rules in this order. The first failing check decides each ve
    - otherwise `copied` when every scoped adapter on the origin agrees (SQ-V5, SQ-V17);
    - otherwise `pending`, naming the catalog's tenant capture: there is no scoped adapter, or they disagree.
 3. Each rule is validated as a one-rule adapter with the copied scope. While scope is pending, a stand-in scope of the tenant capture is used, and where only unscoped is possible, `unscoped`. A rule that fails is dropped as `draft_invalid_rule`, whoever wrote it, because it can never be saved. A failure with no rule index refuses the whole draft as `error`.
-4. Per rule: `draft_no_leading_literal`, `draft_rest_second`, `draft_blocked_route` (a path literal or alternative is a catalog `blocked_route_words` entry, compared with ASCII folding, by its `-`/`_`/`.` parts and their join, with a trailing number and a plural `s` folded), `draft_search_capture`, `draft_paging_capture` and `draft_secret_capture` (an ID capture bound from a `search_keys`, `paging_keys` or secret query key: a `secret_query_keys` entry, a key containing a `secret_query_key_parts` fragment or ending in a `secret_query_key_suffixes` entry, compared with case folded and `-`, `_`, `.` removed), `draft_matches_probe` (the origin root and each catalog probe path on the draft's origin, matched without scope, SQ-V3), and `draft_overlap` (with `existing`, then with `accepted`). The survivors are then validated together in rule order, and a rule that conflicts with an earlier survivor is dropped as `draft_invalid_rule`.
+4. Per rule: `draft_no_leading_literal` (no anchor before the first identifier capture: the anchor is a literal, or a required path capture a `scope` key restricts, the same scoped-capture anchor as `validate`'s §4.1 rule; with the pending stand-in or a copied scope that is the shared-origin tenant), `draft_rest_second`, `draft_blocked_route` (a path literal or alternative is a catalog `blocked_route_words` entry, compared with ASCII folding, by its `-`/`_`/`.` parts and their join, with a trailing number and a plural `s` folded), `draft_search_capture`, `draft_paging_capture` and `draft_secret_capture` (an ID capture bound from a `search_keys`, `paging_keys` or secret query key: a `secret_query_keys` entry, a key containing a `secret_query_key_parts` fragment or ending in a `secret_query_key_suffixes` entry, compared with case folded and `-`, `_`, `.` removed), `draft_matches_probe` (the origin root and each catalog probe path on the draft's origin, matched without scope, SQ-V3), and `draft_overlap` (with `existing`, then with `accepted`). The survivors are then validated together in rule order, and a rule that conflicts with an earlier survivor is dropped as `draft_invalid_rule`.
 5. `draft_id_needs_typed_capture`, judged on the survivors. It refuses the whole draft when any rule is drafted, and warns every surviving rule otherwise.
 
 `resolved` judges `choice` against the scope state after the checks, and never changes a verdict:
 
+- `"unscoped"` is `draft_scope_choice` whenever `scope_anchored` is set: without the scope that rule has no anchor.
 - Pending scope accepts `"unscoped"` or non-empty `values` that are canonical `name|lower` values, at most 64 after duplicates are removed. No choice, or an empty list, is `draft_scope_pending`; a bad value is `draft_scope_choice`.
 - Unscoped-only accepts only `"unscoped"`.
 - Copied and not-shared scope accept only `null`; copied scope resolves to the host's copy.
 - Any other choice is `draft_scope_choice`.
+
+The `validate.drafted.*` cases (`rust`, `ts`) pin drafted tables as they are saved, so both engines judge a drafted adapter alike: a shared-origin draft whose only anchor is its tenant validates once scoped and fails `no_literal_segment` unscoped, the drafted Notion workspace page adapter validates scoped to its workspace, and a rule that does not bind the ID's captures fails `id_unknown_capture`, which is why the per-rule checks drop it as `draft_invalid_rule` (`draft_rules.id_less_rule_is_dropped`).
 
 ## Error codes (`validate`)
 
@@ -440,18 +443,18 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 
 | Kind | Cases | Impls |
 |---|---|---|
-| validate | 603 | rust, ts |
+| validate | 607 | rust, ts |
 | evaluate | 392 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
 | overlap | 35 | rust |
 | draft | 38 | rust |
-| draft_rules | 35 | rust |
+| draft_rules | 40 | rust |
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 8 | rust |
-| **Total** | **1334** | |
+| **Total** | **1343** | |
 
 ## Maintenance
 
