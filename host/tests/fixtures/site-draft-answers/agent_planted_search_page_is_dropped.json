@@ -1,0 +1,50 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.search",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/search/{n:int}"
+        }
+      ],
+      "id": "tools.search:{host}/{n}"
+    },
+    {
+      "type": "tools.find",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/find",
+          "query": {
+            "q": "{n:int}"
+          }
+        }
+      ],
+      "id": "tools.find:{host}/{n}"
+    },
+    {
+      "type": "tools.query",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs",
+          "query": {
+            "query": "{t:token(1,128)}"
+          }
+        }
+      ],
+      "id": "tools.query:{host}/{t}"
+    }
+  ]
+}

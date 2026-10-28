@@ -781,6 +781,19 @@ pub enum HarnessId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    Summary,
+    SiteDraft,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteDraftAnswerView {
+    pub adapters: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,
     Running,
@@ -849,6 +862,10 @@ pub struct RunView {
     pub can_retry_save: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub answer: Option<RunAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<RunKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_draft: Option<SiteDraftAnswerView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,6 +883,8 @@ pub struct StartRunRequest {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub record_key: Option<RecordKey>,
     pub requested_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<RunKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1025,12 +1044,28 @@ pub struct DraftSiteRequest {
     pub origin: String,
     pub visited: Vec<ShapeCount>,
     pub links: Vec<ShapeCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartSiteDraftRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub origin: String,
+    pub visited: Vec<ShapeCount>,
+    pub links: Vec<ShapeCount>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub harness: Option<HarnessId>,
+    pub requested_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SiteDrafter {
     Structural,
+    Agent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1047,6 +1082,7 @@ pub enum DraftScopeState {
 pub enum UncheckedReason {
     LinkOnly,
     TokenOnly,
+    Unseen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1310,6 +1346,7 @@ pub enum Request {
     OpenSummary(OpenSummaryRequest),
     GetAgentEnv(GetAgentEnvRequest),
     DraftSite(DraftSiteRequest),
+    StartSiteDraft(StartSiteDraftRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
     CheckCaptureSite(CheckCaptureSiteRequest),
@@ -1350,6 +1387,7 @@ impl Request {
             Self::OpenSummary(value) => value.protocol_version,
             Self::GetAgentEnv(value) => value.protocol_version,
             Self::DraftSite(value) => value.protocol_version,
+            Self::StartSiteDraft(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
             Self::CheckCaptureSite(value) => value.protocol_version,
@@ -1390,6 +1428,7 @@ impl Request {
             Self::OpenSummary(value) => &value.request_id,
             Self::GetAgentEnv(value) => &value.request_id,
             Self::DraftSite(value) => &value.request_id,
+            Self::StartSiteDraft(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
             Self::CheckCaptureSite(value) => &value.request_id,

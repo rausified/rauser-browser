@@ -1,4 +1,5 @@
 use brauser_protocol::{AdoptedState, Request, Response};
+use brauser_protocol::{HarnessId, RunKind, UncheckedReason};
 use brauser_protocol::{ScopeChoiceView, ScopeValues, SiteDrafter, UnscopedChoice};
 use serde_json::{Value, json};
 
@@ -1061,10 +1062,239 @@ fn check_site_draft_scope_choice_round_trips_and_rejects_an_empty_values_list() 
 
 #[test]
 fn unknown_drafter_value_is_rejected() {
-    let mut agent = site_drafted();
-    agent["drafter"] = json!("agent");
-    assert!(serde_json::from_value::<Response>(agent.clone()).is_err());
-    assert!(!schema_subset::valid("SiteDrafted", &agent));
+    let mut unknown = site_drafted();
+    unknown["drafter"] = json!("llm");
+    assert!(serde_json::from_value::<Response>(unknown.clone()).is_err());
+    assert!(!schema_subset::valid("SiteDrafted", &unknown));
+}
+
+// --- Capture Site agent drafting (additive v7) -----------------------------
+
+fn start_site_draft(visited: usize, links: usize) -> Value {
+    json!({
+        "type": "start_site_draft", "protocol_version": 8, "request_id": "r1",
+        "origin": "https://work.example",
+        "visited": shapes("v", visited), "links": shapes("l", links),
+        "harness": null, "requested_at": "2026-10-28T09:00:00-07:00",
+    })
+}
+
+fn agent_table(path: &str) -> Value {
+    json!({
+        "type": "work.doc", "origin": "https://work.example",
+        "match": [{ "path": path }], "id": "work.doc:{host}/{num}",
+    })
+}
+
+fn run_view() -> Value {
+    serde_json::from_str(RUN_VIEW).unwrap()
+}
+
+fn run_fetched_value(view: Value) -> Value {
+    json!({
+        "type": "run_fetched", "protocol_version": 8, "request_id": "r",
+        "run": view, "stream_text": "x", "next_offset": 1, "more": false,
+    })
+}
+
+#[test]
+fn start_site_draft_round_trips() {
+    let request = start_site_draft(21, 50);
+    match assert_request_round_trips("StartSiteDraftRequest", &request) {
+        Request::StartSiteDraft(value) => {
+            assert_eq!(value.origin, "https://work.example");
+            assert_eq!((value.visited.len(), value.links.len()), (21, 50));
+            assert_eq!(value.harness, None);
+            assert_eq!(value.requested_at, "2026-10-28T09:00:00-07:00");
+        }
+        other => panic!("not start_site_draft: {other:?}"),
+    }
+    let mut chosen = request.clone();
+    chosen["harness"] = json!("claude");
+    match assert_request_round_trips("StartSiteDraftRequest", &chosen) {
+        Request::StartSiteDraft(value) => assert_eq!(value.harness, Some(HarnessId::Claude)),
+        other => panic!("not start_site_draft: {other:?}"),
+    }
+    // Every key is required; harness is nullable, never omitted.
+    for key in ["origin", "visited", "links", "harness", "requested_at"] {
+        let mut missing = request.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(serde_json::from_value::<Request>(missing).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn start_site_draft_rejects_more_than_50_link_shapes_and_unknown_fields() {
+    assert!(!schema_subset::valid(
+        "StartSiteDraftRequest",
+        &start_site_draft(21, 51)
+    ));
+    assert!(!schema_subset::valid(
+        "StartSiteDraftRequest",
+        &start_site_draft(22, 0)
+    ));
+    let mut long = start_site_draft(0, 0);
+    long["origin"] = json!(format!("https://{}", "a".repeat(2041)));
+    assert!(!schema_subset::valid("StartSiteDraftRequest", &long));
+    // Only the origin and shapes cross: no URL, title, page text, structural
+    // draft, agent input, run kind, or record key.
+    for (key, extra) in [
+        ("url", json!("https://work.example/issue/1")),
+        ("title", json!("T")),
+        ("content", json!("body")),
+        ("draft", json!({ "adapters": [] })),
+        ("input", json!("planted")),
+        ("kind", json!("site_draft")),
+        ("record_key", json!(null)),
+    ] {
+        let mut with_extra = start_site_draft(1, 1);
+        with_extra[key] = extra;
+        assert!(
+            serde_json::from_value::<Request>(with_extra.clone()).is_err(),
+            "{key}"
+        );
+        assert!(
+            !schema_subset::valid("StartSiteDraftRequest", &with_extra),
+            "{key}"
+        );
+    }
+    let mut harness = start_site_draft(1, 1);
+    harness["harness"] = json!("claude_code");
+    assert!(serde_json::from_value::<Request>(harness).is_err());
+}
+
+#[test]
+fn start_run_kind_is_optional_and_bounded_to_the_run_kinds() {
+    let ok: Value = serde_json::from_str(r#"{"type":"start_run","protocol_version":8,"request_id":"r","url":"https://a.example/x","title":"T","content":"body","selection":null,"harness":null,"record_key":null,"requested_at":"2026-10-26T14:00:00-07:00"}"#).unwrap();
+    match serde_json::from_value::<Request>(ok.clone()).unwrap() {
+        Request::StartRun(value) => assert_eq!(value.kind, None),
+        other => panic!("not start_run: {other:?}"),
+    }
+    for (kind, expected) in [
+        ("summary", RunKind::Summary),
+        ("site_draft", RunKind::SiteDraft),
+    ] {
+        let mut with_kind = ok.clone();
+        with_kind["kind"] = json!(kind);
+        let parsed: Request = serde_json::from_value(with_kind.clone()).unwrap();
+        match &parsed {
+            Request::StartRun(value) => assert_eq!(value.kind, Some(expected)),
+            other => panic!("not start_run: {other:?}"),
+        }
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), with_kind);
+    }
+    let mut unknown = ok.clone();
+    unknown["kind"] = json!("chat");
+    assert!(serde_json::from_value::<Request>(unknown).is_err());
+}
+
+#[test]
+fn run_view_without_kind_or_site_draft_still_parses() {
+    // An older service's record has neither key, and a new view without them
+    // writes neither back.
+    let message = run_fetched_value(run_view());
+    let parsed = assert_response_round_trips("RunFetched", &message);
+    let Response::RunFetched(fetched) = parsed else {
+        panic!("not run_fetched");
+    };
+    assert_eq!(fetched.run.kind, None);
+    assert_eq!(fetched.run.site_draft, None);
+
+    let mut view = run_view();
+    view["kind"] = json!("site_draft");
+    view["site_draft"] = json!(null);
+    assert!(schema_subset::valid("RunView", &view));
+    let parsed: Response = serde_json::from_value(run_fetched_value(view.clone())).unwrap();
+    let Response::RunFetched(fetched) = parsed else {
+        panic!("not run_fetched");
+    };
+    assert_eq!(fetched.run.kind, Some(RunKind::SiteDraft));
+    assert_eq!(fetched.run.site_draft, None);
+
+    view["kind"] = json!("summary");
+    view["site_draft"] = json!({ "adapters": [agent_table("/docs/{num:int}")] });
+    let parsed = assert_response_round_trips("RunFetched", &run_fetched_value(view.clone()));
+    let Response::RunFetched(fetched) = parsed else {
+        panic!("not run_fetched");
+    };
+    assert_eq!(fetched.run.site_draft.unwrap().adapters.len(), 1);
+
+    let mut unknown = view.clone();
+    unknown["kind"] = json!("chat");
+    assert!(serde_json::from_value::<Response>(run_fetched_value(unknown.clone())).is_err());
+    assert!(!schema_subset::valid("RunView", &unknown));
+    let mut extra = view.clone();
+    extra["site_draft"]["answer"] = json!("raw");
+    assert!(serde_json::from_value::<Response>(run_fetched_value(extra)).is_err());
+}
+
+#[test]
+fn run_view_site_draft_rejects_more_than_8_adapters() {
+    let mut view = run_view();
+    let tables = |count: usize| Value::Array(vec![agent_table("/docs/{num:int}"); count]);
+    for count in [1, 8] {
+        view["site_draft"] = json!({ "adapters": tables(count) });
+        assert!(schema_subset::valid("RunView", &view), "{count}");
+    }
+    for count in [0, 9] {
+        view["site_draft"] = json!({ "adapters": tables(count) });
+        assert!(!schema_subset::valid("RunView", &view), "{count}");
+    }
+    // Each entry is a table; serde reads any JSON value there, so the
+    // service's validator and the host's check enforce it at runtime.
+    view["site_draft"] = json!({ "adapters": ["/docs/{num:int}"] });
+    assert!(!schema_subset::valid("RunView", &view));
+}
+
+#[test]
+fn draft_site_with_and_without_run_id_round_trips() {
+    let without = draft_site(1, 1);
+    match assert_request_round_trips("DraftSiteRequest", &without) {
+        Request::DraftSite(value) => assert_eq!(value.run_id, None),
+        other => panic!("not draft_site: {other:?}"),
+    }
+    let mut with = draft_site(1, 1);
+    with["run_id"] = json!("00000000-0000-4000-8000-000000000001");
+    match assert_request_round_trips("DraftSiteRequest", &with) {
+        Request::DraftSite(value) => assert_eq!(
+            value.run_id.as_deref(),
+            Some("00000000-0000-4000-8000-000000000001")
+        ),
+        other => panic!("not draft_site: {other:?}"),
+    }
+    // An explicit null means no run, as a missing key does.
+    let mut null = draft_site(1, 1);
+    null["run_id"] = json!(null);
+    assert!(schema_subset::valid("DraftSiteRequest", &null));
+    match serde_json::from_value::<Request>(null).unwrap() {
+        Request::DraftSite(value) => assert_eq!(value.run_id, None),
+        other => panic!("not draft_site: {other:?}"),
+    }
+    for bad in [json!("short"), json!("0".repeat(37)), json!(7)] {
+        let mut request = draft_site(1, 1);
+        request["run_id"] = bad.clone();
+        assert!(!schema_subset::valid("DraftSiteRequest", &request), "{bad}");
+    }
+    let mut number = draft_site(1, 1);
+    number["run_id"] = json!(7);
+    assert!(serde_json::from_value::<Request>(number).is_err());
+}
+
+#[test]
+fn site_drafted_accepts_agent_drafter_and_unseen_reason() {
+    let mut drafted = site_drafted();
+    drafted["drafter"] = json!("agent");
+    drafted["adapters"][0]["rules"][0]["unchecked_reason"] = json!("unseen");
+    match assert_response_round_trips("SiteDrafted", &drafted) {
+        Response::SiteDrafted(value) => {
+            assert_eq!(value.drafter, SiteDrafter::Agent);
+            assert_eq!(
+                value.adapters[0].rules[0].unchecked_reason,
+                Some(UncheckedReason::Unseen)
+            );
+        }
+        other => panic!("not site_drafted: {other:?}"),
+    }
 }
 
 mod schema_subset {
@@ -1087,6 +1317,9 @@ mod schema_subset {
         "minimum",
         "maximum",
         "description",
+        // Not checked here (no regex in this subset); the host checks a
+        // requested_at's form and window at runtime.
+        "pattern",
     ];
 
     pub fn schema() -> Value {

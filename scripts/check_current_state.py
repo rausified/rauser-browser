@@ -41,6 +41,7 @@ def main() -> int:
         readme = section(ROOT / "README.md", "Status")
         readme_development = section(ROOT / "README.md", "Development")
         design = status_line(ROOT / "DESIGN.md")
+        design_text = (ROOT / "DESIGN.md").read_text(encoding="utf-8")
     except (OSError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
@@ -83,8 +84,15 @@ def main() -> int:
     stale_claims["AGENTS.md drafter"] = (
         "host structural drafter, selected-rule enable flow and recurring-page hint remain unbuilt"
     )
+    # Retired by Capture Site Improve with AI (`brwr-f45`): the agent drafter
+    # is built, and the recurring-pages hint drafts structurally first.
+    stale_claims["AGENTS.md agent drafting"] = (
+        "agent drafting (`brwr-f45`) and re-learning (`brwr-6x2`) are not built"
+    )
+    stale_claims["DESIGN.md agent hint"] = "the hint's draft uses the agent when one is set up"
     bodies = {
         "README.md drafting": readme + "\n" + readme_development,
+        "DESIGN.md agent hint": design_text,
         "AGENTS.md": agents,
         "README.md": readme,
         "DESIGN.md": design,
@@ -114,12 +122,15 @@ def main() -> int:
         "host recognition": "host independently rechecks each delivered event",
         "artifact activity": "offset-qualified hourly artifact activity",
         "unknown-site capture": "capture site for unknown sites (`brwr-t40`",
+        "agent drafting": "improve with ai (`brwr-f45`",
     }
     folded_agents = normalized(agents)
     for fact, wording in required_agents_facts.items():
         if normalized(wording) not in folded_agents:
             errors.append(f"AGENTS.md Current state no longer records shipped {fact}")
 
+    if "improve with ai" not in normalized(readme):
+        errors.append("README.md Status no longer records shipped Improve with AI")
     if "records hourly artifact activity" not in normalized(readme):
         errors.append("README.md Status no longer records shipped artifact activity")
     if "delivers day-bounded batches" not in normalized(readme):

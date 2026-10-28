@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     AgentEnvListed, ConfigUpdated, ErrorCode, HarnessId, HarnessesDiscovered, PROTOCOL_VERSION,
-    PathOpened, Request, Response, RunFetched, RunStarted, RunUpdated, RunsListed, ServiceReady,
-    SetUpHarnessRequest, SummaryVocabulary,
+    PathOpened, RecordKey, RecordKeyKind, Request, Response, RunFetched, RunKind, RunStarted,
+    RunUpdated, RunsListed, ServiceReady, SetUpHarnessRequest, StartRunRequest, SummaryVocabulary,
 };
 use uuid::Uuid;
 
@@ -30,7 +30,8 @@ use super::record::check_start_run;
 use super::setup;
 use super::supervisor::{CwdCheck, EnvSource, ServiceOptions, StartRun, Supervisor};
 use crate::brand::NAMESPACE;
-use crate::config::{ConfigLock, ConfigStore};
+use crate::capture_site::exact_origin;
+use crate::config::{ConfigLock, ConfigStore, default_summary_vocabulary};
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::native::{error, parse_envelope};
@@ -280,50 +281,7 @@ impl Server {
                 request_id: value.request_id,
                 build_id: self.build_id.clone(),
             }),
-            Request::StartRun(value) => {
-                let Some(record_key) = value.record_key else {
-                    return error(&id, ErrorCode::InvalidRequest, "record_key is required");
-                };
-                // The host checks these too; a direct socket peer is bounded
-                // the same way.
-                if let Err(message) = check_start_run(
-                    &value.url,
-                    &value.title,
-                    &value.content,
-                    value.selection.as_deref(),
-                ) {
-                    return error(&id, ErrorCode::InvalidRequest, message);
-                }
-                let setup = match self.run_setup(value.harness) {
-                    Ok(setup) => setup,
-                    Err((code, message)) => return error(&id, code, message),
-                };
-                // Checked now so a bad agent.env is reported at the click;
-                // the run reads it again when it leaves the queue.
-                if let Err(env_error) = run_env(&self.paths) {
-                    return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
-                }
-                match self.supervisor.start_run(StartRun {
-                    url: value.url,
-                    title: value.title,
-                    content: value.content,
-                    selection: value.selection,
-                    harness: Some(setup.harness),
-                    record_key,
-                    requested_at: value.requested_at,
-                    cwd: setup.cwd,
-                    timeout: setup.timeout,
-                    vocabulary: setup.vocabulary,
-                }) {
-                    Ok((run, existing)) => Response::RunStarted(RunStarted {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: value.request_id,
-                        run,
-                        existing,
-                    }),
-                    Err((code, message)) => error(&id, code, &message),
-                }
-            }
+            Request::StartRun(value) => self.start_run(value),
             Request::GetRun(value) => {
                 let Some(run_id) = parse_run_id(&value.run_id) else {
                     return bad_run_id(&id);
@@ -396,6 +354,68 @@ impl Server {
         }
     }
 
+    /// Queue a run. A summary runs in the knowledge base folder, which must
+    /// still be the folder the user picked. A site draft (`kind:
+    /// site_draft`, which only the native host sends) runs in its own run
+    /// directory, so it needs no knowledge base: its `url` must be an exact
+    /// HTTP(S) origin, its `record_key` that origin, and it has no selection.
+    fn start_run(&self, value: StartRunRequest) -> Response {
+        let id = value.request_id.clone();
+        let kind = value.kind.unwrap_or(RunKind::Summary);
+        let Some(record_key) = value.record_key else {
+            return error(&id, ErrorCode::InvalidRequest, "record_key is required");
+        };
+        // The host checks these too; a direct socket peer is bounded the
+        // same way.
+        if let Err(message) = check_start_run(
+            &value.url,
+            &value.title,
+            &value.content,
+            value.selection.as_deref(),
+        ) {
+            return error(&id, ErrorCode::InvalidRequest, message);
+        }
+        if kind == RunKind::SiteDraft
+            && let Err(message) = check_site_draft(&value.url, &record_key, &value.selection)
+        {
+            return error(&id, ErrorCode::InvalidRequest, message);
+        }
+        let setup = match kind {
+            RunKind::Summary => self.run_setup(value.harness),
+            RunKind::SiteDraft => self.site_draft_setup(value.harness),
+        };
+        let setup = match setup {
+            Ok(setup) => setup,
+            Err((code, message)) => return error(&id, code, message),
+        };
+        // Checked now so a bad agent.env is reported at the click; the run
+        // reads it again when it leaves the queue.
+        if let Err(env_error) = run_env(&self.paths) {
+            return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
+        }
+        match self.supervisor.start_run(StartRun {
+            kind,
+            url: value.url,
+            title: value.title,
+            content: value.content,
+            selection: value.selection,
+            harness: Some(setup.harness),
+            record_key,
+            requested_at: value.requested_at,
+            cwd: setup.cwd,
+            timeout: setup.timeout,
+            vocabulary: setup.vocabulary,
+        }) {
+            Ok((run, existing)) => Response::RunStarted(RunStarted {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                run,
+                existing,
+            }),
+            Err((code, message)) => error(&id, code, &message),
+        }
+    }
+
     /// Detect and probe the harness, then commit it. Setup gets its own
     /// config store, so the probe never holds up another connection.
     fn set_up_harness(&self, value: SetUpHarnessRequest) -> Response {
@@ -433,21 +453,72 @@ impl Server {
     ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
         let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
-        let agent = config
-            .snapshot()
-            .agent
-            .as_ref()
-            .ok_or((ErrorCode::NotConfigured, SET_UP_HARNESS))?;
-        if let Some(requested) = requested.filter(|requested| *requested != agent.harness) {
-            return Err((ErrorCode::NotConfigured, not_set_up(requested)));
-        }
+        let (harness, timeout) = agent_setup(&config, requested)?;
         Ok(RunSetup {
-            harness: agent.harness,
+            harness,
             cwd: knowledge_base,
-            timeout: Some(Duration::from_secs(agent.timeout_secs.into())),
+            timeout,
             vocabulary: config.snapshot().summary_vocabulary.clone(),
         })
     }
+
+    /// As [`Server::run_setup`], for a site draft: the same harness and
+    /// time limit, but no knowledge base. Its working directory is chosen
+    /// by the supervisor (the run's own directory), and it offers no
+    /// vocabulary.
+    fn site_draft_setup(
+        &self,
+        requested: Option<HarnessId>,
+    ) -> Result<RunSetup, (ErrorCode, &'static str)> {
+        let mut config = lock(&self.config);
+        let _config_lock = locked_config(&mut config)?;
+        let (harness, timeout) = agent_setup(&config, requested)?;
+        Ok(RunSetup {
+            harness,
+            // Ignored for a site draft; see `StartRun`.
+            cwd: PathBuf::new(),
+            timeout,
+            vocabulary: default_summary_vocabulary(),
+        })
+    }
+}
+
+/// A site draft's own bounds, beside `check_start_run`'s.
+fn check_site_draft(
+    url: &str,
+    record_key: &RecordKey,
+    selection: &Option<String>,
+) -> Result<(), &'static str> {
+    if !exact_origin(url) {
+        return Err("a site draft's url must be an exact HTTP(S) origin");
+    }
+    if record_key.kind != RecordKeyKind::Url || record_key.value != url {
+        return Err("a site draft's record_key must be its origin");
+    }
+    if selection.is_some() {
+        return Err("a site draft has no selection");
+    }
+    Ok(())
+}
+
+/// The harness set up, and its time limit, for a run that names
+/// `requested` (or none). Call under the config lock, after `refresh`.
+fn agent_setup(
+    config: &ConfigStore,
+    requested: Option<HarnessId>,
+) -> Result<(HarnessId, Option<Duration>), (ErrorCode, &'static str)> {
+    let agent = config
+        .snapshot()
+        .agent
+        .as_ref()
+        .ok_or((ErrorCode::NotConfigured, SET_UP_HARNESS))?;
+    if let Some(requested) = requested.filter(|requested| *requested != agent.harness) {
+        return Err((ErrorCode::NotConfigured, not_set_up(requested)));
+    }
+    Ok((
+        agent.harness,
+        Some(Duration::from_secs(agent.timeout_secs.into())),
+    ))
 }
 
 /// The refusal for a run naming `harness` when another one is set up.
@@ -463,6 +534,14 @@ fn not_set_up(harness: HarnessId) -> &'static str {
 fn locked_knowledge_base(
     config: &mut ConfigStore,
 ) -> Result<(ConfigLock, PathBuf), (ErrorCode, &'static str)> {
+    let config_lock = locked_config(config)?;
+    let knowledge_base = checked_knowledge_base(config)?;
+    Ok((config_lock, knowledge_base))
+}
+
+/// Take the config lock and refresh; a configuration that cannot be read
+/// or needs repair is refused. Hold the lock while acting on it.
+fn locked_config(config: &mut ConfigStore) -> Result<ConfigLock, (ErrorCode, &'static str)> {
     let config_lock = config.lock_current().map_err(|_| {
         (
             ErrorCode::Internal,
@@ -475,8 +554,7 @@ fn locked_knowledge_base(
             "The configuration is unavailable or needs repair in Brauser settings.",
         ));
     }
-    let knowledge_base = checked_knowledge_base(config)?;
-    Ok((config_lock, knowledge_base))
+    Ok(config_lock)
 }
 
 /// The knowledge base folder a harness runs in, which must still be the
@@ -551,7 +629,7 @@ mod tests {
 
     use brauser_protocol::{
         ErrorCode, GetRunRequest, HarnessId, HelloRequest, ListRunsRequest, PROTOCOL_VERSION,
-        RecordKey, RecordKeyKind, Request, Response, RunState, ServiceHelloRequest,
+        RecordKey, RecordKeyKind, Request, Response, RunKind, RunState, ServiceHelloRequest,
         StartRunRequest,
     };
 
@@ -559,7 +637,7 @@ mod tests {
     use crate::brand::FAKE_HARNESS_ENV;
     use crate::config::fixtures;
     use crate::frame::{read_frame, write_request};
-    use crate::service::finisher::SummaryFinisher;
+    use crate::service::finisher::{KindFinisher, SummaryFinisher};
     use crate::service::harness_api::HarnessRegistry;
     use crate::service::paths::build_id;
     use crate::service::record::RunStore;
@@ -680,7 +758,9 @@ mod tests {
                     Ok(Supervisor::new(
                         RunStore::open(paths.runs())?,
                         registry,
-                        Box::new(SummaryFinisher::new(finisher_config.clone())),
+                        Box::new(KindFinisher::new(SummaryFinisher::new(
+                            finisher_config.clone(),
+                        ))),
                         options.clone(),
                     ))
                 })
@@ -710,6 +790,7 @@ mod tests {
                 harness: None,
                 record_key,
                 requested_at: "2026-10-26T10:00:00Z".into(),
+                kind: None,
             }))
         }
 
@@ -915,6 +996,7 @@ mod tests {
             harness: None,
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
+            kind: None,
         })));
         assert_eq!(code, ErrorCode::InvalidRequest);
         assert!(message.contains("title"), "{message}");
@@ -1110,11 +1192,147 @@ mod tests {
             harness: Some(harness),
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
+            kind: None,
         }
     }
 
     fn dir_is_empty(path: &Path) -> bool {
         std::fs::read_dir(path).unwrap().next().is_none()
+    }
+
+    const TOOLS: &str = "https://tools.example.com";
+
+    fn site_draft_start(origin: &str) -> StartRunRequest {
+        StartRunRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "site".into(),
+            url: origin.into(),
+            title: format!("Capture Site: {origin}"),
+            content: crate::service::prompt::site_draft_input(
+                origin,
+                &[("/docs/{num}".to_string(), 2)],
+                &[],
+                &[],
+            ),
+            selection: None,
+            harness: None,
+            record_key: Some(RecordKey {
+                kind: RecordKeyKind::Url,
+                value: origin.into(),
+            }),
+            requested_at: "2026-10-26T10:00:00Z".into(),
+            kind: Some(RunKind::SiteDraft),
+        }
+    }
+
+    /// A fake harness body that answers a one-table site draft for TOOLS.
+    fn site_answer() -> String {
+        let answer = serde_json::json!({"adapters": [{
+            "type": "tools.docs",
+            "origin": TOOLS,
+            "match": [{"path": "/docs/{n:int}"}],
+            "id": "tools.docs:{host}/{n}",
+        }]});
+        format!("/bin/cat <<'EOF'\n{answer}\nEOF\n")
+    }
+
+    /// A site draft needs a harness but no knowledge base: it runs in its
+    /// own run directory, even while a summary is refused for a missing
+    /// knowledge base.
+    #[test]
+    fn site_draft_run_skips_the_knowledge_base_check() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::unconfigured(&site_answer());
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        std::fs::remove_dir(&knowledge_base).unwrap();
+        world.start(Duration::from_secs(600));
+        assert_eq!(
+            error_of(world.start_run(Some(url_key()))),
+            (ErrorCode::NotConfigured, KNOWLEDGE_BASE_CHANGED.to_string())
+        );
+        let started = match world.call(&Request::StartRun(site_draft_start(TOOLS))) {
+            Response::RunStarted(started) => started,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert!(!started.existing);
+        assert_eq!(started.run.kind, Some(RunKind::SiteDraft));
+        let fetched = world.wait_finished(&started.run.run_id);
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+        assert_eq!(fetched.run.harness, HarnessId::Claude);
+        assert_eq!(fetched.run.answer, None);
+        assert_eq!(fetched.run.site_draft.unwrap().adapters.len(), 1);
+        let run_dir = world.paths.runs().join(&started.run.run_id);
+        assert_eq!(fetched.run.cwd, Some(run_dir.display().to_string()));
+    }
+
+    /// A site draft still needs the harness set up in settings.
+    #[test]
+    fn site_draft_run_without_a_harness_is_not_configured() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::unconfigured(&site_answer());
+        world.configure(None, None);
+        world.start(Duration::from_secs(600));
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(site_draft_start(TOOLS)))),
+            (ErrorCode::NotConfigured, SET_UP_HARNESS.to_string())
+        );
+        let mut named = site_draft_start(TOOLS);
+        named.harness = Some(HarnessId::Codex);
+        world.configure(Some(""), None);
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(named))).0,
+            ErrorCode::NotConfigured
+        );
+        assert!(!world.paths.runs().exists() || dir_is_empty(&world.paths.runs()));
+    }
+
+    #[test]
+    fn site_draft_start_run_refuses_what_is_not_an_origin() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&site_answer());
+        world.start(Duration::from_secs(600));
+        let mut cases = Vec::new();
+        for url in [
+            "https://tools.example.com/docs/1",
+            "https://tools.example.com/",
+            "https://Tools.example.com",
+            "https://tools.example.com:443",
+            "https://user@tools.example.com",
+            "ftp://tools.example.com",
+            "tools.example.com",
+        ] {
+            let mut request = site_draft_start(TOOLS);
+            request.url = url.into();
+            request.record_key.as_mut().unwrap().value = url.into();
+            cases.push((
+                request,
+                "a site draft's url must be an exact HTTP(S) origin",
+            ));
+        }
+        let mut other_key = site_draft_start(TOOLS);
+        other_key.record_key.as_mut().unwrap().value = "https://other.example.com".into();
+        cases.push((other_key, "a site draft's record_key must be its origin"));
+        let mut artifact_key = site_draft_start(TOOLS);
+        artifact_key.record_key.as_mut().unwrap().kind = RecordKeyKind::Artifact;
+        cases.push((artifact_key, "a site draft's record_key must be its origin"));
+        let mut selection = site_draft_start(TOOLS);
+        selection.selection = Some("words".into());
+        cases.push((selection, "a site draft has no selection"));
+        for (request, message) in cases {
+            assert_eq!(
+                error_of(world.call(&Request::StartRun(request))),
+                (ErrorCode::InvalidRequest, message.to_string())
+            );
+        }
+        assert!(!world.paths.runs().exists() || dir_is_empty(&world.paths.runs()));
     }
 
     /// Only the harness that passed setup's probe runs: a request naming

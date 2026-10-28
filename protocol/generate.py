@@ -76,6 +76,19 @@ def shape_type(shape: dict, target: str) -> str:
     return types[kind][0 if target == "rust" else 1]
 
 
+def optional_inner(shape: dict) -> dict:
+    """The value shape of an optional property: a nullable one's non-null
+    alternative, since a missing key and null both read as no value."""
+    alternatives = shape.get("oneOf")
+    if isinstance(alternatives, list) and len(alternatives) == 2 and alternatives[1] == {"type": "null"}:
+        return alternatives[0]
+    return shape
+
+
+def is_optional(definition: dict, field: str) -> bool:
+    return field not in definition.get("required", [])
+
+
 def variants(definitions: dict, name: str) -> list[str]:
     return [ref_name(item) for item in definitions[name]["oneOf"]]
 
@@ -118,8 +131,14 @@ def verify_schema(definitions: dict) -> int:
         properties = definition.get("properties", {})
         if definition.get("additionalProperties") is not False:
             fail(f"{name}: object must reject unknown properties")
-        if set(definition.get("required", [])) != set(properties):
-            fail(f"{name}: every property must be required")
+        required = definition.get("required", [])
+        if not set(required) <= set(properties) or len(set(required)) != len(required):
+            fail(f"{name}: required names an unknown or repeated property")
+        for field in set(properties) - set(required):
+            # An optional property is an additive field an older peer may
+            # omit; message headers never are.
+            if field in ("type", "protocol_version", "request_id"):
+                fail(f"{name}: {field} must be required")
         if name in message_names:
             if properties.get("protocol_version", {}).get("type") != "integer":
                 fail(f"{name}: protocol_version must be an integer")
@@ -198,6 +217,13 @@ def render_rust(definitions: dict, version: int) -> str:
         for field, shape in definition["properties"].items():
             if field == "type":
                 continue
+            if is_optional(definition, field):
+                # Additive within a version: missing (or null) reads as None,
+                # and None is not written, so an older peer never sees it.
+                inner = shape_type(optional_inner(shape), "rust")
+                output.append('    #[serde(default, skip_serializing_if = "Option::is_none")]')
+                output.append(f"    pub {field}: Option<{inner}>,")
+                continue
             if "oneOf" in shape:
                 output.append('    #[serde(deserialize_with = "deserialize_required_nullable")]')
             output.append(f"    pub {field}: {shape_type(shape, 'rust')},")
@@ -259,7 +285,8 @@ def render_typescript(definitions: dict, version: int) -> str:
             fail(f"unsupported definition: {name}")
         output.append(f"export interface {name} {{")
         for field, shape in definition["properties"].items():
-            output.append(f"  {field}: {shape_type(shape, 'typescript')};")
+            marker = "?" if is_optional(definition, field) else ""
+            output.append(f"  {field}{marker}: {shape_type(shape, 'typescript')};")
         output.extend(["}", ""])
     for name in ("Request", "Response"):
         members = " | ".join(variants(definitions, name))

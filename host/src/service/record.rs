@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    HarnessId, RecordKey, RunAnswer, RunErrorKind, RunState, RunView, SummaryVocabulary,
+    HarnessId, RecordKey, RunAnswer, RunErrorKind, RunKind, RunState, RunView, SiteDraftAnswerView,
+    SummaryVocabulary,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -162,15 +163,35 @@ pub struct RunStatusFile {
     /// forward compatible, as the fields above.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub save_final: bool,
+    /// What the run is for: a page summary, or a Capture Site agent draft.
+    /// A record without one (every record written before site drafts) is a
+    /// summary. Optional, and not forward compatible, as `answered_at`.
+    #[serde(default = "summary_kind", skip_serializing_if = "is_summary")]
+    pub kind: RunKind,
+}
+
+fn summary_kind() -> RunKind {
+    RunKind::Summary
+}
+
+/// Whether `kind` is the summary kind, which `status.json` leaves unwritten.
+pub fn is_summary(kind: &RunKind) -> bool {
+    *kind == RunKind::Summary
 }
 
 impl RunStatusFile {
     /// The protocol view of this run, with `result` its kept `result.json`.
     /// Retry save is offered only for a save failure a retry can fix whose
     /// validated answer is still on disk. A result that is not a [`SummaryAnswer`] (a PR 2
-    /// record) shows no answer.
+    /// record) shows no answer. A site-draft run never has an answer; its
+    /// view carries the validated tables as `site_draft` instead.
     pub fn view(&self, stream_bytes: u32, result: Option<&serde_json::Value>) -> RunView {
+        let summary = is_summary(&self.kind);
+        let site_draft = result
+            .filter(|_| !summary)
+            .and_then(|value| SiteDraftAnswerView::deserialize(value).ok());
         let answer = result
+            .filter(|_| summary)
             .and_then(|value| SummaryAnswer::deserialize(value).ok())
             .map(|answer| RunAnswer {
                 document_type: answer.document_type,
@@ -201,6 +222,10 @@ impl RunStatusFile {
                 && !self.save_final
                 && result.is_some(),
             answer,
+            // Left out for a summary run, as `status.json` leaves it out: an
+            // extension built before run kinds rejects unknown keys.
+            kind: (!summary).then_some(self.kind),
+            site_draft,
         }
     }
 
@@ -582,6 +607,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            kind: RunKind::Summary,
         }
     }
 
@@ -874,6 +900,63 @@ mod tests {
                 importance_reason: "r".into(),
             })
         );
+    }
+
+    #[test]
+    fn older_status_files_without_kind_read_as_summary() {
+        let (_dir, store) = store();
+        let id = created(&store);
+        let path = store.run_dir(id).join(STATUS_FILE);
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // A summary record is written as before, with no kind.
+        assert!(written.get("kind").is_none(), "{written}");
+        let status = store.status(id).unwrap();
+        assert_eq!(status.kind, RunKind::Summary);
+        // A summary run's view leaves `kind` out too, so a pre-`brwr-f45`
+        // version 7 extension, whose run-view check allows only its own
+        // keys, still accepts summary runs.
+        let view = serde_json::to_value(status.view(0, None)).unwrap();
+        assert!(view.get("kind").is_none(), "{view}");
+        assert!(view.get("site_draft").is_none(), "{view}");
+
+        let mut site = status.clone();
+        site.kind = RunKind::SiteDraft;
+        store.write_status(&site).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["kind"], "site_draft");
+        assert_eq!(store.status(id).unwrap().kind, RunKind::SiteDraft);
+        assert_eq!(site.view(0, None).kind, Some(RunKind::SiteDraft));
+    }
+
+    #[test]
+    fn site_draft_view_carries_the_validated_tables_and_no_answer() {
+        let mut status = sample(Uuid::new_v4());
+        status.kind = RunKind::SiteDraft;
+        status.state = RunState::Succeeded;
+        assert_eq!(status.view(0, None).site_draft, None);
+        let tables = serde_json::json!([
+            {"type": "tools.docs", "origin": "https://tools.example.com", "title": "{title}"}
+        ]);
+        let kept = serde_json::json!({ "adapters": tables });
+        let view = status.view(0, Some(&kept));
+        assert_eq!(view.kind, Some(RunKind::SiteDraft));
+        assert_eq!(view.answer, None);
+        assert_eq!(
+            view.site_draft,
+            Some(SiteDraftAnswerView {
+                adapters: tables.as_array().unwrap().clone(),
+            })
+        );
+        // A summary answer kept for a site-draft run is not one.
+        let summary = serde_json::from_str(crate::answer::TEST_ANSWER).unwrap();
+        let view = status.view(0, Some(&summary));
+        assert_eq!((view.answer, view.site_draft), (None, None));
+        // And a summary run never shows tables.
+        status.kind = RunKind::Summary;
+        let view = status.view(0, Some(&kept));
+        assert_eq!((view.answer, view.site_draft), (None, None));
     }
 
     #[test]

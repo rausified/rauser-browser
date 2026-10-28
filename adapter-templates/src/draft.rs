@@ -156,7 +156,7 @@ fn is_identifier_capture(s: &Segment) -> bool {
 }
 
 /// Step 1: a key a drafter cannot know.
-fn has_forbidden_key(draft: &Value) -> bool {
+pub(crate) fn has_forbidden_key(draft: &Value) -> bool {
     draft
         .as_table()
         .is_some_and(|t| t.iter().any(|(k, _)| FORBIDDEN_KEYS.contains(&k.as_str())))

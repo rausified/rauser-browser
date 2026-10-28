@@ -152,7 +152,7 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    use brauser_protocol::{HarnessId, RecordKey, RecordKeyKind};
+    use brauser_protocol::{HarnessId, RecordKey, RecordKeyKind, RunKind};
 
     use crate::service::harness_api::ProcessSlot;
     use crate::service::supervisor::timestamp;
@@ -205,6 +205,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            kind: RunKind::Summary,
         }
     }
 

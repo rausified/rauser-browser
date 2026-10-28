@@ -18,7 +18,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
-use super::harness_api::{HarnessRegistry, HarnessRunner, ProcessSlot, RunSpec, TurnOutcome};
+use super::harness_api::{
+    HarnessRegistry, HarnessRunner, OutputSchema, ProcessSlot, RunSpec, TurnOutcome,
+};
 use super::server::checked_knowledge_base;
 use crate::config::{
     self, ConfigStore, DEFAULT_SUMMARIES_DIR, DEFAULT_SUMMARY_TIMEOUT_SECS, HarnessCommit,
@@ -239,6 +241,7 @@ pub fn set_up(
         cwd: knowledge_base,
         page_path: PathBuf::from(NO_PAGE),
         prompt: PROBE_PROMPT.to_owned(),
+        output_schema: OutputSchema::RunnerDefault,
         env,
     };
     let probe_runner = runner.for_probe();
@@ -636,6 +639,7 @@ mod tests {
             cwd: setup.fake.path("notes"),
             page_path: PathBuf::from(NO_PAGE),
             prompt: PROBE_PROMPT.into(),
+            output_schema: OutputSchema::RunnerDefault,
             env: setup.run_env(),
         };
         let started = Instant::now();

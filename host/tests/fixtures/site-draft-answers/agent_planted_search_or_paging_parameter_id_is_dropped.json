@@ -1,0 +1,66 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.page",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/items",
+          "query": {
+            "page": "{n:int}"
+          }
+        }
+      ],
+      "id": "tools.page:{host}/{n}"
+    },
+    {
+      "type": "tools.cursor",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/items",
+          "query": {
+            "cursor": "{t:token(1,128)}"
+          }
+        }
+      ],
+      "id": "tools.cursor:{host}/{t}"
+    },
+    {
+      "type": "tools.q",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/items",
+          "query": {
+            "q": "{k:jira_key}"
+          }
+        }
+      ],
+      "id": "tools.q:{host}/{k}"
+    },
+    {
+      "type": "tools.tab",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/items",
+          "query": {
+            "tab": "{n:int}"
+          }
+        }
+      ],
+      "id": "tools.tab:{host}/{n}"
+    }
+  ]
+}

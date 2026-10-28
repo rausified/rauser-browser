@@ -1,0 +1,24 @@
+{
+  "adapters": [
+    {
+      "type": "tools.doc",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/wiki/doc/{n:int}"
+        }
+      ],
+      "id": "tools.doc:{host}/{n}"
+    },
+    {
+      "type": "tools.wiki",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/wiki/(doc|page)/{n:int}"
+        }
+      ],
+      "id": "tools.wiki:{host}/{n}"
+    }
+  ]
+}

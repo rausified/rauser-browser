@@ -656,3 +656,168 @@ test("drafting on a configured origin adds adapters and never changes existing o
   assert.equal(taken.ok, false);
   assert.match(taken.message, /already used/);
 });
+
+// --- Agent drafts (Improve with AI) -----------------------------------------
+
+/** A fake native port: records each posted request and answers it with
+ * `replyFor(request)`, stamped with the request's id. */
+async function withNativeHost(replyFor, action) {
+  const posted = [];
+  const previous = globalThis.chrome;
+  globalThis.chrome = {
+    runtime: {
+      connectNative() {
+        const listeners = [];
+        return {
+          onMessage: { addListener(listener) { listeners.push(listener); } },
+          onDisconnect: { addListener() {} },
+          postMessage(request) {
+            posted.push(structuredClone(request));
+            const reply = { ...replyFor(request), request_id: request.request_id };
+            setTimeout(() => { for (const listener of listeners) listener(reply); }, 0);
+          },
+          disconnect() {},
+        };
+      },
+    },
+  };
+  try {
+    const { ConfigSession } = await import("../dist/settings.js");
+    const session = new ConfigSession(() => undefined);
+    try {
+      await action(session);
+    } finally {
+      session.host.disconnect();
+    }
+  } finally {
+    globalThis.chrome = previous;
+  }
+  return posted;
+}
+
+const SITE_DRAFT_RUN = {
+  run_id: "00000000-0000-4000-8000-000000000077", state: "queued", harness: "codex",
+  record_key: { kind: "url", value: WIKI }, written_record_key: null, url: WIKI, title: "Capture Site: wiki.example.com",
+  cwd: null, created_at: "2026-10-27T15:59:00.000000000Z", started_at: null, finished_at: null, error: null,
+  error_kind: null, thread_id: null, session_id: null, summary_path: null, stream_bytes: 0, can_retry_save: false,
+  answer: null, kind: "site_draft", site_draft: null,
+};
+
+test("the start_site_draft request carries shapes and origin only", async () => {
+  const request = draftRequest(WIKI, {
+    current: "/pages/{num}",
+    links: [{ shape: "/archive/{num}", count: 4 }, { shape: "https://wiki.example.com/archive/9", count: 1 }],
+  }, [{ shape: "/space/{id}", count: 2, last_seen: 1 }]);
+  let started = null;
+  const posted = await withNativeHost(
+    () => ({ type: "run_started", protocol_version: PROTOCOL_VERSION, run: SITE_DRAFT_RUN, existing: false }),
+    async (session) => { started = await session.startSiteDraft(request.origin, request.visited, request.links); },
+  );
+  assert.equal(started.type, "run_started");
+  assert.equal(started.run.kind, "site_draft");
+  assert.equal(posted.length, 1);
+  const [sent] = posted;
+  assert.deepEqual(Object.keys(sent).sort(), [
+    "harness", "links", "origin", "protocol_version", "request_id", "requested_at", "type", "visited",
+  ]);
+  assert.equal(sent.type, "start_site_draft");
+  assert.equal(sent.protocol_version, PROTOCOL_VERSION);
+  assert.equal(sent.origin, WIKI);
+  // The default harness from settings: the extension never picks one.
+  assert.equal(sent.harness, null);
+  assert.match(sent.requested_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  assert.deepEqual(sent.visited, request.visited);
+  assert.deepEqual(sent.links, request.links);
+  // No URL other than the origin, no tab title, no link href, no kind.
+  const wire = JSON.stringify(sent).replaceAll(JSON.stringify(WIKI), "");
+  assert.ok(!wire.includes("http"), wire);
+  for (const key of ["kind", "url", "title", "content", "record_key"]) assert.equal(key in sent, false, key);
+});
+
+test("draftSite with a run id sends run_id and nothing else new", async () => {
+  const request = draftRequest(WIKI, { current: "/pages/{num}", links: [] }, []);
+  const replies = [];
+  const posted = await withNativeHost(
+    () => ({ ...wikiDraft(), drafter: "agent" }),
+    async (session) => {
+      replies.push(await session.draftSite(request.origin, request.visited, request.links, SITE_DRAFT_RUN.run_id));
+      replies.push(await session.draftSite(request.origin, request.visited, request.links));
+    },
+  );
+  assert.equal(replies[0].drafter, "agent");
+  const base = ["links", "origin", "protocol_version", "request_id", "type", "visited"];
+  assert.deepEqual(Object.keys(posted[0]).sort(), [...base.slice(0, 4), "run_id", ...base.slice(4)]);
+  assert.equal(posted[0].run_id, SITE_DRAFT_RUN.run_id);
+  assert.equal(posted[0].type, "draft_site");
+  // Without a run id the structural request is unchanged: no run_id key.
+  assert.deepEqual(Object.keys(posted[1]).sort(), base);
+  const { run_id: _id, request_id: _a, ...agent } = posted[0];
+  const { request_id: _b, ...structural } = posted[1];
+  assert.deepEqual(agent, structural);
+});
+
+test("an agent draft plans and saves through the same checked tables and overlays", () => {
+  const url = `${WIKI}/pages/42`;
+  const basic = wikiDraft();
+  const agent = { ...wikiDraft(), drafter: "agent" };
+  const structuralPlan = drafts(basic, select(basic), url);
+  const agentPlan = drafts(agent, select(agent, { titleSuffix: " - Wiki" }), url, "Release - Wiki");
+  assert.equal(structuralPlan.drafter, "structural");
+  assert.equal(agentPlan.drafter, "agent");
+  // The same checked tables and all-drafted provenance: the save re-judges
+  // an agent selection exactly as a structural one.
+  assert.deepEqual(agentPlan.checked, structuralPlan.checked);
+  assert.deepEqual(agentPlan.checked.provenance, [["drafted"]]);
+  assert.equal("drafter" in agentPlan.checked, false);
+  // The title overlay is on the saved document only.
+  assert.equal(added(agentPlan)[0].title, "{title} - Wiki");
+  assert.equal("title" in agentPlan.checked.adapters[0], false);
+  // A linear agent draft takes the same scope path.
+  const linear = { ...linearDraft(), drafter: "agent" };
+  const scoped = drafts(linear, select(linear, { scope: [{ values: "acme" }] }), `${LINEAR}/acme/issue/ABC-12`);
+  assert.deepEqual(added(scoped)[0].scope, { workspace: ["acme"] });
+  assert.deepEqual(scoped.checked.scope, [{ values: ["acme"] }]);
+  assert.equal(drafting(linear, select(linear), `${LINEAR}/acme/issue/ABC-12`).ok, false);
+});
+
+test("unseen rules start unchecked like link-only and token-only rules", async () => {
+  const { defaultChecked } = await import("../dist/capture-site.js");
+  for (const reason of ["link_only", "token_only", "unseen"]) {
+    // Even a host that marked it checked cannot start a flagged rule checked.
+    assert.equal(defaultChecked(rule(0, `${WIKI}/x/1`, { checked: true, unchecked_reason: reason })), false, reason);
+    assert.equal(defaultChecked(rule(0, `${WIKI}/x/1`, { checked: false, unchecked_reason: reason })), false, reason);
+  }
+  assert.equal(defaultChecked(rule(0, `${WIKI}/x/1`)), true);
+  assert.equal(defaultChecked(rule(0, `${WIKI}/x/1`, { checked: false })), false);
+  // An unseen agent rule is left out unless the user opts in.
+  const agent = { ...wikiDraft(), drafter: "agent" };
+  agent.adapters[0].rules[0] = rule(0, `${WIKI}/pages/123`, { checked: true, unchecked_reason: "unseen", visited: 0 });
+  agent.adapters[0].rules[1] = rule(1, `${WIKI}/archive/123`);
+  const defaults = {
+    ...select(agent),
+    checked: agent.adapters.map((view) => view.rules.map(defaultChecked)),
+  };
+  assert.deepEqual(defaults.checked, [[false, true], [false]]);
+  const plan = drafts(agent, defaults, `${WIKI}/archive/42`);
+  assert.deepEqual(added(plan).map((adapter) => adapter.match), [[{ path: "/archive/{num:int}" }]]);
+  // An unseen rule never feeds the tenant prefill.
+  const linear = { ...linearDraft(), drafter: "agent" };
+  linear.adapters[0].rules[0] = rule(0, `${LINEAR}/example/issue/ABC-123`, { unchecked_reason: "unseen" });
+  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, linear.adapters[0]), "");
+  assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, linearDraft().adapters[0]), "acme");
+});
+
+test("the harness hint text is shared with Summarize", async () => {
+  const { NEEDS_HARNESS_MESSAGE, harnessReady } = await import("../dist/summarize.js");
+  assert.equal(NEEDS_HARNESS_MESSAGE, "Set up a summary harness in settings first.");
+  assert.equal(harnessReady({ agentStatus: null }), false);
+  for (const state of ["not_set_up", "harness_problem"]) {
+    assert.equal(harnessReady({ agentStatus: { state } }), false, state);
+  }
+  assert.equal(harnessReady({ agentStatus: { state: "ready" } }), true);
+  // The panel takes both from summarize.js and keeps no copy of its own.
+  const panel = await readFile(new URL("../dist/panel.js", import.meta.url), "utf8");
+  assert.ok(!panel.includes(NEEDS_HARNESS_MESSAGE));
+  assert.match(panel, /import \{[^}]*\bNEEDS_HARNESS_MESSAGE\b[^}]*\} from "\.\/summarize\.js"/);
+  assert.match(panel, /import \{[^}]*\bharnessReady\b[^}]*\} from "\.\/summarize\.js"/);
+});

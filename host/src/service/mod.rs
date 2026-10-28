@@ -26,7 +26,7 @@ use anyhow::{Result, bail};
 
 use crate::brand::NAMESPACE;
 use crate::config::ConfigStore;
-use finisher::SummaryFinisher;
+use finisher::{KindFinisher, SummaryFinisher};
 use harness_api::HarnessRegistry;
 use paths::ServicePaths;
 use record::RunStore;
@@ -50,8 +50,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let exit = server::serve(&paths, config, &options, || {
         let store = RunStore::open(paths.runs())?;
         // It reads config.toml again at each save, so a summary follows
-        // the configuration current when its run finishes.
-        let finisher = SummaryFinisher::new(config_path.clone());
+        // the configuration current when its run finishes. A site-draft run
+        // goes to its own finisher, which writes nothing.
+        let finisher = KindFinisher::new(SummaryFinisher::new(config_path.clone()));
         Ok(Supervisor::new(
             store,
             HarnessRegistry::from_environment(),

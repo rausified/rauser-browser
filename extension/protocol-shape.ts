@@ -128,12 +128,26 @@ const RUN_ERROR_KINDS: ReadonlySet<string> = new Set([
 
 const HARNESS_IDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 
-/** Exactly the v6 `RunView` keys. */
+/** Exactly the required v7 `RunView` keys. */
 const RUN_VIEW_KEYS: readonly string[] = [
   "run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd",
   "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id",
   "summary_path", "stream_bytes", "can_retry_save", "answer",
 ];
+/** The additive v7 `RunView` keys an older service's view omits. */
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft"];
+const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft"]);
+
+/** A site-draft run's service-validated tables: 1 to 8 objects. The panel
+ * never renders them; the host judges them on `draft_site` with `run_id`. */
+function isSiteDraftAnswer(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const answer = value as Record<string, unknown>;
+  return hasExactKeys(answer, ["adapters"]) && Array.isArray(answer.adapters) &&
+    answer.adapters.length >= 1 && answer.adapters.length <= 8 &&
+    answer.adapters.every((table: unknown) =>
+      typeof table === "object" && table !== null && !Array.isArray(table));
+}
 
 const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
@@ -151,7 +165,12 @@ export function isRunView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const run = value as Record<string, unknown>;
   const keys = Object.keys(run);
-  if (keys.length !== RUN_VIEW_KEYS.length || !RUN_VIEW_KEYS.every((key) => keys.includes(key))) return false;
+  if (!RUN_VIEW_KEYS.every((key) => keys.includes(key))) return false;
+  if (!keys.every((key) => RUN_VIEW_KEYS.includes(key) || RUN_VIEW_OPTIONAL_KEYS.includes(key))) return false;
+  if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
+  if (Object.hasOwn(run, "site_draft") && run.site_draft !== null && !isSiteDraftAnswer(run.site_draft)) {
+    return false;
+  }
   return typeof run.run_id === "string" && run.run_id.length === 36 &&
     typeof run.state === "string" && RUN_STATES.has(run.state) &&
     typeof run.harness === "string" && HARNESS_IDS.has(run.harness) &&
@@ -281,7 +300,7 @@ export function isConfig(value: unknown): boolean {
     isAdapterDocument(config.adapters);
 }
 
-// --- Capture Site drafting (additive v6) ---------------------------------
+// --- Capture Site drafting (additive v7) ---------------------------------
 // Every object has exactly its schema keys and every list its schema bound;
 // the panel renders this text, so a host speaking another shape is refused.
 
@@ -290,7 +309,8 @@ const DRAFT_SCOPE_STATES: ReadonlySet<string> = new Set([
   "not_shared", "copied", "pending", "unscoped_only",
 ]);
 const RESOLVED_SCOPES: ReadonlySet<string> = new Set(["not_shared", "scoped", "unscoped"]);
-const UNCHECKED_REASONS: ReadonlySet<string> = new Set(["link_only", "token_only"]);
+const UNCHECKED_REASONS: ReadonlySet<string> = new Set(["link_only", "token_only", "unseen"]);
+const SITE_DRAFTERS: ReadonlySet<string> = new Set(["structural", "agent"]);
 const PREVIEW_SOURCES: ReadonlySet<string> = new Set(["visited", "link", "probe"]);
 const RULE_VERDICTS: ReadonlySet<string> = new Set(["kept", "dropped", "warned"]);
 /** The structural `DropReason` values, then the `DraftErrorCode` values. */
@@ -382,7 +402,7 @@ function isScopeVerdict(value: unknown): boolean {
 function isSiteDrafted(value: Record<string, unknown>): boolean {
   return isMessage(value, [
     "revision", "drafter", "adapters", "dropped", "preview", "taken_types", "remapped",
-  ]) && value.drafter === "structural" && isBoundedList(value.adapters, 8, isDraftedAdapter) &&
+  ]) && isOneOf(value.drafter, SITE_DRAFTERS) && isBoundedList(value.adapters, 8, isDraftedAdapter) &&
     isBoundedList(value.dropped, 128, isDropped) && isBoundedList(value.preview, 128, isPreviewRow) &&
     isBoundedList(value.taken_types, 160, (type) => isBoundedString(type, 64, 1)) &&
     isUnsignedInteger(value.remapped);

@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 
 use super::child::{ChildLine, LineChild};
 use super::harness_api::{
-    HarnessEvent, HarnessRunner, HarnessSession, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
+    HarnessEvent, HarnessRunner, HarnessSession, OutputSchema, ProcessSlot, RunSpec, SessionRef,
+    TurnOutcome,
 };
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::harness::{Adapter, resolve_for_run};
@@ -73,7 +74,13 @@ impl HarnessRunner for CodexRunner {
             next_id: 0,
             thread_id: String::new(),
             cwd: spec.cwd.clone(),
-            output_schema: self.output_schema.clone(),
+            // The run kind decides: this runner's own schema (a summary),
+            // none (a site draft), or one it names.
+            output_schema: match &spec.output_schema {
+                OutputSchema::RunnerDefault => self.output_schema.clone(),
+                OutputSchema::Omit => None,
+                OutputSchema::Schema(schema) => Some(schema.clone()),
+            },
             pending: Vec::new(),
             turns: 0,
             exited: false,
@@ -560,6 +567,7 @@ done
                 cwd: self.kb(),
                 page_path: self.dir.path().join("page.md"),
                 prompt: "the prompt".to_string(),
+                output_schema: OutputSchema::RunnerDefault,
                 env: vec![
                     (OsString::from("PATH"), self.search_path()),
                     (OsString::from("HOME"), OsString::from("/users/someone")),
@@ -996,6 +1004,55 @@ done
         let fake = Fake::turns(&simple_turn());
         run(fake.runner(None), fake.spec(), &["the prompt"]);
         assert!(fake.requests()[3]["params"].get("outputSchema").is_none());
+    }
+
+    /// A run kind's own schema (a site draft's) beats the runner's summary
+    /// schema, on every turn.
+    #[test]
+    fn spec_output_schema_overrides_the_runners_own() {
+        let summary = json!({"type": "object", "required": ["title"]});
+        let site = json!({"type": "object", "required": ["adapters"]});
+        let fake = Fake::turns(&simple_turn());
+        let mut spec = fake.spec();
+        spec.output_schema = OutputSchema::Schema(site.clone());
+        run(fake.runner(Some(summary)), spec, &["the prompt"]);
+        assert_eq!(fake.requests()[3]["params"]["outputSchema"], site);
+    }
+
+    /// A run kind that asks for no schema (a site draft, whose tables a
+    /// strict-mode schema cannot describe) sends none on any turn, even
+    /// though the runner holds summaries to its own.
+    #[test]
+    fn spec_without_output_schema_sends_none_even_with_a_runner_default() {
+        let summary = json!({"type": "object", "required": ["title"]});
+        let fake = Fake::turns(&simple_turn());
+        let mut spec = fake.spec();
+        spec.output_schema = OutputSchema::Omit;
+        run(
+            fake.runner(Some(summary)),
+            spec,
+            &["the prompt", "the repair"],
+        );
+        let turns: Vec<_> = fake
+            .requests()
+            .into_iter()
+            .filter(|request| request["method"] == "turn/start")
+            .collect();
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        for turn in turns {
+            assert!(turn["params"].get("outputSchema").is_none(), "{turn}");
+        }
+    }
+
+    /// The default keeps the runner's own schema.
+    #[test]
+    fn spec_with_the_runner_default_sends_the_runners_schema() {
+        let summary = json!({"type": "object", "required": ["title"]});
+        let fake = Fake::turns(&simple_turn());
+        let mut spec = fake.spec();
+        spec.output_schema = OutputSchema::RunnerDefault;
+        run(fake.runner(Some(summary.clone())), spec, &["the prompt"]);
+        assert_eq!(fake.requests()[3]["params"]["outputSchema"], summary);
     }
 
     /// Setup's probe asks for one word, so it must not be held to the
