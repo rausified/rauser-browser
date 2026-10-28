@@ -125,6 +125,17 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
     }
   };
 
+  // SPA navigation can update the body before document.title (and the
+  // metadata Readability uses). Prefer one unambiguous main-page heading;
+  // ignore hidden/navigation headings and fall back when a page has several.
+  const headings = new Set<string>();
+  for (const heading of document.querySelectorAll("main h1, article h1, [role='main'] h1")) {
+    if (heading.closest("[hidden], [aria-hidden='true'], nav, aside")) continue;
+    const text = ((heading as HTMLElement).innerText ?? heading.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (text !== "") headings.add(text);
+  }
+  const headingTitle = headings.size === 1 ? [...headings][0] : "";
+
   let title = "";
   let content = "";
   let readable = false;
@@ -147,7 +158,7 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   }
   // Replaced before measuring, so a cut never meets a lone half either.
   content = whole(content);
-  const fullTitle = whole(title || document.title || "");
+  const fullTitle = whole(headingTitle || title || document.title || "");
   title = cut(fullTitle, Math.min(fullTitle.length, limits.maxTitleChars));
 
   const picked = whole(window.getSelection()?.toString() ?? "");
