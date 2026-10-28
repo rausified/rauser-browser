@@ -457,6 +457,8 @@ impl Server {
         let setup = match kind {
             RunKind::Summary => self.run_setup(value.harness),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
+            // Placeholder until the service builds a task's setup.
+            RunKind::Task => Err((ErrorCode::InvalidRequest, "not yet")),
         };
         let setup = match setup {
             Ok(setup) => setup,
@@ -912,6 +914,7 @@ mod tests {
                 record_key,
                 requested_at: "2026-10-26T10:00:00Z".into(),
                 kind: None,
+                instruction: None,
             }))
         }
 
@@ -1105,6 +1108,7 @@ mod tests {
                 }),
                 requested_at: "2026-10-26T10:00:00Z".into(),
                 kind: None,
+                instruction: None,
             }));
             run_id = match started {
                 Response::RunStarted(started) => started.run.run_id,
@@ -1309,6 +1313,7 @@ mod tests {
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: None,
+            instruction: None,
         })));
         assert_eq!(code, ErrorCode::InvalidRequest);
         assert!(message.contains("title"), "{message}");
@@ -1505,6 +1510,7 @@ mod tests {
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: None,
+            instruction: None,
         }
     }
 
@@ -1534,6 +1540,7 @@ mod tests {
             }),
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: Some(RunKind::SiteDraft),
+            instruction: None,
         }
     }
 

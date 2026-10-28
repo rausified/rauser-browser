@@ -353,6 +353,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::GetAgentEnv(_) => "get_agent_env",
         Request::DraftSite(_) => "draft_site",
         Request::StartSiteDraft(_) => "start_site_draft",
+        Request::StartTask(_) => "start_task",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
         Request::CheckCaptureSite(_) => "check_capture_site",
@@ -770,6 +771,9 @@ fn dispatch(
         Request::OpenSummary(value) => open_summary(value, config, context.open),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
+        // Placeholder until the host builds and forwards a task's start_run.
+        #[cfg(unix)]
+        Request::StartTask(value) => error(&value.request_id, ErrorCode::InvalidRequest, "not yet"),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
         // agent.env and run threads live in the service's directory.
@@ -785,6 +789,7 @@ fn dispatch(
         #[cfg(not(unix))]
         Request::StartRun(_)
         | Request::StartSiteDraft(_)
+        | Request::StartTask(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
@@ -9077,6 +9082,7 @@ title = "{title} - Jira"
                 record_key,
                 requested_at: requested_at.into(),
                 kind: None,
+                instruction: None,
             })
         }
 

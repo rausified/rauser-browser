@@ -32,6 +32,7 @@ fn key_id(run: RunKind, key: &RecordKey) -> KeyId {
     let run = match run {
         RunKind::Summary => 0,
         RunKind::SiteDraft => 1,
+        RunKind::Task => 2,
     };
     let kind = match key.kind {
         RecordKeyKind::Url => 0,

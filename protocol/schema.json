@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rausified/rauser-browser/blob/main/protocol/schema.json",
   "title": "Brauser native messaging protocol",
-  "description": "Version 8 messages exchanged by the Chrome extension and native host. Host-owned configuration, adapter policy, the config revision, and host-minted folder tokens gate capture and writes.",
+  "description": "Version 8 messages exchanged by the Chrome extension and native host. Host-owned configuration, adapter policy, the config revision, and host-minted folder tokens gate capture and writes. Task-bar runs carry the user's typed instruction, with the page as untrusted context; the host chooses their kind and record key.",
   "oneOf": [
     {
       "$ref": "#/$defs/Request"
@@ -80,6 +80,7 @@
         { "$ref": "#/$defs/GetAgentEnvRequest" },
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
+        { "$ref": "#/$defs/StartTaskRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
         { "$ref": "#/$defs/WorklogReportRequest" },
         { "$ref": "#/$defs/CheckCaptureSiteRequest" },
@@ -1957,8 +1958,8 @@
     },
     "RunKind": {
       "type": "string",
-      "description": "What a service run does: summarize a page (every run before Capture Site agent drafting), or draft a Capture Site policy from the host's untrusted-data block.",
-      "enum": ["summary", "site_draft"]
+      "description": "What a service run does: summarize a page; draft a Capture Site policy from the host's untrusted-data block; or carry out a task the user typed in the side panel's task bar, with the page as untrusted context.",
+      "enum": ["summary", "site_draft", "task"]
     },
     "SiteDraftAnswerView": {
       "type": "object",
@@ -2020,7 +2021,9 @@
         "can_retry_save": { "type": "boolean" },
         "answer": { "oneOf": [{ "$ref": "#/$defs/RunAnswer" }, { "type": "null" }] },
         "kind": { "description": "Optional; missing means summary (an older service's record).", "$ref": "#/$defs/RunKind" },
-        "site_draft": { "description": "Optional; a site-draft run's validated tables once it has them, else null or missing.", "oneOf": [{ "$ref": "#/$defs/SiteDraftAnswerView" }, { "type": "null" }] }
+        "site_draft": { "description": "Optional; a site-draft run's validated tables once it has them, else null or missing.", "oneOf": [{ "$ref": "#/$defs/SiteDraftAnswerView" }, { "type": "null" }] },
+        "instruction": { "description": "Optional; a task's instruction (cut to 280 characters plus … in list_runs). Left out for other kinds.", "type": "string", "maxLength": 4096 },
+        "task_report": { "description": "Optional; a succeeded task's report; missing or null before then, always missing in list_runs, and missing for other kinds.", "oneOf": [{ "type": "string", "maxLength": 16384 }, { "type": "null" }] }
       }
     },
     "StartRunRequest": {
@@ -2039,7 +2042,8 @@
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
         "requested_at": { "description": "The user's local click time with its UTC offset: RFC 3339 in whole seconds, ending in Z or +HH:MM/-HH:MM, as occurred_at is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" },
-        "kind": { "description": "Optional, host to service only; missing means summary. The extension never sends it: the host sets site_draft when it forwards a start_site_draft, and refuses a start_run from the extension that carries it.", "$ref": "#/$defs/RunKind" }
+        "kind": { "description": "Optional, host to service only; missing means summary. The extension never sends it: the host sets site_draft when it forwards a start_site_draft and task when it forwards a start_task, and refuses a start_run from the extension that carries it.", "$ref": "#/$defs/RunKind" },
+        "instruction": { "description": "Optional, host to service only; present exactly when kind is task. The extension sends start_task instead, and the host refuses a start_run from the extension that carries it.", "type": "string", "minLength": 1, "maxLength": 4096 }
       }
     },
     "RunStarted": {
@@ -2284,6 +2288,24 @@
         "origin": { "type": "string", "minLength": 1, "maxLength": 2048 },
         "visited": { "type": "array", "maxItems": 21, "items": { "$ref": "#/$defs/ShapeCount" } },
         "links": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/ShapeCount" } },
+        "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
+        "requested_at": { "description": "The user's local click time with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
+      }
+    },
+    "StartTaskRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a task-bar run: the user's typed instruction, with the page as untrusted context. The host bounds the instruction (not blank; no control characters but newline and tab), resolves the record key, and forwards a start_run with kind task. Answers run_started; existing is always false.",
+      "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "instruction", "harness", "requested_at"],
+      "properties": {
+        "type": { "const": "start_task" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "content": { "type": "string", "maxLength": 1048576 },
+        "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
+        "instruction": { "description": "The user's typed instruction, in characters. The host also refuses one that is blank after trimming or holds a control character other than newline and tab.", "type": "string", "minLength": 1, "maxLength": 4096 },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "requested_at": { "description": "The user's local click time with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
       }

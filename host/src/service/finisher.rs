@@ -443,6 +443,25 @@ impl RunFinisher for SiteDraftFinisher {
     }
 }
 
+/// Placeholder until the task finisher lands: a task run is failed before it
+/// reaches a finisher, and this one keeps and writes nothing either way.
+#[derive(Debug, Default, Clone, Copy)]
+struct PendingTaskFinisher;
+
+impl RunFinisher for PendingTaskFinisher {
+    fn accept(&self, _run: &RunStatusFile, _final_text: &str) -> Result<serde_json::Value, String> {
+        Err("not yet".to_string())
+    }
+
+    fn save(
+        &self,
+        _run: &RunStatusFile,
+        _result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure> {
+        Err(SaveFailure::final_reason("not yet", None))
+    }
+}
+
 /// The service's finisher: each run goes to the finisher of its kind, so a
 /// site-draft run never reaches the summary finisher.
 pub struct KindFinisher {
@@ -463,6 +482,7 @@ impl KindFinisher {
         match run.kind {
             RunKind::Summary => self.summary.as_ref(),
             RunKind::SiteDraft => &self.site_draft,
+            RunKind::Task => &PendingTaskFinisher,
         }
     }
 }

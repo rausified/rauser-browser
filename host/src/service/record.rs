@@ -226,6 +226,8 @@ impl RunStatusFile {
             // extension built before run kinds rejects unknown keys.
             kind: (!summary).then_some(self.kind),
             site_draft,
+            instruction: None,
+            task_report: None,
         }
     }
 

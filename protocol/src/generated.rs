@@ -784,6 +784,7 @@ pub enum HarnessId {
 pub enum RunKind {
     Summary,
     SiteDraft,
+    Task,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,6 +867,10 @@ pub struct RunView {
     pub kind: Option<RunKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_draft: Option<SiteDraftAnswerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_report: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -885,6 +890,8 @@ pub struct StartRunRequest {
     pub requested_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<RunKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1056,6 +1063,22 @@ pub struct StartSiteDraftRequest {
     pub origin: String,
     pub visited: Vec<ShapeCount>,
     pub links: Vec<ShapeCount>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub harness: Option<HarnessId>,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartTaskRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub title: String,
+    pub content: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub selection: Option<String>,
+    pub instruction: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub harness: Option<HarnessId>,
     pub requested_at: String,
@@ -1347,6 +1370,7 @@ pub enum Request {
     GetAgentEnv(GetAgentEnvRequest),
     DraftSite(DraftSiteRequest),
     StartSiteDraft(StartSiteDraftRequest),
+    StartTask(StartTaskRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
     CheckCaptureSite(CheckCaptureSiteRequest),
@@ -1388,6 +1412,7 @@ impl Request {
             Self::GetAgentEnv(value) => value.protocol_version,
             Self::DraftSite(value) => value.protocol_version,
             Self::StartSiteDraft(value) => value.protocol_version,
+            Self::StartTask(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
             Self::CheckCaptureSite(value) => value.protocol_version,
@@ -1429,6 +1454,7 @@ impl Request {
             Self::GetAgentEnv(value) => &value.request_id,
             Self::DraftSite(value) => &value.request_id,
             Self::StartSiteDraft(value) => &value.request_id,
+            Self::StartTask(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
             Self::CheckCaptureSite(value) => &value.request_id,

@@ -490,7 +490,7 @@ impl Supervisor {
             };
             // A site draft always runs in its own run directory.
             let cwd = match status.kind {
-                RunKind::Summary => status.cwd.as_ref().map(PathBuf::from),
+                RunKind::Summary | RunKind::Task => status.cwd.as_ref().map(PathBuf::from),
                 RunKind::SiteDraft => Some(inner.store.run_dir(id)),
             };
             let resumable = cwd.map(|cwd| {
@@ -572,7 +572,7 @@ impl Supervisor {
             }
             let now = now_timestamp();
             let (cwd, page) = match req.kind {
-                RunKind::Summary => (
+                RunKind::Summary | RunKind::Task => (
                     req.cwd,
                     page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref()),
                 ),
@@ -1126,6 +1126,8 @@ impl Inner {
                 site_draft_prompt(&page_path, &status.url, catalog()),
                 OutputSchema::Omit,
             ),
+            // Placeholder until the task prompt lands.
+            RunKind::Task => return Driven::Failed("not yet".to_string()),
         };
         let spec = RunSpec {
             run_id: id,
@@ -1636,6 +1638,7 @@ pub(crate) fn kind_name(kind: RunKind) -> &'static str {
     match kind {
         RunKind::Summary => "summary",
         RunKind::SiteDraft => "site_draft",
+        RunKind::Task => "task",
     }
 }
 

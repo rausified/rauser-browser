@@ -942,6 +942,7 @@ pub fn start_site_draft(
         }),
         requested_at: value.requested_at,
         kind: Some(RunKind::SiteDraft),
+        instruction: None,
     });
     crate::native::forward(&request, service)
 }
