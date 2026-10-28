@@ -449,6 +449,20 @@ Brauser's only native dialog is the folder picker, used for the home folder and 
 
 Reference implementation: `host/src/dialog.rs` (`scripted` module) and `scripts/smoke-macos.mjs --headless`.
 
+Host lifecycle fixtures in `host/tests/scripted_dialogs.rs` also set
+`BRAUSER_TEST_CONFIG_PATH` to an absolute config file inside their temporary
+directory. Only debug `scripted-dialogs` builds honor this override; ordinary
+builds ignore it, and release builds with the feature cannot compile. Empty
+or relative overrides fail without falling back to user configuration.
+`--config-path` reports the override, and an injected path keeps the cache
+beside that config. This is necessary on Windows, where Known Folders ignore
+the fixture's `HOME`. The host-kill and knowledge-base picker tests run on
+both Windows and Unix without reading the user's config. `host/tests/config_path.rs`
+checks the process boundary, including the loaded file's exact revision and
+ordinary-build isolation. The macOS smoke wrapper still uses its cleared
+environment and temporary `HOME`; its config-path expectations and dialog
+count are unchanged.
+
 ### Browser permission prompts
 
 Brauser asks for nothing at run time. Its manifest requests `http://*/*` and `https://*/*` as install-time `host_permissions`, with `webNavigation` and `scripting` required, so loading the extension grants all of it and the UI-free run needs no grant-ahead step. The panel's site-access banner is covered by unit tests with a fake `chrome.permissions`. *Withdrawing and restoring access in headless Chrome (for example with `chrome.developerPrivate` from a `chrome://extensions` tab) has not been exercised here; confirm it and update this line.*

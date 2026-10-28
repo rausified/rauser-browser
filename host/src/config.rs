@@ -287,6 +287,18 @@ struct AgentRefusal {
 
 impl ConfigStore {
     pub fn default_path() -> Result<PathBuf> {
+        #[cfg(feature = "scripted-dialogs")]
+        if let Some(path) = std::env::var_os(crate::brand::TEST_CONFIG_PATH_ENV) {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() || path.file_name().is_none() {
+                bail!("BRAUSER_TEST_CONFIG_PATH must name an absolute config file");
+            }
+            return Ok(path);
+        }
+        Self::platform_default_path()
+    }
+
+    fn platform_default_path() -> Result<PathBuf> {
         let dirs = ProjectDirs::from("", "", APP_NAME)
             .context("cannot locate this user's application config directory")?;
         Ok(dirs.config_dir().join("config.toml"))
@@ -584,7 +596,7 @@ impl ConfigStore {
     /// injected config path keep their disposable index beside that config,
     /// so parallel fixtures never share process-global cache state.
     pub fn cache_dir(&self) -> Result<PathBuf> {
-        if self.path == Self::default_path()? {
+        if self.path == Self::platform_default_path()? {
             let dirs = ProjectDirs::from("", "", APP_NAME)
                 .context("cannot locate this user's application cache directory")?;
             Ok(dirs.cache_dir().to_path_buf())

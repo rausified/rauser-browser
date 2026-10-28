@@ -426,3 +426,41 @@ an occupied URL note, missing history, ownership changes, response bounds,
 copying, autosave identity and asynchronous navigation. The full required and
 README gates pass, including all 144 panel cases. macOS Chrome interaction
 remains a separate human check; no live service or external API was touched.
+
+## 2026-10-28 — Isolate scripted host configuration on Windows and Unix
+
+The host lifecycle tests now choose a disposable configuration file explicitly
+instead of relying on HOME alone. Windows obtains application directories
+through Known Folders, so changing HOME did not prevent those tests from
+reading a person's real Brauser settings. The new BRAUSER_TEST_CONFIG_PATH
+seam exists only in debug scripted-dialogs builds; ordinary builds ignore it,
+and the existing release guard prevents shipping that feature. Empty or
+relative overrides fail rather than silently using a real configuration.
+
+Both host-level picker fixtures now set this path, including the test that
+kills the host while a picker is open. Configuration side files and the
+rebuildable cache stay beside the temporary configuration. Process-level
+regressions check the printed path, the exact revision of the file actually
+loaded, disposable cache placement and invalid-path refusal. The ordinary
+build also proves it ignores the override. No dialog count or macOS smoke
+configuration convention changed; Windows execution remains with CI.
+
+## 2026-10-28 — Explain why the current page is outside capture
+
+The panel now gives a readable explanation when automatic capture does not
+apply to the current page. It distinguishes a paused configuration from a
+pause still pending in this browser, a pending site removal, a page outside
+the chosen workspaces or accounts, and a page that matches no rule. It also
+points out missing setup, configuration repair and unavailable browser
+settings. An existing site's button opens settings; a site without rules
+opens the existing Capture Site review and still requires an explicit save.
+
+The explanation uses the same ordered URL evaluator and revision-cached
+compiler as capture, with local pauses and removals taking precedence. It
+does not inspect links, infer visits from link counts or change capture,
+note identity, or the host's history verdict. Navigation, changed scope and
+local status refresh the explanation; unreadable and private tabs clear it.
+Repeated control refreshes retain unchanged status text to avoid repeating
+screen-reader announcements. Fourteen new composed-panel cases cover these
+states and their actions, bringing the individually exercised panel suite to
+158 passing cases. Real macOS Chrome interaction remains human verification.
