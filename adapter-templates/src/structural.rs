@@ -1755,11 +1755,9 @@ fn bound_tenant(
 ///    with its code, a table refused whole with `rule: None`, and a table
 ///    left with no rule is removed.
 /// 4. **Structural refusals**: a kept rule that captures an input shape
-///    the structural Keep step refuses (a blocked route word in any path
-///    segment, or a search, paging or secret query with no identifier) is
-///    dropped as `draft_blocked_route`, `draft_search_capture` or
-///    `draft_secret_capture`, whatever capture, `{_}`, alternation or
-///    `{*}` let it reach that page.
+///    the structural Keep step refuses for a blocked route word in any
+///    path segment is dropped as `draft_blocked_route`, whatever capture,
+///    `{_}`, alternation or `{*}` let it reach that page.
 /// 5. **Review fields** come from [`describe_rules`] on the kept rules,
 ///    and a rule that also captures a link shape none of its visited
 ///    shapes is starts `link_only`, so it is never checked by default.
@@ -1831,15 +1829,15 @@ pub fn check_agent_draft(
             .unwrap_or_default();
         for (rule, verdict) in report.rules.iter().enumerate() {
             // A kept rule that captures a page the structural Keep step
-            // refuses is dropped with that page's check code.
+            // refuses for a blocked route word is dropped as one.
             let refused = || {
                 let document = rules
                     .get(rule)
                     .and_then(|r| matching_document(table, r, policy))?;
                 refused
                     .iter()
-                    .find(|(url, _)| matches_url(&document, url))
-                    .map(|(_, code)| *code)
+                    .any(|url| matches_url(&document, url))
+                    .then_some(DraftErrorCode::BlockedRoute)
             };
             let code = match verdict {
                 RuleVerdict::Dropped(code) => Some(*code),
@@ -2022,38 +2020,31 @@ fn matches_url(document: &Document, url: &str) -> bool {
     Prepared::new(url).is_ok_and(|prepared| matches_prepared(document, &prepared))
 }
 
-/// The input shapes the structural Keep step refuses as a page no drafted
-/// rule may capture, each filled with the catalog's examples, with the
-/// draft check code an agent rule matching it is dropped with: a blocked
-/// route word anywhere in the path, or a search, paging or secret query
-/// with no identifier (the [`filter`] verdicts).
+/// The input shapes the structural Keep step refuses for a blocked route
+/// word anywhere in the path (the [`filter`] verdict), each filled with the
+/// catalog's examples: no agent rule may capture one. A shape refused only
+/// for its search, paging or secret query is not here: a path rule ignores
+/// the query, so a borderline rule may still match it, and the preview
+/// lists it as the structural review does (DESIGN §12.2 step 7.7).
 fn refused_shapes(
     origin: &str,
     existing: &Document,
     recorded: &[Document],
     input: &ShapeInput,
     policy: &DraftPolicy,
-) -> Vec<(String, DraftErrorCode)> {
+) -> Vec<String> {
     let (_, dropped) = filter(origin, existing, recorded, input, policy);
-    let code = |reason| match reason {
-        DropReason::BlockedRoute => Some(DraftErrorCode::BlockedRoute),
-        DropReason::SearchOrPaging => Some(DraftErrorCode::SearchCapture),
-        DropReason::SecretQuery => Some(DraftErrorCode::SecretCapture),
-        _ => None,
-    };
-    let refused: BTreeMap<String, DraftErrorCode> = dropped
+    let refused: BTreeSet<String> = dropped
         .into_iter()
-        .filter_map(|d| code(d.reason).map(|code| (d.shape, code)))
+        .filter(|d| d.reason == DropReason::BlockedRoute)
+        .map(|d| d.shape)
         .collect();
     input
         .visited
         .iter()
         .chain(&input.links)
-        .filter_map(|(shape, _)| {
-            refused
-                .get(&shape.to_string())
-                .map(|code| (shape.fill(origin, policy), *code))
-        })
+        .filter(|(shape, _)| refused.contains(&shape.to_string()))
+        .map(|(shape, _)| shape.fill(origin, policy))
         .collect()
 }
 
