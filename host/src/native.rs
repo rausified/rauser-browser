@@ -472,6 +472,7 @@ fn dispatch(
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         Request::DraftSite(value) => crate::capture_site::draft_site(value, config),
         Request::CheckSiteDraft(value) => crate::capture_site::check_site_draft(value, config),
+        Request::CheckCaptureSite(value) => crate::capture_site::check_capture_site(value, config),
         Request::OpenSummary(value) => open_summary(value, config, context.open),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
@@ -7424,6 +7425,96 @@ id = "work:{host}/{id}"
                 assert!(value.agent_status.message.is_some());
             }
             other => panic!("expected config_result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capture_site_preflight_checks_removed_contracts_before_save() {
+        for hand_removed in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            let mut config = ConfigStore::for_test(path.clone());
+            let starter = serde_json::json!({
+                "type": "jira.issue", "origin": "https://acme.atlassian.net",
+                "match": [{"path": "/browse/{key:jira_key}"},
+                    {"path": "/jira/{*}", "query": {"selectedIssue": "{key:jira_key}"}}],
+                "id": "jira:{host}/{key}",
+                "title": "[{key:jira_key}] {title} - Jira",
+                "alias": {"from": "tab_title", "capture": "key"},
+                "refs": [{"type": "jira.issue", "find": "jira_key"}]
+            });
+            let mut original = config.snapshot().clone();
+            let mut custom = starter.clone();
+            custom["type"] = "custom.issue".into();
+            custom["id"] = "jira:{host}/issues/{key}".into();
+            original.adapters.artifacts = vec![custom.clone()];
+            let revision = config.revision().to_owned();
+            config.update(original, &revision).unwrap().unwrap();
+            // Adopt under the config lock before simulating a hand edit.
+            let lock = config.lock_current().unwrap();
+            config.refresh().unwrap();
+            drop(lock);
+            if hand_removed {
+                let mut disk: toml::Value =
+                    toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                disk.as_table_mut().unwrap().remove("artifacts");
+                std::fs::write(&path, toml::to_string(&disk).unwrap()).unwrap();
+            } else {
+                let mut removed = config.snapshot().clone();
+                removed.adapters.artifacts.clear();
+                let revision = config.revision().to_owned();
+                config.update(removed, &revision).unwrap().unwrap();
+            }
+            let config = loaded(&path);
+            assert!(config.snapshot().adapters.artifacts.is_empty());
+            let before = std::fs::read(&path).unwrap();
+            let check = serde_json::json!({
+                "type": "check_capture_site", "protocol_version": PROTOCOL_VERSION,
+                "request_id": "starter-check", "expected_revision": config.revision(),
+                "adapters": {"format": 1, "artifacts": [starter.clone()]}
+            });
+            let responses = served(&[check.to_string()], config);
+            let (code, message) = refused(&responses[0]);
+            assert_eq!(code, ErrorCode::InvalidConfig, "{message}");
+            assert!(message.contains("custom.issue"), "{message}");
+            assert!(message.contains("jira:{host}/issues/{key}"), "{message}");
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+
+            // Restoring the historical identity is allowed, and the check
+            // neither writes the proposal nor consumes its revision.
+            let mut restore = check.clone();
+            restore["adapters"]["artifacts"] = serde_json::json!([custom]);
+            let responses = served(&[restore.to_string()], loaded(&path));
+            assert_eq!(
+                serde_json::to_value(&responses[0]).unwrap()["type"],
+                "capture_site_checked",
+                "{:?}",
+                responses[0]
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+
+            // Adopted contracts belong to the support directory, so a
+            // fresh install needs a separate support directory too.
+            let fresh_folder = tempfile::tempdir().unwrap();
+            let fresh = fresh_folder.path().join("config.toml");
+            let mut fresh_config = ConfigStore::for_test(fresh.clone());
+            let mut check = check.clone();
+            check["expected_revision"] = fresh_config.revision().into();
+            let responses = served(&[check.to_string()], ConfigStore::for_test(fresh.clone()));
+            assert_eq!(
+                serde_json::to_value(&responses[0]).unwrap()["type"],
+                "capture_site_checked",
+                "{:?}",
+                responses[0]
+            );
+            let mut next = fresh_config.snapshot().clone();
+            next.adapters.artifacts = vec![starter];
+            let revision = fresh_config.revision().to_owned();
+            fresh_config.update(next, &revision).unwrap().unwrap();
+            assert_eq!(
+                refused(&served(&[check.to_string()], loaded(&fresh))[0]).0,
+                ErrorCode::Conflict
+            );
         }
     }
 

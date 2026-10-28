@@ -77,3 +77,12 @@
   conflict copy-out and durable recovery instead of being applied to another
   note. Four new panel cases and the full local gate pass (`brwr-jdi`);
   real Chrome timing remains macOS acceptance work.
+
+
+- **Brauser — Check recorded identities before Capture Site offers Save (2026-10-28).**
+  Starter review now checks the host's retired and hand-removed capture
+  contracts before enabling Save, names any conflicting recorded identity,
+  and discards verdicts for edited or closed reviews. Fresh compatible sites
+  still save with one click, and the host independently validates every save.
+  Seven panel cases plus native and wire regressions pass with the full local
+  gate (`brwr-t8m`); macOS Chrome acceptance remains human work.

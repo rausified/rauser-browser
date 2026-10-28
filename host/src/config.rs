@@ -2101,6 +2101,28 @@ pub(crate) fn validate_strip_params_readers(
 }
 
 impl ConfigStore {
+    /// Read-only Capture Site preflight against a freshly locked/read store.
+    /// Reuse the save's policy checks; history never crosses to the extension.
+    pub(crate) fn check_capture_site(&self, adapters: &AdapterDocument) -> Result<()> {
+        let mut next = self.config.clone();
+        next.adapters = adapters.clone();
+        if serde_json::to_vec(&next)?.len() > MAX_CONFIG_BYTES {
+            bail!("configuration exceeds the 64 KiB size limit");
+        }
+        validate_update(&self.config, &next)?;
+        self.validate_strip_params(&next)?;
+        let state_path =
+            adopted_contracts_path(self.path.parent().context("config path has no parent")?);
+        let by_hand = retired_by_hand(&self.adopted, &self.config, &self.retired_adapter_contracts);
+        validate_adapter_transition_with_history(
+            &self.config,
+            &next,
+            &self.retired_adapter_contracts,
+            &by_hand,
+            Some(&state_path),
+        )
+    }
+
     /// `validate_strip_params_readers` against this store's last read.
     pub(crate) fn validate_strip_params(&self, next: &ConfigSnapshot) -> Result<()> {
         let state = self
@@ -2729,7 +2751,7 @@ fn refuse_rekeyed_routes(
             && !declares_container(previous, next, earlier, (artifact_type, id))
         {
             bail!(
-                "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+                "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available: recorded adapter {previous_type:?} uses {previous_id:?}. Review its rules in settings."
             );
         }
     }

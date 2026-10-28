@@ -157,6 +157,8 @@ function hostReply(request, config = CONFIG) {
         adapter_issue: null, adapter_warnings: [],
         adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       };
+    case "check_capture_site":
+      return { type: "capture_site_checked", revision: request.expected_revision };
     case "load_note":
       return {
         type: "note_loaded", exists: false, revision: "", title: "", body: "",
@@ -817,21 +819,112 @@ test("private and nonweb tabs never offer page-pattern inspection", async () => 
 const updates = (page) => page.state.requests.filter((request) => request.type === "update_config");
 
 async function captureReview(url = JIRA_URL, options = {}) {
-  const page = await install({ tab: { id: 1, url, title: "Work page" }, ...options });
+  const { waitForCheck = true, ...installOptions } = options;
+  const page = await install({ tab: { id: 1, url, title: "Work page" }, ...installOptions });
   await until(() => !page.el("capture-site").disabled && !page.el("capture-site-area").hidden, "Capture Site to be ready");
   await until(() => !page.el("note-body").disabled, "the note to load");
   // The panel sends pending visits once on startup.
   await until(() => !page.el("capture-site").disabled, "startup delivery to finish");
   page.el("capture-site").click();
   assert.equal(page.el("capture-site-review").hidden, false);
+  if (waitForCheck) await until(() => page.el("capture-site-message").textContent !== "Checking saved site identities…", "the starter preflight");
   return page;
 }
 
 async function saveCapture(page) {
-  assert.equal(page.el("capture-site-save").disabled, false);
+  await until(() => !page.el("capture-site-save").disabled, "Save after the starter preflight");
   page.el("capture-site-save").click();
   await until(() => page.el("capture-site-review").hidden, "site capture to save");
   await until(() => !page.el("note-body").disabled, "the note to reload after enabling capture");
+}
+
+for (const history of ["retired", "hand-removed"]) {
+  test(`Capture Site refuses a starter conflicting with a ${history} contract before save`, async () => {
+    const page = await captureReview(JIRA_URL, { intercept(request) {
+      if (request.type === "check_capture_site") return {
+        type: "error", code: "invalid_config",
+        message: 'Recorded adapter "custom.issue" on https://acme.atlassian.net uses "jira:{host}/issues/{key}". Review its rules in settings.',
+      };
+    } });
+    await settle();
+    assert.equal(page.el("capture-site-save").disabled, true);
+    assert.match(page.el("capture-site-message").textContent, /custom.issue.*jira:\{host\}\/issues\/\{key\}/);
+    assert.doesNotMatch(page.el("capture-site-message").textContent, /Saving enables/);
+    page.el("capture-site-save").click();
+    assert.equal(updates(page).length, 0);
+  });
+}
+
+test("Capture Site waits for the host's history check before promising a save", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const page = await captureReview(JIRA_URL, { waitForCheck: false, intercept: (request) =>
+    request.type === "check_capture_site" ? held : undefined });
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.doesNotMatch(page.el("capture-site-message").textContent, /Saving enables/);
+  release({ type: "capture_site_checked", revision: "1" });
+  await until(() => !page.el("capture-site-save").disabled, "the history check to pass");
+  assert.match(page.el("capture-site-message").textContent, /Saving enables/);
+  await saveCapture(page);
+});
+
+test("Capture Site ignores history replies for superseded selections and canceled reviews", async () => {
+  const pending = [];
+  const page = await captureReview(GITHUB_URL, { waitForCheck: false, intercept(request) {
+    if (request.type === "check_capture_site") return new Promise((resolve) => pending.push({ request, resolve }));
+  } });
+  await until(() => pending.length === 1, "the first preflight");
+  page.el("capture-site-orgs").value = "other-org";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  await until(() => pending.length === 2, "the edited preflight");
+  assert.deepEqual(pending[1].request.adapters.artifacts[0].scope, { owner: ["other-org"] });
+  assert.deepEqual(Object.keys(pending[1].request).sort(),
+    ["adapters", "expected_revision", "protocol_version", "request_id", "type"]);
+  pending[1].resolve({ type: "error", code: "invalid_config", message: "Recorded adapter conflicts; use settings." });
+  await until(() => /Recorded adapter/.test(page.el("capture-site-message").textContent), "the current refusal");
+  pending[0].resolve({ type: "capture_site_checked", revision: "1" });
+  await settle();
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.match(page.el("capture-site-message").textContent, /Recorded adapter/);
+
+  page.el("capture-site-orgs").value = "third-org";
+  page.el("capture-site-orgs").dispatch("input");
+  await until(() => pending.length === 3, "another preflight");
+  page.el("capture-site-orgs").value = "";
+  page.el("capture-site-orgs").dispatch("input");
+  pending[2].resolve({ type: "capture_site_checked", revision: "1" });
+  await settle();
+  assert.equal(page.el("capture-site-save").disabled, true, "a reply cannot enable an invalid selection");
+
+  page.el("capture-site-orgs").value = "fourth-org";
+  page.el("capture-site-orgs").dispatch("input");
+  await until(() => pending.length === 4, "the canceled preflight");
+  page.el("capture-site-cancel").click();
+  page.el("capture-site").click();
+  await until(() => pending.length === 5, "the reopened review's preflight");
+  pending[3].resolve({ type: "error", code: "invalid_config", message: "Obsolete refusal" });
+  await settle();
+  assert.doesNotMatch(page.el("capture-site-message").textContent, /Obsolete/);
+  assert.equal(page.el("capture-site-save").disabled, true);
+  pending[4].resolve({ type: "capture_site_checked", revision: "1" });
+  await until(() => !page.el("capture-site-save").disabled, "the new review's check");
+  await saveCapture(page);
+});
+
+for (const reply of [
+  { type: "error", code: "invalid_request", message: "Upgrade the native host." },
+  { type: "capture_site_checked", revision: "other-revision" },
+  { type: "capture_site_checked" },
+]) {
+  test(`Capture Site stays disabled after a refused or mismatched check: ${JSON.stringify(reply)}`, async () => {
+    const page = await captureReview(JIRA_URL, { intercept: (request) =>
+      request.type === "check_capture_site" ? reply : undefined });
+    assert.equal(page.el("capture-site-save").disabled, true);
+    assert.doesNotMatch(page.el("capture-site-message").textContent, /Saving enables/);
+    page.el("capture-site-save").click();
+    assert.equal(updates(page).length, 0);
+  });
 }
 
 test("Capture Site previews Jira and installs the host-returned policy in one save", async () => {
@@ -857,7 +950,7 @@ test("Capture Site previews Jira and installs the host-returned policy in one sa
   assert.equal(page.calls("permissions.remove"), 0);
   // The panel's opening list_runs restores run cards; it is not part of the save.
   assert.deepEqual([...new Set(page.state.requests.map((r) => r.type).filter((type) => type !== "list_runs"))].sort(),
-    ["get_artifact", "get_config", "hello", "load_note", "update_config"]);
+    ["check_capture_site", "get_artifact", "get_config", "hello", "load_note", "update_config"]);
 });
 
 test("Capture Site recognizes OneDrive document routes without scope or JSON", async () => {
@@ -899,7 +992,7 @@ test("unchecking repositories omits the repo adapter", async () => {
   const page = await captureReview(GITHUB_URL);
   page.el("capture-site-repos").checked = false;
   page.el("capture-site-repos").dispatch("input");
-  assert.equal(page.el("capture-site-save").disabled, false);
+  await until(() => !page.el("capture-site-save").disabled, "the edited selection preflight");
   await saveCapture(page);
   assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type),
     ["github.pr", "github.issue"]);

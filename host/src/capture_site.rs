@@ -220,6 +220,34 @@ fn locked_document(config: &mut ConfigStore) -> Result<ConfigLock, (ErrorCode, &
     Ok(lock)
 }
 
+/// Check a starter review without exporting host-owned identity history.
+/// The save rechecks this independently; this message never writes a policy.
+pub fn check_capture_site(
+    value: brauser_protocol::CheckCaptureSiteRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let id = value.request_id.as_str();
+    let _lock = match locked_document(config) {
+        Ok(lock) => lock,
+        Err((code, message)) => return error(id, code, message),
+    };
+    if config.revision() != value.expected_revision {
+        return error(
+            id,
+            ErrorCode::Conflict,
+            "Settings changed. Open Capture Site again.",
+        );
+    }
+    if let Err(reason) = config.check_capture_site(&value.adapters) {
+        return error(id, ErrorCode::InvalidConfig, &reason.to_string());
+    }
+    Response::CaptureSiteChecked(brauser_protocol::CaptureSiteChecked {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: value.request_id,
+        revision: config.revision().to_owned(),
+    })
+}
+
 /// The refusal while the adopted-contract record cannot vouch for
 /// `origin` (`ConfigStore::adopted_contracts_unknown_for`): drafting against
 /// an incomplete set of recorded contracts would offer rules the save

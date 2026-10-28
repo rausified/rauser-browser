@@ -290,3 +290,28 @@ in-flight drafts, and the unchanged-revision control. The full local gate
 passed, including 159 panel/editor cases, all 15 extension files and 927 Rust
 outcomes (884 exercised, 43 explicit IPC sandbox skips). macOS Chrome smoke
 remains unverified on this Linux VM. Completes assigned brwr-jdi.
+
+
+## 2026-10-28 — Check a removed site's identity before offering Save
+
+Capture Site can now tell someone during review when its starter would
+conflict with capture rules they used earlier. Removing a site keeps those
+rules' identity contracts so old activity and notes stay connected; previously
+the panel could promise to enable a starter and only reveal the conflict after
+the person clicked Save. The review now asks the native host to check the
+proposed rules first. A conflict names the recorded page kind and ID template
+and points to settings, while a fresh or compatible site still saves with one
+click after the check completes.
+
+The host checks both normal retired history and contracts removed from the
+config file by hand. That history stays on the host, and the check changes no
+capture policy. Each selection has its own verdict: editing an organization,
+unchecking a kind, canceling or reopening cannot reuse an older reply. A host
+that lacks the new additive protocol message leaves Save disabled. The actual
+save still independently validates its revision and history. Seven new panel
+cases, a native removal/restoration regression and a protocol round trip pass
+with the full local gate: 134 panel cases and 929 Rust outcomes (886 exercised,
+43 explicit IPC sandbox skips). macOS Chrome smoke remains unverified on this
+Linux VM. Completes assigned `brwr-t8m`; `brwr-iqx` remains blocked because its
+acceptance criteria name a deleted finisher whose replacement already has the
+correct notes-folder wording.
