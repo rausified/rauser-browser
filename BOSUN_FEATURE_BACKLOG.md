@@ -1432,11 +1432,11 @@ stop product work, and no history reset or production IPC change is called for.
   Establish the runner's exact wait before changing it; no engine was touched.
 
 
-### Platform evidence handoff (2026-10-28, rechecked at 003a85c6)
+### Platform evidence handoff (2026-10-28, rechecked at b794d54e)
 
-- Health at `003a85c6` began clean: no quarantine notice or working-tree
+- Health at `b794d54e` began clean: no quarantine notice or working-tree
   changes. All required local commands passed: protocol generation check,
-  workspace build, fmt, both Clippy configurations, npm installation,
+  workspace build, fmt, both Clippy configurations, offline npm installation,
   typecheck, lint,
   extension build, all 15 extension test files and workspace Rust tests.
   Rust reported 997 successful outcomes: 954 executed and 43 explicit
