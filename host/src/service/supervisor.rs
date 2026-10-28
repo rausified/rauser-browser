@@ -522,7 +522,8 @@ impl Supervisor {
                     let control = RunControl::new(launch, timeout, span);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
-                Some((Submit::Existing(_), _)) | None => {
+                // A resumed task beyond the task limit cannot run either.
+                Some((Submit::Existing(_) | Submit::Full, _)) | None => {
                     tracing::warn!(run_id = %id, "run cannot be resumed after a restart");
                     // Its key stays taken until this end state is recorded.
                     lock(&inner.scheduler).hold(status.kind, &status.start_key, id);
@@ -565,10 +566,20 @@ impl Supervisor {
             let mut scheduler = lock(&inner.scheduler);
             // A run whose end state is now recorded gives up its key first.
             inner.settle_locked(&mut scheduler);
-            if let Submit::Existing(owner) = scheduler.submit(req.kind, &req.record_key, id) {
-                drop(scheduler);
-                tracing::info!(run_id = %owner, "run already queued");
-                return inner.view(owner).map(|view| (view, true));
+            match scheduler.submit(req.kind, &req.record_key, id) {
+                Submit::New => {}
+                Submit::Existing(owner) => {
+                    drop(scheduler);
+                    tracing::info!(run_id = %owner, "run already queued");
+                    return inner.view(owner).map(|view| (view, true));
+                }
+                Submit::Full => {
+                    return Err((
+                        ErrorCode::Conflict,
+                        "Four tasks are already waiting or running. Wait for one to finish."
+                            .to_string(),
+                    ));
+                }
             }
             let now = now_timestamp();
             let (cwd, page) = match req.kind {
