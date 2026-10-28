@@ -771,10 +771,7 @@ pub fn use_as_artifact_note(
                 format!("removing its temporary failed: {error}")
             }
         };
-        eprintln!(
-            "{}: warning: the note was moved, but {what}",
-            crate::brand::NAMESPACE
-        );
+        tracing::warn!(warning = %what, "the note was moved with a warning");
     }
     load_keyed_note(vault, destination_url, artifact_key, &[])
 }

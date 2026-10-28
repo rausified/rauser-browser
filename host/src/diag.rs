@@ -284,6 +284,102 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingFile {
     }
 }
 
+/// Captures what a block logs, as the JSON lines the log file would get,
+/// so tests can check fields and that no content leaks. Captures `debug`
+/// and up, so a leak at a level the default filter hides still fails.
+#[cfg(test)]
+pub(crate) mod test_capture {
+    use std::cell::RefCell;
+    use std::io;
+    use std::sync::Once;
+
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt::format::FmtSpan;
+
+    thread_local! {
+        /// This thread's capture, while one runs.
+        static CAPTURED: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    }
+
+    /// Appends to this thread's capture; other threads' lines are dropped.
+    struct ThreadWriter;
+
+    impl io::Write for ThreadWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            CAPTURED.with(|captured| {
+                if let Some(captured) = captured.borrow_mut().as_mut() {
+                    captured.extend_from_slice(buf);
+                }
+            });
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// One global subscriber for the whole test binary. A scoped one
+    /// (`with_default`) is not enough: a callsite that another test thread
+    /// registers while no capture is live can cache "never" and hide its
+    /// events from a capture that starts a moment later.
+    fn install() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_current_span(false)
+                .with_span_list(true)
+                .with_span_events(FmtSpan::CLOSE)
+                .with_max_level(LevelFilter::DEBUG)
+                .with_writer(|| ThreadWriter)
+                .finish();
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+    }
+
+    /// Run `body` on this thread, capturing what it logs as the log file
+    /// would get it; returns its result, the lines, and their text.
+    pub(crate) fn capture<T>(body: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>, String) {
+        install();
+        CAPTURED.with(|captured| *captured.borrow_mut() = Some(Vec::new()));
+        let result = body();
+        let bytes = CAPTURED
+            .with(|captured| captured.borrow_mut().take())
+            .unwrap_or_default();
+        let text = String::from_utf8(bytes).expect("log lines are UTF-8");
+        let lines = text
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each log line is JSON"))
+            .collect();
+        (result, lines, text)
+    }
+
+    /// Every captured event whose message is `message`.
+    pub(crate) fn events<'a>(
+        lines: &'a [serde_json::Value],
+        message: &str,
+    ) -> Vec<&'a serde_json::Value> {
+        lines
+            .iter()
+            .filter(|line| line["fields"]["message"] == message)
+            .collect()
+    }
+
+    /// The innermost span named `name` that `line` happened in, with its
+    /// fields.
+    pub(crate) fn span<'a>(
+        line: &'a serde_json::Value,
+        name: &str,
+    ) -> Option<&'a serde_json::Value> {
+        line["spans"]
+            .as_array()?
+            .iter()
+            .rev()
+            .find(|span| span["name"] == name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

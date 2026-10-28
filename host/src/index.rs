@@ -926,9 +926,11 @@ impl ArtifactIndex {
                                 ("removing its temporary", error)
                             }
                         };
-                        eprintln!(
-                            "{NAMESPACE}: warning: wrote {}, but {step} failed: {error}",
-                            path()
+                        tracing::warn!(
+                            path = %path(),
+                            step,
+                            %error,
+                            "artifact file written, but a later step failed"
                         );
                     }
                     report.written += 1;
@@ -997,7 +999,10 @@ impl ArtifactIndex {
             && fs::read(self.pass_marker_path()).ok().as_deref() != Some(bytes.as_slice())
             && let Err(error) = atomic_write(&self.pass_marker_path(), &bytes)
         {
-            eprintln!("{NAMESPACE}: warning: could not record artifact pass: {error:#}");
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not record artifact pass"
+            );
         }
     }
 
@@ -1124,8 +1129,9 @@ impl ArtifactIndex {
         match self.scan_rollup_files() {
             Ok(found) => found,
             Err(error) => {
-                eprintln!(
-                    "{NAMESPACE}: warning: could not look for container files to clean up: {error:#}"
+                tracing::warn!(
+                    error = format!("{error:#}"),
+                    "could not look for container files to clean up"
                 );
                 BTreeMap::new()
             }
@@ -1409,9 +1415,9 @@ impl ArtifactIndex {
         if database.skipped_rows > 0 {
             // index.db is a derived snapshot; the log and the ingestion
             // cache keep the event. One bad row never stops publication.
-            eprintln!(
-                "{NAMESPACE}: warning: left {} artifact index row(s) larger than one SQLite page out of index.db",
-                database.skipped_rows
+            tracing::warn!(
+                skipped_rows = database.skipped_rows,
+                "left artifact index rows larger than one SQLite page out of index.db"
             );
         }
         atomic_write(&self.database_path(), &database.bytes)?;

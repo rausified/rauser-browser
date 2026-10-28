@@ -10,8 +10,6 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::HarnessId;
 
-use crate::brand::APP_NAME;
-
 pub const UNSUPPORTED_PLATFORM: &str = "AI harness setup is not supported on this platform yet";
 
 /// The setup probe's prompt. Neither harness has a max-tokens flag, so the
@@ -19,8 +17,6 @@ pub const UNSUPPORTED_PLATFORM: &str = "AI harness setup is not supported on thi
 pub const PROBE_PROMPT: &str = "Reply with the single word OK.";
 
 const STDERR_CAP: usize = 64 * 1024;
-/// How much stderr a failed check writes to the host's own log.
-const STDERR_LOG_BYTES: usize = 2 * 1024;
 
 pub const VERSION_LIMITS: Limits = Limits {
     timeout: Duration::from_secs(10),
@@ -252,7 +248,11 @@ fn installed_version(
     let command = format!("{} --version", adapter.program());
     let output = run_bounded(&real, &["--version".to_owned()], run_env, VERSION_LIMITS).map_err(
         |error| {
-            eprintln!("{APP_NAME}: {command} could not run: {error:#}");
+            tracing::warn!(
+                %command,
+                error = format!("{error:#}"),
+                "harness could not run"
+            );
             format!("{command} could not run")
         },
     )?;
@@ -337,11 +337,8 @@ fn resolve_install(_found: &Path) -> Result<PathBuf, String> {
 
 fn log_stderr(command: &str, stderr: &[u8]) {
     if !stderr.is_empty() {
-        let shown = &stderr[..stderr.len().min(STDERR_LOG_BYTES)];
-        eprintln!(
-            "{APP_NAME}: {command} stderr: {}",
-            String::from_utf8_lossy(shown)
-        );
+        // Only the size: a harness's output is never logged (diag.rs).
+        tracing::warn!(%command, stderr_bytes = stderr.len(), "harness wrote to stderr");
     }
 }
 

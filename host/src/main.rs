@@ -8,7 +8,13 @@ use brauser_host::{
 };
 
 fn main() {
-    let _diagnostics = diag::init(process_kind(std::env::args().nth(1).as_deref()));
+    let command = std::env::args().nth(1);
+    let _diagnostics = if writes_no_files(command.as_deref()) {
+        stderr_only_diagnostics();
+        None
+    } else {
+        diag::init(process_kind(command.as_deref()))
+    };
     if let Err(error) = run() {
         tracing::error!(
             error = format!("{error:#}"),
@@ -16,6 +22,28 @@ fn main() {
         );
         std::process::exit(1);
     }
+}
+
+/// Read-only commands that must create no file, not even a log
+/// (`host/tests/aliases_preview.rs`): the adapter developer tools and the
+/// version and path queries.
+fn writes_no_files(command: Option<&str>) -> bool {
+    matches!(
+        command,
+        Some(adapters::COMMAND | "--version" | "--config-path")
+    )
+}
+
+/// Warnings and errors to stderr, as `diag::init` mirrors them, with no
+/// log file.
+fn stderr_only_diagnostics() {
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_target(false)
+        .without_time()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 /// Which diagnostics file a command logs to (diag.rs).
