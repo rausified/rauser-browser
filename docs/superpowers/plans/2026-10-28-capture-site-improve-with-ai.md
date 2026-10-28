@@ -105,13 +105,41 @@ These follow John's binding decisions. The orchestrator confirms the open ones b
 
 These are the failure modes most likely to slip through, each pinned by a named test.
 
-1. **Agent output reaching the review unchecked.** Pinned by the step 7.7 cases in Task 6 (`agent_draft_with_tier1_fields_is_rejected_before_the_preview`, `agent_draft_with_a_title_template_is_rejected_before_the_preview`, `agent_draft_with_a_scope_is_rejected_before_the_preview`, `unparseable_agent_draft_is_discarded_without_being_shown`) and by `the review renders only the host's site_drafted, never the run's raw answer` (Task 7).
-2. **Planted shapes steering the agent wider.** Pinned by the nine `agent_planted_*` cases (Task 6), which mirror #138's `planted_*` structural cases with the same expected codes.
+1. **Agent output reaching the review unchecked.** Pinned by the step 7.7 rejected-before-the-preview cases (`agent_draft_with_tier1_fields_is_rejected_before_the_preview`, `agent_draft_with_a_title_template_is_rejected_before_the_preview`, `agent_draft_with_a_scope_is_rejected_before_the_preview`, `unparseable_agent_draft_is_discarded_without_being_shown`), written first in Task 2 (crate) and Task 3 (service), and run end to end in Task 6. Also pinned by `the review renders only the host's site_drafted, never the run's raw answer` (Task 7).
+2. **Planted shapes steering the agent wider.** Pinned by the step 7.7 planted cases in "Step 7.7 case map" below: eight `agent_planted_*` cases that each mirror one of #138's eight `planted_*` cases in `adapter-templates/tests/structural.rs`, one new `agent_planted_blocked_route_word_is_dropped`, and `agent_draft_overlapping_existing_adapter_loses_only_overlapping_rules`. They are written first in Task 2 and run end to end in Task 6.
 3. **The extension choosing agent input or run kind.** Pinned by `start_run_from_the_extension_refuses_a_kind` and `start_site_draft_builds_the_input_from_the_hosts_own_structural_draft` (Task 4).
 4. **A site-draft run writing outside its run directory, or running in the knowledge base.** Pinned by `site_draft_run_writes_nothing_outside_its_run_directory` and `site_draft_run_cwd_is_its_run_directory` (Task 3).
 5. **Summary UI confused by site-draft runs.** Pinned by `restored summary cards skip site-draft runs` (Task 7) and `site_draft_runs_never_reach_the_summary_finisher` (Task 3).
 6. **An agent rule silently widening capture.** Pinned by `agent_rule_matching_no_seen_shape_starts_unchecked_as_unseen` (Task 2) and `unseen AI rules start unchecked with their label` (Task 7).
 7. **Borderline drafts hiding what they match.** Pinned by `agent_preview_lists_every_non_artifact_shape_a_borderline_draft_matches` (Task 6).
+
+## Step 7.7 case map
+
+Each agent case reuses the planted input (visited shapes and link shapes) of the named test in `adapter-templates/tests/structural.rs`, and adds an agent table that follows the plant. The structural tests assert shape-level `DropReason`s from the Keep step. An agent rule never goes through the Keep step: it is judged by `check_draft_rules`, so its expected outcome is a `DraftErrorCode`. `rule_check` reports the first check a rule fails, in this order: `draft_no_leading_literal`, `draft_rest_second`, `draft_blocked_route`, `draft_search_capture`, `draft_paging_capture`, `draft_secret_capture`, `draft_matches_probe`, `draft_overlap`. Each agent table below is written so the listed code is the first check it fails. Every case also asserts, as the structural test does with `assert_visited_rule_unchanged`, that the visited rule (`/docs/{num:int}` or `/wiki/doc/{num:int}`) is kept and checked.
+
+| Agent case | Mirrors (input from) | Agent table rules | Expected |
+| --- | --- | --- | --- |
+| `agent_planted_links_toward_rest_after_first_segment_are_dropped` | `planted_links_toward_rest_after_first_segment_are_dropped` | `/{*}`, `/docs/{*}` | `draft_no_leading_literal`, `draft_rest_second` |
+| `agent_planted_root_match_is_dropped` | `planted_root_match_is_dropped` | `/`, `/{n:int}`, `/?id={n:int}` | `draft_no_leading_literal` for each; no surviving rule evaluates the structural test's three root URLs. (`draft_matches_probe` is not reachable here: every catalog probe path other than the root starts with a blocked route word, so `draft_blocked_route` fires first.) |
+| `agent_planted_search_page_is_dropped` | `planted_search_page_is_dropped` | `/search/{n:int}`, `/find?q={n:int}`, `/docs?query={t:token(1,128)}` | `draft_blocked_route`, `draft_search_capture`, `draft_search_capture` |
+| `agent_planted_secret_query_parameter_id_is_dropped` | `planted_secret_query_parameter_id_is_dropped` | `/view?sig={h:hex(32)}`, `/cb?code={t:token(1,128)}`, `/files/{n:int}?token={t:token(1,128)}` with the ID built from `t` | `draft_secret_capture` for each; no surviving ID contains a secret capture |
+| `agent_planted_auth_or_capability_route_is_dropped` | `planted_auth_or_capability_route_is_dropped` | `/invite/{h:hex(32)}`, `/reset/{u:uuid}`, `/password/reset/{h:hex(64)}`, `/verify/{t:token(1,128)}`, `/confirm/{n:int}` | `draft_blocked_route` for each |
+| `agent_planted_search_or_paging_parameter_id_is_dropped` | `planted_search_or_paging_parameter_id_is_dropped` | `/items?page={n:int}`, `/items?cursor={t:token(1,128)}`, `/items?q={k:jira_key}`, `/items?tab={n:int}` | `draft_paging_capture`, `draft_paging_capture`, `draft_search_capture`, `draft_paging_capture` |
+| `agent_planted_id_less_rule_is_dropped` | `planted_id_less_rule_is_dropped` | one table whose only rule is `/about/team` and whose ID has no identifier capture; one table for `/pages/{s:name}` with the ID built from `s` | the whole table is dropped as `draft_id_needs_typed_capture` (step 5 of `check_draft_rules`, which is table-level for drafted rules) |
+| `agent_planted_alternative_on_visited_rule_starts_unchecked_or_is_dropped` | `planted_alternative_on_visited_rule_is_a_separate_unchecked_rule` | the visited rule `/wiki/doc/{n:int}` first, then a second table with that rule widened to cover the planted link word, `/wiki/{(doc|page)}/{n:int}` | no error code is required. The assertion is outcome-based: no rule that is `checked` evaluates `https://tools.example.com/wiki/page/42` (the planted, link-only shape filled), and `https://tools.example.com/wiki/doc/42` still evaluates to the checked first table. Task 2 chooses whether the widened rule starts unchecked or is dropped (for example as `draft_overlap` against the first table); the test accepts either |
+| `agent_planted_blocked_route_word_is_dropped` | **New.** No structural `planted_*` counterpart: the structural Keep step only meets blocked words that appear in shapes. Nearest input: `planted_auth_or_capability_route_is_dropped` | one rule per catalog `blocked_route_words` entry, each anchored on that word (`/<word>/{n:int}`), plus one where the word is a member of an alternation (`/tools/{(docs|share)}/{n:int}`, anchored on `tools` because a plain alternation does not anchor) | `draft_blocked_route` for every rule; the expected list is read from `catalog.json`, never copied |
+| `agent_draft_overlapping_existing_adapter_loses_only_overlapping_rules` | `draft_overlapping_existing_adapter_loses_only_overlapping_rules` (not a `planted_*` test; same existing `tools.history` document and visited shapes) | `/docs/{n:int}`, `/docs/{n:int}/history`, `/tickets/{k:jira_key}` | only `/docs/{n:int}/history` is dropped, as `draft_overlap`; the other two are kept |
+
+Rejected before the preview (whole-draft refusals, contract decision rule 1):
+
+| Agent case | Mirrors | Expected |
+| --- | --- | --- |
+| `agent_draft_with_tier1_fields_is_rejected_before_the_preview` (`fields`, `alias`, `path_case`) | New; the per-key code is #138's `draft_forbidden_key` | `rejected == Some(ForbiddenKey)`, no adapters |
+| `agent_draft_with_a_title_template_is_rejected_before_the_preview` | New | `rejected == Some(ForbiddenKey)`, no adapters |
+| `agent_draft_with_a_scope_is_rejected_before_the_preview` (`scope` and `unscoped`) | New | `rejected == Some(ForbiddenKey)`, no adapters |
+| `unparseable_agent_draft_is_discarded_without_being_shown` | New | service: `failed`/`invalid_output` after one repair turn; crate: `rejected == Some(InvalidRule)` for a table that does not parse |
+
+Each case's agent answer is also a fixture, `host/tests/fixtures/site-draft-answers/<case>.json` (an `{"adapters":[…]}` answer), created in Task 2 and read by the crate test with `include_str!("../../host/tests/fixtures/site-draft-answers/<case>.json")`, as `tests/structural.rs` already includes `protocol/capture-site/`. So the same answer drives the crate test (Task 2), the service test (Task 3) and the host end-to-end test (Task 6). Where an agent table's exact rule text does not parse in the crate's template grammar, adjust the text, not the expected code, and note it in the test.
 
 Commands used throughout:
 - **Crate:** `cargo test --locked -p adapter-templates`
@@ -177,7 +205,9 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
     - Then `check_in_rank_order`, in the agent's table order.
     - Then the review fields.
   - Add `pub fn describe_rules(table: &Value, input: &ShapeInput, policy: &DraftPolicy) -> Vec<DraftedRule>`. It computes counts, `link_only`, `token_only`, `unseen` and `example` for any table. Structural `Candidate::drafted` keeps its own counts, and a unit test pins that the two agree on a structural table.
-- Test: `adapter-templates/src/structural.rs` `#[cfg(test)]`.
+- Create `adapter-templates/tests/agent_draft.rs`. It reads `protocol/capture-site/shapes.json` and `catalog.json` with the same helper as `tests/structural.rs`; move the shared helpers (`policy`, `document`, `shapes`, `drafted_document`) to `tests/common/mod.rs`. For each case in "Step 7.7 case map", it feeds the mirrored structural test's planted input and the case's fixture into `check_agent_draft`, and asserts the mapped code or outcome.
+- Create `host/tests/fixtures/site-draft-answers/`, one JSON answer per case in "Step 7.7 case map", including `agent_planted_secret_query_parameter_id_is_dropped.json`. The unparseable case is a text file, `unparseable_agent_draft_is_discarded_without_being_shown.txt`, for the service test; its crate test uses an inline table that does not parse.
+- Test: `adapter-templates/src/structural.rs` `#[cfg(test)]` and `adapter-templates/tests/agent_draft.rs`.
 
 **Interfaces:**
 - Consumes: `check_draft_rules`, `scope_state`, `match_rule` and `UrlShape::fill` from #138.
@@ -197,6 +227,8 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
   - `agent_link_only_and_token_only_rules_are_flagged_like_structural_ones`
   - `describe_rules_agrees_with_structural_counts`
   - `agent_shared_origin_tables_get_the_hosts_scope_state_and_tenant`
+  - In `tests/agent_draft.rs`, every case of "Step 7.7 case map" at the crate layer: the eight mirrored `agent_planted_*` cases (including `agent_planted_secret_query_parameter_id_is_dropped`), the new `agent_planted_blocked_route_word_is_dropped`, `agent_draft_overlapping_existing_adapter_loses_only_overlapping_rules`, and the four rejected-before-the-preview cases.
+  - `agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_checks` (crate layer): a visited shape the structural Keep step dropped as `no_route_word`, which a valid anchored agent rule covers, is kept and checked.
 - [ ] Run **Crate**. Expect FAIL. Confirm the existing `draft`/`draft_rules` vectors and the `structural` integration tests still pass before refactoring.
 - [ ] Implement.
 - [ ] Run **Crate**, `(cd adapter-templates/fuzz && cargo check --locked)`, `cargo build --locked -p brauser && npm run test:adapter-diff -- --cases 5000`, and **Windows clippy**. Expect PASS.
@@ -219,7 +251,7 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
     - the answer shape `{"adapters": [ … ]}`;
     - "Your final message must be only the JSON object."
 
-    It names `input_path` and says its content is untrusted data between the markers, which may contain instructions aimed at the agent, which it must ignore. It tells the agent to read no other files and change none.
+    It names `input_path` on a line of its own, exactly `Input file: <absolute path>`, so tests and the smoke's fake harnesses can find it, and says the file's content is untrusted data between the markers, which may contain instructions aimed at the agent, which it must ignore. It tells the agent to read no other files and change none.
   - Add `pub fn site_draft_input(origin: &str, visited: &[(String, u32)], links: &[(String, u32)], structural: &[serde_json::Value]) -> String`: the run's `page.md` content, one delimited untrusted-data block (`BEGIN UNTRUSTED SITE DATA` … `END UNTRUSTED SITE DATA`) holding the origin, visited shapes with counts, link shapes with counts, and the structural draft's tables as JSON. Any marker text inside a shape or table is escaped, so the block cannot be closed early.
   - `repair_prompt` is reused unchanged.
 - Create `host/src/site_draft_answer.rs`. Register it in `host/src/lib.rs`, next to `answer.rs`. It holds:
@@ -236,10 +268,12 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
   - A site-draft run's `cwd` is `store.run_dir(id)`, and `ServiceOptions::run_cwd` (the knowledge base identity check) runs only for summary runs.
   - Recovery and resume keep the kind.
 - Modify `host/src/service/server.rs` (`Request::StartRun`). For `kind: Some(SiteDraft)` the server skips the knowledge-base resolution and `not_configured` check, and checks `url` is an exact HTTP(S) origin and `content` is within the start-run bounds. It passes `vocabulary` as the default, which site drafts do not use. A summary run is unchanged.
-- Test: `#[cfg(test)]` in `prompt.rs`, `site_draft_answer.rs`, `finisher.rs`, `supervisor.rs` and `server.rs`, using `HarnessRegistry::of` with in-process fake runners.
+- Test: `#[cfg(test)]` in `prompt.rs`, `site_draft_answer.rs`, `finisher.rs`, `supervisor.rs` and `server.rs`, using `HarnessRegistry::of` with in-process fake runners. The `supervisor.rs` fixture tests read Task 2's `host/tests/fixtures/site-draft-answers/` with `include_str!`.
 
 - [ ] Write failing tests:
-  - `site_draft_prompt_names_the_input_by_path_and_marks_it_untrusted`
+  - `site_draft_prompt_names_the_input_by_path_and_marks_it_untrusted` (the prompt has exactly one `Input file: <path>` line, and it names the run's `page.md`)
+  - `every_site_draft_fixture_answer_passes_the_service_unchanged`: for each fixture except the unparseable one, an in-process fake runner first asserts its `page.md` holds the mirrored structural test's planted shapes, then answers with the fixture. The run ends `succeeded`, with the fixture's tables unchanged in `RunView.site_draft`, forbidden keys included.
+  - `unparseable_agent_draft_is_discarded_without_being_shown` (service layer): the unparseable fixture, answered to both the first turn and the repair turn, ends `failed`/`invalid_output` with `site_draft` null.
   - `site_draft_prompt_lists_every_catalog_rule_and_the_forbidden_keys`
   - `site_draft_prompt_never_contains_shapes_or_the_structural_draft` (only the input file does)
   - `site_draft_input_block_cannot_be_closed_early_by_a_planted_marker`
@@ -346,40 +380,23 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
 
 ---
 
-### Task 6: Step 7.7 named draft tests
+### Task 6: Step 7.7 host end-to-end layer
 
-The step 7.7 cases, at the two layers that decide them. The fake harness's answers are the planted drafts. They pass the service validator unchanged, so the decision is the host's.
+The crate cases were written first in Task 2 and the service cases in Task 3. This task adds only the host end-to-end layer: each fixture runs through a service-shaped `RunView` into `draft_site` with `run_id`, so the step 7.7 decision is shown to be the host's. The fake answers are the planted drafts, which pass the service validator unchanged (Task 3).
 
 **Files:**
-- Create `adapter-templates/tests/agent_draft.rs`. It reads `protocol/capture-site/shapes.json` and `catalog.json` with the same helper as `tests/structural.rs`; move the helper to `tests/common/mod.rs` if both need it. It feeds #138's planted inputs together with an agent table that follows the plant into `check_agent_draft`, and asserts the same codes #138's structural `planted_*` cases expect.
-- Create `host/tests/fixtures/site-draft-answers/`, one JSON answer per case below. Each one also serves as a fake harness's final message.
-- Modify `host/src/service/supervisor.rs` tests. For every fixture, an in-process fake runner (`HarnessRegistry::of`) that first asserts its `page.md` holds the planted shapes, and then answers with the fixture, ends `succeeded` with the fixture's tables unchanged in `RunView.site_draft`. The exception is the unparseable fixture, which ends `failed`/`invalid_output` after one repair turn.
-- Modify `host/src/capture_site.rs` tests. For every fixture except the unparseable one, `draft_site` with `run_id`, against a `FakeService` that answers that view, yields the expected verdicts.
-- Test: the files above.
+- Modify `host/src/capture_site.rs` tests. For every fixture in "Step 7.7 case map" except the unparseable one, `draft_site` with `run_id`, against a `FakeService` whose `run_fetched` carries a `succeeded` `site_draft` view with the fixture's tables, yields the mapped code or outcome in the `site_drafted` response (`dropped`, `adapters`, `checked`, `preview`).
+- Test: the file above.
 
-- [ ] Write failing tests:
-  - Planted inputs (crate and host), each mirroring #138's structural case and expecting the same code:
-    - `agent_planted_links_toward_rest_after_first_segment_are_dropped`
-    - `agent_planted_root_match_is_dropped`
-    - `agent_planted_search_page_is_dropped`
-    - `agent_planted_auth_or_capability_route_is_dropped`
-    - `agent_planted_search_or_paging_parameter_id_is_dropped`
-    - `agent_planted_id_less_rule_is_dropped`
-    - `agent_planted_alternative_on_visited_rule_starts_unchecked_or_is_dropped` (never widens a visited rule while checked)
-    - `agent_planted_blocked_route_word_is_dropped`
-    - `agent_planted_overlap_with_existing_adapter_loses_only_overlapping_rules`
-  - Rejected before the preview (crate and host; the host response has no adapters, one `DroppedView` with the code, and no preview row naming an agent rule):
-    - `agent_draft_with_tier1_fields_is_rejected_before_the_preview` (`fields`, `alias`, `path_case`)
-    - `agent_draft_with_a_title_template_is_rejected_before_the_preview`
-    - `agent_draft_with_a_scope_is_rejected_before_the_preview` (`scope` and `unscoped`)
-    - `unparseable_agent_draft_is_discarded_without_being_shown` (service: `invalid_output` after one repair; host: a `run_id` of a failed run is refused, so no `site_drafted` exists for it)
-  - Borderline:
-    - `agent_preview_lists_every_non_artifact_shape_a_borderline_draft_matches`: an agent rule that survives the checks but also matches a structurally dropped visited shape (a `search_or_paging` or `already_recognized` shape). It is not on the probe list. Every such row appears in `preview` with that rule's `adapter`/`rule`, so the review shows what else it captures.
-  - Refinement (the point of the feature):
-    - `agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_checks`: a visited shape the structural Keep step dropped as `no_route_word`, which a valid anchored agent rule covers, is kept and checked.
-- [ ] Run **Crate** and **Host**. Expect FAIL wherever Tasks 2–4 missed a case. Fix the code, not the test.
+- [ ] Write the host tests (each named with a `host_` prefix on the case-map name, for example `host_agent_planted_secret_query_parameter_id_is_dropped`):
+  - every planted and overlap case of "Step 7.7 case map";
+  - the three forbidden-key rejected-before-the-preview cases: the host response has no adapters, one `DroppedView { shape: null, adapter: null, rule: null }` with the code, and no preview row naming an agent rule;
+  - `host_unparseable_agent_draft_is_discarded_without_being_shown`: a `run_id` of a `failed`/`invalid_output` run is refused, so no `site_drafted` exists for it;
+  - Borderline: `agent_preview_lists_every_non_artifact_shape_a_borderline_draft_matches`: an agent rule that survives the checks but also matches a structurally dropped visited shape (a `search_or_paging` or `already_recognized` shape). It is not on the probe list. Every such row appears in `preview` with that rule's `adapter`/`rule`, so the review shows what else it captures.
+  - Refinement (the point of the feature): `host_agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_checks`, the host layer of Task 2's crate case.
+- [ ] Run **Host**. These tests check code Tasks 2–4 built, so most should pass at once. Any FAIL is a missed case: fix the code, not the test, and add the missing crate or service case to Task 2's or Task 3's test file first.
 - [ ] Run **Crate**, **Host** and **Windows clippy**. Expect PASS.
-- [ ] Commit: `git commit -m "test: step 7.7 agent draft cases through the fake harness"`
+- [ ] Commit: `git commit -m "test: step 7.7 agent draft cases end to end through the host"`
 
 ---
 
@@ -440,12 +457,12 @@ Read DESIGN.md §5.7 and `panel.css` first. *Depends on the previous review* for
 
 **Files:**
 - Modify `scripts/smoke-macos.mjs`:
-  - `FAKE_CODEX` and `FAKE_CLAUDE` answer a prompt that names a site-draft input (the prompt starts with the site-draft task line) with a fixed `{"adapters":[…]}` answer for the fixture origin. It holds one valid rule beyond the structural draft and one rule matching `/search`. The fakes log the input file path they were given, as they log argv now.
+  - `FAKE_CODEX` and `FAKE_CLAUDE` answer a prompt that names a site-draft input (the prompt starts with the site-draft task line) with a fixed `{"adapters":[…]}` answer for the fixture origin. It holds one valid rule beyond the structural draft and one rule matching `/search`. The input path reaches the fakes only inside the prompt: the fake `claude` reads it from the prompt it read on stdin, and the fake `codex` from the joined `params.input[].text` of its `turn/start` request (the text it already passes to `reply`). Each fake matches the prompt's `Input file: <path>` line (Task 3) with `/^Input file: (.+)$/m` and logs `{ input_path }` as its own JSON line, beside the existing `argv`, `rpc` and `stdin` entries; `harnessRuns` collects it on the run.
   - Add `step("Capture Site improves a draft with AI")` inside the service block, after `step("Harness setup in settings")` and before the summary-output steps. It uses the second origin `http://localhost:<port>` from #138's step. It:
     1. opens a wiki page, clicks `#capture-site` and asserts the basic review;
     2. clicks `#capture-site-improve` and waits for the progress to finish;
     3. asserts the review says "Improved with AI", lists the added rule, and lists the `/search` rule as not captured;
-    4. asserts the harness log shows the prompt went on stdin and the input path as an argument, with no shape text in argv;
+    4. asserts from the harness log that the site-draft run's prompt, on stdin for `claude` or in the `turn/start` input for `codex`, names the run's `page.md` by path: the logged `input_path` ends in `/<run_id>/page.md`, and the run's `cwd` is that directory. It also asserts that argv contains neither shape text (no visited or link shape, no structural rule) nor the input path, and is the harness's usual argv (`app-server --listen stdio://` for `codex`, the `-p` flags for `claude`);
     5. saves, and asserts the host config holds the agent adapter with only Tier 0 keys;
     6. asserts `list_runs` shows the run as `site_draft` and the summary cards did not restore it.
   - The dialog counter is unchanged, and `dialogsShown === dialogLogLines().length` still holds.
