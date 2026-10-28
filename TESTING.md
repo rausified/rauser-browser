@@ -41,7 +41,12 @@ original payload completes exactly once. Existing encoded-URL tests keep new
 oversized writes rejected without creating logs or intents, and accept the
 exact 8192-byte boundary. The mixed-batch regression checks that a rejected
 oversized event cannot select the day or block a valid neighbor, in either
-order. All use disposable local directories; no browser or network is used.
+order. `completed_mixed_batch_recovers_after_selecting_a_different_home_folder`
+interrupts cleanup after a real batch append has synced, then selects another
+home folder. It checks that only appended rows are journaled, recovery clears
+the completed intent without touching the old log, and capture continues in
+the new folder. The interruption seam is compiled only into unit tests. All
+use disposable local directories; no browser or network is used.
 
 ## Summary title extraction
 

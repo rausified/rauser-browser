@@ -562,7 +562,10 @@ As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per req
   the existing exact hash/prefix and owned-log recovery checks, through single
   or batch delivery. A changed payload remains retryable for manual repair;
   it never becomes a new oversized append. Rejected candidates do not choose
-  the day for accepted new entries in a mixed batch. A normalized URL of
+  the day for accepted new entries in a mixed batch. Compact intents list
+  only the entries actually appended to their log, so rejected or separately
+  recovered events cannot make a completed batch appear unfinished after a
+  home-folder change. A normalized URL of
   exactly 8192 bytes is accepted. Activity and Why marker payloads use the same
   lowercase, hyphenated UUID as their marker hash and immediate index update, so alternate
   valid UUID spellings cannot disappear or count twice after a rebuild. Batch

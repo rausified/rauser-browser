@@ -1345,9 +1345,11 @@ impl CaptureStore {
                 .to_str()
                 .context("log path is not UTF-8")?
                 .to_owned(),
-            event_hashes: entries
+            // Recovery checks these markers in this log. Rejected entries and
+            // v1 intents replayed in another log are not part of this append.
+            event_hashes: appended
                 .iter()
-                .map(|entry| entry.event_hash.clone())
+                .map(|&index| entries[index].event_hash.clone())
                 .collect(),
             entry: combined.clone(),
             offset: metadata.len(),
@@ -1366,6 +1368,10 @@ impl CaptureStore {
             return Err(error).context("appending capture batch");
         }
         sync_directory(&day_dir).context("syncing daily log directory")?;
+        #[cfg(test)]
+        if fixtures::INTERRUPT_BATCH_AFTER_SYNC.replace(false) {
+            bail!("simulated interruption before clearing capture batch intent");
+        }
         clear_batch_intent(&self.batch_intent_path())?;
         for index in appended {
             outcomes[index] = Some(CaptureOutcome::Persisted {
@@ -2158,6 +2164,10 @@ fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
 pub(crate) mod fixtures {
     use std::cell::Cell;
     use time::OffsetDateTime;
+
+    thread_local! {
+        pub(super) static INTERRUPT_BATCH_AFTER_SYNC: Cell<bool> = const { Cell::new(false) };
+    }
 
     std::thread_local! {
         static EVENT_TIME: Cell<OffsetDateTime> = Cell::new(event_time_for(OffsetDateTime::now_utc()));
@@ -3161,6 +3171,67 @@ mod tests {
             );
             assert!(!store.batch_intent_path().exists());
         }
+    }
+
+    #[test]
+    fn completed_mixed_batch_recovers_after_selecting_a_different_home_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let next_root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let origins = ["https://example.com".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        let valid = event();
+        let oversized = VisitEvent {
+            url: format!("https://example.com/{}a", "ü".repeat(1362)),
+            ..event()
+        };
+        // Leave the real published journal behind after the append has synced,
+        // as a process exit or a failed journal cleanup would do.
+        fixtures::INTERRUPT_BATCH_AFTER_SYNC.set(true);
+        let result = store.record_batch(
+            policy,
+            &Uuid::new_v4().to_string(),
+            &[
+                CaptureBatchEvent::Visit(&oversized),
+                CaptureBatchEvent::Visit(&valid),
+            ],
+            None,
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|(_, outcome)| matches!(outcome, CaptureOutcome::Retryable { .. }))
+        );
+        let intent = read_batch_intent(&store.batch_intent_path())
+            .unwrap()
+            .unwrap();
+        let original_log = root.path().join(&intent.relative_log);
+        let before = fs::read(&original_log).unwrap();
+        assert_eq!(
+            before.len() as u64,
+            intent.offset + intent.entry.len() as u64
+        );
+
+        let next =
+            CaptureStore::open_at(&storage(next_root.path(), "log"), None, state.path()).unwrap();
+        let outcome = next.record(policy, &event());
+        assert!(
+            matches!(outcome, CaptureOutcome::Persisted { .. }),
+            "a completed batch must not block capture in the new folder: {outcome:?}"
+        );
+        assert_eq!(fs::read(&original_log).unwrap(), before);
+        assert!(!store.batch_intent_path().exists());
+        assert_eq!(
+            intent.event_hashes,
+            vec![sha256_hex(valid.event_id.as_bytes())]
+        );
     }
 
     #[test]
