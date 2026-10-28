@@ -53,6 +53,16 @@ const EXTENSION_ID = /^[a-p]{32}$/;
 // turn by these.
 const PROBE_PROMPT = "Reply with the single word OK.";
 const REPAIR_PREFIX = "Your previous answer was not valid";
+// Keep in step with TASK_PROMPT_START and task_repair_prompt in
+// host/src/service/prompt.rs: the fakes answer a task turn and its repair
+// turn by these.
+const TASK_PROMPT_START = "Do a task for the user.";
+const TASK_REPAIR_PREFIX = "Your previous final message was empty";
+// The task step's instruction carries this canary, and its fake report is
+// TASK_REPORT; neither may reach an argv, page.md or a diagnostics line.
+const TASK_CANARY = "SMOKE-TASK-CANARY";
+const TASK_REPORT = "Did the smoke task.\n- Read the page.";
+const TASK_REPORT_START = "Did the smoke task.";
 const EXTENSION_ID_ALPHABET = "abcdefghijklmnop";
 
 function usage() {
@@ -239,7 +249,10 @@ async function choosePickerFolder(folder) {
 // - summary: a valid §6.4 answer (FIXTURE_SUMMARY_ANSWER) whose agent text
 //   carries remote images, a Mermaid fence and a Dataview inline query, for
 //   the summary-file steps.
-// The setup probe is answered "OK" in every mode except fail.
+// The setup probe is answered "OK" in every mode except fail. A task prompt
+// (it starts with TASK_PROMPT_START) and the task repair turn (it starts with
+// TASK_REPAIR_PREFIX) are answered with the plain-text TASK_REPORT in every
+// mode except fail.
 const FAKE_SESSION = "fake-session-1";
 const FAKE_THREAD = "fake-thread-1";
 const FAKE_ANSWER = {
@@ -300,6 +313,9 @@ function reply(prompt) {
   if (prompt.startsWith(${JSON.stringify(SITE_DRAFT_TASK)})) {
     const origin = prompt.slice(${SITE_DRAFT_TASK.length}).split(". ")[0];
     return { text: JSON.stringify({ adapters: [{ ...${JSON.stringify(FAKE_SITE_DRAFT_TABLE)}, origin }] }) };
+  }
+  if (prompt.startsWith(${JSON.stringify(TASK_PROMPT_START)}) || prompt.startsWith(${JSON.stringify(TASK_REPAIR_PREFIX)})) {
+    return { text: ${JSON.stringify(TASK_REPORT)} };
   }
   if (current === "slow") return { slow: true };
   const bad = current === "badjson" || (current === "badjson-once" && !prompt.startsWith(${JSON.stringify(REPAIR_PREFIX)}));
@@ -627,6 +643,19 @@ class PageDriver {
     })()`);
   }
 
+  /** Focus `selector` and press `key` there, as real key events. */
+  async press(selector, key) {
+    await this.evaluate(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element) throw new Error("Missing ${selector.replaceAll('"', "'")}");
+      element.focus();
+    })()`);
+    const keys = { Enter: { code: "Enter", windowsVirtualKeyCode: 13, text: "\r" } };
+    const { text, ...fields } = keys[key] ?? { code: key };
+    await this.cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key, text, ...fields }, this.sessionId);
+    await this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, ...fields }, this.sessionId);
+  }
+
   text(selector) {
     return this.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent ?? null`);
   }
@@ -699,7 +728,8 @@ const ARTICLE_SENTINEL = "says what a reader came for";
 
 // The host and service logs (DESIGN.md §15) of a headless run: every line is
 // JSON, a request the host forwarded shows up under the same request_id in
-// both files, and no line carries page text.
+// both files, and no line carries page text, a task's instruction or its
+// report.
 async function checkDiagnostics(logDir) {
   const read = async (name) => {
     const text = await readFile(path.join(logDir, name), "utf8").catch((error) => {
@@ -707,6 +737,8 @@ async function checkDiagnostics(logDir) {
       throw error;
     });
     requireCondition(!text.includes(ARTICLE_SENTINEL), `${name} contains page text`);
+    requireCondition(!text.includes(TASK_CANARY), `${name} contains a task's instruction`);
+    requireCondition(!text.includes(TASK_REPORT_START), `${name} contains a task's report`);
     return text.split("\n").filter(Boolean).map((line) => {
       try { return JSON.parse(line); } catch { throw new Error(`${name} has a line that is not JSON: ${line}`); }
     });
@@ -885,6 +917,25 @@ async function markdownFiles(directory) {
   }
   await visit(directory);
   return found;
+}
+
+// Every file under `directory`, by path, sorted; none when it is missing.
+async function filePaths(directory) {
+  const found = [];
+  async function visit(current) {
+    let entries;
+    try { entries = await readdir(current, { withFileTypes: true }); } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const filename = path.join(current, entry.name);
+      if (entry.isDirectory()) await visit(filename);
+      else found.push(filename);
+    }
+  }
+  await visit(directory);
+  return found.sort();
 }
 
 function requireCondition(condition, message) {
@@ -1871,6 +1922,8 @@ async function run() {
     const failPage = `${origin}/run/fail?case=${caseId}`;
     const article = `${origin}/article?case=${caseId}`;
     const runIds = {};
+    // The task bar's runs, which show as task cards, never summary cards.
+    const taskRunIds = {};
     const noNewDialog = async (before) => requireCondition((await dialogLogLines()).length === before,
       "Harness setup opened a native dialog");
     const settledStatus = (prefix) => waitFor(async () => {
@@ -1985,6 +2038,114 @@ async function run() {
       return fresh[0].id;
     }
     const newRuns = async (since) => (await harnessRuns(argvLog)).slice(since).filter((run) => !isVersionCheck(run));
+
+    // The panel's task cards, in the task bar's own area.
+    const taskCards = () => onPanel((page) => page.evaluate(`[...document.querySelectorAll("#task-run-area .run-card")]
+      .map((card) => ({ id: card.dataset.runId, state: card.querySelector(".run-card-state")?.textContent ?? "",
+        instruction: card.querySelector(".run-card-instruction")?.textContent ?? "",
+        report: card.querySelector(".run-card-report")?.textContent ?? "",
+        buttons: [...card.querySelectorAll(".run-card-actions button")].map((button) => button.textContent) }))`));
+    // Every file in the home folder's content folders and the knowledge
+    // base; a task writes none of them.
+    const contentFiles = async () => (await Promise.all([
+      ...["notes", "logs", "artifacts", "summaries", "later"].map((dir) => filePaths(path.join(notesRoot, dir))),
+      filePaths(knowledgeBase),
+    ])).flat();
+    // The prompt a fake read: Claude's stdin, or Codex's turn/start input.
+    const promptOf = (run) => run.stdin ?? run.rpc.filter((request) => request.method === "turn/start")
+      .map((request) => request.params.input.map((item) => item.text).join("")).join("\n");
+    // Type a canary instruction in the task bar and press Enter; checks the
+    // task card reports Done with the fake report, that the instruction and
+    // the page each went only where they belong, and that nothing was written.
+    // Resolves with the task's run id.
+    async function taskFromPanel(harness) {
+      await setAgentMode("ok");
+      await panelOnArticle();
+      await pendingVisitsCleared();
+      const instruction = `List what this page asks for. ${TASK_CANARY} ${harness}`;
+      const articleTitle = `${APP_NAME} smoke /article`;
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.hidden("#task-bar") === false, "The task bar is hidden");
+        const hint = await page.hidden("#task-hint");
+        requireCondition(hint === true, `The task bar is disabled: ${await page.text("#task-hint-text")}`);
+        const context = await page.text("#task-context");
+        requireCondition(context === `Uses this page: ${articleTitle}`, `The task context line: ${context}`);
+      }), { timeout: 20_000 });
+      const listed = await agentRequest({ type: "list_runs" });
+      requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
+      const before = new Set([...listed.runs.map((run) => run.run_id), ...(await taskCards()).map((card) => card.id)]);
+      const filesBefore = await contentFiles();
+      const since = (await harnessRuns(argvLog)).length;
+      await onPanel((page) => page.fill("#task-input", instruction));
+      await onPanel((page) => page.press("#task-input", "Enter"));
+      const { cards } = await waitUntil("a new task card after Enter", async () => {
+        const [cards, line] = await Promise.all([taskCards(), onPanel((page) => page.evaluate(`(() => {
+          const line = document.querySelector("#task-run-area .run-line");
+          return line ? { text: line.textContent, warning: line.classList.contains("warning") } : null;
+        })()`))]);
+        if (line?.warning) {
+          throw Object.assign(new Error(`Enter did not start a task; the panel says: ${line.text}`), { fatal: true });
+        }
+        return { cards, line: line?.text ?? null };
+      }, ({ cards: shown }) => shown.some((card) => !before.has(card.id)), { timeout: 30_000, signal: abort.signal });
+      const fresh = cards.filter((card) => !before.has(card.id));
+      requireCondition(fresh.length === 1, `Enter showed ${fresh.length} new task cards: ${JSON.stringify(fresh)}`);
+      const runId = fresh[0].id;
+      requireCondition(await fieldValue("task-input") === "", "The task bar still holds the instruction");
+      const { card } = await waitUntil(`the task card for run ${runId} to show Done`,
+        async () => ({ card: (await taskCards()).find((candidate) => candidate.id === runId) ?? null }),
+        ({ card: shown }) => shown !== null && ["Done", "Failed", "Canceled"].some((state) => shown.state.startsWith(state)),
+        { timeout: 60_000, interval: 500, signal: abort.signal, diagnose: async () => {
+          const reply = await getRun(runId);
+          return reply.type === "run_fetched"
+            ? { service: { state: reply.run.state, error_kind: reply.run.error_kind, error: reply.run.error } } : reply;
+        } });
+      requireCondition(card.state.startsWith("Done"), `The task card says: ${card.state}`);
+      requireCondition(card.report === TASK_REPORT, `The task card's report: ${JSON.stringify(card.report)}`);
+      requireCondition(card.instruction === instruction, `The task card's headline: ${card.instruction}`);
+      requireCondition(card.buttons.includes("Copy report") && !card.buttons.includes("Retry save"),
+        `The task card offers ${JSON.stringify(card.buttons)}`);
+      requireCondition(!(await runCards()).some((summary) => summary.id === runId), "The task also shows as a summary card");
+      await waitFor(() => onPanel(async (page) => {
+        const said = await page.text("#task-announce");
+        requireCondition(said?.startsWith("Task done: "), `The task announcement: ${said}`);
+      }), { timeout: 10_000 });
+
+      const { run } = await getRun(runId);
+      requireCondition(run?.kind === "task" && run.harness === harness && run.state === "succeeded" &&
+        run.instruction === instruction && run.task_report === TASK_REPORT,
+      `The task run: ${JSON.stringify({ kind: run?.kind, harness: run?.harness, state: run?.state })}`);
+      const page = await readFile(path.join(runDirOf(runId), "page.md"), "utf8");
+      requireCondition(page.includes(articleText(caseId)), "The task's page.md lacks the article text");
+      requireCondition(!page.includes(TASK_CANARY), "The instruction reached page.md");
+
+      const runs = await newRuns(since);
+      requireCondition(runs.length === 1 && runs[0].program === harness,
+        `Expected one ${harness} run for the task; got ${JSON.stringify(runs.map((entry) => [entry.program, entry.argv]))}`);
+      const knowledgeBaseReal = await realpath(knowledgeBase);
+      requireCondition(runs[0].cwd === knowledgeBaseReal, `The task ran in ${runs[0].cwd}`);
+      requireCondition(!runs.some((entry) => entry.argv.some((arg) => arg.includes(TASK_CANARY))),
+        "The instruction reached a command line");
+      requireCondition(!anyArgvHasArticle(runs), "Article text reached a command line");
+      const prompt = promptOf(runs[0]);
+      requireCondition(prompt.startsWith(TASK_PROMPT_START), `The task prompt starts: ${prompt.slice(0, 80)}`);
+      requireCondition(prompt.includes(`----- BEGIN USER REQUEST -----\n${instruction}\n----- END USER REQUEST -----`),
+        "The task prompt does not fence the instruction");
+      requireCondition(!prompt.includes(articleText(caseId)) && !prompt.includes(ARTICLE_SENTINEL) &&
+        !prompt.includes(articleTitle), "Page text or the page title reached the task prompt");
+      requireCondition(prompt.includes(path.join(runDirOf(runId), "page.md")) ||
+        prompt.includes(path.join(await realpath(runDirOf(runId)), "page.md")), "The task prompt does not name page.md");
+      if (harness === "codex") {
+        const named = runs[0].rpc.find((request) => request.method === "thread/name/set")?.params?.name ?? "";
+        requireCondition(named.includes("Task: List what this page asks for."), `The Codex thread name: ${named}`);
+        const turn = runs[0].rpc.find((request) => request.method === "turn/start")?.params ?? {};
+        requireCondition(!("outputSchema" in turn), "The task turn asked for an output schema");
+      }
+      const filesAfter = await contentFiles();
+      const added = filesAfter.filter((file) => !filesBefore.includes(file));
+      requireCondition(added.length === 0, `The task wrote ${JSON.stringify(added)}`);
+      return runId;
+    }
     const anyArgvHasArticle = (runs) => runs.some((run) => run.argv.some((arg) => arg.includes(articleText(caseId))));
 
     // Capture Site on the /kb/articles fixture page under the second origin,
@@ -2167,6 +2328,10 @@ async function run() {
         }, { timeout: 15_000, signal: abort.signal });
       });
 
+      await step("A task from the task bar with Codex", async () => {
+        taskRunIds.codex = await taskFromPanel("codex");
+      });
+
       await step("Claude Code and resume", async () => {
         await openSettingsTab();
         await settingsConnected();
@@ -2212,6 +2377,10 @@ async function run() {
           `The Claude Code run: ${JSON.stringify(run)}`);
         requireCondition(copied === `cd ${shellQuote(run.cwd)} && claude --resume ${FAKE_SESSION}`,
           `Copy resume command copied ${copied}`);
+      });
+
+      await step("A task from the task bar with Claude Code", async () => {
+        taskRunIds.claude = await taskFromPanel("claude");
       });
 
       await step("Second invalid answer", async () => {
@@ -2278,14 +2447,24 @@ async function run() {
         }, { timeout: 20_000, signal: abort.signal });
         requireCondition(card.state.startsWith("Summarized") && /Importance: high/.test(card.answer),
           `The restored Codex card: ${JSON.stringify(card)}`);
+        // Task cards come back in the task bar's area, with their reports.
+        await waitFor(async () => {
+          const shown = await taskCards();
+          for (const id of Object.values(taskRunIds)) {
+            const task = shown.find((candidate) => candidate.id === id);
+            requireCondition(task?.state.startsWith("Done") && task.report === TASK_REPORT,
+              `The restored task card ${id}: ${JSON.stringify(task ?? null)}`);
+          }
+        }, { timeout: 20_000, signal: abort.signal });
       });
 
       await step("list_runs shows every run", async () => {
         const listed = await agentRequest({ type: "list_runs" });
         requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
         const ids = new Set(listed.runs.map((run) => run.run_id));
-        requireCondition(Object.values(runIds).length === 5 && Object.values(runIds).every((id) => ids.has(id)),
-          `list_runs shows ${JSON.stringify([...ids])}; expected ${JSON.stringify(runIds)}`);
+        const expected = [...Object.values(runIds), ...Object.values(taskRunIds)];
+        requireCondition(expected.length === 7 && expected.every((id) => ids.has(id)),
+          `list_runs shows ${JSON.stringify([...ids])}; expected ${JSON.stringify({ runIds, taskRunIds })}`);
       });
 
       await step("agent.env", async () => {
