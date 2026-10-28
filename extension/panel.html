@@ -169,6 +169,18 @@
             <button id="close-older-note-view" type="button" class="secondary compact">Close</button>
           </div>
         </div>
+        <details id="preserved-notes" hidden>
+          <summary>Preserved notes at this address</summary>
+          <p class="page-url">These artifact notes share this stored address and may belong to different pages. Viewing one never changes this page's note or capture rules. This limited search shows up to 24 matching notes.</p>
+          <p id="preserved-notes-status" role="status"></p>
+          <ul id="preserved-note-list" class="plain-list"></ul>
+          <div id="preserved-note-view" hidden>
+            <p id="preserved-note-title"></p>
+            <textarea id="preserved-note-body" aria-label="Preserved note (read only)" rows="6" readonly></textarea>
+            <button id="copy-preserved-note" type="button" class="secondary compact">Copy</button>
+            <button id="close-preserved-note" type="button" class="secondary compact">Close</button>
+          </div>
+        </details>
       </section>
       </div>
 

@@ -98,6 +98,14 @@ function isOlderNote(value: unknown): boolean {
     typeof note.title === "string" && typeof note.revision === "string";
 }
 
+function isPreservedNote(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["key", "canonical_url", "title", "revision"]) &&
+    isPlainObject(value.key) && hasExactKeys(value.key, ["kind", "value"]) &&
+    value.key.kind === "artifact" && isBoundedString(value.key.value, 512, 1) &&
+    isBoundedString(value.canonical_url, 8192, 1) && isBoundedString(value.title, 2048) &&
+    isBoundedString(value.revision, 128, 1);
+}
+
 function isUnsignedInteger(value: unknown): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -411,6 +419,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
             .includes(String((result as Record<string, unknown>).outcome)) &&
           stringOrNull((result as Record<string, unknown>).reason) &&
           stringOrNull((result as Record<string, unknown>).relative_path));
+    case "preserved_notes_listed":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "notes"]) &&
+        isBoundedList(value.notes, 24, isPreservedNote);
     case "note_loaded":
       return typeof value.exists === "boolean" && typeof value.revision === "string" &&
         typeof value.title === "string" && typeof value.body === "string" &&

@@ -162,6 +162,25 @@ that URL again. Existing ownership, stale-revision and occupied-destination
 tests still guard the move. All of these use local fixtures and mocked host
 transport; interactive Chrome acceptance remains separate.
 
+## Preserved artifact-note viewing
+
+`cargo test --locked -p brauser --lib preserved_note_browsing` covers multiple
+ambiguous historical notes beside an occupied URL note, lost contracts,
+stripped addresses, unavailable index/adopted history, rechecked ownership,
+duplicate ownership fields, unrelated file kinds and bounded response metadata.
+The primary key, stale-key save refusal and capture config stay unchanged.
+Protocol wire tests round-trip both additive requests and the list response
+and check the 24-item schema bound. `extension/tests/panel.test.mjs` checks
+explicit discovery, text-only titles and bodies, Copy, the original autosave
+key/revision, errors and empty lists, and stale list/view replies after
+navigation, collapse, close or another selection. Run after building the
+extension; `node --test --test-isolation=none --test-name-pattern=preserved
+extension/tests/panel.test.mjs` exposes all eight focused cases individually.
+The fake DOM does not initialize `disabled` from HTML: waits must observe a
+sent `load_note` as well as an enabled editor before interacting with it.
+Actual Chrome disclosure styling and keyboard interaction still need the
+separate macOS interactive check; these tests do not claim that acceptance.
+
 ## Page-note recovery coverage
 
 `extension/tests/note-editor.test.mjs` drives the real recovery store with

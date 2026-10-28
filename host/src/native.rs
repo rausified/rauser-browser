@@ -150,6 +150,8 @@ fn panel_request(body: &[u8]) -> bool {
                     | "save_note"
                     | "use_artifact_note"
                     | "view_older_note"
+                    | "list_preserved_notes"
+                    | "view_preserved_note"
                     | "get_artifact"
                     | "record_why"
                     | "list_artifacts"
@@ -468,6 +470,8 @@ fn dispatch(
         Request::SaveNote(value) => save_note(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
         Request::ViewOlderNote(value) => view_older_note(value, config),
+        Request::ListPreservedNotes(value) => list_preserved_notes(value, config),
+        Request::ViewPreservedNote(value) => view_preserved_note(value, config),
         Request::GetArtifact(value) => get_artifact(value, config),
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
@@ -1732,6 +1736,78 @@ fn view_older_note(
             older_notes: Vec::new(),
         }),
         Err(note_error_value) => note_error(&value.request_id, note_error_value),
+    }
+}
+
+// Callers hold the config lock. This deliberately does not resolve a note key.
+fn preserved_note_context(config: &mut ConfigStore, url: &str) -> Result<(Vault, String), Refusal> {
+    let vault = open_vault(config)?;
+    let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
+        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
+    Ok((vault, canonical))
+}
+
+/// An explicit read-only lookup independent of both note-key resolution and
+/// index.db. Missing or ambiguous contracts must not promote a viewed note to
+/// an autosave target; even an unavailable history cache permits this lookup.
+fn list_preserved_notes(
+    value: brauser_protocol::ListPreservedNotesRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let (vault, canonical) = match preserved_note_context(config, &value.url) {
+        Ok(context) => context,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    match note::preserved_notes(&vault, &canonical) {
+        Ok(notes) => Response::PreservedNotesListed(brauser_protocol::PreservedNotesListed {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            notes,
+        }),
+        Err(err) => note_error(&value.request_id, err),
+    }
+}
+
+fn view_preserved_note(
+    value: brauser_protocol::ViewPreservedNoteRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let (vault, canonical) = match preserved_note_context(config, &value.url) {
+        Ok(context) => context,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    match note::load_preserved_note(&vault, &canonical, &value.key) {
+        Ok(loaded) => Response::NoteLoaded(NoteLoaded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            exists: loaded.exists,
+            revision: loaded.revision,
+            title: loaded.title,
+            body: loaded.body,
+            key: loaded.key,
+            older_notes: Vec::new(),
+        }),
+        Err(err) => note_error(&value.request_id, err),
     }
 }
 
@@ -3138,6 +3214,231 @@ id = "{prefix}:{{host}}/{{id}}"
                 assert_eq!(conflict.key.value, "replacement:work.example/7");
             }
             other => panic!("expected key_changed conflict, got {other:?}"),
+        }
+    }
+
+    mod preserved_note_browsing {
+        use super::*;
+
+        const URL: &str = "https://work.example/items/7";
+
+        fn setup() -> (
+            tempfile::TempDir,
+            std::path::PathBuf,
+            ConfigStore,
+            Vec<RecordKey>,
+        ) {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("home");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &root, "");
+            let mut contents = std::fs::read_to_string(&path).unwrap();
+            for prefix in ["first", "second"] {
+                contents.push_str(&format!(
+                    "\n[[adapter_id_history]]\ntype = \"work.{prefix}\"\norigin = \"https://work.example\"\nmatch = [{{ path = \"/items/{{id:int}}\" }}]\nid = \"{prefix}:{{host}}/{{id}}\"\n"
+                ));
+            }
+            std::fs::write(&path, contents).unwrap();
+            let config = loaded(&path);
+            assert_eq!(config.note_key_rule(URL), NoteKeyRule::Ambiguous);
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            let keys = ["first", "second"]
+                .map(|prefix| RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: format!("{prefix}:work.example/7"),
+                })
+                .to_vec();
+            for key in &keys {
+                note::save_keyed_note(&vault, URL, key, &key.value, &key.value, "missing").unwrap();
+            }
+            (folder, root, config, keys)
+        }
+
+        fn list(config: &mut ConfigStore) -> Vec<brauser_protocol::OlderNote> {
+            match list_preserved_notes(
+                brauser_protocol::ListPreservedNotesRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "preserved".into(),
+                    url: URL.into(),
+                },
+                config,
+            ) {
+                Response::PreservedNotesListed(result) => result.notes,
+                other => panic!("expected preserved notes, got {other:?}"),
+            }
+        }
+
+        fn view(config: &mut ConfigStore, url: &str, key: RecordKey) -> Response {
+            view_preserved_note(
+                brauser_protocol::ViewPreservedNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "view".into(),
+                    url: url.into(),
+                    key,
+                },
+                config,
+            )
+        }
+
+        #[test]
+        fn ambiguous_candidates_are_read_only_beside_an_occupied_url_note() {
+            let (_folder, _root, mut config, keys) = setup();
+            let primary = note_load(&mut config, URL);
+            assert_eq!(primary.key.kind, RecordKeyKind::Url);
+            note_save(
+                &mut config,
+                URL,
+                "URL note",
+                &primary.revision,
+                primary.key.clone(),
+            );
+            let revision = config.revision().to_owned();
+            let policy = config.snapshot().clone();
+            let entries = list(&mut config);
+            assert_eq!(entries.len(), 2);
+            for key in keys {
+                assert!(entries.iter().any(|entry| entry.key == key));
+                match view(&mut config, URL, key.clone()) {
+                    Response::NoteLoaded(note) => assert_eq!(note.body, key.value),
+                    other => panic!("expected read-only note, got {other:?}"),
+                }
+                assert!(
+                    matches!(note_save(&mut config, URL, "overwrite", "missing", key),
+                    Response::NoteConflict(reply) if reply.reason == "key_changed")
+                );
+            }
+            let after = note_load(&mut config, URL);
+            assert_eq!(after.key, primary.key);
+            assert_eq!(after.body, "URL note");
+            assert_eq!(config.revision(), revision);
+            assert_eq!(config.snapshot(), &policy);
+        }
+
+        #[test]
+        fn discovery_does_not_open_unavailable_history_or_need_note_contracts() {
+            let (folder, _root, mut config, keys) = setup();
+            let cache = config.cache_dir().unwrap();
+            std::fs::create_dir_all(&cache).unwrap();
+            let db = cache.join("index.db");
+            std::fs::write(&db, b"unavailable history").unwrap();
+            // Damaged adopted state refuses primary note identity, but is not
+            // needed to inspect an owned note at its exact stored address.
+            std::fs::write(config::adopted_contracts_path(folder.path()), b"{").unwrap();
+            assert_eq!(list(&mut config).len(), 2);
+            assert!(matches!(
+                view(&mut config, URL, keys[0].clone()),
+                Response::NoteLoaded(_)
+            ));
+            assert_eq!(std::fs::read(db).unwrap(), b"unavailable history");
+        }
+
+        #[test]
+        fn opening_rechecks_ownership_address_and_artifact_kind() {
+            let (_folder, root, mut config, keys) = setup();
+            assert_eq!(list(&mut config).len(), 2);
+            assert!(matches!(
+                view(&mut config, "https://work.example/items/8", keys[0].clone()),
+                Response::Error(_)
+            ));
+            let path = root
+                .join("notes")
+                .join(crate::vault::note_filename(&keys[0], URL).unwrap());
+            std::fs::write(&path, "unowned private text").unwrap();
+            assert_eq!(list(&mut config).len(), 1);
+            assert!(matches!(
+                view(&mut config, URL, keys[0].clone()),
+                Response::Error(_)
+            ));
+            let url_key = crate::vault::url_record_key(URL).unwrap();
+            assert!(matches!(
+                view(&mut config, URL, url_key),
+                Response::Error(_)
+            ));
+        }
+
+        #[test]
+        fn lost_contracts_and_stripped_addresses_allow_viewing_without_identity_recovery() {
+            let (folder, _root, _config, keys) = setup();
+            let path = folder.path().join("config.toml");
+            let mut table: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            table.remove("adapter_id_history");
+            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            let mut config = loaded(&path);
+            assert_eq!(config.note_key_rule(URL), NoteKeyRule::Uncovered);
+            assert_eq!(list(&mut config).len(), 2);
+            assert!(matches!(
+                view(
+                    &mut config,
+                    &format!("{URL}?utm_source=test"),
+                    keys[0].clone()
+                ),
+                Response::NoteLoaded(_)
+            ));
+            assert_eq!(note_load(&mut config, URL).key.kind, RecordKeyKind::Url);
+        }
+
+        #[test]
+        fn changed_or_duplicate_ownership_is_refused_after_listing() {
+            for inserted in [
+                "  kind: summary\n",
+                "  artifact_id: \"duplicate\"\n",
+                "brauser:\n  artifact_id: \"duplicate\"\n",
+            ] {
+                let (_folder, root, mut config, keys) = setup();
+                assert_eq!(list(&mut config).len(), 2);
+                let path = root
+                    .join("notes")
+                    .join(crate::vault::note_filename(&keys[0], URL).unwrap());
+                let before = std::fs::read_to_string(&path).unwrap();
+                let changed = before.replace("\n---\n\n", &format!("\n{inserted}---\n\n"));
+                std::fs::write(&path, &changed).unwrap();
+                assert_eq!(list(&mut config).len(), 1);
+                assert!(matches!(
+                    view(&mut config, URL, keys[0].clone()),
+                    Response::Error(_)
+                ));
+                assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
+            }
+        }
+
+        #[test]
+        fn discovery_is_bounded_and_ignores_other_file_kinds_and_duplicate_ownership() {
+            let (_folder, root, mut config, keys) = setup();
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            for index in 0..30 {
+                let key = RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: format!("extra:{index}"),
+                };
+                note::save_keyed_note(&vault, URL, &key, &"\u{1}".repeat(2048), "body", "missing")
+                    .unwrap();
+            }
+            let notes = root.join("notes");
+            for (index, content) in [
+                "not owned",
+                "  kind: summary\n",
+                "  artifact_id: \"duplicate\"\n",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let path = notes.join(crate::vault::note_filename(&keys[index % 2], URL).unwrap());
+                let original = std::fs::read_to_string(path).unwrap();
+                let copy = original.replace("\n---\n\n", &format!("\n{content}---\n\n"));
+                std::fs::write(notes.join(format!("000-copy-{index}.md")), copy).unwrap();
+            }
+            let entries = list(&mut config);
+            assert_eq!(entries.len(), 24);
+            let response = Response::PreservedNotesListed(brauser_protocol::PreservedNotesListed {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "\"".repeat(128),
+                notes: entries,
+            });
+            assert!(
+                serde_json::to_vec(&response).unwrap().len() <= crate::frame::MAX_OUTBOUND_BYTES
+            );
         }
     }
 

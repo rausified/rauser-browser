@@ -122,6 +122,14 @@ settings shows a warning; nothing is blocked. For a full record it also
 offers **Forget recorded adapters**. Notes alone do not turn
 capture back on.
 
+If capture rules were removed and an artifact note is no longer the page's
+editable note, expand **Preserved notes at this address** below the editor.
+Brauser searches for up to 24 owned artifact notes with the same stored
+address and shows their titles and artifact IDs. Choose **View read only** to
+read or copy one separately. Several pages may share that address; viewing
+never replaces the editable note or turns capture on. This is a limited
+search of the notes folder, and it does not need the history cache.
+
 Expand **Page patterns** in the panel and choose **Review page patterns** to
 inspect the current address and same-site link patterns, including on sites
 without capture rules. It reads up to 500 anchors only on that click, replaces

@@ -50,6 +50,8 @@
         {
           "$ref": "#/$defs/ViewOlderNoteRequest"
         },
+        { "$ref": "#/$defs/ListPreservedNotesRequest" },
+        { "$ref": "#/$defs/ViewPreservedNoteRequest" },
         {
           "$ref": "#/$defs/GetArtifactRequest"
         },
@@ -85,6 +87,7 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/PreservedNotesListed" },
         {
           "$ref": "#/$defs/HelloResult"
         },
@@ -1006,6 +1009,99 @@
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 }
+      }
+    },
+    "ListPreservedNotesRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "list_preserved_notes"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      }
+    },
+    "ViewPreservedNoteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "url",
+        "key"
+      ],
+      "properties": {
+        "type": {
+          "const": "view_preserved_note"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "key": {
+          "$ref": "#/$defs/RecordKey"
+        }
+      }
+    },
+    "PreservedNotesListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "notes"
+      ],
+      "properties": {
+        "type": {
+          "const": "preserved_notes_listed"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 24,
+          "items": {
+            "$ref": "#/$defs/OlderNote"
+          }
+        }
       }
     },
     "GetArtifactRequest": {

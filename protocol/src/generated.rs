@@ -289,6 +289,31 @@ pub struct ViewOlderNoteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ListPreservedNotesRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewPreservedNoteRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub key: RecordKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreservedNotesListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub notes: Vec<OlderNote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetArtifactRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1227,6 +1252,8 @@ pub enum Request {
     SaveNote(SaveNoteRequest),
     UseArtifactNote(UseArtifactNoteRequest),
     ViewOlderNote(ViewOlderNoteRequest),
+    ListPreservedNotes(ListPreservedNotesRequest),
+    ViewPreservedNote(ViewPreservedNoteRequest),
     GetArtifact(GetArtifactRequest),
     ListArtifacts(ListArtifactsRequest),
     Worklog(WorklogRequest),
@@ -1263,6 +1290,8 @@ impl Request {
             Self::SaveNote(value) => value.protocol_version,
             Self::UseArtifactNote(value) => value.protocol_version,
             Self::ViewOlderNote(value) => value.protocol_version,
+            Self::ListPreservedNotes(value) => value.protocol_version,
+            Self::ViewPreservedNote(value) => value.protocol_version,
             Self::GetArtifact(value) => value.protocol_version,
             Self::ListArtifacts(value) => value.protocol_version,
             Self::Worklog(value) => value.protocol_version,
@@ -1299,6 +1328,8 @@ impl Request {
             Self::SaveNote(value) => &value.request_id,
             Self::UseArtifactNote(value) => &value.request_id,
             Self::ViewOlderNote(value) => &value.request_id,
+            Self::ListPreservedNotes(value) => &value.request_id,
+            Self::ViewPreservedNote(value) => &value.request_id,
             Self::GetArtifact(value) => &value.request_id,
             Self::ListArtifacts(value) => &value.request_id,
             Self::Worklog(value) => &value.request_id,
@@ -1326,6 +1357,7 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    PreservedNotesListed(PreservedNotesListed),
     HelloResult(HelloResult),
     ConfigResult(ConfigResult),
     ConfigUpdated(ConfigUpdated),
@@ -1359,6 +1391,7 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::PreservedNotesListed(value) => value.protocol_version,
             Self::HelloResult(value) => value.protocol_version,
             Self::ConfigResult(value) => value.protocol_version,
             Self::ConfigUpdated(value) => value.protocol_version,
@@ -1392,6 +1425,7 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::PreservedNotesListed(value) => &value.request_id,
             Self::HelloResult(value) => &value.request_id,
             Self::ConfigResult(value) => &value.request_id,
             Self::ConfigUpdated(value) => &value.request_id,

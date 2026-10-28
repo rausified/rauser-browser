@@ -936,6 +936,28 @@ deletion nor reindex changes these decisions. Optional older-note discovery
 on a recognized page remains best effort, so a broken optional note does not
 hide the primary note.
 
+**Explicit preserved-note viewing (2026-10-28, `brwr-r88`).** The panel's
+**Preserved notes at this address** disclosure runs a separate read-only search
+on demand. It lists up to 24 verified artifact notes whose stored creation
+canonical URL exactly equals the current page normalized with today's
+`strip_params`, including when several historical artifacts share that
+address, no contract remains, or index.db is unavailable. The existing flat
+notes scan bounds apply (4,096 files and 16 MiB); results are explicitly a
+limited search, not a complete history. It verifies ownership at the key's
+actual path and skips malformed, unowned, oversized, symlinked and other-kind
+files. Each row names the title and artifact ID and offers only **View read
+only**. The host rechecks ownership and the stored address on every open.
+
+Stored-address equality authorizes only this explicit read, never identity
+recovery or migration: the primary editor keeps its host-derived key,
+including an occupied URL note, and capture remains unchanged. The viewer is
+separate, text-only and copyable; collapse or navigation clears it and late
+replies cannot restore it. This search does not consult the history index or
+note contracts and cannot make an ordinary uncovered-page load or autosave
+scan the notes folder. If today's stripping no longer produces the stored
+creation address, this disclosure cannot find the note on that route; a route
+that still normalizes to that address or the home folder remains available.
+
 **Hand-removed contracts (2026-10-27, `brwr-hrc`).** Only a removal
 through settings records `[[adapter_id_history]]`, so the host also keeps its
 own record of every adapter contract it has adopted, in the same recognition
