@@ -249,3 +249,23 @@ A note autosave that reconnects to the native host now refreshes the artifact ca
 ## 2026-10-28 — Keep delivered activity visible after capture controls
 
 Background delivery updates are now noticed by every panel status reader. Dismiss notices, Pause capture and Discard pending could previously read the new delivery counter before the periodic poll, leaving the poll with equal counters and the card with stale totals. The shared render callback now tracks the last observed generation and uses the existing coalescing refresher to reload the current page once when it changes. Repeated polls with unchanged counters send nothing. All three action cases failed before the fix while the normal poll control passed; all four now pass. This completes assigned `brwr-mm0`. The complete local gate passed for this batch: 883 exercised Rust tests with 43 explicit sandbox IPC skips, all 15 extension and two script files, and 10,696 inert Markdown renderings. macOS browser smoke remains separate because its runner refuses Linux.
+
+
+## 2026-10-28 — Keep adapter repair reachable
+
+Settings can now read a configuration whose adapter rules the host preserved for repair, including format 0 and documents with 65 adapters. Previously the extension rejected the entire reply and hid the repair path behind a protocol error. The incoming check now validates the document's JSON shape, allowing the host's issue and revision through to the existing reset control. It still rejects non-object artifacts, and the adapter engine retains the supported-format and 64-adapter limits before any new capture policy can be enabled. Shared fixtures come from the real host and are checked by both the Rust native path and settings tests (`brwr-5nq`).
+
+
+## 2026-10-28 — Explain a pending pause during a host outage
+
+A locally paused capture session can still be waiting for the native host to save the setting. The panel now explains when the host is unavailable and asks the user to reopen the panel, instead of directing them to a disabled Pause capture button. While another panel task is running or config needs repair, the hint explains that wait; once the host answers and the control is usable, the normal finishing instruction returns. The longer-lived reload status states that the host setting is pending without retaining a button pointer after the connection changes. An outage/recovery regression checks the composed panel behavior (`brwr-gob`).
+
+
+## 2026-10-28 — Keep Why drafts private during pending removal
+
+The artifact card's Save why action now respects the worker's pending site-removal list. On the origin being removed, the button is disabled and the handler independently refuses a save, tells the user to finish removal in settings, and retains the typed draft. This closes the upgrade window where the worker had already turned a site off locally but the host still had its adapter and would accept a manual Why entry. A pending removal on another origin does not stop saving context on this page; both paths are covered (`brwr-ufa`).
+
+
+## 2026-10-28 — Keep activity references tied to the retained title
+
+When queue pressure combines two undispatched activity totals for the same artifact and hour, the resulting refs now come from the event whose title is retained. Previously an older title's issue keys could survive after a newer title replaced it, causing the host to reject the whole combined activity event as unverifiable. If the newer event has no title, the existing title and its refs remain together. Refs are still deduplicated and capped, and existing duration, trail, dispatch and byte-bound behavior stays intact. Four worker cases exercise replacement, repeated refs, missing titles and the first title (`brwr-rft`).
