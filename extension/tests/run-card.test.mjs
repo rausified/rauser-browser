@@ -736,3 +736,159 @@ test("a run recorded while list_runs is in flight is not cleared", async () => {
   assert.equal(await runsMayExist(storage), true);
   page.runCards.dispose();
 });
+
+// --- Site-draft runs (Capture Site: Improve with AI) ------------------------
+
+const { RunProgress } = await import("../dist/run-card.js");
+
+const SITE_DRAFT = {
+  kind: "site_draft", url: "https://wiki.example.com", title: "Capture Site: wiki.example.com",
+  record_key: { kind: "url", value: "https://wiki.example.com" }, cwd: "/Users/me/Library/Application Support/Brauser/runs/x",
+};
+const ANSWER_DRAFT = { adapters: [{ type: "wiki.pages", origin: "https://wiki.example.com", match: [{ path: "/pages/{n:int}" }], id: "wiki.pages:{host}/{n}" }] };
+
+test("restored summary cards skip site-draft runs", async () => {
+  const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const runs = [
+    view({ run_id: id(1), state: "running" }),
+    view({ run_id: id(2), state: "running", ...SITE_DRAFT }),
+    view({ run_id: id(3), state: "succeeded", answer: ANSWER, finished_at: "2026-10-27T15:59:50Z", kind: "summary" }),
+    view({ run_id: id(4), state: "succeeded", finished_at: "2026-10-27T15:59:55Z", ...SITE_DRAFT, site_draft: ANSWER_DRAFT }),
+    view({ run_id: id(5), state: "queued", started_at: null, ...SITE_DRAFT }),
+  ];
+  assert.deepEqual(restorable(runs, NOW, new Set()).map((run) => run.run_id), [id(1), id(3)]);
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs };
+      if (request.type === "get_run") {
+        return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false };
+      }
+      return null;
+    },
+  });
+  await page.runCards.restore();
+  await settle();
+  assert.deepEqual(cards(page.container).map((card) => card.dataset.runId), [id(1), id(3)]);
+  assert.ok(page.sent("get_run").every((request) => request.run_id === id(1) || request.run_id === id(3)));
+  page.runCards.dispose();
+});
+
+function progressSetup({ reply, visible = true, run = view({ state: "queued", started_at: null, ...SITE_DRAFT }) }) {
+  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  const requests = [];
+  const copied = [];
+  const finished = [];
+  const state = { visible };
+  const host = {
+    async call(request, expected) {
+      requests.push(structuredClone(request));
+      const answer = await reply(request);
+      if (answer instanceof Error) throw answer;
+      if (!answer) throw new HostError("internal", `unexpected ${request.type}`);
+      assert.equal(answer.type, expected);
+      return answer;
+    },
+  };
+  const progress = new RunProgress(run, {
+    host, now: () => NOW, copy: async (text) => { copied.push(text); }, visible: () => state.visible,
+  }, (done) => finished.push(structuredClone(done)));
+  return { progress, requests, copied, finished, state, sent: (type) => requests.filter((r) => r.type === type) };
+}
+
+test("run progress streams text as text, cancels, and reports the finished run once", async () => {
+  const running = view({ ...SITE_DRAFT, thread_id: "thread-9" });
+  const pages = [
+    { run: running, stream_text: "<img src=x onerror=alert(1)>", next_offset: 28, more: false },
+    { run: view({ ...SITE_DRAFT, thread_id: "thread-9", state: "succeeded", finished_at: "2026-10-27T16:00:20Z", site_draft: ANSWER_DRAFT }), stream_text: " done", next_offset: 33, more: false },
+  ];
+  const page = progressSetup({
+    reply: (request) => request.type === "get_run" ? { type: "run_fetched", ...pages.shift() } : null,
+  });
+  page.progress.start();
+  await settle();
+  const root = page.progress.element;
+  assert.equal(root.dataset.runId, running.run_id);
+  assert.match(root.textContent, /Running · 30s/);
+  let stream = null;
+  walk(root, (child) => { if (child.tagName === "PRE") stream = child; });
+  assert.equal(stream.textContent, "<img src=x onerror=alert(1)>");
+  assert.deepEqual(stream.children, []);
+  // Only progress controls: no answer, Open summary, Retry save or Dismiss.
+  assert.deepEqual(buttonTexts(root), ["Cancel", "Open in Codex"]);
+  assert.deepEqual(page.finished, []);
+
+  await tick();
+  assert.match(root.textContent, /Drafted/);
+  assert.doesNotMatch(root.textContent, /Summarized|Type:/);
+  assert.equal(stream.textContent, "<img src=x onerror=alert(1)> done");
+  assert.deepEqual(buttonTexts(root), ["Open in Codex"]);
+  assert.equal(page.finished.length, 1);
+  assert.equal(page.finished[0].state, "succeeded");
+  assert.deepEqual(page.finished[0].site_draft, ANSWER_DRAFT);
+  // Finished is reported once, and polling stops.
+  await tick(POLL_MS * 4);
+  assert.equal(page.finished.length, 1);
+  assert.equal(page.sent("get_run").length, 2);
+  page.progress.dispose();
+
+  // Cancel: cancel_run, then one final fetch, then finished once as canceled.
+  let current = view({ ...SITE_DRAFT, harness: "claude", session_id: "s-1" });
+  const canceling = progressSetup({
+    run: current,
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "cancel_run") {
+        current = view({ ...SITE_DRAFT, harness: "claude", session_id: "s-1", state: "canceled", finished_at: "2026-10-27T16:00:01Z", error: "Canceled.", error_kind: "canceled" });
+        return { type: "run_updated", run: current };
+      }
+      return null;
+    },
+  });
+  canceling.progress.start();
+  await settle();
+  assert.deepEqual(buttonTexts(canceling.progress.element), ["Cancel", "Copy resume command"]);
+  button(canceling.progress.element, "Copy resume command").click();
+  await settle();
+  assert.deepEqual(canceling.copied, [`cd '${SITE_DRAFT.cwd}' && claude --resume s-1`]);
+  button(canceling.progress.element, "Cancel").click();
+  await settle();
+  assert.deepEqual(canceling.sent("cancel_run").map((r) => r.run_id), [current.run_id]);
+  assert.match(canceling.progress.element.textContent, /Canceled/);
+  assert.deepEqual(canceling.finished, []);
+  await tick();
+  assert.deepEqual(canceling.finished.map((run) => run.state), ["canceled"]);
+  await tick(POLL_MS * 3);
+  assert.equal(canceling.finished.length, 1);
+  canceling.progress.dispose();
+
+  // close() cancels an unfinished run and stops, reporting nothing.
+  const closing = progressSetup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: running, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "cancel_run") return { type: "run_updated", run: view({ ...SITE_DRAFT, state: "canceled", finished_at: "2026-10-27T16:00:01Z" }) };
+      return null;
+    },
+  });
+  closing.progress.start();
+  await settle();
+  await closing.progress.close();
+  await settle();
+  assert.deepEqual(closing.sent("cancel_run").map((r) => r.run_id), [running.run_id]);
+  const fetched = closing.sent("get_run").length;
+  await tick(POLL_MS * 3);
+  assert.equal(closing.sent("get_run").length, fetched);
+  assert.deepEqual(closing.finished, []);
+  // close() on a finished run sends nothing.
+  const done = progressSetup({
+    run: view({ ...SITE_DRAFT, state: "failed", finished_at: "2026-10-27T16:00:01Z", error: "bad", error_kind: "invalid_output" }),
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: view({ ...SITE_DRAFT, state: "failed", finished_at: "2026-10-27T16:00:01Z", error: "bad", error_kind: "invalid_output" }), stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  done.progress.start();
+  await settle();
+  assert.deepEqual(done.finished.map((run) => run.state), ["failed"]);
+  assert.match(done.progress.element.textContent, /Failed: bad/);
+  await done.progress.close();
+  assert.deepEqual(done.sent("cancel_run"), []);
+});

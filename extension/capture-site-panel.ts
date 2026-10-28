@@ -3,8 +3,8 @@ import type { WorkerStatus } from "./model.js";
 import { HostError } from "./native.js";
 import { ConfigSession, describe, element, leaseFor, withConfigMutationLock, worker } from "./settings.js";
 import {
-  DROP_REASONS, captureMode, captureOrigin, checkReason, draftRequest, planCaptureSite, planDraftedSite, recurringHint,
-  siteConfigured, tenantPrefill,
+  DROP_REASONS, captureMode, captureOrigin, checkReason, defaultChecked, draftRequest, planCaptureSite, planDraftedSite,
+  recurringHint, siteConfigured, tenantPrefill,
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
@@ -436,7 +436,7 @@ export class CaptureSitePanel {
         const row = child(card, "label", "", "check-label");
         const box = child(row, "input");
         box.type = "checkbox";
-        box.checked = entry.checked;
+        box.checked = defaultChecked(entry);
         box.dataset.rule = `${a}/${entry.rule}`;
         box.addEventListener("input", () => this.updateDraftPreview());
         const reason = entry.unchecked_reason ? ` · ${UNCHECKED_LABELS[entry.unchecked_reason]}` : "";

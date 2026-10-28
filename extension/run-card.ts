@@ -21,11 +21,16 @@ const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
 // A shell word that needs no quoting.
 const PLAIN_SHELL_WORD = /^[A-Za-z0-9._-]+$/;
 
-export interface RunCardDeps {
+/** What a run's progress view needs: the host, a clock, the clipboard, and
+ * whether the panel is visible (it polls only then). */
+export interface RunProgressDeps {
   host: Pick<HostClient, "call">;
   now(): number;
   copy(text: string): Promise<void>;
   visible(): boolean;
+}
+
+export interface RunCardDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
   openSettings(): void;
   /** A card saw its run succeed and save a summary, so the page's own
@@ -66,7 +71,7 @@ export function stateText(run: RunView): string {
     case "running":
       return "Running";
     case "succeeded":
-      return "Summarized";
+      return run.kind === "site_draft" ? "Drafted" : "Summarized";
     case "failed":
       return `Failed: ${run.error ?? "the run did not finish"}`;
     case "canceled":
@@ -90,12 +95,14 @@ export function resumeCommand(cwd: string, sessionId: string): string {
   return `cd ${shellQuote(cwd)} && claude --resume ${id}`;
 }
 
-/** The runs a newly opened panel shows: every queued or running run, then the
+/** The summary runs a newly opened panel shows: every queued or running run, then the
  * newest {@link MAX_RESTORED_FINISHED} finished in the last day that the user
  * has not dismissed. */
 export function restorable(runs: RunView[], now: number, dismissed: ReadonlySet<string>): RunView[] {
-  const active = runs.filter((run) => !isTerminal(run));
-  const finished = runs
+  // A Capture Site draft run belongs to its review, never to a summary card.
+  const summaries = runs.filter((run) => run.kind !== "site_draft");
+  const active = summaries.filter((run) => !isTerminal(run));
+  const finished = summaries
     .filter((run) => isTerminal(run) && !dismissed.has(run.run_id))
     .map((run) => ({ run, at: run.finished_at === null ? NaN : Date.parse(run.finished_at) }))
     .filter(({ at }) => Number.isFinite(at) && now - at <= RESTORE_FINISHED_WITHIN_MS)
@@ -152,10 +159,187 @@ function actionButton(text: string, action: () => void): HTMLButtonElement {
   return button;
 }
 
-/** One run's card. It polls while the run is unfinished and the panel is
- * visible, and fetches once more after the run finishes so the card holds
- * all of its stream. */
-class RunCard {
+/** What every run view shares: it polls `get_run` while the run is
+ * unfinished and the panel is visible, fetches once more after the run
+ * finishes so it holds all of its stream, and offers Cancel and the
+ * harness's own resume (Open in Codex, Copy resume command). The stream is
+ * untrusted agent text, kept as text only. Subclasses build their elements,
+ * then call `render()`. */
+abstract class RunWatcher {
+  protected stream = "";
+  private offset = 0;
+  // Whether a get_run has seen the run finished since the last action.
+  private finalFetched = false;
+  // Bumped by each action, so a fetch sent before it cannot end the polling.
+  private epoch = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private fetching = false;
+  protected acting = false;
+  private gone = false;
+  protected disposed = false;
+  protected problem: string | null = null;
+
+  constructor(protected view: RunView, protected readonly baseDeps: RunProgressDeps) {}
+
+  get runId(): string {
+    return this.view.run_id;
+  }
+
+  start(): void {
+    void this.tick();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  protected abstract render(): void;
+
+  /** Called after each fetch or action that may have finished the run. */
+  protected settled(): void {}
+
+  protected done(): boolean {
+    return this.gone || (isTerminal(this.view) && this.finalFetched);
+  }
+
+  // A finished run never goes back to running, so a get_run answered before
+  // a cancel cannot undo it; Retry save goes from one finished state to
+  // another.
+  protected setView(run: RunView): void {
+    if (isTerminal(this.view) && !isTerminal(run)) return;
+    this.view = run;
+  }
+
+  protected schedule(): void {
+    if (this.disposed || this.timer !== null || this.done()) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.tick();
+    }, POLL_MS);
+  }
+
+  private async tick(): Promise<void> {
+    if (this.disposed || this.fetching || this.done()) return;
+    if (this.baseDeps.visible()) await this.fetch();
+    this.schedule();
+  }
+
+  /** Reads the run and its new stream text, following `more` to the end. */
+  private async fetch(): Promise<void> {
+    this.fetching = true;
+    const epoch = this.epoch;
+    try {
+      for (;;) {
+        const fetched = await this.baseDeps.host.call({
+          type: "get_run", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+          run_id: this.view.run_id, since_offset: this.offset,
+        }, "run_fetched");
+        if (this.disposed) return;
+        const progressed = fetched.next_offset > this.offset;
+        if (progressed) {
+          this.stream += fetched.stream_text;
+          this.offset = fetched.next_offset;
+        }
+        this.setView(fetched.run);
+        this.problem = null;
+        // The final fetch is done only once a finished run's stream is all
+        // here; a later page that fails is retried on the next poll.
+        if (!fetched.more && isTerminal(fetched.run) && epoch === this.epoch) this.finalFetched = true;
+        if (!fetched.more || !progressed) break;
+      }
+    } catch (error) {
+      if (this.disposed) return;
+      // The service forgets runs past its retention; nothing more will come.
+      if (error instanceof HostError && error.code === "invalid_request") {
+        this.gone = true;
+        this.problem = "This run is no longer available.";
+      } else {
+        this.problem = `Could not refresh this run: ${errorText(error)}`;
+      }
+    } finally {
+      this.fetching = false;
+      if (!this.disposed) {
+        this.render();
+        this.settled();
+      }
+    }
+  }
+
+  protected async act(action: () => Promise<RunView | void>, failure: string): Promise<void> {
+    if (this.acting) return;
+    this.acting = true;
+    this.render();
+    try {
+      const run = await action();
+      if (this.disposed) return;
+      this.problem = null;
+      if (run) {
+        this.epoch += 1;
+        this.setView(run);
+        this.finalFetched = false;
+        this.schedule();
+      }
+    } catch (error) {
+      this.problem = `${failure}: ${errorText(error)}`;
+    } finally {
+      this.acting = false;
+      if (!this.disposed) this.render();
+    }
+  }
+
+  protected cancelRun(): Promise<RunView> {
+    return this.baseDeps.host.call({
+      type: "cancel_run", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      run_id: this.view.run_id,
+    }, "run_updated").then((updated) => updated.run);
+  }
+
+  private cancel(): void {
+    void this.act(() => this.cancelRun(), "Could not cancel");
+  }
+
+  private openInCodex(): void {
+    void this.act(async () => {
+      await this.baseDeps.host.call({
+        type: "open_path", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        target: "codex_thread", run_id: this.view.run_id,
+      }, "path_opened");
+    }, "Could not open Codex");
+  }
+
+  protected copy(text: string): void {
+    void this.act(() => this.baseDeps.copy(text), "Could not copy");
+  }
+
+  /** The state line: the state, then the elapsed time when there is one. */
+  protected stateLineText(): string {
+    const elapsed = elapsedText(this.view, this.baseDeps.now());
+    return elapsed ? `${stateText(this.view)} · ${elapsed}` : stateText(this.view);
+  }
+
+  /** Cancel, while the run is unfinished. */
+  protected cancelButtons(): HTMLButtonElement[] {
+    return isTerminal(this.view) ? [] : [actionButton("Cancel", () => this.cancel())];
+  }
+
+  /** The harness's own way back into the run's session. */
+  protected resumeButtons(): HTMLButtonElement[] {
+    const run = this.view;
+    if (run.harness === "codex" && run.thread_id) return [actionButton("Open in Codex", () => this.openInCodex())];
+    if (run.harness === "claude" && run.session_id && run.cwd) {
+      const command = resumeCommand(run.cwd, run.session_id);
+      return [actionButton("Copy resume command", () => this.copy(command))];
+    }
+    return [];
+  }
+}
+
+/** One summary run's card. Beyond the shared progress it shows the
+ * answer and the saved summary, and offers Open summary, Retry save, Copy
+ * and Dismiss. */
+class RunCard extends RunWatcher {
   readonly element: HTMLDivElement;
   private readonly titleLine: HTMLParagraphElement;
   private readonly stateLine: HTMLParagraphElement;
@@ -164,18 +348,6 @@ class RunCard {
   private readonly streamText: HTMLPreElement;
   private readonly problemLine: HTMLParagraphElement;
   private readonly actions: HTMLDivElement;
-  private stream = "";
-  private offset = 0;
-  // Whether a get_run has seen the run finished since the last action.
-  private finalFetched = false;
-  // Bumped by each action, so a fetch sent before it cannot end the polling.
-  private epoch = 0;
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private fetching = false;
-  private acting = false;
-  private gone = false;
-  private disposed = false;
-  private problem: string | null = null;
   // The summary file the card last asked get_artifact about, so it asks once
   // per saved file, and the page's saved summary that call returned. A
   // failed call is retried once, a poll interval later (`summaryRetried`
@@ -186,10 +358,11 @@ class RunCard {
   private saved: SummaryView | null = null;
 
   constructor(
-    private view: RunView,
+    view: RunView,
     private readonly deps: RunCardDeps,
     private readonly onDismiss: (card: RunCard) => void,
   ) {
+    super(view, deps);
     this.element = make("div", "run-card");
     this.element.dataset.runId = view.run_id;
     this.titleLine = make("p", "run-card-title");
@@ -207,39 +380,22 @@ class RunCard {
     void this.loadSavedSummary();
   }
 
-  get runId(): string {
-    return this.view.run_id;
-  }
-
-  start(): void {
-    void this.tick();
-  }
-
   /** A newer view from outside the card, such as list_runs. */
   update(run: RunView): void {
     this.setView(run);
     this.render();
   }
 
-  dispose(): void {
-    this.disposed = true;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
+  override dispose(): void {
+    super.dispose();
     if (this.summaryTimer !== null) clearTimeout(this.summaryTimer);
     this.summaryTimer = null;
   }
 
-  private done(): boolean {
-    return this.gone || (isTerminal(this.view) && this.finalFetched);
-  }
-
-  // A finished run never goes back to running, so a get_run answered before
-  // a cancel cannot undo it; Retry save goes from one finished state to
-  // another.
-  private setView(run: RunView): void {
-    if (isTerminal(this.view) && !isTerminal(run)) return;
+  protected override setView(run: RunView): void {
     const before = this.savedPath();
-    this.view = run;
+    super.setView(run);
+    if (this.view !== run) return;
     if (before === null && this.savedPath() !== null) this.deps.summarySaved?.(run);
     void this.loadSavedSummary();
   }
@@ -278,101 +434,11 @@ class RunCard {
     this.render();
   }
 
-  private schedule(): void {
-    if (this.disposed || this.timer !== null || this.done()) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.tick();
-    }, POLL_MS);
-  }
-
-  private async tick(): Promise<void> {
-    if (this.disposed || this.fetching || this.done()) return;
-    if (this.deps.visible()) await this.fetch();
-    this.schedule();
-  }
-
-  /** Reads the run and its new stream text, following `more` to the end. */
-  private async fetch(): Promise<void> {
-    this.fetching = true;
-    const epoch = this.epoch;
-    try {
-      for (;;) {
-        const fetched = await this.deps.host.call({
-          type: "get_run", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-          run_id: this.view.run_id, since_offset: this.offset,
-        }, "run_fetched");
-        if (this.disposed) return;
-        const progressed = fetched.next_offset > this.offset;
-        if (progressed) {
-          this.stream += fetched.stream_text;
-          this.offset = fetched.next_offset;
-        }
-        this.setView(fetched.run);
-        this.problem = null;
-        // The final fetch is done only once a finished run's stream is all
-        // here; a later page that fails is retried on the next poll.
-        if (!fetched.more && isTerminal(fetched.run) && epoch === this.epoch) this.finalFetched = true;
-        if (!fetched.more || !progressed) break;
-      }
-    } catch (error) {
-      if (this.disposed) return;
-      // The service forgets runs past its retention; nothing more will come.
-      if (error instanceof HostError && error.code === "invalid_request") {
-        this.gone = true;
-        this.problem = "This run is no longer available.";
-      } else {
-        this.problem = `Could not refresh this run: ${errorText(error)}`;
-      }
-    } finally {
-      this.fetching = false;
-      if (!this.disposed) this.render();
-    }
-  }
-
-  private async act(action: () => Promise<RunView | void>, failure: string): Promise<void> {
-    if (this.acting) return;
-    this.acting = true;
-    this.render();
-    try {
-      const run = await action();
-      if (this.disposed) return;
-      this.problem = null;
-      if (run) {
-        this.epoch += 1;
-        this.setView(run);
-        this.finalFetched = false;
-        this.schedule();
-      }
-    } catch (error) {
-      this.problem = `${failure}: ${errorText(error)}`;
-    } finally {
-      this.acting = false;
-      if (!this.disposed) this.render();
-    }
-  }
-
-  private cancel(): void {
-    void this.act(async () => (await this.deps.host.call({
-      type: "cancel_run", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-      run_id: this.view.run_id,
-    }, "run_updated")).run, "Could not cancel");
-  }
-
   private retrySave(): void {
     void this.act(async () => (await this.deps.host.call({
       type: "retry_save", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
       run_id: this.view.run_id,
     }, "run_updated")).run, "Could not retry the save");
-  }
-
-  private openInCodex(): void {
-    void this.act(async () => {
-      await this.deps.host.call({
-        type: "open_path", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-        target: "codex_thread", run_id: this.view.run_id,
-      }, "path_opened");
-    }, "Could not open Codex");
   }
 
   private openSummary(): void {
@@ -385,15 +451,10 @@ class RunCard {
     }, "Could not open the summary");
   }
 
-  private copy(text: string): void {
-    void this.act(() => this.deps.copy(text), "Could not copy");
-  }
-
-  private render(): void {
+  protected render(): void {
     const run = this.view;
     this.titleLine.textContent = run.title || run.url;
-    const elapsed = elapsedText(run, this.deps.now());
-    this.stateLine.textContent = elapsed ? `${stateText(run)} · ${elapsed}` : stateText(run);
+    this.stateLine.textContent = this.stateLineText();
     const answer = run.state === "succeeded" && run.answer ? answerLine(run.answer) : "";
     this.answerText.textContent = answer;
     this.answerText.hidden = answer === "";
@@ -406,25 +467,83 @@ class RunCard {
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
 
-    const buttons: HTMLButtonElement[] = [];
-    if (!isTerminal(run)) buttons.push(actionButton("Cancel", () => this.cancel()));
+    const buttons: HTMLButtonElement[] = [...this.cancelButtons()];
     // A failed save can still have written the file (the daily log then
     // refused its event); the run keeps its path, so it opens too.
     if (isTerminal(run) && run.summary_path !== null) {
       buttons.push(actionButton("Open summary", () => this.openSummary()));
     }
-    if (run.harness === "codex" && run.thread_id) {
-      buttons.push(actionButton("Open in Codex", () => this.openInCodex()));
-    }
-    if (run.harness === "claude" && run.session_id && run.cwd) {
-      const command = resumeCommand(run.cwd, run.session_id);
-      buttons.push(actionButton("Copy resume command", () => this.copy(command)));
-    }
+    buttons.push(...this.resumeButtons());
     if (run.can_retry_save) buttons.push(actionButton("Retry save", () => this.retrySave()));
     if (run.state === "failed") {
       buttons.push(actionButton("Copy", () => this.copy(this.stream || (this.view.error ?? ""))));
     }
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.onDismiss(this)));
+    for (const button of buttons) button.disabled = this.acting;
+    this.actions.replaceChildren(...buttons);
+  }
+}
+
+/**
+ * A run's progress without the summary card's parts: the state line and
+ * elapsed time, the streamed text (as text only), Cancel, and Open in Codex
+ * or Copy resume command. It has no answer line, Open summary or Retry
+ * save; the Capture Site review shows it for an Improve with AI run and
+ * judges the finished run itself. `onFinished` is called once, with the
+ * finished run, after its last stream page is fetched.
+ */
+export class RunProgress extends RunWatcher {
+  readonly element: HTMLDivElement;
+  private readonly stateLine: HTMLParagraphElement;
+  private readonly streamText: HTMLPreElement;
+  private readonly problemLine: HTMLParagraphElement;
+  private readonly actions: HTMLDivElement;
+  private reported = false;
+
+  constructor(view: RunView, deps: RunProgressDeps, private readonly onFinished: (run: RunView) => void) {
+    super(view, deps);
+    this.element = make("div", "run-card");
+    this.element.dataset.runId = view.run_id;
+    this.stateLine = make("p", "run-card-state");
+    this.streamText = make("pre", "run-card-stream");
+    this.problemLine = make("p", "run-card-problem warning");
+    this.actions = make("div", "run-card-actions");
+    this.element.append(this.stateLine, this.streamText, this.problemLine, this.actions);
+    this.render();
+  }
+
+  /** The run as last seen. */
+  get run(): RunView {
+    return this.view;
+  }
+
+  /** Stops watching, and cancels the run when it is unfinished: closing
+   * the review discards the shapes it was drafting from. A cancel that
+   * fails is not retried; the run then finishes on its own. */
+  async close(): Promise<void> {
+    const unfinished = !isTerminal(this.view);
+    this.dispose();
+    if (!unfinished) return;
+    try {
+      await this.cancelRun();
+    } catch {
+      // The service's timeout still bounds the run.
+    }
+  }
+
+  protected override settled(): void {
+    if (this.reported || this.disposed || !isTerminal(this.view) || !this.done()) return;
+    this.reported = true;
+    this.onFinished(this.view);
+  }
+
+  protected render(): void {
+    this.stateLine.textContent = this.stateLineText();
+    this.streamText.textContent = this.stream;
+    this.streamText.hidden = this.stream === "";
+    this.problemLine.textContent = this.problem ?? "";
+    this.problemLine.hidden = this.problem === null;
+    const buttons = [...this.cancelButtons(), ...this.resumeButtons()];
     for (const button of buttons) button.disabled = this.acting;
     this.actions.replaceChildren(...buttons);
   }

@@ -3,8 +3,8 @@
 // private URL shapes, and this module turns the review's selection into the
 // checked tables and the document to save.
 import type {
-  AdapterDocument, ConfigSnapshot, DraftDropReason, DraftedAdapterView, DraftScopeState, RuleProvenance,
-  ScopeChoiceView, ShapeCount, SiteDrafted,
+  AdapterDocument, ConfigSnapshot, DraftDropReason, DraftedAdapterView, DraftedRuleView, DraftScopeState,
+  RuleProvenance, ScopeChoiceView, ShapeCount, SiteDrafted, SiteDrafter,
 } from "../protocol/ts/generated.js";
 import { canonicalCapture, compileDocument, evaluate, urlSegments } from "./adapter-templates.js";
 import type { PolicyLease } from "./model.js";
@@ -236,7 +236,7 @@ export function tenantPrefill(url: string, view: DraftedAdapterView | null): str
   // page with the candidate as its tenant.
   const match = view.adapter.match;
   if (!Array.isArray(match)) return "";
-  const kept = view.rules.filter((entry) => entry.checked && entry.rule < match.length).map((entry) => match[entry.rule]);
+  const kept = view.rules.filter((entry) => defaultChecked(entry) && entry.rule < match.length).map((entry) => match[entry.rule]);
   if (!kept.length) return "";
   // A drafted table carries no scope overlay; one that did fails closed.
   const compiled = compileDocument({ format: 1, artifacts: [{ ...view.adapter, match: kept, scope: { [tenant.capture]: [canonical] } }] });
@@ -266,6 +266,15 @@ export function tenantAnchoredRule(rule: unknown): boolean {
     if (IDENTIFIER_TYPES.has(type)) return true;
   }
   return true;
+}
+
+/** Whether a drafted rule starts checked in the review: only when the host
+ * kept it and gave no reason to leave it out. A rule seen only in links, one
+ * whose ID has no fixed shape, and an AI rule no page the user visited or
+ * linked matches (`unseen`) all start unchecked, so a draft never widens
+ * capture without the user opting in. */
+export function defaultChecked(rule: DraftedRuleView): boolean {
+  return rule.checked && rule.unchecked_reason === null;
 }
 
 /** The review's choices, one entry per drafted adapter (and per rule in
@@ -302,6 +311,9 @@ export interface DraftCounts {
 }
 
 export interface DraftPlan extends Pick<CapturePlan, "origin" | "document" | "current" | "examples" | "probes" | "startsCapture"> {
+  /** Who drafted the tables, for the review's provenance line only: the
+   * save re-checks them the same way and never sends it. */
+  drafter: SiteDrafter;
   checked: DraftChecked;
   kinds: DraftKind[];
   counts: DraftCounts;
@@ -477,7 +489,7 @@ export function planDraftedSite(
     }
   }
   return { ok: true, plan: {
-    origin, document, current: preview.rows[0]!, examples, probes,
+    origin, drafter: draft.drafter, document, current: preview.rows[0]!, examples, probes,
     startsCapture: config.capture_enabled || config.adapters.artifacts.length === 0,
     checked, kinds, counts,
   } };
