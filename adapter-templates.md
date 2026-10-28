@@ -1,6 +1,6 @@
 # Adapter Templates — Specification
 
-> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6), and an adapter may declare a container with `within` (§3, §8.3) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
+> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6), and an adapter may declare a container with `within` (§3, §8.3) · Amended 2026-10-28: the §11 SharePoint example's sharing-link rule covers Word, Excel and PowerPoint links in both `/r/` and `/g/` forms, from sites and from OneDrive (`/personal/`) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
 
 ## 1. Purpose
 
@@ -455,9 +455,9 @@ type      = "sharepoint.doc"
 origin    = "https://<tenant>.sharepoint.com"
 path_case = "insensitive"
 match     = [
-  { path = "/sites/{_}/_layouts/15/Doc.aspx",       query = { sourcedoc = "{doc:uuid}" } },
-  { path = "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query = { sourcedoc = "{doc:uuid}" } },
-  { path = "/personal/{_}/_layouts/15/Doc.aspx",    query = { sourcedoc = "{doc:uuid}" } },
+  { path = "/sites/{_}/_layouts/15/Doc.aspx",                                    query = { sourcedoc = "{doc:uuid}" } },
+  { path = "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx",     query = { sourcedoc = "{doc:uuid}" } },
+  { path = "/personal/{_}/_layouts/15/Doc.aspx",                                 query = { sourcedoc = "{doc:uuid}" } },
 ]
 id        = "sharepoint:{host}/{doc}"
 ```

@@ -444,17 +444,17 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | Kind | Cases | Impls |
 |---|---|---|
 | validate | 607 | rust, ts |
-| evaluate | 392 | rust, ts |
+| evaluate | 399 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
 | overlap | 35 | rust |
 | draft | 38 | rust |
-| draft_rules | 40 | rust |
+| draft_rules | 41 | rust |
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 8 | rust |
-| **Total** | **1343** | |
+| **Total** | **1351** | |
 
 ## Maintenance
 

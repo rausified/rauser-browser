@@ -19,7 +19,7 @@ use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
-    IncomingTrailView, StorageConfig, SummaryView, WhyEvent,
+    IncomingTrailView, OverflowMarker, StorageConfig, SummaryView, WhyEvent,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -55,7 +55,9 @@ use crate::vault::{
 // its checkpoints survive the upgrade. V7 adds per-URL stripped query names;
 // v6 caches and v5/v6 pending passes keep their checkpoints with unknown
 // evidence for older events, never manufactured empty lists.
-const STATE_VERSION: u8 = 7;
+// V8 indexes overflow notices. Older checkpoints skipped those markers, so
+// migration retains their events but rechecks the logs once to recover gaps.
+const STATE_VERSION: u8 = 8;
 // How often a long regeneration pass publishes its progress. Chrome ends a
 // host soon after its port closes; without checkpoints a pass killed that
 // way would restart at the same sorted prefix every time.
@@ -119,6 +121,12 @@ struct IndexState {
     log_dir: String,
     artifacts_dir: String,
     events: BTreeMap<String, CachedEvent>,
+    #[serde(default)]
+    gaps: BTreeMap<String, CachedGap>,
+    /// Kept separately so upgrading can rescan skipped overflow markers
+    /// without losing the event checkpoints used to detect removed logs.
+    #[serde(default)]
+    gap_logs: BTreeMap<PathBuf, LogCheckpoint>,
     /// Each logged event's durable position (log path, line), which breaks
     /// ties between equal instants (context is saved with one-second
     /// resolution) the same way whichever order catch-up discovered the
@@ -150,6 +158,13 @@ struct IndexState {
     /// document no longer makes). Omitted when empty, like `containers`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     container_files: BTreeMap<String, PathBuf>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CachedGap {
+    marker: OverflowMarker,
+    position: (PathBuf, u64),
 }
 
 impl IndexState {
@@ -1164,10 +1179,10 @@ impl ArtifactIndex {
     /// An unreadable one is ignored like an unreadable cache.
     fn read_pending(&self) -> Option<PendingCatchUp> {
         let mut pending: PendingCatchUp = read_bounded_json(&self.pending_path()).ok()??;
-        // The progress file exists since v5. V5/v6 passes migrate with
-        // unknown provenance; older or future progress restarts the pass.
+        // The progress file exists since v5. V5–v7 passes retain event
+        // checkpoints but recheck their prefix for gaps; older/future ones restart.
         if !self.state_location_matches(&pending.state)
-            || !matches!(pending.state.version, 5 | 6 | STATE_VERSION)
+            || !matches!(pending.state.version, 5 | 6 | 7 | STATE_VERSION)
             || !migrate_state(&mut pending.state)
             || pending
                 .conflicts
@@ -1222,6 +1237,8 @@ impl ArtifactIndex {
             log_dir: self.storage.log_dir.clone(),
             artifacts_dir: self.storage.artifacts_dir.clone(),
             events: BTreeMap::new(),
+            gaps: BTreeMap::new(),
+            gap_logs: BTreeMap::new(),
             positions: BTreeMap::new(),
             sequence: BTreeMap::new(),
             next_sequence: 0,
@@ -1300,12 +1317,14 @@ impl ArtifactIndex {
         if reset {
             *state = self.empty_state();
         }
-        let changed = reset || state.logs != checkpoints;
+        let changed = reset || state.logs != checkpoints || state.gap_logs != checkpoints;
         let limit = scan_byte_limit();
         let mut scanned = 0;
         let mut complete = true;
         for (relative, checkpoint) in &checkpoints {
-            if state.logs.get(relative) == Some(checkpoint) {
+            if state.logs.get(relative) == Some(checkpoint)
+                && state.gap_logs.get(relative) == Some(checkpoint)
+            {
                 continue;
             }
             if checkpoint.bytes > MAX_LOG_BYTES {
@@ -1344,6 +1363,7 @@ impl ArtifactIndex {
             // Checkpoint every file read, a skipped non-log one included, so
             // the next pass resumes after it.
             state.logs.insert(relative.clone(), checkpoint.clone());
+            state.gap_logs.insert(relative.clone(), checkpoint.clone());
             let text = String::from_utf8_lossy(&bytes);
             if !text.starts_with(LOG_HEADER) {
                 continue;
@@ -1351,8 +1371,23 @@ impl ArtifactIndex {
             for (line, event) in parse_log_lines(&text) {
                 state.ingest(event, Some((relative.clone(), line)), rebuild || reset);
             }
+            for (number, line) in text.lines().enumerate() {
+                if let Some((id, marker)) = parse_overflow_marker(line) {
+                    let position = (relative.clone(), number as u64);
+                    // Retries reuse the marker ID. Conflicting copies always
+                    // keep the earliest log position, including after reindex.
+                    let gap = state.gaps.entry(id).or_insert_with(|| CachedGap {
+                        marker: marker.clone(),
+                        position: position.clone(),
+                    });
+                    if position < gap.position {
+                        *gap = CachedGap { marker, position };
+                    }
+                }
+            }
         }
         if complete {
+            state.gap_logs = checkpoints.clone();
             state.logs = checkpoints;
         }
         Ok(LogPass {
@@ -1552,7 +1587,18 @@ impl ArtifactIndex {
     /// Render a measured, agent-free summary for an inclusive range of local
     /// dates. Callers validate and bound the range before reaching here.
     pub fn worklog(&self, start: Date, end: Date) -> Result<(String, usize)> {
-        let derived = self.derive(&self.load_or_rebuild()?);
+        let (text, count, _, _) = self.worklog_report(start, end)?;
+        Ok((text, count))
+    }
+
+    pub fn worklog_report(
+        &self,
+        start: Date,
+        end: Date,
+    ) -> Result<(String, usize, Vec<OverflowMarker>, bool)> {
+        let state = self.load_or_rebuild()?;
+        let (gaps, gaps_truncated) = worklog_gaps(&state, start, end);
+        let derived = self.derive(&state);
         let mut rows = BTreeMap::<String, WorklogRow>::new();
         for visit in &derived.visits {
             let Ok(date) = parse_date(&visit.local_date) else {
@@ -1661,7 +1707,7 @@ impl ArtifactIndex {
                 ordered.len() - shown
             ));
         }
-        Ok((text, ordered.len()))
+        Ok((text, ordered.len(), gaps, gaps_truncated))
     }
 
     fn state_path(&self) -> PathBuf {
@@ -1674,7 +1720,7 @@ impl ArtifactIndex {
 }
 
 /// Bring a cache (or saved catch-up progress) of an older format up to
-/// `STATE_VERSION` without rereading the logs. False means it must be
+/// `STATE_VERSION`, scheduling a one-time gap rescan. False means it must be
 /// rebuilt from the logs instead.
 fn migrate_state(state: &mut IndexState) -> bool {
     if state.events.values().any(|event| !event.valid_provenance()) {
@@ -1684,13 +1730,15 @@ fn migrate_state(state: &mut IndexState) -> bool {
         STATE_VERSION => return true,
         4 => migrate_v4_state(state),
         5 => {}
-        6 => {
-            state.version = STATE_VERSION;
-            return true;
-        }
+        6 | 7 => {}
         _ => return false,
     }
-    migrate_v5_state(state);
+    if state.version <= 5 {
+        migrate_v5_state(state);
+    }
+    state.version = STATE_VERSION;
+    state.gap_logs.clear();
+    state.gaps.clear();
     true
 }
 
@@ -2589,6 +2637,81 @@ fn parse_log_lines(text: &str) -> Vec<(u64, CachedEvent)> {
     output
 }
 
+/// Overflow is system evidence, never an artifact, visit, duration or open.
+/// Only bounded complete owned markers count; presentation text is ignored.
+fn parse_overflow_marker(line: &str) -> Option<(String, OverflowMarker)> {
+    let rest = line.strip_prefix(MARKER_PREFIX)?.strip_suffix(" -->")?;
+    let fields = rest.split(' ').collect::<Vec<_>>();
+    if !(5..=6).contains(&fields.len()) || !valid_hash(fields[0]) || fields[3] != "kind=overflow" {
+        return None;
+    }
+    let url_hash = fields[1].strip_prefix("url=")?;
+    if !valid_hash(url_hash) {
+        return None;
+    }
+    let at = fields[2].strip_prefix("at=")?;
+    OffsetDateTime::parse(at, &Rfc3339).ok()?;
+    let data = fields[4].strip_prefix("data=")?;
+    // An 8 KiB anchor URL can double in JSON (query backslashes), then
+    // double again in hex. Leave room for that and the bounded gap fields.
+    if data.len() > 64 * 1024 {
+        return None;
+    }
+    let mut payload: serde_json::Value = serde_json::from_slice(&hex::decode(data).ok()?).ok()?;
+    // Attached markers used a visit as their anchor: its URL was added to
+    // the payload and its time selected the log. Neither identifies lost work.
+    let anchor = payload.as_object_mut()?.remove("url");
+    let standalone = anchor.is_none();
+    match anchor {
+        Some(serde_json::Value::String(url))
+            if safe_page_url(&url) && sha256_hex(url.as_bytes()) == url_hash => {}
+        None if sha256_hex(b"") == url_hash => {}
+        _ => return None,
+    }
+    let marker: OverflowMarker = serde_json::from_value(payload).ok()?;
+    if marker.first_occurred_at.len() > 64 || marker.last_occurred_at.len() > 64 {
+        return None;
+    }
+    let first = OffsetDateTime::parse(&marker.first_occurred_at, &Rfc3339).ok()?;
+    let last = OffsetDateTime::parse(&marker.last_occurred_at, &Rfc3339).ok()?;
+    if marker.count == 0 || first > last || (standalone && at != marker.last_occurred_at) {
+        return None;
+    }
+    if let Some(encoded) = fields.get(5) {
+        let encoded = encoded.strip_prefix("stripped=")?;
+        if encoded.len() > 512 * 1024 {
+            return None;
+        }
+        let provenance: UrlProvenance = serde_json::from_slice(&hex::decode(encoded).ok()?).ok()?;
+        if !provenance.valid(0, &[]) {
+            return None;
+        }
+    }
+    Some((fields[0].to_owned(), marker))
+}
+
+fn worklog_gaps(state: &IndexState, start: Date, end: Date) -> (Vec<OverflowMarker>, bool) {
+    let mut gaps = state
+        .gaps
+        .iter()
+        .filter_map(|(id, gap)| {
+            let first = OffsetDateTime::parse(&gap.marker.first_occurred_at, &Rfc3339).ok()?;
+            let last = OffsetDateTime::parse(&gap.marker.last_occurred_at, &Rfc3339).ok()?;
+            // Endpoint dates retain the offsets recorded when activity froze.
+            // Travel can reverse the local dates, so use their enclosing range.
+            (first.date().min(last.date()) <= end && first.date().max(last.date()) >= start)
+                .then_some((first, last, id, gap.marker.clone()))
+        })
+        .collect::<Vec<_>>();
+    gaps.sort_by(|left, right| (&left.0, &left.1, left.2).cmp(&(&right.0, &right.1, right.2)));
+    let truncated = gaps.len() > 32;
+    gaps.truncate(32);
+    (
+        gaps.into_iter().map(|(_, _, _, marker)| marker).collect(),
+        truncated,
+    )
+}
+
 fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
     let rest = line.strip_prefix(MARKER_PREFIX)?.strip_suffix(" -->")?;
     let (id_hash, rest) = rest.split_once(" url=")?;
@@ -2612,9 +2735,11 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             if bytes.len() > 256 * 1024 {
                 return None;
             }
-            let event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
+            let mut event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
+            // Older payloads kept the queued spelling; the marker always
+            // hashed the canonical UUID. Normalize before validating or caching.
+            event.event_id = Uuid::parse_str(&event.event_id).ok()?.to_string();
             if !logged_activity_is_bounded(&event)
-                || Uuid::parse_str(&event.event_id).is_err()
                 || event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
                 || event.artifact_type.is_empty()
@@ -2639,11 +2764,11 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             if bytes.len() > 256 * 1024 {
                 return None;
             }
-            let event: WhyEvent = serde_json::from_slice(&bytes).ok()?;
+            let mut event: WhyEvent = serde_json::from_slice(&bytes).ok()?;
+            event.event_id = Uuid::parse_str(&event.event_id).ok()?.to_string();
             if event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
                 || event.text.chars().count() > 500
-                || Uuid::parse_str(&event.event_id).is_err()
                 || !safe_page_url(&event.url)
                 || sha256_hex(event.event_id.as_bytes()) != id_hash
                 || sha256_hex(event.url.as_bytes()) != url_hash
@@ -3695,6 +3820,191 @@ mod tests {
         ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
     }
 
+    fn overflow_line(id: &str, marker: &OverflowMarker) -> String {
+        format!(
+            "{MARKER_PREFIX}{} url={} at={} kind=overflow data={} -->\n",
+            sha256_hex(id.as_bytes()),
+            sha256_hex(b""),
+            marker.last_occurred_at,
+            hex::encode(serde_json::to_vec(marker).unwrap())
+        )
+    }
+
+    #[test]
+    fn worklog_gaps_intersect_local_dates_without_prorating_or_summing_overlap() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let spanning = OverflowMarker {
+            count: 4,
+            first_occurred_at: "2026-10-20T23:00:00-07:00".into(),
+            last_occurred_at: "2026-10-22T01:00:00-07:00".into(),
+        };
+        let overlap = OverflowMarker {
+            count: 2,
+            first_occurred_at: "2026-10-21T01:00:00-07:00".into(),
+            last_occurred_at: "2026-10-21T02:00:00-07:00".into(),
+        };
+        fs::create_dir_all(root.path().join("log")).unwrap();
+        let path = root.path().join("log/gaps.md");
+        let marker = overflow_line("spanning", &spanning);
+        let bytes = format!(
+            "{LOG_HEADER}\n{marker}{marker}{}",
+            overflow_line("overlap", &overlap)
+        );
+        fs::write(&path, &bytes).unwrap();
+        let report = |start: &str, end: &str| {
+            index
+                .worklog_report(parse_date(start).unwrap(), parse_date(end).unwrap())
+                .unwrap()
+        };
+        for day in ["2026-10-20", "2026-10-21", "2026-10-22"] {
+            let (text, artifacts, gaps, truncated) = report(day, day);
+            assert_eq!(artifacts, 0);
+            assert!(text.starts_with("Opened 0 artifacts"));
+            assert!(!truncated);
+            assert_eq!(
+                gaps[0], spanning,
+                "full marker count, even for one intersecting day"
+            );
+            assert_eq!(gaps.len(), if day == "2026-10-21" { 2 } else { 1 });
+        }
+        assert!(report("2026-10-19", "2026-10-19").2.is_empty());
+        assert!(report("2026-10-23", "2026-10-23").2.is_empty());
+        let expected = report("2026-10-19", "2026-10-25");
+        assert_eq!(expected.2, [spanning, overlap]);
+        assert!(index.recent(None, None, 32).unwrap().0.is_empty());
+        index.reindex().unwrap();
+        assert_eq!(report("2026-10-19", "2026-10-25"), expected);
+        assert_eq!(fs::read_to_string(path).unwrap(), bytes);
+        // V7 checkpointed this same log while ignoring overflow entirely.
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        old["version"] = 7.into();
+        old.as_object_mut().unwrap().remove("gaps");
+        fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(report("2026-10-19", "2026-10-25"), expected);
+        LOG_BYTES_READ.with(|value| value.set(0));
+        assert_eq!(report("2026-10-19", "2026-10-25"), expected);
+        assert_eq!(LOG_BYTES_READ.with(|value| value.get()), 0);
+    }
+
+    #[test]
+    fn real_attached_and_standalone_overflow_survive_retries_restart_and_reindex() {
+        use crate::capture::{CaptureBatchEvent, CapturePolicy, CaptureStore};
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let capture = CaptureStore::open_in(&index.storage, None, state.path()).unwrap();
+        let stamp = crate::capture::fixtures::event_time();
+        let timestamp = stamp.format(&Rfc3339).unwrap();
+        let origins = ["https://example.com".into()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        let marker = OverflowMarker {
+            count: 3,
+            first_occurred_at: timestamp.clone(),
+            last_occurred_at: timestamp.clone(),
+        };
+        let standalone = Uuid::new_v4().to_string();
+        let attached = Uuid::new_v4().to_string();
+        let mut event = activity(
+            &Uuid::new_v4().to_string(),
+            "actual",
+            "Actual work",
+            &timestamp,
+        );
+        // Attached markers include their anchor URL and provenance. The
+        // anchor's log time can differ from the missing range's endpoints.
+        // Query backslashes survive URL normalization and double in JSON.
+        event.url.push_str(&format!("&large={}", "\\".repeat(7000)));
+        event.occurred_at = (stamp + time::Duration::hours(1)).format(&Rfc3339).unwrap();
+        for _ in 0..2 {
+            assert!(
+                capture
+                    .record_batch(policy, &standalone, &[], Some(&marker))
+                    .overflow_recorded
+            );
+            assert!(
+                capture
+                    .record_batch(
+                        policy,
+                        &attached,
+                        &[CaptureBatchEvent::Activity(&event)],
+                        Some(&marker)
+                    )
+                    .overflow_recorded
+            );
+        }
+        let expected = index.worklog_report(stamp.date(), stamp.date()).unwrap();
+        assert_eq!(expected.1, 1);
+        assert_eq!(expected.2, [marker.clone(), marker]);
+        assert!(!expected.3);
+        assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 1);
+        index.reindex().unwrap();
+        let reopened = ArtifactIndex::open_in(&index.storage, None, cache.path()).unwrap();
+        assert_eq!(
+            reopened.worklog_report(stamp.date(), stamp.date()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn gap_notices_are_bounded_and_invalid_or_unowned_markers_are_ignored() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let marker = OverflowMarker {
+            count: 1,
+            first_occurred_at: "2026-10-20T01:00:00+14:00".into(),
+            last_occurred_at: "2026-10-20T01:00:00+14:00".into(),
+        };
+        let valid = overflow_line("valid", &marker);
+        for bad in [
+            valid.trim_end().trim_end_matches(" -->").to_owned(),
+            valid.replace("at=2026-10-20", "at=invalid"),
+            valid.replace("kind=overflow", "kind=activity"),
+            overflow_line(
+                "zero",
+                &OverflowMarker {
+                    count: 0,
+                    ..marker.clone()
+                },
+            ),
+            overflow_line(
+                "backwards",
+                &OverflowMarker {
+                    first_occurred_at: "2026-10-21T01:00:00+14:00".into(),
+                    ..marker.clone()
+                },
+            ),
+        ] {
+            assert!(parse_overflow_marker(bad.trim_end()).is_none(), "{bad}");
+        }
+        fs::create_dir_all(root.path().join("log")).unwrap();
+        fs::write(root.path().join("log/unowned.md"), &valid).unwrap();
+        let day = parse_date("2026-10-20").unwrap();
+        assert!(index.worklog_report(day, day).unwrap().2.is_empty());
+        let markers = (0..33)
+            .map(|id| overflow_line(&id.to_string(), &marker))
+            .collect::<String>();
+        fs::write(
+            root.path().join("log/owned.md"),
+            format!("{LOG_HEADER}\n{markers}"),
+        )
+        .unwrap();
+        let report = index.worklog_report(day, day).unwrap();
+        assert_eq!(report.2.len(), 32);
+        assert!(report.3);
+        // Own offsets, not UTC (these markers are on October 19 in UTC).
+        let utc_day = day.previous_day().unwrap();
+        assert!(index.worklog_report(utc_day, utc_day).unwrap().2.is_empty());
+    }
+
     fn capture_ids_survive_reindex(kind: &str) {
         use crate::capture::{CaptureBatchEvent, CaptureOutcome, CapturePolicy, CaptureStore};
 
@@ -3821,6 +4131,111 @@ mod tests {
                 index.artifact(&event.artifact_id).unwrap().unwrap(),
                 rebuilt
             );
+        }
+    }
+
+    #[test]
+    fn historical_noncanonical_uuid_markers_survive_reindex() {
+        let canonical = "abcdef01-2345-4678-9abc-def012345678";
+        for raw in [
+            canonical.to_uppercase(),
+            canonical.replace('-', ""),
+            canonical.to_uppercase().replace('-', ""),
+        ] {
+            for why in [false, true] {
+                let root = TempDir::new().unwrap();
+                let cache = TempDir::new().unwrap();
+                let event = activity(
+                    &raw,
+                    "ABC",
+                    "Historical work",
+                    &crate::capture::fixtures::event_time()
+                        .replace_minute(0)
+                        .unwrap()
+                        .replace_second(0)
+                        .unwrap()
+                        .format(&Rfc3339)
+                        .unwrap(),
+                );
+                let context = WhyEvent {
+                    event_id: raw.clone(),
+                    artifact_id: event.artifact_id.clone(),
+                    url: event.url.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    incognito: false,
+                    text: "Prepare the release".into(),
+                };
+                let payload = if why {
+                    serde_json::to_value(&context).unwrap()
+                } else {
+                    serde_json::to_value(&event).unwrap()
+                };
+                let kind = if why { "why" } else { "activity" };
+                let marker = |payload: &serde_json::Value, id: &str, kind: &str| {
+                    format!(
+                        "{MARKER_PREFIX}{} url={} at={} kind={kind} data={} -->",
+                        sha256_hex(id.as_bytes()),
+                        sha256_hex(event.url.as_bytes()),
+                        event.occurred_at,
+                        hex::encode(serde_json::to_vec(payload).unwrap())
+                    )
+                };
+                let historical = marker(&payload, canonical, kind);
+                let parsed = parse_marker_event(&historical, "").expect("historical UUID marker");
+                match &parsed.data {
+                    EventData::Activity(event) => assert_eq!(event.event_id, canonical),
+                    EventData::Why(event) => assert_eq!(event.event_id, canonical),
+                    _ => panic!("unexpected historical event"),
+                }
+                let mut forged = payload.clone();
+                forged["event_id"] = Uuid::new_v4().to_string().into();
+                assert!(parse_marker_event(&marker(&forged, canonical, kind), "").is_none());
+                let seed = ActivityEvent {
+                    event_id: Uuid::new_v4().to_string(),
+                    ..event.clone()
+                };
+                let mut contents = format!("{LOG_HEADER}\n");
+                if why {
+                    contents.push_str(&marker(
+                        &serde_json::to_value(&seed).unwrap(),
+                        &seed.event_id,
+                        "activity",
+                    ));
+                    contents.push('\n');
+                }
+                contents.push_str(&historical);
+                contents.push('\n');
+                let date = OffsetDateTime::parse(&event.occurred_at, &Rfc3339)
+                    .unwrap()
+                    .date();
+                let path = root.path().join(format!(
+                    "log/{}/{:02}/{date}.md",
+                    date.year(),
+                    u8::from(date.month())
+                ));
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, &contents).unwrap();
+                let index = index(&root, &cache);
+                index.reindex().unwrap();
+                let rebuilt = index.artifact(&event.artifact_id).unwrap().unwrap();
+                if why {
+                    assert_eq!(rebuilt.why.as_deref(), Some(context.text.as_str()));
+                    index.record_why(&context, &[]).unwrap();
+                } else {
+                    assert_eq!(rebuilt.focused_seconds, event.focused_seconds);
+                    assert_eq!(rebuilt.opens, event.opens);
+                    index.record_activity(&event, &[]).unwrap();
+                }
+                let state = index.load_current_state().unwrap().0;
+                assert!(state.events.contains_key(canonical));
+                assert_eq!(state.events.len(), if why { 2 } else { 1 });
+                index.reindex().unwrap();
+                assert_eq!(
+                    index.artifact(&event.artifact_id).unwrap().unwrap(),
+                    rebuilt
+                );
+                assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+            }
         }
     }
 
@@ -4238,7 +4653,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
                 ["url", "https://example.com/items/ABC", "[\"utm_source\"]"],
             ])
         );
-        // A v6 cache has no evidence. Upgrade preserves checkpoints and does
+        // A v6 cache has no evidence. Upgrade schedules a gap rescan and does
         // not manufacture an empty list for an older stripped address.
         let mut old: serde_json::Value = serde_json::from_slice(&original).unwrap();
         old["version"] = 6.into();
@@ -4248,8 +4663,9 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
         let (migrated, changed) = index.read_current_state().unwrap();
         assert!(changed);
-        assert_eq!(migrated.version, 7);
+        assert_eq!(migrated.version, STATE_VERSION);
         assert_eq!(serde_json::to_value(&migrated.logs).unwrap(), old["logs"]);
+        assert!(migrated.gap_logs.is_empty());
         assert!(
             migrated
                 .events
@@ -5737,6 +6153,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         assert_eq!(index.reindex().unwrap().written, 2);
     }
 
+    // This fixture removes POSIX read permission bits; Windows uses ACLs.
     #[cfg(unix)]
     #[test]
     fn an_unreadable_log_names_its_path() {
@@ -5858,6 +6275,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         assert_eq!(fs::read_to_string(&edited).unwrap(), kept);
     }
 
+    // This fixture removes POSIX directory write bits; Windows uses ACLs.
     #[cfg(unix)]
     #[test]
     fn one_failing_artifact_path_does_not_block_the_others() {
@@ -7954,7 +8372,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
 
     #[test]
     fn a_version_5_state_cache_is_migrated() {
-        assert_eq!(STATE_VERSION, 7);
+        assert_eq!(STATE_VERSION, 8);
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -7997,12 +8415,12 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         state["version"] = 5.into();
         fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
 
-        // Migrated in place: no log is reread, and only the file whose
+        // Migration rechecks old logs for gaps; only the file whose
         // rendering changed is rewritten.
         LOG_BYTES_READ.with(|count| count.set(0));
         let report = index.regenerate_dirty().unwrap();
         assert_eq!((report.written, report.unchanged), (1, 1));
-        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        assert!(LOG_BYTES_READ.with(|count| count.get()) > 0);
         for (path, text) in files.iter().zip(&current) {
             assert_eq!(&fs::read_to_string(path).unwrap(), text);
         }
@@ -8016,7 +8434,14 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
 
     #[test]
     fn version_5_catch_up_progress_resumes_and_older_progress_restarts() {
-        for (version, resumes) in [(5, true), (4, false), (3, false)] {
+        for (version, resumes) in [
+            (8, true),
+            (7, false),
+            (6, false),
+            (5, false),
+            (4, false),
+            (3, false),
+        ] {
             let root = TempDir::new().unwrap();
             let cache = TempDir::new().unwrap();
             let index = index(&root, &cache);
@@ -8051,8 +8476,8 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
             pending["state"]["version"] = version.into();
             fs::write(index.pending_path(), serde_json::to_vec(&pending).unwrap()).unwrap();
 
-            // Version 5 progress migrates and resumes after the logs it read;
-            // progress from any older format is discarded and restarts.
+            // Only v8 progress already includes gaps. Older progress rechecks
+            // the prefix once, then resumes within the usual read bound.
             LOG_BYTES_READ.with(|count| count.set(0));
             let result = index.recent(None, None, 32);
             let read = LOG_BYTES_READ.with(|count| count.get());
@@ -8309,10 +8734,10 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         state["dirty"] = serde_json::json!([]);
         fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
 
-        // The migration keeps the checkpoints: no log is reread.
+        // The migration rechecks old checkpoints once for skipped gaps.
         LOG_BYTES_READ.with(|count| count.set(0));
         assert_eq!(index.regenerate_dirty().unwrap().written, 1);
-        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        assert!(LOG_BYTES_READ.with(|count| count.get()) > 0);
         assert_eq!(fs::read_to_string(&path).unwrap(), current);
     }
 

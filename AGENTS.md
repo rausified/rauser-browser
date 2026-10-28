@@ -141,9 +141,10 @@ or more and code-length space runs as numeric entities), single-line fields
 through `markdown::inline` or wikilinks, and front matter through
 `markdown::yaml_string` with no entities; `npm run test:markdown-neutralizer`
 renders the shared corpus with markdown-it, micromark and marked, in CI too.
-The index cache is format 7 (`STATE_VERSION`; older formats 4–6 migrate in
-place, with unknown URL provenance for old records); summaries never count as
-opens or opened days, artifact files gain a Summary line and date-ordered
+The index cache is format 8 (`STATE_VERSION`; older formats 4–7 retain event
+checkpoints and perform one bounded gap rescan, with unknown URL provenance
+for old records); summaries never count as opens or opened days, artifact
+files gain a Summary line and date-ordered
 Timeline summary lines, and Recent rows,
 `get_artifact` (an unrecognized page included, quietly null on a failed
 lookup), and the worklog carry them. `open_summary` opens only the record's
@@ -151,6 +152,18 @@ owned summary file through the native host's `SetupContext.open` (PR 3's
 opener). The panel shows the page's saved summary, summarized Recent rows,
 and the run card's saved-summary line (one retried lookup), each with **Open
 summary** through `ConfigSession.openSummary` or the card's host call.
+
+Worklog gap review (`brwr-9r7`, 2026-10-28) uses additive protocol-v8
+`worklog_report` / `worklog_reported`, leaving the original worklog pair intact.
+The same caught-up snapshot supplies measured text and up to 32 owned overflow
+notices (explicit truncation). Each full count/range is shown on every day/week
+its recorded local endpoint dates enclose; overlapping notices stay separate,
+retry IDs deduplicate, and missing records never become measured activity.
+The panel always reviews notices and offers a checked-by-default Include
+capture gaps choice; Copy uses the exact preview. Cache format 8 keeps system
+notices separate from artifact events, with separate checkpoints so older
+caches recover previously skipped overflow in one bounded rescan. Reindex
+preserves notices; SQLite artifact tables are unchanged.
 
 M1.5a is built on top of that. The adapter-template language
 (`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a
@@ -234,6 +247,17 @@ capture, or treats a canonical address as autosave identity. No index or
 recorded contracts are needed; ordinary uncovered-page note loads still do
 no scan. Collapse/navigation clear results and invalidate pending reads.
 
+Removed-site restoration (`brwr-cua`, 2026-10-28) uses additive protocol-v8
+`get_site_restore` / `site_restore_loaded` before a new starter or draft, on an
+explicit Capture Site click. The host returns only usable recorded recognition
+contracts for that exact unconfigured origin, deduplicating identical entries
+and refusing damaged or overlapping contracts (container overlaps included).
+The panel names page kinds and fixed account scopes, re-reads the set before
+an explicit revision-checked save, preserves global pauses, and uses the
+existing note-save/recovery boundary. Title cleanup and title-derived aliases
+or references were not recorded and are not reconstructed. No history is
+forgotten, note migrated, page content read or capture resumed implicitly.
+
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety
@@ -297,7 +321,7 @@ summary retries require the same payload and selected folder too.
 Stripped-parameter provenance (`brwr-srp`, 2026-10-28): canonicalization
 records the sorted, distinct decoded names actually removed, never values.
 New daily markers add `stripped=<hex JSON>` with main/mode/trail evidence;
-wire event shapes and the daily-log header are unchanged. Cache format 7
+wire event shapes and the daily-log header are unchanged. Cache format 8
 keeps it beside each event and SQLite's `url_provenance` table exposes it
 (JSON arrays, SQL NULL for legacy unknown). Notes and summaries record
 `brauser.stripped_params`; note saves and migrations preserve creation

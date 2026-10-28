@@ -2079,7 +2079,7 @@ pub(crate) struct StripParamConflict {
 /// The query keys an adapter's rules read, each with its rule. Read from
 /// the raw document, so an inert or individually invalid adapter still
 /// counts.
-fn query_keys_read(adapter: &serde_json::Value) -> Vec<(&serde_json::Value, &str)> {
+pub(crate) fn query_keys_read(adapter: &serde_json::Value) -> Vec<(&serde_json::Value, &str)> {
     let mut keys = Vec::new();
     for rule in adapter
         .get("match")
@@ -2211,6 +2211,71 @@ pub(crate) fn validate_strip_params_readers(
 }
 
 impl ConfigStore {
+    /// Recorded recognition only. Historical contracts carry no reliable
+    /// precedence between competing rules, so refuse overlaps rather than
+    /// guessing. Exact duplicates carry no extra evidence.
+    pub(crate) fn site_restore(&self, origin: &str) -> Result<AdapterDocument> {
+        if self
+            .config
+            .adapters
+            .artifacts
+            .iter()
+            .any(|a| a.get("origin").and_then(serde_json::Value::as_str) == Some(origin))
+        {
+            bail!("This site already has capture rules. Manage them in settings.");
+        }
+        if self.adopted_contracts_unknown_for(origin) {
+            bail!(
+                "Brauser's recorded adapters cannot be read for this site. Fix adopted-contracts.json or choose Forget recorded adapters in settings, then review again."
+            );
+        }
+        if self.note_key_rules.unavailable_origins.contains(origin) {
+            bail!(
+                "Recorded capture rules for this site need repair in config.toml. Repair adapter_id_history in that file before restoring capture."
+            );
+        }
+        let by_hand = retired_by_hand(&self.adopted, &self.config, &self.retired_adapter_contracts);
+        let mut remaining = Vec::new();
+        for contract in self
+            .retired_adapter_contracts
+            .iter()
+            .chain(&by_hand.contracts)
+        {
+            if contract.get("origin").and_then(serde_json::Value::as_str) == Some(origin)
+                && !remaining.contains(contract)
+            {
+                validate_adapter_history(std::slice::from_ref(contract))?;
+                remaining.push(contract.clone());
+            }
+        }
+        if remaining.len() > adapter_templates::MAX_ADAPTERS {
+            bail!(
+                "Too many recorded page kinds to restore together. Review the rules in settings."
+            );
+        }
+        let adapters = AdapterDocument {
+            format: 1,
+            artifacts: remaining,
+        };
+        if adapters.artifacts.is_empty() {
+            return Ok(adapters);
+        }
+        let mut proposal = self.config.clone();
+        proposal
+            .adapters
+            .artifacts
+            .extend(adapters.artifacts.clone());
+        let mut restored = empty_config();
+        restored.adapters = adapters.clone();
+        if !compile_adapters(&restored)?.overlapping_rules().is_empty() {
+            bail!(
+                "Recorded capture rules overlap, so Brauser cannot choose which to restore. Review the rules in settings; existing notes are unchanged."
+            );
+        }
+        self.check_capture_site(&proposal.adapters)?;
+        Ok(adapters)
+    }
+
     /// Read-only Capture Site preflight against a freshly locked/read store.
     /// Reuse the save's policy checks; history never crosses to the extension.
     pub(crate) fn check_capture_site(&self, adapters: &AdapterDocument) -> Result<()> {
@@ -3482,6 +3547,127 @@ mod tests {
         store
     }
 
+    mod site_restore_tests {
+        use super::*;
+
+        fn item() -> serde_json::Value {
+            json!({"type":"work.item", "origin":"https://work.example", "match":[{"path":"/items/{id:int}"}], "id":"work:{host}/{id}"})
+        }
+
+        fn recorded(contracts: &[serde_json::Value]) -> (tempfile::TempDir, ConfigStore) {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            fs::write(
+                adopted_contracts_path(folder.path()),
+                serde_json::to_vec(&json!({"format":1,"contracts":contracts})).unwrap(),
+            )
+            .unwrap();
+            let mut store = loaded(&path);
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            (folder, store)
+        }
+
+        #[test]
+        fn scope_is_exact_and_duplicate_contracts_do_not_widen_it() {
+            let pr = json!({"type":"github.pr", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/pull/{n:int}/{*}"}], "id":"github:{host}/{owner}/{repo}/pull/{n}", "scope":{"owner":["acme-corp","partner"]}});
+            let (_folder, store) = recorded(&[pr.clone(), pr.clone()]);
+            let restore = store.site_restore("https://github.com").unwrap();
+            assert_eq!(restore.artifacts, vec![pr]);
+            let mut next = store.snapshot().clone();
+            next.adapters = restore;
+            let engine = compile_adapters(&next).unwrap();
+            assert!(
+                engine
+                    .evaluate("https://github.com/acme-corp/widgets/pull/4", None)
+                    .is_ok()
+            );
+            assert!(
+                engine
+                    .evaluate("https://github.com/outsider/widgets/pull/4", None)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn overlapping_container_history_is_not_enough_to_choose_note_identity() {
+            let repo = json!({"type":"github.repo", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/{*}"}], "id":"github:{host}/{owner}/{repo}", "scope":{"owner":["acme-corp"]}});
+            let pr = json!({"type":"github.pr", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/pull/{n:int}/{*}"}], "id":"github:{host}/{owner}/{repo}/pull/{n}", "scope":{"owner":["acme-corp"]}, "within":{"type":"github.repo","id":"github:{host}/{owner}/{repo}"}});
+            let (_folder, store) = recorded(&[repo, pr]);
+            assert_eq!(
+                store.note_key_rule("https://github.com/acme-corp/widgets/pull/4"),
+                NoteKeyRule::Ambiguous
+            );
+            assert!(
+                store
+                    .site_restore("https://github.com")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("overlap")
+            );
+        }
+
+        #[test]
+        fn overlapping_versions_and_damaged_records_are_refused_without_writes() {
+            let mut other = item();
+            other["id"] = json!("different:{host}/{id}");
+            other["type"] = json!("work.other");
+            let (folder, store) = recorded(&[item(), other]);
+            let state = adopted_contracts_path(folder.path());
+            let before = fs::read(&state).unwrap();
+            assert!(
+                store
+                    .site_restore("https://work.example")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("overlap")
+            );
+            assert_eq!(fs::read(&state).unwrap(), before);
+            for damage in [
+                b"broken".as_slice(),
+                br#"{"format":1,"contracts":[{"origin":"https://work.example","match":"broken"}]}"#,
+            ] {
+                fs::write(&state, damage).unwrap();
+                let mut store = loaded(&folder.path().join("config.toml"));
+                let lock = store.lock_current().unwrap();
+                store.refresh().unwrap();
+                drop(lock);
+                let error = store
+                    .site_restore("https://work.example")
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("Forget recorded adapters"), "{error}");
+                assert_eq!(fs::read(&state).unwrap(), damage);
+            }
+        }
+
+        #[test]
+        fn damaged_config_history_retains_its_repair_guidance() {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("home");
+            fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            fixtures::write(
+                &path,
+                &root,
+                "",
+                "",
+                "[[adapter_id_history]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{path = \"/items/{id:nope}\"}]\nid = \"work:{host}/{id}\"\n",
+            );
+            let store = loaded(&path);
+            let before = fs::read(&path).unwrap();
+            assert!(
+                store
+                    .site_restore("https://work.example")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("adapter_id_history")
+            );
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+    }
+
     #[test]
     fn an_uncompilable_recorded_contract_makes_its_origins_note_identity_unavailable() {
         let folder = tempfile::tempdir().unwrap();
@@ -4427,6 +4613,7 @@ mod tests {
             assert!(adopted.warnings[0].contains("Forget recorded adapters"));
         }
 
+        // This fixture removes POSIX directory write bits; Windows uses ACLs.
         #[cfg(unix)]
         #[test]
         fn a_failed_record_write_is_a_warning_until_a_write_succeeds() {

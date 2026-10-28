@@ -260,6 +260,43 @@ pub fn check_capture_site(
     })
 }
 
+/// Return only usable recorded recognition contracts on explicit review.
+/// The caller supplies an origin, never a page URL, title or body.
+pub fn get_site_restore(
+    value: brauser_protocol::GetSiteRestoreRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let id = value.request_id.as_str();
+    if !exact_origin(&value.origin) {
+        return error(
+            id,
+            ErrorCode::InvalidRequest,
+            "Expected an exact HTTP(S) origin.",
+        );
+    }
+    let _lock = match locked_document(config) {
+        Ok(lock) => lock,
+        Err((code, message)) => return error(id, code, message),
+    };
+    if value.expected_revision != config.revision() {
+        return error(
+            id,
+            ErrorCode::Conflict,
+            "Settings changed. Open Capture Site again.",
+        );
+    }
+    match config.site_restore(&value.origin) {
+        Ok(adapters) => Response::SiteRestoreLoaded(brauser_protocol::SiteRestoreLoaded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            revision: config.revision().to_owned(),
+            origin: value.origin,
+            adapters,
+        }),
+        Err(reason) => error(id, ErrorCode::InvalidConfig, &reason.to_string()),
+    }
+}
+
 /// The refusal while the adopted-contract record cannot vouch for
 /// `origin` (`ConfigStore::adopted_contracts_unknown_for`): drafting against
 /// an incomplete set of recorded contracts would offer rules the save

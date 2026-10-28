@@ -81,7 +81,9 @@
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
+        { "$ref": "#/$defs/WorklogReportRequest" },
         { "$ref": "#/$defs/CheckCaptureSiteRequest" },
+        { "$ref": "#/$defs/GetSiteRestoreRequest" },
         { "$ref": "#/$defs/ForgetAdoptedContractsRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
@@ -146,7 +148,9 @@
         { "$ref": "#/$defs/AgentEnvListed" },
         { "$ref": "#/$defs/SiteDrafted" },
         { "$ref": "#/$defs/SiteDraftChecked" },
+        { "$ref": "#/$defs/WorklogReported" },
         { "$ref": "#/$defs/CaptureSiteChecked" },
+        { "$ref": "#/$defs/SiteRestoreLoaded" },
         { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
@@ -1128,6 +1132,35 @@
         "artifact_type": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
         "title_query": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
         "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+      }
+    },
+    "WorklogReportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Measured worklog and bounded capture-loss notices from the same index snapshot. Additive protocol-v8 request; the original worklog message is unchanged.",
+      "required": ["type", "protocol_version", "request_id", "start_date", "end_date"],
+      "properties": {
+        "type": { "const": "worklog_report" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "start_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "end_date": { "type": "string", "minLength": 10, "maxLength": 10 }
+      }
+    },
+    "WorklogReported": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "start_date", "end_date", "text", "artifact_count", "gaps", "gaps_truncated"],
+      "properties": {
+        "type": { "const": "worklog_reported" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "start_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "end_date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "text": { "type": "string", "maxLength": 131072 },
+        "artifact_count": { "type": "integer", "minimum": 0 },
+        "gaps": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/OverflowMarker" } },
+        "gaps_truncated": { "type": "boolean" }
       }
     },
     "WorklogRequest": {
@@ -2392,6 +2425,82 @@
     "ScopeChoiceView": {
       "description": "The review's scope choice for one adapter, sent beside the checked table and never inside it; null means no choice.",
       "oneOf": [{ "$ref": "#/$defs/ScopeValues" }, { "$ref": "#/$defs/UnscopedChoice" }]
+    },
+    "GetSiteRestoreRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read-only review of recorded recognition contracts for an unconfigured origin. Empty adapters means no recorded rules. Does not enable capture or read page content. Save through update_config at the reviewed revision.",
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "origin",
+        "expected_revision"
+      ],
+      "properties": {
+        "type": {
+          "const": "get_site_restore"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "SiteRestoreLoaded": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Usable, unambiguous recorded recognition rules only. Title/alias/ref extraction was not recorded and is not invented. Recheck this review before the explicit revision-checked save.",
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "origin",
+        "revision",
+        "adapters"
+      ],
+      "properties": {
+        "type": {
+          "const": "site_restore_loaded"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "adapters": {
+          "$ref": "#/$defs/AdapterDocument"
+        }
+      }
     },
     "CheckCaptureSiteRequest": {
       "type": "object",

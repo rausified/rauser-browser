@@ -93,7 +93,7 @@ test("plist paths stay POSIX when node:path is win32", async (t) => {
   assert.throws(() => plistPath("C:\\Users\\u", "l"), /absolute/);
 });
 
-test("plist lints", { skip: process.platform !== "darwin" }, async (t) => {
+test("plist lints", { skip: process.platform !== "darwin" && "requires macOS /usr/bin/plutil to validate the LaunchAgent plist" }, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const directory = await mkdtemp(path.join(os.tmpdir(), "bdl-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

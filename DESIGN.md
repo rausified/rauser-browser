@@ -327,6 +327,28 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
   unknown-site Capture Site (below); known-site Capture Site retains its
   current flow.
 
+  **As built (2026-10-28 — restore recorded site rules, `brwr-cua`).**
+  On an unconfigured origin, an explicit Capture Site click first reads
+  `get_site_restore` / `site_restore_loaded` (additive protocol v8), sending
+  only the exact origin and reviewed config revision. Usable contracts from
+  `adapter_id_history` and hand-removed adopted contracts take precedence over
+  a new starter or structural draft. The panel names their page kinds, route
+  shapes and exact account scope, including an explicit every-account line
+  for recorded `unscoped` rules. This restores recognition only: title cleanup,
+  aliases from titles and reference extraction were not recorded and are not
+  reconstructed. Existing notes retain their host-derived keys and bytes.
+  The host deduplicates exact contracts and refuses damaged records or any
+  overlap between recorded adapters, including container fall-throughs whose
+  note-only evidence names several identities. It retains the existing repair
+  guidance; neither Forget nor migration is implicit. The panel re-reads the
+  recorded set before a normal revision-checked `update_config`, refuses a
+  changed set, navigation, revision changes and pending local pauses/removals,
+  and finishes note edits through the existing recovery-aware save boundary.
+  Restoration preserves `capture_enabled` even when this is the only site;
+  a paused installation stays paused. With no recorded contract, the ordinary
+  starter/drafter flow proceeds. No page patterns or content are needed for
+  restoration and the log/cache formats are unchanged.
+
   **As built (2026-10-27 — Capture Site for unknown sites, `brwr-t40`).**
   On any credential-free HTTP(S) origin that has no adapter and is not a
   starter origin, the panel's **Capture Site** button drafts a policy with the
@@ -532,6 +554,17 @@ A source is recorded only when it is a recognized artifact, which means it is on
 - **Files.** The artifact file lives at the canonical ID's path. When an alias changes the canonical ID, the file at the old path is replaced, under the checked rename (§4.4), with a short Brauser-owned stub (`brauser.kind: artifact`, `alias_of: <canonical id>`) that links to the new file, so links in the user's own notes still lead somewhere. The frontmatter of the canonical file lists `aliases`.
 - **Correction.** A wrong alias would merge two histories, so the artifact card shows "Also known as PROJ-123" with **Not the same**, which appends an `unalias` event. The log stays append-only, and the index honors the latest `alias` or `unalias` event for each pair.
 
+**Re-learning groundwork (2026-10-28, `brwr-sq9`).** The offline developer
+command `brauser adapters aliases-preview` rehearses confirmed, suggested and
+unalias operations against supplied old/proposed adapter documents and URL
+evidence. Its replay groups confirmed edges, chooses the latest active
+confirmation's target in append order and treats unalias as removal of that
+pair's edge. Suggestions never group identities. The command reads no live
+configuration or vault and applies nothing; it does not enable Re-learn or
+relax the ID freeze. The [staged implementation plan](docs/superpowers/plans/2026-10-28-capture-relearning.md)
+documents its JSON interface, provenance checks, replay rules and the remaining
+impact-planning, durable-migration and panel work under `brwr-6x2`.
+
 **Containers.** An adapter can declare that its artifacts sit *within* a container artifact, such as a GitHub pull request within its repository (adapter-templates.md §3, §8.3). A visit recognized as artifact A within container C counts toward A exactly as it always has, and also rolls up into C: C gains the visit's focused and background seconds and its open, and C's `days_opened` is the union of its own days and its contents' days, never a sum. Because a visit is recognized by exactly one adapter (first match wins, §3), each second counts once toward A and once toward C, never twice toward C. The index records the relationship as a `within` edge from the contained artifact to its container, alongside `mentions` and the derived `co-focused` edges. While some adapter declares `within` C's type, C's title and URL come from its ID, never from whichever sub-page's title happened to be seen last, so a container with rolled-up activity but no direct visit yet still shows a usable title (for GitHub, `owner/repo`) and a link built from its captures (`https://github.com/<owner>/<repo>`). Recent and the worklog show C as one row with its rolled-up totals and A as its own row; a day's or period's total counts each visit once, skipping the contained copy of a roll-up. Existing history rolls up too: because the index is rebuilt from the append-only logs, a logged visit rolls up whenever re-evaluating its original URL under the current adapters still yields the same `artifact_id` and the matching adapter declares `within`; an event whose adapter has since changed or been removed is left alone rather than misattributed. Container files follow the adapters as well: when an adapter change takes a container's roll-up away, or the last declaration of its type, its file is rewritten with only its direct visits and its own title, and a container whose only activity was that roll-up no longer has a record, so its generated file is removed (only while it is still Brauser's file for that ID; a replaced or edited-away file is left alone). A container file whose record includes rolled-up activity carries `brauser.rollup: true` in its frontmatter. The index cache remembers where it wrote each container's file, and `brauser reindex` or a rebuild of a lost cache recovers that list from the previous cache if there is one and otherwise from the owned files on disk that carry the marker, so a container that no longer derives a record still has its file removed after a rebuild. The artifact card names an artifact's container, and a container's card lists what was worked on inside it (§5.7); nesting more than one level deep, and an artifact with more than one container, are not supported.
 
 `github.repo` is the first container (and the first starter adapter added since M1.5a step 6.8): a catch-all over everything inside `/<owner>/<repo>/…` on `https://github.com` that no `github.pr` or `github.issue` adapter already claims, scoped to the owner like the other two. Because adapters on one origin are tried in config order and a PR or issue visit already rolls up into its repository through `within`, PR and issue adapters must come before the repo catch-all on `https://github.com`; every way of adding any of the three (the panel's Capture Site, the settings gallery, and the JSON editor) keeps that order regardless of the order the user checked them in (`orderContainedFirst`, extension/starter-adapters.ts). The PR and issue starters declare `within` only when a `github.repo` rule is kept on the origin, chosen in the same save or already configured (`linkedToPresentContainers`); choosing pull requests or issues without repositories records no repositories, and adding repositories later links them then (§7.2). `github.repo`'s catch-all rule, `/{owner:name|lower}/{repo:name|lower}/{*}`, has no literal route word; it validates because a required path capture a `scope` key restricts to a literal list counts as an anchor segment too, the listed GitHub organization standing in for a literal (adapter-templates.md §4.1, §6). This is a general rule for any shared origin with a tenant capture, such as a Notion or Linear workspace, not a GitHub exception; an `unscoped` adapter, or a capture scope does not restrict, still gets no such anchor. Enabling the repo catch-all over already-configured PR or issue adapters would otherwise trip the overlapping-route guard below (§6.2): any past edit to their `scope` leaves a retired contract whose routes the catch-all overlaps under a different type. The guard is amended to accept that overlap when the new adapter is exactly that retired contract's declared container — same type, same ID template string — because those URLs were already counting toward the container. A retired contract counts as declaring the container when it declares `within` itself, or when another contract with its same origin, type, and ID template declares it: a live adapter in the saved config, or another contract already retired or removed. While the PR or issue adapter is live its routes still win (first match); only once it is removed do its URLs fall through to the container, and the PR or issue's finer-grained identity stops being recorded. Settings adding repositories to an existing GitHub setup adds `within` to the user's PR and issue adapters in the same save (§7.2). That edit still retires the old `within`-less shape into `[[adapter_id_history]]`, like any recognition edit, but its same-identity successor declares the container, so the old shape never blocks the repository adapter, including after the PR or issue adapter is itself removed later (which retires the `within` shape too).
@@ -544,6 +577,40 @@ A source is recorded only when it is a recognized artifact, which means it is on
 
 - **Recent tab.** The panel lists artifacts grouped by local day, newest day first, and within a day sorted by focused time. It can be filtered by type (for example, only `jira.issue` or `github.pr`) and by a title substring. Each row shows the title, type, focused and background minutes, and the one-liner if there is one, and opens the artifact's last URL. It reads the index (§5.5) through a `list_artifacts` message, so it needs no FTS5.
 - **Worklog.** An optional daily or weekly summary, generated by the host from the index without an agent. It uses the same measured wording as the rest of the log, for example: "Opened 9 artifacts, and focused on 2 left open from an earlier day. PROJ-123 *Release blocker — SBOM export times out*: focused 2 h, opened from PR #412. Why: blocking the release." The panel shows yesterday's, today's, or this week's worklog with Copy, for standups and status reports. When the user turns on worklog files (M1.5b), the host also writes Brauser-owned `worklog/<YYYY-MM-DD>.md` or `worklog/<YYYY>-W<ww>.md` files (`brauser.kind: worklog`). They are regenerated lazily and skipped when unchanged, like artifact files (§6.7), and are not rewritten after their period ends unless `brauser reindex` runs. Worklog files are off by default, and the settings page shows the sync caution below before they are enabled.
+
+**Known gaps when sharing a worklog (2026-10-28, `brwr-9r7`).** The panel
+requests an additive protocol-v8 `worklog_report` and receives `worklog_reported`:
+measured text, artifact count, and up to 32 `OverflowMarker` notices from one
+caught-up index snapshot, plus `gaps_truncated`. The original `worklog` pair
+is unchanged. Only complete machine markers in owned daily logs supply gaps;
+attached markers use their overflow payload's range, not the anchor visit's
+log date. Standalone markers work without any artifact activity.
+
+A notice intersects an inclusive day/week when the enclosing range of its two
+recorded local endpoint dates intersects that period. Each endpoint keeps its
+own UTC offset (including DST or travel); UTC dates and current browser offset
+never re-date it. The full reported range and count are shown even when only
+part intersects: the log cannot apportion missing records among dates. Counts
+mean dropped completed artifact activity-hour records, not elapsed wall-clock
+hours or measured focus. Retry copies with the same marker ID appear once;
+conflicting copies choose the earliest sorted log path and line. Distinct IDs
+stay separate even when ranges overlap or payloads happen to agree. They are
+never summed or merged, and no missing activity is assigned to artifacts,
+opens, focus totals or Recent rows. Notices sort by first instant, last instant,
+then marker ID; truncation is explicit in both the review and shared note.
+
+The review always shows known notices. **Include capture gaps in copied
+worklog** starts checked and adds a plain incompleteness note with those exact
+ranges/counts to the text preview; clearing it removes only that note from the
+preview and Copy. The choice survives period changes and delivery refreshes
+while the panel stays open. Copy always copies the preview. Loading/error
+states disable Copy and hide stale notices; late replies cannot replace a newer
+period. An older host refuses the new request and leaves Copy unavailable until
+both components are rebuilt. Reindex regenerates the same notices without
+changing source logs. Cache format 8 retains event checkpoints from formats 4–7
+and schedules a bounded one-time gap rescan with separate gap checkpoints;
+partial passes remain unavailable and resume normally. SQLite artifact tables
+are unchanged; the JSON index cache holds these system notices.
 
 As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per request and reports truncation; the host accepts worklog ranges of one through seven inclusive local dates and caps generated text before the native-message ceiling. Worklog files remain deferred to M1.5b.
 
@@ -1083,12 +1150,12 @@ untouched raw query segments. A known empty list means no query parameter was re
 a missing field on an older record means unknown. The log header and event
 payload shapes stay compatible, and old rows are never rewritten.
 
-Index cache format 7 keeps that evidence beside each event and writes the
+Index cache format 8 keeps that evidence beside each event and writes the
 SQLite `url_provenance(event_id, artifact_id, role, url, stripped_params)` table
 (`role` is `url`, `mode:<index>`, or `trail:<index>`; the last column is a JSON
 array or SQL NULL for legacy unknown). Trail sources never become URLs for
-the destination artifact's note discovery. V4/V5/V6 caches and V5/V6 saved
-catch-up passes migrate in place with their log checkpoints; records lacking
+the destination artifact's note discovery. V4–V7 caches and V5–V7 saved
+catch-up passes retain their event checkpoints while scheduling the bounded gap rescan described in §5.1; records lacking
 evidence stay unknown. Reindex reads both old and new markers; malformed or
 misaligned evidence is skipped rather than guessed, and an unusable cache
 is rebuilt. The existing cache read and publication bounds remain in force.
@@ -1116,6 +1183,17 @@ exact torn tail. Batch journals already retain prepared bytes and keep their
 format. A v3 retry with changed removed names refuses without touching the
 log. Downgrading with a pending v3 intent is unsupported; older hosts cannot
 recover it.
+
+Historical activity and Why markers with uppercase or unhyphenated UUID
+payload IDs (before `brwr-q7e`) are read using their canonical UUID for both
+marker-hash validation and cache identity (`brwr-smu`, 2026-10-28). A different
+UUID still fails the marker hash; authoritative logs are never rewritten.
+For a pending v1 intent, the original queued UUID spelling is also tried in
+the marker payload across all three pre-provenance presentation generations.
+Only the stored whole-entry hash and exact existing tail can select those
+bytes, through single delivery or activity batch delivery. The original queued
+spelling must be retained; recovery does not guess arbitrary UUID spellings.
+V2/V3 prepared-byte and payload-hash checks remain unchanged.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing; since PR 4 a changed key is followed, not refused, and the run records the key it wrote (§5.2 step 7).
 
@@ -1354,6 +1432,7 @@ title    = "{title} - Google Docs"
 - **Tier 1 `fields`** (M1.5b) are optional named CSS selectors, used as in §5.1, and travel to the worker in the lease with the match rules. The fixed extractor caps each value (for example at 256 characters) and the total. When a selector matches nothing, the field is empty and nothing fails.
 - **Overlap.** Because the language has no free-form patterns, the host compares rules segment by segment and warns when two adapters on one origin could match the same URL, naming the rule that wins. The same check drops each Tier 2 draft rule that overlaps an existing adapter, and it feeds the match preview's re-map count.
 - **Starter adapters.** Brauser ships adapters for common tools (Jira, Confluence, Google Docs/Sheets/Slides, GitHub pull requests, issues, and repositories, Notion, Figma, Linear, SharePoint) as disabled **starter adapters** with a placeholder origin such as `https://<your-site>.atlassian.net`. Before enabling one, the user resolves it to an exact scheme, host, and port and can edit it for self-hosted tools. Tool UIs change, so each starter adapter records the date its URL and title formats were last checked against the live tool. Each ships with a documentation page, `docs/adapters/<type>.md`, giving sample URLs and titles, what each rule and title entry covers, the frozen `id` template, scope guidance, and known limits ([adapter-templates.md](adapter-templates.md) §11.1). A starter adapter's `id` template is frozen once it ships (§6.2). A Tier 1 selector that stops matching degrades to Tier 0; it never fails the visit.
+- **Starter rule updates (2026-10-28).** Starter adapters improve after a user has saved one, and a saved adapter never changes on its own. Brauser keeps each starter's earlier shipped rule sets (`STARTER_HISTORY`, extension/starter-adapters.ts). When a configured adapter has the origin, type, and `id` template string of a current starter (a GitHub one built with the adapter's own organizations), holds every rule of one of those earlier versions, and lacks some current rule, its settings card offers **Update to current rules** beside Edit and preview. It opens the usual edit of that adapter with the earlier version's retired rules removed and the current rules appended, under a line naming each rule added and removed ("Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:"), and previews the first added rule. Rules the user added, scope, `within`, title, and every other key stay; `modes` gains only the entries a new rule's `mode` capture lacks. An adapter matching no earlier version, because its user wrote it or narrowed it on purpose (say, removing Jira's board-modal rule), is never offered a re-widening. Nothing changes until the user saves, through the usual revision-checked save, and no offer is made when the result would pass the 16-rule cap or fail to compile (`starterRuleUpdate`). The frozen `id` template is untouched, so recorded history is unaffected; if the host still refuses the save as reusing a retired adapter's routes, settings says to edit it by hand.
 - **Match preview.** Enabling or widening any adapter, not only a Tier 2 draft, shows the match preview from §5.1 against the origin's URL-shape sample and probe URLs. Until the sample exists (§12.2 step 7.6), and on an origin with no sample yet, the preview covers the probe URLs only, plus link shapes during Create adapter (§5.1). For a user-written adapter, the Tier 2 rejection rules only warn, because user-written config is trusted (§4.2).
 - **Saving.** From protocol v6 (2026-10-26) saving an adapter turns its site on: settings shows the adapter's match rules, scope (or the unscoped statement), Tier 1 fields, and the match preview, and the save needs only the host's revision check. There is no Chrome grant request and no native confirmation, and removing an origin's last adapter turns the site off. Before v6, enabling or widening an adapter requested the origin's optional Chrome grant and a native confirmation. Changing the `id` template of an adapter that has recorded activity is a migration, not an edit (§6.2).
 

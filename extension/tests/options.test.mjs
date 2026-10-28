@@ -106,7 +106,7 @@ function install({
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
-    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
+    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-editor-review", "div"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
@@ -1877,3 +1877,90 @@ for (const { name, response } of ADAPTER_REPAIR_CASES) {
     assert.match(statusText(), /adapter rules removed/);
   });
 }
+
+const ONEDRIVE = "https://cisco-my.sharepoint.com";
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+function staleOneDrive() {
+  return {
+    type: "sharepoint.doc", origin: ONEDRIVE, path_case: "insensitive",
+    match: [
+      { path: "/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+      { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+      { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+    ],
+    id: "sharepoint:{host}/{doc}",
+  };
+}
+const updateButtons = () => env.elements.get("adapter-list").querySelectorAll("button")
+  .filter((button) => button.textContent === "Update to current rules");
+
+test("a stale starter adapter offers Update to current rules; an up-to-date one does not", async () => {
+  install({ adapters: [staleOneDrive(), artifactFor("https://a.com")] });
+  await openSettings();
+  assert.equal(updateButtons().length, 1);
+  const [card] = env.elements.get("adapter-list").children;
+  const actions = card.children.find((child) => child.className === "adapter-actions");
+  assert.deepEqual(actions.children.slice(0, 2).map((button) => button.textContent),
+    ["Edit and preview", "Update to current rules"]);
+
+  install({ adapters: [{ ...staleOneDrive(), match: [...staleOneDrive().match, SHARE_RULE] }] });
+  await openSettings();
+  assert.equal(updateButtons().length, 0);
+});
+
+const updatedOneDrive = (saved) => {
+  const [sites, , personal, ...rest] = saved.match;
+  return { ...saved, match: [sites, personal, ...rest, SHARE_RULE] };
+};
+
+test("Update to current rules reviews the replaced rule and saves it only on Save", async () => {
+  const saved = { ...staleOneDrive(), title: "{title}.docx" };
+  const saves = [];
+  const state = install({
+    adapters: [saved],
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  updateButtons()[0].click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), updatedOneDrive(saved));
+  const review = env.elements.get("adapter-editor-review");
+  assert.equal(review.hidden, false);
+  const text = nodeText(review);
+  assert.match(text, /Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:/);
+  assert.ok(text.includes("Adds /(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
+  assert.ok(text.includes("Removes /:w:/r/sites/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
+  // The preview starts on the new rule, and that example matches it.
+  const example = env.elements.get("adapter-preview-url").value;
+  assert.match(example, /^https:\/\/cisco-my\.sharepoint\.com\/:w:\/r\/sites\/example\/_layouts\/15\/Doc\.aspx\?sourcedoc=/);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /Example: [^ ]+ — Matches sharepoint\.doc rule 3 · sharepoint:cisco-my\.sharepoint\.com\//);
+  assert.equal(saves.length, 0, "opening the review saves nothing");
+
+  await saveOpenAdapter("the starter update");
+  assert.equal(saves.length, 1);
+  const [adapter] = saves[0].config.adapters.artifacts;
+  assert.deepEqual(adapter, updatedOneDrive(saved));
+  assert.deepEqual(state.config.adapters.artifacts, [adapter]);
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.equal(updateButtons().length, 0, "an up-to-date adapter offers no update");
+
+  // Editing another adapter afterwards shows no stale review line.
+  env.elements.get("adapter-list").querySelectorAll("button")[0].click();
+  assert.equal(env.elements.get("adapter-editor-review").hidden, true);
+});
+
+test("a starter update the host refuses as a retired-contract change explains itself", async () => {
+  install({
+    adapters: [staleOneDrive()],
+    host: { update_config: () => ({
+      type: "error", code: "invalid_config",
+      message: "the artifact type or id template for adapter \"x\" on \"y\" cannot change until artifact migrations are available: recorded adapter",
+    }) },
+  });
+  await openSettings();
+  updateButtons()[0].click();
+  env.elements.get("save-adapter").click();
+  await until(() => statusText().startsWith("This update") && idle(), "the refused save");
+  assert.equal(statusText(), "This update overlaps an adapter you used before; edit it by hand in the editor.");
+  assert.equal(env.elements.get("adapter-editor").hidden, false, "the editor stays open for a hand edit");
+});

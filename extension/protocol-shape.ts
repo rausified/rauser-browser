@@ -20,6 +20,14 @@ function isStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
 }
 
+function isOverflowMarker(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const gap = value as Record<string, unknown>;
+  return isUnsignedInteger(gap.count) && (gap.count as number) > 0 &&
+    typeof gap.first_occurred_at === "string" && gap.first_occurred_at.length <= 64 &&
+    typeof gap.last_occurred_at === "string" && gap.last_occurred_at.length <= 64;
+}
+
 function isHarnessId(value: unknown): boolean {
   return value === "codex" || value === "claude";
 }
@@ -467,6 +475,11 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "worklog_result":
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
+    case "worklog_reported":
+      return typeof value.start_date === "string" && typeof value.end_date === "string" &&
+        typeof value.text === "string" && isUnsignedInteger(value.artifact_count) &&
+        typeof value.gaps_truncated === "boolean" && Array.isArray(value.gaps) && value.gaps.length <= 32 &&
+        value.gaps.every(isOverflowMarker);
     case "artifacts_refreshed":
       return isUnsignedInteger(value.written) && isUnsignedInteger(value.unchanged) &&
         isUnsignedInteger(value.conflicts) && Array.isArray(value.conflict_paths) &&
@@ -494,6 +507,11 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return isSiteDrafted(value);
     case "capture_site_checked":
       return isMessage(value, ["revision"]);
+    case "site_restore_loaded":
+      return isMessage(value, ["revision", "origin", "adapters"]) && isBoundedString(value.origin, 2048, 1) &&
+        isAdapterDocument(value.adapters) &&
+        (value.adapters as { format: number }).format === 1 &&
+        (value.adapters as { artifacts: unknown[] }).artifacts.length <= 64;
     case "site_draft_checked":
       return isSiteDraftChecked(value);
     default:

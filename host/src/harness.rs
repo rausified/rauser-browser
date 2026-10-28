@@ -692,7 +692,8 @@ esac
     }
 }
 
-/// Process tests, using the fake harnesses in [`fake`].
+/// Process tests use POSIX shell scripts, permissions and symlinks from
+/// [`fake`]; these fixtures cannot run on Windows.
 #[cfg(all(test, unix))]
 mod process_tests {
     use std::os::unix::fs::{PermissionsExt, symlink};

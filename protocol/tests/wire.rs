@@ -1462,3 +1462,23 @@ fn preserved_note_requests_and_bounded_metadata_round_trip() {
     value["notes"] = json!(vec![note; 25]);
     assert!(!schema_subset::valid("PreservedNotesListed", &value));
 }
+
+#[test]
+fn site_restore_requires_origin_and_revision_without_page_content() {
+    let request = json!({"type":"get_site_restore", "protocol_version":8, "request_id":"r", "origin":"https://work.example", "expected_revision":"v"});
+    assert_request_round_trips("GetSiteRestoreRequest", &request);
+    for field in ["origin", "expected_revision"] {
+        let mut invalid = request.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<Request>(invalid).is_err());
+    }
+    for field in ["url", "title", "body", "adapters"] {
+        let mut invalid = request.clone();
+        invalid[field] = json!("private");
+        assert!(serde_json::from_value::<Request>(invalid).is_err());
+    }
+    let reply = json!({"type":"site_restore_loaded", "protocol_version":8, "request_id":"r", "origin":"https://work.example", "revision":"v", "adapters":{"format":1,"artifacts":[]}});
+    assert!(schema_subset::valid("SiteRestoreLoaded", &reply));
+    let parsed: Response = serde_json::from_value(reply.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), reply);
+}

@@ -89,6 +89,19 @@ finishes the original bytes torn inside a multibyte title, retains an earlier
 row and deduplicates a retry. It covers single delivery for all three kinds
 and batch delivery for visits/activity (Why is not a batch event).
 
+`historical_noncanonical_uuid_markers_survive_reindex` builds older activity
+and Why markers with uppercase and unhyphenated payload UUIDs and canonical
+marker hashes. Reindex retains their measurements/context with canonical
+cache IDs, live retries do not double count, unrelated payload IDs fail hash
+validation, and the log stays byte-for-byte unchanged.
+`noncanonical_v1_uuid_intents_resume_only_original_bytes` combines those
+spellings with all three pre-provenance presentation generations. It tears
+inside the marker payload, reopens the store, refuses changed payloads,
+mismatched payload UUIDs and edited tails, then recovers only the original
+bytes and deduplicates retries. It covers single activity/Why delivery and
+activity batch delivery (Why has no batch path). Run both with
+`cargo test --locked -p brauser noncanonical`; no live harness is used.
+
 ## Standalone overflow delivery
 
 `extension/tests/worker.test.mjs` fills the byte-capped queue with one final
@@ -902,3 +915,58 @@ and `node extension/tests/panel.test.mjs` separately for detailed case counts.
 The macOS smoke's refused-save check reads the first recovery-card textarea;
 its steps and expected dialog count are unchanged.
 Actual Chrome layout and clipboard behavior still need macOS verification.
+
+## Worklog capture gaps
+
+`cargo test --locked -p brauser index::tests` covers gap date intersection in
+recorded offsets (including a range spanning multiple days), overlapping
+notices without summed counts, duplicated marker IDs, full-count preservation,
+32-notice truncation, malformed/unowned logs, real attached and standalone
+capture batches, lost-ack retries, restart, reindex and format-7 checkpoints
+that had skipped overflow. Attached fixtures use a JSON-escaped URL and a log time
+outside the missing range, so the reader must use the loss payload rather than
+the anchor. Old-format migration cases keep event checkpoints while testing the
+one-time bounded gap rescan and partial-pass recovery. Source logs stay unchanged;
+system notices never create artifacts or measures.
+
+`extension/tests/panel.test.mjs` loads the built panel against mocked transport
+and DOM, with a private clipboard stub. It checks visible notices, exact preview
+Copy with inclusion on/off, preserving that choice across period changes,
+truncation, response validation, failed/mismatched periods and late replies.
+The existing native overflow regression also queries the new worklog report and
+the unchanged original worklog. No real accounts, model, clipboard or browser
+profile are used. Actual Chrome acceptance stays in the macOS smoke gate.
+
+## Removed-site restore review
+
+`cargo test --locked --workspace site_restore` covers real native framing,
+settings and hand removals of a custom Jira identity, browse/modal note keys,
+byte-for-byte unchanged notes, explicit saves, preserved global pauses, stale
+read/save revisions, exact-origin validation, fixed GitHub scope, deduplication,
+damaged config/adopted history and ambiguous container contracts. It uses only
+disposable local config/vault fixtures. `extension/tests/panel.test.mjs` loads
+the built panel and covers plain-language page kinds, fixed and every-account
+scope, no page-pattern extraction, explicit saves, unchanged notes, stale and
+canceled reads, changed records, pending pauses/removals and malformed replies.
+Ordinary starter/drafter flows remain covered by the same full panel suite.
+Actual Chrome acceptance remains the existing macOS smoke/human gate.
+
+Windows exclusions have fixture-specific reasons beside each Unix-only test:
+POSIX mode-bit denial, Unix symlinks/device-inode identity, /bin/sh process
+tools, or the Unix-only service. The plist lint test states its macOS plutil
+requirement in its skip reason. CI still runs the shared build on Windows and
+macOS; a Linux-only run supplies no current platform-green evidence.
+
+The composed panel tests dynamically import the built panel for each case.
+Finish `build:extension` before starting them and do not rebuild `dist` until
+all panel test processes exit: a diagnostic run overlapped a rebuild in this
+cycle and reproduced `ERR_MODULE_NOT_FOUND`. Its results were discarded and
+the complete gate rerun sequentially after correcting the unscoped fixture
+(`unscoped = "acknowledged"`, not a boolean).
+
+This cycle's optional 5,000-case adapter comparison could not complete in the
+sandbox: the one-case probe also timed out after 30 seconds, while the
+existing child-pipe IPC probe returned EPERM. The long run was interrupted
+and is not validation evidence. Follow-up `brwr-wg5` will identify the exact
+wait and bound the diagnostic; the required gate and engine vectors passed,
+and neither adapter engine changed here.

@@ -156,6 +156,7 @@ fn panel_request(body: &[u8]) -> bool {
                     | "record_why"
                     | "list_artifacts"
                     | "worklog"
+                    | "worklog_report"
             )
         )
     })
@@ -475,6 +476,16 @@ fn dispatch(
         Request::GetArtifact(value) => get_artifact(value, config),
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
+        Request::WorklogReport(value) => worklog_response(
+            brauser_protocol::WorklogRequest {
+                protocol_version: value.protocol_version,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+            },
+            config,
+            true,
+        ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
         Request::DraftSite(value) => {
@@ -489,6 +500,7 @@ fn dispatch(
         }
         Request::CheckSiteDraft(value) => crate::capture_site::check_site_draft(value, config),
         Request::CheckCaptureSite(value) => crate::capture_site::check_capture_site(value, config),
+        Request::GetSiteRestore(value) => crate::capture_site::get_site_restore(value, config),
         Request::OpenSummary(value) => open_summary(value, config, context.open),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
@@ -2257,6 +2269,14 @@ fn list_artifacts(
 }
 
 fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) -> Response {
+    worklog_response(value, config, false)
+}
+
+fn worklog_response(
+    value: brauser_protocol::WorklogRequest,
+    config: &mut ConfigStore,
+    report: bool,
+) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
         Err(_) => {
@@ -2298,8 +2318,20 @@ fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) ->
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    match index.worklog(start, end) {
-        Ok((text, count)) => Response::WorklogResult(WorklogResult {
+    match index.worklog_report(start, end) {
+        Ok((text, count, gaps, gaps_truncated)) if report => {
+            Response::WorklogReported(brauser_protocol::WorklogReported {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+                text,
+                artifact_count: u32::try_from(count).unwrap_or(u32::MAX),
+                gaps,
+                gaps_truncated,
+            })
+        }
+        Ok((text, count, _, _)) => Response::WorklogResult(WorklogResult {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
             start_date: value.start_date,
@@ -7544,6 +7576,7 @@ refs = [{ type = "jira.issue", find = "jira_key" }]
         }
     }
 
+    // This fixture removes POSIX directory write bits; Windows uses ACLs.
     #[cfg(unix)]
     #[test]
     fn refreshing_artifacts_updates_the_rest_and_names_an_unwritable_path() {
@@ -7976,6 +8009,24 @@ id = "work:{host}/{id}"
                 assert_eq!(text.matches("kind=overflow").count(), 1);
                 assert_eq!(text.matches("2 completed activity hour(s)").count(), 1);
                 assert!(!text.contains("https://"));
+                let report_request = brauser_protocol::WorklogRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "gap-report".into(),
+                    start_date: at[..10].to_owned(),
+                    end_date: at[..10].to_owned(),
+                };
+                let Response::WorklogReported(report) =
+                    worklog_response(report_request.clone(), &mut config, true)
+                else {
+                    panic!("expected worklog gap report")
+                };
+                assert_eq!(report.gaps, vec![request.overflow.clone().unwrap()]);
+                assert_eq!(report.artifact_count, 0);
+                assert!(!report.gaps_truncated);
+                let Response::WorklogResult(original) = worklog(report_request, &mut config) else {
+                    panic!("original worklog remains available")
+                };
+                assert_eq!(original.text, report.text);
                 let mut empty = request.clone();
                 empty.overflow = None;
                 assert!(matches!(
@@ -8088,6 +8139,154 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected config_result, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn site_restore_reviews_custom_jira_without_changing_notes_or_capture() {
+        const ORIGIN: &str = "https://acme.atlassian.net";
+        const URL: &str = "https://acme.atlassian.net/browse/PROJ-42";
+        const MODAL: &str = "https://acme.atlassian.net/jira/board?selectedIssue=PROJ-42";
+        for hand_removed in [false, true] {
+            for paused in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("home");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                write_adapter_config(
+                    &path,
+                    &root,
+                    r#"[[artifacts]]
+type = "custom.issue"
+origin = "https://acme.atlassian.net"
+match = [{path = "/browse/{key:jira_key}"}, {path = "/jira/{*}", query = {selectedIssue = "{key:jira_key}"}}]
+id = "custom:{host}/issues/{key}"
+title = "{title} - Jira"
+"#,
+                );
+                let mut config = loaded(&path);
+                let note = note_load(&mut config, URL);
+                let saved = note_save(
+                    &mut config,
+                    URL,
+                    "  Keep my custom note\n",
+                    &note.revision,
+                    note.key,
+                );
+                let Response::NoteSaved(saved) = saved else {
+                    panic!("{saved:?}")
+                };
+                let note_path = root.join(&saved.relative_path);
+                let note_bytes = std::fs::read(&note_path).unwrap();
+                let original = config.snapshot().adapters.artifacts[0].clone();
+                if hand_removed {
+                    let mut disk: toml::Value =
+                        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    disk.as_table_mut().unwrap().remove("artifacts");
+                    disk["capture_enabled"] = (!paused).into();
+                    std::fs::write(&path, toml::to_string(&disk).unwrap()).unwrap();
+                } else {
+                    let mut next = config.snapshot().clone();
+                    next.adapters.artifacts.clear();
+                    next.capture_enabled = !paused;
+                    let revision = config.revision().to_owned();
+                    config.update(next, &revision).unwrap().unwrap();
+                }
+                let before = std::fs::read(&path).unwrap();
+                let mut config = loaded(&path);
+                assert_eq!(note_load(&mut config, MODAL).key, saved.key);
+                let request = serde_json::json!({
+                    "type": "get_site_restore", "protocol_version": PROTOCOL_VERSION,
+                    "request_id": "restore-review", "origin": ORIGIN,
+                    "expected_revision": config.revision()
+                });
+                let replies = served(&[request.to_string()], config);
+                let Response::SiteRestoreLoaded(review) = &replies[0] else {
+                    panic!("{:?}", replies[0])
+                };
+                assert_eq!(review.adapters.artifacts.len(), 1);
+                let mut recognition = original;
+                recognition.as_object_mut().unwrap().remove("title");
+                assert_eq!(review.adapters.artifacts[0], recognition);
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    before,
+                    "review writes no policy"
+                );
+                assert_eq!(std::fs::read(&note_path).unwrap(), note_bytes);
+
+                let config = loaded(&path);
+                let mut next = config.snapshot().clone();
+                next.adapters = review.adapters.clone();
+                let update = serde_json::json!({
+                    "type": "update_config", "protocol_version": PROTOCOL_VERSION,
+                    "request_id": "restore-save", "expected_revision": review.revision,
+                    "config": next, "picker_token": null, "knowledge_base_token": null
+                });
+                assert!(matches!(
+                    &served(&[update.to_string()], config)[0],
+                    Response::ConfigUpdated(_)
+                ));
+                let mut restored = loaded(&path);
+                assert_eq!(restored.snapshot().capture_enabled, !paused);
+                let current = note_load(&mut restored, MODAL);
+                assert_eq!(current.key, saved.key);
+                assert_eq!(current.body, "  Keep my custom note\n");
+                assert_eq!(std::fs::read(&note_path).unwrap(), note_bytes);
+                assert!(config::adopted_contracts_path(folder.path()).exists());
+                assert_eq!(
+                    refused(&served(&[update.to_string()], loaded(&path))[0]).0,
+                    ErrorCode::Conflict
+                );
+                assert_eq!(
+                    refused(&served(&[request.to_string()], loaded(&path))[0]).0,
+                    ErrorCode::Conflict
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn site_restore_refuses_invalid_origins_stale_revisions_and_configured_sites() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let config = ConfigStore::for_test(path.clone());
+        let request = serde_json::json!({
+            "type": "get_site_restore", "protocol_version": PROTOCOL_VERSION,
+            "request_id": "review", "origin": "https://work.example", "expected_revision": config.revision()
+        });
+        let replies = served(&[request.to_string()], config);
+        assert!(
+            matches!(&replies[0], Response::SiteRestoreLoaded(r) if r.adapters.artifacts.is_empty())
+        );
+        for origin in [
+            "https://work.example/",
+            "https://work.example/secret",
+            "https://u:p@work.example",
+            "file:///tmp/a",
+            "https://work.example?token=secret",
+        ] {
+            let mut bad = request.clone();
+            bad["origin"] = origin.into();
+            assert_eq!(
+                refused(&served(&[bad.to_string()], loaded(&path))[0]).0,
+                ErrorCode::InvalidRequest
+            );
+        }
+        let mut config = loaded(&path);
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.push(serde_json::json!({
+            "type": "work.item", "origin": "https://work.example", "match": [{"path": "/items/{id:int}"}], "id": "work:{host}/{id}"
+        }));
+        let revision = config.revision().to_owned();
+        config.update(next, &revision).unwrap().unwrap();
+        assert_eq!(
+            refused(&served(&[request.to_string()], loaded(&path))[0]).0,
+            ErrorCode::Conflict
+        );
+        let mut request = request;
+        request["expected_revision"] = config.revision().into();
+        let replies = served(&[request.to_string()], config);
+        assert!(refused(&replies[0]).1.contains("already has capture rules"));
     }
 
     #[test]

@@ -35,6 +35,13 @@ npm run test:markdown-neutralizer
 npm run test:scripts
 ```
 
+To rehearse artifact identity changes offline, use
+`target/debug/brauser adapters aliases-preview < requests.jsonl`.
+It shows canonical groups and pending suggestions from supplied adapter
+documents and URL evidence, without opening your settings or vault. See the
+[JSON example and limits](docs/superpowers/plans/2026-10-28-capture-relearning.md#offline-command).
+Re-learn in the panel and applying migrations remain under development.
+
 ### Try the M1 development build
 
 1. Build the native host with `cargo build --locked -p brauser` and the extension with `npm ci --ignore-scripts && npm run build:extension`.
@@ -57,6 +64,13 @@ Summaries need the development service from step 3 and an installed, logged-in C
 6. On any HTTP(S) page, click **Summarize & log** in the panel, press Command+Shift+9, or choose **Summarize with Brauser** from the page's context menu. The card shows the streamed text, then "Summarized" with the type, category, and importance. **Open in Codex** reopens a Codex run's thread in Codex Desktop; **Copy resume command** copies `cd '<knowledge base>' && claude --resume <session>` for a Claude Code run. Closing the panel does not stop a run; reopening it brings the card back. On the development branch with saved summaries, the finished card also shows the saved summary's line and **Open summary**, which opens the file in your default Markdown app; if the save fails, the card says why and, when a retry can work, offers **Retry save**, which saves the same answer again without rerunning the agent. A failure no retry can fix (a full or refusing daily log, an interrupted log entry that changed since, an invalid stored answer, or a newer summary of the page already saved) offers no Retry save, and a summary file it already wrote can still be opened.
 
 The panel updates when settings change, can send pending activity and pause capture, and follows whichever tab is active. On any HTTP(S) page it shows the address and title, loads that page's note (if any), and autosaves what you type. Recognized artifact pages also show measured activity and one-line context; **Recent** combines artifacts across tools and generates a copyable worklog. Brauser holds HTTP(S) site access from install; if you withdraw it in Chrome, the panel shows one banner with a button that opens Brauser's Chrome extension settings so you can turn it back on.
+
+In **Recent**, the worklog shows known capture gaps beside the preview, with
+the reported missing activity-hour records and their full date/time ranges.
+Counts can span several dates and overlap; they are never added to work totals.
+**Include capture gaps in copied worklog** starts checked. Clear it to copy just
+the measured work; the notices remain visible for review. Copy uses the exact
+preview text. Rebuild the host and extension together for this review.
 
 The side panel and settings headers show the extension's build commit, with `-dirty` when tracked files had uncommitted changes, and the host's commit once it answers; a host built from a different commit is flagged, so rebuild both after pulling.
 

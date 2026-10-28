@@ -243,6 +243,26 @@ export interface ListArtifactsRequest {
   limit: number;
 }
 
+export interface WorklogReportRequest {
+  type: "worklog_report";
+  protocol_version: 8;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+}
+
+export interface WorklogReported {
+  type: "worklog_reported";
+  protocol_version: 8;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  text: string;
+  artifact_count: number;
+  gaps: OverflowMarker[];
+  gaps_truncated: boolean;
+}
+
 export interface WorklogRequest {
   type: "worklog";
   protocol_version: 8;
@@ -833,6 +853,23 @@ export type UnscopedChoice = "unscoped";
 
 export type ScopeChoiceView = ScopeValues | UnscopedChoice;
 
+export interface GetSiteRestoreRequest {
+  type: "get_site_restore";
+  protocol_version: 8;
+  request_id: string;
+  origin: string;
+  expected_revision: string;
+}
+
+export interface SiteRestoreLoaded {
+  type: "site_restore_loaded";
+  protocol_version: 8;
+  request_id: string;
+  origin: string;
+  revision: string;
+  adapters: AdapterDocument;
+}
+
 export interface CheckCaptureSiteRequest {
   type: "check_capture_site";
   protocol_version: 8;
@@ -882,6 +919,6 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | CheckSiteDraftRequest | CheckCaptureSiteRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | CheckSiteDraftRequest | WorklogReportRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
-export type Response = PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | CaptureSiteChecked | ServiceReady | ErrorResponse;
+export type Response = PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;

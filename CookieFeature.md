@@ -533,3 +533,115 @@ exact original bytes. Ten new regression tests cover these paths, including
 a later-adapter collision and a review-discovered error-classification bug.
 The full required and README gates pass; real macOS browser checks remain
 outside this Linux run. Completes assigned `brwr-srp`.
+
+
+### Recover historical activity and context (2026-10-28)
+
+Brauser can now rebuild older work history that used uppercase or
+unhyphenated UUIDs without silently losing measured activity or Why context.
+Those older log entries stored the original UUID spelling in their payload
+but hashed its canonical form in the marker. The reader now validates and
+caches the canonical UUID, keeping retries from double-counting the same
+work. It leaves the daily log exactly as it was written, and a payload naming
+a different UUID still fails validation.
+
+An interrupted append from that older build can also finish after an upgrade.
+For v1 hash-only intents, recovery reconstructs the original queued UUID
+spelling alongside all three frozen historical text renderings. It selects
+bytes only when the complete intent hash and existing torn tail both match;
+changed payloads, mismatched IDs and edited logs stay untouched. Prepared-byte
+v2/v3 recovery continues unchanged. Two failing-first regression matrices
+exercise 33 cases through reindex, restart, single delivery and activity batch
+delivery, including duplicate retries and refusal paths. The full required
+and README gates pass; macOS browser acceptance remains outside this Linux
+run. Completes assigned `brwr-smu`.
+
+
+## 2026-10-28 — Rehearse artifact identity corrections before migration
+
+Brauser now has an offline developer command, `brauser adapters aliases-preview`,
+that shows what an artifact's identities would become under a proposed capture
+policy. Given old and proposed adapter documents and URL evidence, it derives
+the endpoint IDs itself and prints the resulting canonical groups and pending
+suggestions. A chain of moves stays one group, a move back makes the old key
+canonical again, and undoing a pair removes only that connection. Suggested
+links never merge records. Exact logical event retries are idempotent, while
+conflicting reuse refuses the preview.
+
+This gives developers and agents an inspectable first step toward Re-learn
+capture without risking existing notes. The command reads stdin only, creates
+no config or vault files, checks adapter scope and types, and refuses URL
+provenance that cannot establish a query-based identity. Its output describes
+only the supplied operations and cannot authorize a migration. The ID freeze
+remains until the remaining impact planner, durable migration and panel review
+are complete. Fifteen new tests include real binary isolation checks; the full
+required and README gates pass with 987 reported Rust outcomes and all 15
+extension files. `brwr-sq9` is complete; parent `brwr-6x2` continues with
+`brwr-hq8` under the four-stage plan in `docs/superpowers/plans/`.
+
+## 2026-10-28 — Review capture gaps before sharing a worklog
+
+Brauser now shows known capture gaps where a person prepares a daily or weekly
+worklog. If a full browser buffer dropped completed activity-hour records, the
+review lists the reported count and its original time range instead of making
+the worklog look silently complete. A checked-by-default “Include capture gaps
+in copied worklog” choice adds a plain incompleteness note to the preview.
+Clearing it leaves the notices visible for review and copies only the measured
+work. Copy always uses exactly the preview, and the choice remains in place
+when the period changes or new activity refreshes the view.
+
+The host derives notices from existing owned daily-log markers alongside the
+measured report. A range that intersects the chosen local dates is shown in
+full: the log does not say which missing records belong to which day, so the
+count is never prorated or turned into focus time. Retry copies appear once;
+different notices with overlapping ranges stay separate without a combined
+count. Notices work even when no artifact was recorded. Reindex restores the
+same evidence, and an older cache makes one bounded rescan to find overflow it
+previously skipped. Results are capped at 32 notices with explicit truncation.
+Loading, failed or stale replies cannot leave an earlier report available to Copy.
+
+Assigned `brwr-9r7` is complete. Real local capture/reindex fixtures cover both
+standalone and attached notices, including long anchor URLs, and six new panel
+cases use mocked transport and a private clipboard stub. The full required and
+README gates pass: 990 workspace Rust outcomes, all 15 extension test files,
+both Clippy builds, the scripted-dialogs suite, script checks and 10,696 inert
+Markdown renderings. IPC sandbox skips remain explicit. Actual macOS Chrome
+and current Windows/macOS CI acceptance remain with the existing platform gates;
+no real account, model, live service or user clipboard was used.
+
+
+## 2026-10-28 — Restore a removed site's recorded capture rules
+
+Capture Site now recognizes when Brauser has used rules on a site before,
+including custom rules removed through settings or deleted from config.toml.
+An explicit click offers the recorded page kinds, readable route patterns and
+exact account scopes for review, instead of proposing a stock starter with a
+different artifact identity. The review sends only the origin and config
+revision to the host. It does not need page content or link inspection, and
+nothing starts capturing until the user saves. Restoring the only site also
+respects a global pause rather than silently resuming capture.
+
+The host checks that the recorded contracts are usable and unambiguous; the
+panel re-reads the same set before the normal revision-checked save, and
+refuses changed records, stale settings, navigation and pending local pauses
+or removals. Existing note edits use the established save/recovery boundary.
+Real local native tests exercise custom Jira browse and issue-modal routes
+through both removal paths and verify unchanged note keys and exact file
+bytes. Recorded title cleanup, title aliases and reference extraction are not
+reconstructed; settings can add those again. Damaged records retain repair
+guidance. Overlapping historical rules, including repository/PR containers
+that can name several note identities, remain refused; follow-up brwr-7lq
+covers an explicit identity review through the existing migration plan.
+
+Validation adds seven Rust regressions and eleven composed-panel cases. The
+required Linux gate passes 997 Rust outcomes (43 documented IPC sandbox
+skips), all 15 extension files, formatting, builds, typecheck, lint and both
+Clippy configurations; the scripted-dialog suite has 859 passing outcomes.
+The Windows skip-reason audit is complete, while brwr-bzx and brwr-9xg remain
+blocked for current Windows/macOS CI and actual macOS Chrome evidence. This
+cycle makes no platform acceptance claim and uses no real account or model.
+
+The optional 5,000-case engine comparison is not counted as passed: its
+one-case probe timed out, and Node child pipes are denied by this sandbox.
+The run was stopped and recorded as brwr-wg5. Both adapter engines are
+unchanged; their ordinary vector tests passed in the required gate.

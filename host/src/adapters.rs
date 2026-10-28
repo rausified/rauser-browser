@@ -24,6 +24,8 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
 
+mod aliases;
+
 pub const COMMAND: &str = "adapters";
 
 /// Runs `brauser adapters <subcommand>`.
@@ -37,8 +39,16 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
             }
             eval_lines(io::stdin().lock(), io::stdout().lock())
         }
+        Some("aliases-preview") => {
+            if args.next().is_some() {
+                bail!(
+                    "adapters aliases-preview takes no arguments; requests are JSON Lines on stdin"
+                );
+            }
+            aliases::preview_lines(io::stdin().lock(), io::stdout().lock())
+        }
         Some(other) => bail!("unknown adapters command: {other}"),
-        None => bail!("usage: adapters eval < requests.jsonl"),
+        None => bail!("usage: adapters <eval|aliases-preview> < requests.jsonl"),
     }
 }
 
