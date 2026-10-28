@@ -1291,6 +1291,10 @@ async function run() {
     // The same fixture under a second origin that has no adapter and no
     // starter: Capture Site drafts its rules from the page's shapes.
     const unknownOrigin = origin.replace("://127.0.0.1", "://localhost");
+    // A third name for the fixture, for the Improve with AI steps: saving and
+    // removing a site records its rules for Restore, so the unknown-site
+    // step below must find its own origin untouched.
+    const aiOrigin = origin.replace("://127.0.0.1", "://ai.localhost");
     // The URL typed into settings; the default-port run spells out :80.
     const siteInput = options.defaultPort ? `${origin}:80` : origin;
     const allowed = `${origin}/allowed/page?case=${caseId}`;
@@ -1956,7 +1960,7 @@ async function run() {
     // Capture Site on the /kb/articles fixture page under the second origin,
     // for the Improve with AI steps. Resolves with the tab's target id once
     // the basic review is drafted.
-    const kbUrl = `${unknownOrigin}/kb/articles/101/Smoke-Home`;
+    const kbUrl = `${aiOrigin}/kb/articles/101/Smoke-Home`;
     async function openKbReview() {
       const { targetId } = await cdp.send("Target.createTarget", { url: kbUrl });
       await cdp.withTarget(targetId, (page) => waitFor(async () => requireCondition(
@@ -2309,10 +2313,10 @@ async function run() {
         const runId = fresh[0].run_id;
         // The host's judgment of the answer drops exactly the /search rule.
         const input = await siteDraftInput(runId);
-        requireCondition(input.origin === unknownOrigin && input.visited.some(({ shape }) => shape.startsWith("/kb/articles/")),
+        requireCondition(input.origin === aiOrigin && input.visited.some(({ shape }) => shape.startsWith("/kb/articles/")),
           `The site-draft input: ${JSON.stringify(input)}`);
         const judged = await agentRequest({
-          type: "draft_site", origin: unknownOrigin, visited: input.visited, links: input.links, run_id: runId,
+          type: "draft_site", origin: aiOrigin, visited: input.visited, links: input.links, run_id: runId,
         });
         const searchRule = FAKE_SITE_DRAFT_RULES.findIndex((rule) => rule.path.startsWith("/search/"));
         requireCondition(judged.type === "site_drafted" && judged.drafter === "agent" &&
@@ -2351,8 +2355,8 @@ async function run() {
           await page.click("#capture-site-save");
         });
         const adapter = await waitFor(async () => {
-          const found = (await hostConfig(wrapper)).config.adapters.artifacts.find((entry) => entry.origin === unknownOrigin);
-          requireCondition(found, `The host has no adapter for ${unknownOrigin}`);
+          const found = (await hostConfig(wrapper)).config.adapters.artifacts.find((entry) => entry.origin === aiOrigin);
+          requireCondition(found, `The host has no adapter for ${aiOrigin}`);
           return found;
         }, { timeout: 30_000, interval: 500, signal: abort.signal });
         requireCondition(Object.keys(adapter).every((key) => ["type", "origin", "match", "id", "modes"].includes(key)) &&
@@ -2362,7 +2366,7 @@ async function run() {
         `The host saved the AI adapter ${JSON.stringify(adapter)}`);
         await waitFor(() => onPanel(async (page) => {
           const status = await page.text("#status");
-          requireCondition(status?.startsWith(`Saved capture rules for ${new URL(unknownOrigin).host}.`),
+          requireCondition(status?.startsWith(`Saved capture rules for ${new URL(aiOrigin).host}.`),
             `Panel status says: ${status}`);
           requireCondition(await page.hidden("#capture-site-review") === true, "The review is still open");
         }), { timeout: 20_000 });
@@ -2383,12 +2387,12 @@ async function run() {
         await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
         await settingsConnected();
         await waitFor(() => onSettings(async (page) => requireCondition(
-          await page.enabled(`button[aria-label="Remove site ${unknownOrigin}"]`), `Settings does not list ${unknownOrigin}`)),
+          await page.enabled(`button[aria-label="Remove site ${aiOrigin}"]`), `Settings does not list ${aiOrigin}`)),
         { timeout: 20_000 });
-        await inSettings((page) => page.click(`button[aria-label="Remove site ${unknownOrigin}"]`));
+        await inSettings((page) => page.click(`button[aria-label="Remove site ${aiOrigin}"]`));
         await waitFor(async () => {
           const reply = await hostConfig(wrapper);
-          requireCondition(!reply.config.adapters.artifacts.some((entry) => entry.origin === unknownOrigin),
+          requireCondition(!reply.config.adapters.artifacts.some((entry) => entry.origin === aiOrigin),
             "The host still has the AI draft's adapter");
           requireCondition(reply.config.capture_enabled && reply.config.adapters.artifacts.some((entry) => entry.origin === origin),
             "Removing the AI draft's site changed the configured site");

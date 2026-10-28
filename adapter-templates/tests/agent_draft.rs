@@ -659,3 +659,60 @@ fn agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_
     assert_eq!(page.artifact_type, "tools.view");
     assert!(doc.evaluate("https://tools.example.com/", None).is_err());
 }
+
+/// Agent tables carry only the Tier 0 keys. `within` (a container link the
+/// review never shows) is a forbidden key; any other key fails the table's
+/// form. Either refuses the whole draft before the preview.
+#[test]
+fn agent_draft_with_a_container_or_unknown_key_is_rejected_before_the_preview() {
+    let clean = json!({
+        "type": "tools.docs", "origin": TOOLS, "match": [{ "path": "/docs/{n:int}" }],
+        "id": "tools.docs:{host}/{n}",
+    });
+    let mut within = clean.clone();
+    within["type"] = json!("tools.page");
+    within["id"] = json!("tools.page:{host}/{n}");
+    within["match"] = json!([{ "path": "/page/{n:int}" }]);
+    within["within"] = json!({ "type": "tools.docs", "id": "tools.docs:{host}/{n}" });
+    let mut unknown = clean.clone();
+    unknown["type"] = json!("tools.page");
+    unknown["id"] = json!("tools.page:{host}/{n}");
+    unknown["match"] = json!([{ "path": "/page/{n:int}" }]);
+    unknown["priority"] = json!(1);
+    let forbidden: Vec<Value> = [clean.clone(), within].into_iter().map(value).collect();
+    assert_each_table_rejected(&forbidden, DraftErrorCode::ForbiddenKey);
+    let malformed: Vec<Value> = [clean, unknown].into_iter().map(value).collect();
+    assert_each_table_rejected(&malformed, DraftErrorCode::InvalidRule);
+}
+
+/// A taken type gets a numeric suffix that still fits the 32-character type
+/// limit, and a ref to the agent's own type follows the rename.
+#[test]
+fn a_renamed_agent_type_fits_the_limit_and_keeps_its_self_refs() {
+    let long = "tools.abcdefghijklmnopqrstuvwxyz"; // 32 characters
+    assert_eq!(long.len(), 32);
+    let table = value(json!({
+        "type": long, "origin": TOOLS, "match": [{ "path": "/docs/{n:int}" }],
+        "id": format!("{long}:{{host}}/{{n}}"),
+        "refs": [{ "type": long, "find": "jira_key" }],
+    }));
+    let input = input(&["/docs/{num}"], &[]);
+    let site = check_agent_draft(
+        TOOLS,
+        &empty(),
+        &[],
+        &input,
+        &policy(),
+        &[long.to_owned()],
+        &[table],
+    );
+    assert_eq!(site.rejected, None, "{site:?}");
+    let shown = &site.adapters[0].adapter;
+    let renamed = shown.get("type").and_then(Value::as_str).unwrap();
+    assert_ne!(renamed, long);
+    assert!(renamed.len() <= 32, "{renamed}");
+    let refs = shown.get("refs").and_then(Value::as_array).unwrap();
+    assert_eq!(refs[0].get("type").and_then(Value::as_str), Some(renamed));
+    // The draft also validates as a document.
+    let _ = drafted_document(&site);
+}

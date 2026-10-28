@@ -1659,6 +1659,7 @@ fn agent_table_form(table: &Value, origin: &str) -> bool {
     let text = |key: &str| table.get(key).and_then(Value::as_str);
     let rules = table.get("match").and_then(Value::as_array);
     table.as_table().is_some()
+        && only_tier0_keys(table)
         && text("origin") == Some(origin)
         && text("type").is_some_and(|t| {
             text("id")
@@ -1668,11 +1669,30 @@ fn agent_table_form(table: &Value, origin: &str) -> bool {
         && rules.is_some_and(|r| (1..=MAX_RULES).contains(&r.len()))
 }
 
-/// The table with `type` set to `artifact_type` and the ID scheme with it.
+/// Agent table keys: the Tier 0 keys of a checked table (adapter-templates.md §10.4).
+const TIER0_KEYS: &[&str] = &["type", "origin", "match", "id", "modes", "refs"];
+
+/// The longest artifact type a document accepts.
+const MAX_TYPE_LEN: usize = 32;
+
+/// True unless `table` is a table with a key outside [`TIER0_KEYS`]; a
+/// non-table is left to the form check.
+fn only_tier0_keys(table: &Value) -> bool {
+    table
+        .as_table()
+        .is_none_or(|t| t.iter().all(|(k, _)| TIER0_KEYS.contains(&k.as_str())))
+}
+
+/// The table with `type` set to `artifact_type`, and the ID scheme and any
+/// ref to its own old type with it.
 fn renamed(table: &Value, artifact_type: &str) -> Value {
     let Value::Table(entries) = table else {
         return table.clone();
     };
+    let old = table
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     Value::Table(
         entries
             .iter()
@@ -1685,10 +1705,39 @@ fn renamed(table: &Value, artifact_type: &str) -> Value {
                         Value::String(format!("{artifact_type}:{rest}")),
                     )
                 }
+                ("refs", Value::Array(refs)) => (
+                    key.clone(),
+                    Value::Array(
+                        refs.iter()
+                            .map(|r| retarget_ref(r, old, artifact_type))
+                            .collect(),
+                    ),
+                ),
                 _ => (key.clone(), value.clone()),
             })
             .collect(),
     )
+}
+
+/// `r` with its `type` moved from `old` to `new` when it names `old`.
+fn retarget_ref(r: &Value, old: &str, new: &str) -> Value {
+    match r {
+        Value::Table(entries) if r.get("type").and_then(Value::as_str) == Some(old) => {
+            Value::Table(
+                entries
+                    .iter()
+                    .map(|(k, v)| {
+                        if k == "type" {
+                            (k.clone(), Value::String(new.to_owned()))
+                        } else {
+                            (k.clone(), v.clone())
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        _ => r.clone(),
+    }
 }
 
 /// The table with only the rules at `keep` in its `match`.
@@ -1774,7 +1823,12 @@ pub fn check_agent_draft(
         rejected: Some(code),
         ..SiteDraft::default()
     };
-    if tables.iter().any(has_forbidden_key) {
+    // `within` is a container link the review never shows; any other key
+    // outside the Tier 0 set fails the form check below.
+    if tables
+        .iter()
+        .any(|t| has_forbidden_key(t) || t.get("within").is_some())
+    {
         return reject(DraftErrorCode::ForbiddenKey);
     }
     if tables.is_empty()
@@ -1799,7 +1853,10 @@ pub fn check_agent_draft(
             let mut artifact_type = base.to_owned();
             let mut n = 2u32;
             while used.contains(&artifact_type) {
-                artifact_type = format!("{base}{n}");
+                // Keep the suffixed type within the type length limit.
+                let suffix = n.to_string();
+                let keep = base.len().min(MAX_TYPE_LEN.saturating_sub(suffix.len()));
+                artifact_type = format!("{}{suffix}", &base[..keep]);
                 n += 1;
             }
             used.insert(artifact_type.clone());
