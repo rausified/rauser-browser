@@ -315,3 +315,24 @@ with the full local gate: 134 panel cases and 929 Rust outcomes (886 exercised,
 Linux VM. Completes assigned `brwr-t8m`; `brwr-iqx` remains blocked because its
 acceptance criteria name a deleted finisher whose replacement already has the
 correct notes-folder wording.
+
+
+## 2026-10-28 — Finish interrupted captures after upgrading URL limits
+
+Brauser can now finish an older interrupted capture even when percent encoding
+makes its stored URL exceed the newer 8192-byte limit. Previously, the new
+check rejected the retry before reaching the older host's recovery journal.
+The worker could then drop the event while an unfinished line remained in the
+daily log. The host now checks that journal first, under the existing capture
+lock, for both individual deliveries and batches. This covers the page URL
+and activity mode and incoming-trail URLs.
+
+Recovery still needs the exact entry hash, an unchanged partial prefix, an
+owned log and the same selected folder. A changed retry remains pending for
+repair; it cannot write different content. New events still obey the URL
+limit, and a rejected event cannot block a valid batch neighbor by choosing
+the wrong daily log. Two failing-first regressions cover eight recovery
+combinations and both mixed-batch orders. The full local gate passes with
+931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips), all 15
+extension files and two script files. macOS smoke remains unverified on this
+Linux VM. Completes assigned `brwr-u8r`.

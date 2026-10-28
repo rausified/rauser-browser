@@ -86,3 +86,12 @@
   still save with one click, and the host independently validates every save.
   Seven panel cases plus native and wire regressions pass with the full local
   gate (`brwr-t8m`); macOS Chrome acceptance remains human work.
+
+
+- **Brauser — Complete interrupted captures after the URL-limit upgrade (2026-10-28).**
+  Existing v1 capture journals now get exact-byte recovery before the new
+  normalized URL bound can reject a retry, including activity mode and trail
+  URLs through single and batch delivery. Changed payloads remain retryable,
+  new oversized events remain rejected, and valid batch neighbors still save.
+  Two failing-first regressions and the full local gate pass (`brwr-u8r`);
+  real macOS smoke remains unverified on this Linux VM.

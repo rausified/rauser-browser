@@ -263,12 +263,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
-- [ ] `brwr-u8r` **Replay existing v1 capture intents before the normalized-URL
-  bound rejects their event (P2).** From #139's review: a partial v1 intent left
-  by an older host for an event whose normalized URL exceeds 8192 bytes is now
-  rejected (`url_too_long`) before `record_authorized` can replay it, so the
-  worker drops the event and strands the log tail (host/src/capture.rs
-  `normalized_bounded_url`).
 - [ ] `brwr-srp` **Record which query parameters were stripped beside stored
   canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
   artifacts apart in history; changes the log and index formats.
@@ -444,6 +438,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Complete interrupted captures before applying the new URL limit (2026-10-28).** Completed assigned `brwr-u8r`. A retry now reaches its existing v1 intent before an oversized normalized page, mode or trail URL can reject the event. Recovery retains the exact old bytes and all hash, prefix, ownership and folder checks; changed payloads stay retryable, while new oversized writes remain rejected. Rejected events cannot choose the log day for valid batch neighbors. **Metrics:** 2 new failing-first Rust regressions covering 8 recovery variants and both mixed-batch orders; 931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips), all 15 extension and 2 script files, full required gate and 10,696 inert Markdown renderings green.
 
 - **Category:** Bug Fix. **Check recorded identities before Capture Site offers Save (2026-10-28).** Completed assigned `brwr-t8m`. Starter reviews now wait for the host to check the proposed rules against active, retired and hand-removed contracts, then name a conflicting recorded type and ID template before Save is available. Edited selections and closed reviews discard older replies; an unsupported host or mismatched response leaves Save disabled. Existing revision-checked saves remain authoritative, and a fresh site still enables in one click. **Metrics:** 7 new panel cases, 1 native regression and 1 protocol round trip; 134 panel cases, all 15 extension and 2 script files pass; 929 Rust outcomes (886 exercised, 43 explicit IPC sandbox skips); full required gate and 10,696 inert Markdown renderings green.
 
@@ -994,3 +990,40 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` because the Git mount is read-only. The complete green
   diff, exported queue and excluded `.bosun_commit_msg` remain for the
   driver. No retry, remote operation or live-service action was attempted.
+
+### Cycle observations (2026-10-28 — capture recovery before URL limits)
+
+- Opening health on `e604019b` passed with a clean tree and no quarantine
+  report. Claimed and completed highest-priority ready assignment `brwr-u8r`.
+  No live service, credential, remote Git operation or external API was used.
+- The regression independently reconstructs pre-limit presentation and payload
+  bytes, publishes a v1 intent and truncates the log. The original code
+  terminally rejected the oversized event before checking that intent. The
+  new test covers visit/page/mode/trail URLs through single and batch paths,
+  refuses changed payloads, completes the original bytes and deduplicates a
+  second delivery. An initial fixture serialized the struct directly rather
+  than the old host's JSON value; corrected its JSON key ordering.
+- Review caught and tested an implementation issue before handoff: delaying
+  the bound left rejected oversized candidates participating in the batch's
+  calendar-day check. The new mixed-batch regression failed, then passed
+  after only accepted new writes were allowed to select the log day. The
+  existing raw and stored URL caps and exact 8192-byte boundary still pass.
+- Final gate: 931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips),
+  all 15 extension and two script files, current-state consistency and 10,696
+  inert Markdown renderings pass. Evidence is in `target/cookie-u8r-*.log`.
+  The macOS headless smoke runner explicitly refused Linux. Complete code,
+  test and documentation diff reviewed manually; external Codex review was
+  not invoked because this run forbids live APIs. The driver's independent
+  reviewer remains the publication gate.
+- Queue priorities remain authoritative: 13 assigned items remain, including
+  the two blocked items; do not jump to self-directed product work. The
+  existing `brwr-1g2` incoming-trail card and `brwr-kws` individual recovery
+  review offer visible workflow improvements after higher-priority work.
+  For future recovery-format changes, keep a fixture of exact historical
+  bytes: regenerating both the fixture and expected output with today's
+  renderer can hide the compatibility failure.
+
+- Commit handoff: the single `git add -A` / commit attempt failed creating
+  `.git/index.lock` on the read-only mount. The green diff, exported queue
+  and excluded `.bosun_commit_msg` remain for the driver. No retry or remote
+  operation was attempted.
