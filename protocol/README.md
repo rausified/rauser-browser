@@ -112,6 +112,12 @@ Totals are unchanged in meaning: a contained artifact's seconds count in its
 own view and once in its container's, and recent and worklog totals still
 count each second once. No message is added or removed.
 
+Version 7 also carries summary outputs (open access PR 4), all additive:
+`SummaryView`; a required, nullable `summary` on `ArtifactListItem` and
+`ArtifactResult`; `RunView`'s `summary_path`, `written_record_key`, and
+`can_retry_save`; and the `open_summary` request with its `summary_opened`
+answer. Each is described below.
+
 Downgrading after adding repositories is unsupported: older hosts reject
 `within` in the adapter config and in adapter history.
 
@@ -288,7 +294,7 @@ a `summary_path` that is not a summary path is `invalid_request`, and
 anything else at the name is `conflict` "The file at the summary path is not
 a Brauser summary." Where there is no opener (off macOS)
 the answer is `invalid_request` "Opening is only supported on macOS.", the
-same wording as `open_path`. These messages and `summary_path` were added within version 6.
+same wording as `open_path`. These messages and `summary_path` were added in version 7.
 
 `SummaryView` has `summarized_at` (RFC 3339 in the offset of the click that
 requested it, at most 32 characters), `document_type` and `category` (1 to 64

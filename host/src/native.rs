@@ -1826,7 +1826,18 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         )
     };
     let (artifact, summary) = match index.artifact_with_summary(&matched.artifact_id) {
-        Ok((Some(artifact), summary)) => (artifact, summary),
+        Ok((Some(mut artifact), summary)) => {
+            // The index draws `within` from rolled-up visits, so a contained
+            // artifact recorded only by its summary names its container the
+            // way an unvisited one does.
+            if artifact.within.is_none() {
+                artifact.within = config
+                    .adapter_document()
+                    .ok()
+                    .and_then(|document| crate::index::unvisited_within(document, &matched));
+            }
+            (artifact, summary)
+        }
         Ok((None, _)) => {
             let document = config.adapter_document().ok();
             let container =
@@ -6772,6 +6783,80 @@ id = "github.repo:{host}/{owner}/{repo}"
             })
         );
         assert!(pull.contained.is_empty());
+    }
+
+    /// A contained artifact recorded only by its summary still names the
+    /// container it sits within, and the summary stays with it: the
+    /// repository's own page shows none (DESIGN.md §6.2, spec §7.2).
+    #[test]
+    fn a_summary_only_pull_request_names_its_repository() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://github.com\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "github.pr"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.pr:{host}/{owner}/{repo}/{number}"
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+
+[[artifacts]]
+type = "github.repo"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/{*}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.repo:{host}/{owner}/{repo}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let pr_url = "https://github.com/acme-corp/widgets/pull/7";
+        let pr_id = "github.pr:github.com/acme-corp/widgets/7";
+        let event = record_page_summary(
+            &config,
+            pr_url,
+            RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Artifact,
+                value: pr_id.into(),
+            },
+            "github.pr",
+        );
+        let result = artifact_result(&mut config, pr_url);
+        assert!(result.recognized);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        let pull = result.artifact.unwrap();
+        assert_eq!(pull.artifact_id, pr_id);
+        assert_eq!(
+            (pull.opens, pull.days_opened, pull.focused_seconds),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            pull.within,
+            Some(brauser_protocol::ArtifactRefView {
+                artifact_id: "github.repo:github.com/acme-corp/widgets".into(),
+                artifact_type: "github.repo".into(),
+                title: "acme-corp/widgets".into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+            })
+        );
+        let repo = artifact_result(
+            &mut config,
+            "https://github.com/acme-corp/widgets/blob/main/README.md",
+        );
+        assert_eq!(repo.summary, None);
+        let repo = repo.artifact.unwrap();
+        assert_eq!(repo.artifact_id, "github.repo:github.com/acme-corp/widgets");
+        assert_eq!((repo.opens, repo.focused_seconds), (0, 0));
+        assert!(repo.contained.is_empty());
     }
 
     #[test]

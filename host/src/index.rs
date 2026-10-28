@@ -5661,6 +5661,242 @@ print(json.dumps([tables,row]))"#;
         assert!(text.contains(GITHUB_REPO_ID), "{text}");
     }
 
+    fn github_summary(artifact: (&str, &str), url: &str, at: &str) -> SummaryEvent {
+        SummaryEvent {
+            title: "Fix the widget".into(),
+            summary_path: "summaries/widget.summary.md".into(),
+            ..adapter_summary(artifact.1, artifact.0, url, at)
+        }
+    }
+
+    fn github_file(root: &Path, kind: &str) -> String {
+        let file = artifact_files(root)
+            .into_iter()
+            .find(|path| path.to_string_lossy().contains(kind))
+            .unwrap();
+        fs::read_to_string(file).unwrap()
+    }
+
+    /// A summary of a page an adapter recognizes as an artifact within a
+    /// container attaches to that artifact (spec §7.2: the page's record
+    /// key), never to the container. Like measured activity it is not an
+    /// open, and unlike activity it is not rolled up: the container's
+    /// totals, days, last seen, Summary line, and Timeline do not change.
+    #[test]
+    fn a_summary_within_a_repo_attaches_to_the_contained_artifact() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        index
+            .record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        let summary = github_summary(
+            ("github.pr", GITHUB_PR_ID),
+            "https://github.com/acme-corp/widgets/pull/7",
+            "2026-10-16T09:00:00Z",
+        );
+        index.record_summary(&summary).unwrap();
+
+        let (pull, pull_summary) = index.artifact_with_summary(GITHUB_PR_ID).unwrap();
+        let pull = pull.unwrap();
+        assert_eq!(pull_summary, Some(expected_view(&summary)));
+        assert_eq!(
+            (pull.opens, pull.days_opened, pull.focused_seconds),
+            (1, 1, 125)
+        );
+        assert_eq!(pull.last_seen, "2026-10-16");
+        assert_eq!(
+            pull.within
+                .as_ref()
+                .map(|within| within.artifact_id.as_str()),
+            Some(GITHUB_REPO_ID)
+        );
+
+        let (repo, repo_summary) = index.artifact_with_summary(GITHUB_REPO_ID).unwrap();
+        let repo = repo.unwrap();
+        assert_eq!(repo_summary, None);
+        assert_eq!(
+            (
+                repo.focused_seconds,
+                repo.background_seconds,
+                repo.opens,
+                repo.days_opened
+            ),
+            (125, 61, 1, 1)
+        );
+        assert_eq!(
+            (repo.first_seen.as_str(), repo.last_seen.as_str()),
+            ("2026-10-15", "2026-10-15")
+        );
+        assert_eq!(repo.title, "acme-corp/widgets");
+
+        // Recent: the summary's day lists only the PR, with its summary.
+        let (items, _, _) = index.recent(None, None, 32).unwrap();
+        let rows = items
+            .iter()
+            .map(|item| {
+                (
+                    item.local_date.as_str(),
+                    item.artifact_id.as_str(),
+                    item.opens,
+                    item.summary.is_some(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                ("2026-10-16", GITHUB_PR_ID, 0, true),
+                // Equal focus sorts by title: "Page" before "acme-corp/…".
+                ("2026-10-15", GITHUB_PR_ID, 1, false),
+                ("2026-10-15", GITHUB_REPO_ID, 1, false),
+            ]
+        );
+
+        // The worklog counts it as a summary, not an open, and lists no
+        // repository row for a day with nothing rolled up.
+        let d2 = Date::from_calendar_date(2026, time::Month::October, 16).unwrap();
+        let (text, rows) = index.worklog(d2, d2).unwrap();
+        assert!(
+            text.starts_with(
+                "Opened 0 artifacts, focused on 0 left open from an earlier day, and summarized 1 page."
+            ),
+            "{text}"
+        );
+        assert_eq!(rows, 1);
+        assert!(!text.contains(GITHUB_REPO_ID), "{text}");
+
+        index.regenerate_dirty().unwrap();
+        let pr_file = github_file(root.path(), "github-pr");
+        assert!(pr_file.contains("Summarized: Fix the widget"), "{pr_file}");
+        assert!(pr_file.contains("Summary: ["), "{pr_file}");
+        let repo_file = github_file(root.path(), "github-repo");
+        assert!(!repo_file.contains("Summar"), "{repo_file}");
+        assert!(repo_file.contains("opens: 1\n"), "{repo_file}");
+        assert!(repo_file.contains("days_opened: 1\n"), "{repo_file}");
+    }
+
+    /// A summary-only contained artifact (summarized before any visit was
+    /// delivered) creates no container record and adds nothing to one.
+    #[test]
+    fn a_summary_only_contained_artifact_does_not_inflate_its_container() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        let summary = github_summary(
+            ("github.pr", GITHUB_PR_ID),
+            "https://github.com/acme-corp/widgets/pull/7",
+            "2026-10-16T09:00:00Z",
+        );
+        index.record_summary(&summary).unwrap();
+        assert!(index.artifact(GITHUB_REPO_ID).unwrap().is_none());
+        let pull = index.artifact(GITHUB_PR_ID).unwrap().unwrap();
+        assert_eq!(
+            (pull.opens, pull.days_opened, pull.focused_seconds),
+            (0, 0, 0)
+        );
+
+        // With a repo visit as well, the container counts only that visit.
+        index
+            .record_activity(&github_blob(2, "2026-10-16T10:00:00Z"), &[])
+            .unwrap();
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!(
+            (repo.focused_seconds, repo.opens, repo.days_opened),
+            (30, 1, 1)
+        );
+        assert!(repo.contained.is_empty(), "{:?}", repo.contained);
+        let (items, _, _) = index.recent(None, None, 32).unwrap();
+        let repo_row = items
+            .iter()
+            .find(|item| item.artifact_id == GITHUB_REPO_ID)
+            .unwrap();
+        assert_eq!((repo_row.focused_seconds, repo_row.opens), (30, 1));
+        assert_eq!(repo_row.summary, None);
+    }
+
+    /// A repository page the catch-all recognizes (a file view) is the
+    /// container's own record key (DESIGN.md §6.2), so its summary attaches
+    /// to the repository itself, which keeps its ID-derived title.
+    #[test]
+    fn a_summary_of_a_repo_page_attaches_to_the_repository() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        index
+            .record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        let summary = SummaryEvent {
+            title: "widgets/README.md at main · acme-corp/widgets".into(),
+            ..github_summary(
+                ("github.repo", GITHUB_REPO_ID),
+                "https://github.com/acme-corp/widgets/blob/main/README.md",
+                "2026-10-16T09:00:00Z",
+            )
+        };
+        index.record_summary(&summary).unwrap();
+        let (repo, repo_summary) = index.artifact_with_summary(GITHUB_REPO_ID).unwrap();
+        let repo = repo.unwrap();
+        assert_eq!(repo_summary, Some(expected_view(&summary)));
+        assert_eq!(repo.title, "acme-corp/widgets");
+        assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
+        assert_eq!(
+            (repo.focused_seconds, repo.opens, repo.days_opened),
+            (125, 1, 1)
+        );
+        assert_eq!(repo.last_seen, "2026-10-16");
+        let (_, pull_summary) = index.artifact_with_summary(GITHUB_PR_ID).unwrap();
+        assert_eq!(pull_summary, None);
+    }
+
+    /// A version 5 cache a #126 host published, holding a container with
+    /// only rolled-up activity, migrates in place: its container records
+    /// survive, and the container's file is regenerated with the rest.
+    #[test]
+    fn a_version_5_cache_with_containers_is_migrated() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        index
+            .record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
+            .unwrap();
+        assert_eq!(index.regenerate_dirty().unwrap().written, 2);
+        let current = github_file(root.path(), "github-repo");
+        let path = artifact_files(root.path())
+            .into_iter()
+            .find(|path| path.to_string_lossy().contains("github-repo"))
+            .unwrap();
+        // As a version 5 build rendered it.
+        let stale = current.replace(
+            "title: \"acme-corp/widgets\"\n",
+            "title: \"acme-corp/widgets (v5)\"\n",
+        );
+        assert_ne!(stale, current);
+        fs::write(&path, stale).unwrap();
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
+        assert_eq!(state["containers"], serde_json::json!([GITHUB_REPO_ID]));
+        assert!(state["container_files"][GITHUB_REPO_ID].is_string());
+        state["version"] = 5.into();
+        fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+
+        LOG_BYTES_READ.with(|count| count.set(0));
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (1, 1), "{report:?}");
+        assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+        assert_eq!(fs::read_to_string(&path).unwrap(), current);
+        let migrated = read_state(&index.state_path()).unwrap().unwrap();
+        assert_eq!(migrated.version, STATE_VERSION);
+        assert!(migrated.containers.contains(GITHUB_REPO_ID));
+        assert!(migrated.container_files.contains_key(GITHUB_REPO_ID));
+        let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
+        assert_eq!((repo.focused_seconds, repo.opens), (125, 1));
+    }
+
     /// Index a PR and a repo page under the containing document and write
     /// both files, then reopen under `after` and regenerate. Returns the
     /// pass and the repo's file, which must then hold only its own visit.
