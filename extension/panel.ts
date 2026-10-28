@@ -23,7 +23,7 @@ import { RunCards, clearNotice, restoreRunCards, runsMayExist, showListFailure }
 import {
   TASK_NEEDS_HARNESS_MESSAGE, TASK_REPAIR_MESSAGE, cleanInstruction, startTask, taskFailureText,
 } from "./task.js";
-import { tasksPageUrl } from "./task-history.js";
+import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor } from "./note-editor.js";
@@ -162,6 +162,11 @@ let newestTaskId: string | null = null;
 let trackerError: unknown = null;
 // The task this panel last started, which Tasks ↗ opens.
 let lastStartedRunId: string | null = null;
+// This panel's own window, read once so a Reuse value meant for it (and not
+// another window's panel) can be told apart. Resolves to null on an old
+// Chrome that cannot answer, which then claims any window's Reuse value.
+const panelWindowId: Promise<number | null> = chrome.windows.getCurrent()
+  .then((current) => current.id ?? null, () => null);
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
 // Once the post-save reload starts, tab events must reach NoteEditor's token
@@ -1272,10 +1277,24 @@ async function refreshTasks(): Promise<void> {
 }
 
 /** Opens the Tasks page on the task this panel last started, else the
- * newest one. */
-function openTasksPage(): void {
-  const runId = lastStartedRunId ?? newestTaskId;
-  void chrome.tabs.create({ url: tasksPageUrl(runId, (path) => chrome.runtime.getURL(path)) });
+ * newest one, focusing an already-open Tasks tab rather than opening a
+ * second one. */
+function openTasks(): void {
+  void openTasksPage(chrome, lastStartedRunId ?? newestTaskId);
+}
+
+/** Takes any Reuse instruction left for this panel's window and fills the
+ * task bar with it, unless a start is already in flight: `taskStarting`
+ * gates the fill, not the take, so a value meant for this window is always
+ * consumed once seen, never left to surprise a later, unrelated start. */
+async function checkReuse(): Promise<void> {
+  const windowId = await panelWindowId;
+  if (windowId === null) return;
+  const instruction = await takeReuse(chrome.storage.session, windowId).catch(() => null);
+  if (!closed && instruction !== null && !taskStarting) {
+    taskInput.value = instruction;
+    taskInput.focus();
+  }
 }
 
 /** Restores the summary cards. The run record stays while a task is active,
@@ -1803,7 +1822,7 @@ taskInput.addEventListener("focus", () => void probeSelection());
 taskRunButton.addEventListener("pointerdown", () => void probeSelection());
 window.addEventListener("focus", () => void probeSelection());
 taskHintSettings.addEventListener("click", openSettings);
-taskOpenButton.addEventListener("click", openTasksPage);
+taskOpenButton.addEventListener("click", openTasks);
 // The tracker does not poll while the panel is hidden; showing it again
 // catches up at once.
 document.addEventListener("visibilitychange", () => {
@@ -1817,6 +1836,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   return false;
 });
 session.watchPolicy(scheduleReload);
+// The Tasks page may leave a Reuse instruction while this panel is open.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "session" && REUSE_KEY in changes) void checkReuse();
+});
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 // Withdrawing or restoring site access in Chrome changes what this tab shows.
 chrome.permissions.onAdded.addListener(() => void refreshActiveTab());
@@ -1839,6 +1862,10 @@ window.addEventListener("pagehide", () => {
   void notes.flush();
   session.host.disconnect();
 });
+
+// Independent of the host connection: a Reuse value left before this panel
+// opened is claimed as soon as its own window is known.
+void checkReuse();
 
 void (async () => {
   busy = true;

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CONFIG, PANEL_HTML, READY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
+  ARTICLE_URL, CONFIG, PANEL_HTML, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
   buttonIn, descendants, install, readablePage, settle, startsRun, storageKey, teardown, until,
 } from "./harness.mjs";
 
@@ -817,6 +817,7 @@ test("Tasks ↗ opens the Tasks page on the last started task, else the newest",
   });
   await until(() => taskLists(page).length === 1, "the first list");
   page.el("task-open").click();
+  await until(() => page.created.length === 1, "a new tab");
   assert.deepEqual(page.created.map((tab) => tab.url), ["chrome-extension://test-id/tasks.html"]);
   teardown.splice(0).forEach((listener) => listener());
 
@@ -829,10 +830,45 @@ test("Tasks ↗ opens the Tasks page on the last started task, else the newest",
   await until(() => taskLists(listedPage).length === 1, "the first list");
   await settle(20);
   listedPage.el("task-open").click();
+  await until(() => listedPage.created.length === 1, "a new tab");
   assert.equal(listedPage.created.at(-1).url, `chrome-extension://test-id/tasks.html#run=${newest.run_id}`);
   type(listedPage, "My own task");
   enter(listedPage);
   await until(() => listedPage.el("task-input").value === "", "the start");
   listedPage.el("task-open").click();
+  await until(() => listedPage.created.length === 2, "a second new tab");
   assert.equal(listedPage.created.at(-1).url, `chrome-extension://test-id/tasks.html#run=${TASK_VIEW.run_id}`);
+});
+
+test("Tasks ↗ focuses an already-open Tasks tab instead of opening a second one", async () => {
+  const page = await taskPanel({ tasksContexts: [
+    { documentUrl: "chrome-extension://test-id/tasks.html#run=00000000-0000-4000-8000-000000000001", tabId: 7, windowId: 3 },
+  ] });
+  await until(() => taskLists(page).length === 1, "the first list");
+  page.el("task-open").click();
+  await until(() => page.state.tabUpdates.length === 1, "the open tab to be focused");
+  assert.deepEqual(page.created, []);
+  assert.deepEqual(page.state.tabUpdates, [
+    { tabId: 7, active: true, url: "chrome-extension://test-id/tasks.html" },
+  ]);
+  assert.deepEqual(page.state.windowUpdates, [{ windowId: 3, focused: true }]);
+});
+
+test("the bar is never filled from a reuse value while a start is in flight", async () => {
+  const start = held();
+  const page = await taskPanel({ intercept: (request) => request.type === "start_task" ? start.promise : startsTask()(request) });
+  type(page, "My own draft");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "start_task");
+  assert.equal(page.el("task-run").disabled, true, "a start is in flight");
+  // A Reuse value for this panel's window (and the harness's default
+  // windowId, 1) arrives while the start is in flight.
+  page.state.session.set(REUSE_KEY, { instruction: "Reused while starting", window_id: 1, at: Date.now() });
+  page.reuseChanged();
+  await settle(20);
+  assert.equal(page.el("task-input").value, "My own draft", "the draft stays");
+  start.release({ type: "run_started", run: TASK_VIEW, existing: false });
+  await until(() => page.el("task-input").value === "", "the bar to clear on success");
+  // The value is gone either way: Reuse is taken once, not retried after.
+  assert.equal(page.state.session.has(REUSE_KEY), false);
 });

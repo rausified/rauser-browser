@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  FakeElement, NOT_SET_UP, PROTOCOL_VERSION, READY, RUN_VIEW, TASKS_HTML, buttonIn, descendants,
-  hostReply, pageElements, settle, storageArea, storageKey, teardown, until,
+  ARTICLE_URL, FakeElement, NOT_SET_UP, PROTOCOL_VERSION, READY, RUN_VIEW, SET_UP, TASKS_HTML, buttonIn,
+  descendants, hostReply, install, pageElements, settle, storageArea, storageKey, teardown, until,
 } from "./harness.mjs";
 
 const { serviceSetupText } = await import("../../dist/agent.js");
@@ -44,13 +44,17 @@ let loads = 0;
 async function openTasks({
   runs = [task(1), task(2), task(3)], pageSize = 20, agentStatus = READY, local = new Map(),
   hash = "", platform = "MacIntel", intercept = () => null, localGet = null,
+  // This page's own window (chrome.windows.getCurrent), shared session
+  // storage for Reuse (task-handoff.ts), and whether chrome.sidePanel.open
+  // rejects (as it does with no window to open it in).
+  windowId = 1, session = new Map(), sidePanelFails = false,
 } = {}) {
   const elements = pageElements(TASKS_HTML);
   // A select's value is its first option's until one is chosen.
   elements.get("tasks-filter").value = "all";
   const state = {
     runs: structuredClone(runs), requests: [], created: [], counts: new Map(), local,
-    session: new Map(), hidden: false,
+    session, hidden: false, sidePanelOpens: [],
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
   const docListeners = new Map();
@@ -144,6 +148,17 @@ async function openTasks({
       async create(properties) {
         state.created.push(properties);
         return { id: 99, incognito: false, ...properties };
+      },
+    },
+    windows: {
+      async getCurrent() {
+        return { id: windowId };
+      },
+    },
+    sidePanel: {
+      async open(options) {
+        state.sidePanelOpens.push(options);
+        if (sidePanelFails) throw new Error("No window to open the side panel in.");
       },
     },
   };
@@ -405,18 +420,52 @@ test("arrow keys move the selection", async () => {
   assert.deepEqual(page.selected(), [runId(3)]);
 });
 
-test("Open page opens the task's own URL and Reuse hands the instruction to the task bar", async () => {
-  const page = await openTasks();
+test("Open page opens the task's own URL and Reuse opens the side panel and hands off the instruction", async () => {
+  const page = await openTasks({ windowId: 9 });
   await listed(page);
   await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "the Reuse button");
   buttonIn(page.el("tasks-detail"), "Open page").click();
   assert.deepEqual(page.state.created, [{ url: "https://work.example/page" }]);
   buttonIn(page.el("tasks-detail"), "Reuse").click();
   await until(() => page.el("tasks-status").textContent === "Instruction sent to the task bar.", "the Reuse text");
+  // The side panel was opened for this page's own window, read at load.
+  assert.deepEqual(page.state.sidePanelOpens, [{ windowId: 9 }]);
+  const handed = page.state.session.get(storageKey("task_reuse_v1"));
+  assert.equal(handed.instruction, "Task 1");
+  assert.equal(handed.window_id, 9);
+  assert.equal(typeof handed.at, "number");
+});
+
+test("Reuse still hands off the instruction, to any window, when opening the side panel fails", async () => {
+  const page = await openTasks({ sidePanelFails: true });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "the Reuse button");
+  buttonIn(page.el("tasks-detail"), "Reuse").click();
+  await until(() => page.el("tasks-status").textContent === "Instruction sent to the task bar.", "the Reuse text");
   const handed = page.state.session.get(storageKey("task_reuse_v1"));
   assert.equal(handed.instruction, "Task 1");
   assert.equal(handed.window_id, null);
-  assert.equal(typeof handed.at, "number");
+});
+
+test("Reuse opens the side panel and fills its task bar, end to end", async () => {
+  const session = new Map();
+  const tasksPage = await openTasks({ windowId: 4, session });
+  await listed(tasksPage);
+  await until(() => buttonIn(tasksPage.el("tasks-detail"), "Reuse"), "the Reuse button");
+  buttonIn(tasksPage.el("tasks-detail"), "Reuse").click();
+  await until(
+    () => tasksPage.el("tasks-status").textContent === "Instruction sent to the task bar.",
+    "the Reuse text",
+  );
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A side panel in the same window (the hand-off's whole point) reads the
+  // instruction it left and fills its task bar with it, unprompted.
+  const panel = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP, session, windowId: 4,
+  });
+  await until(() => panel.el("task-input").value === "Task 1", "the task bar filled from Reuse");
+  assert.equal(panel.state.session.has(storageKey("task_reuse_v1")), false);
 });
 
 test("the list keeps keyboard focus across a refresh", async () => {

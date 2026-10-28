@@ -7,7 +7,6 @@
 // textContent only, and none of it reaches diag (DESIGN.md §15).
 import type { RunView } from "../protocol/ts/generated.js";
 import { serviceSetupText } from "./agent.js";
-import { storageKey } from "./brand.js";
 import { initDiag } from "./diag.js";
 import { HostError } from "./native.js";
 import {
@@ -16,6 +15,7 @@ import {
 } from "./run-card.js";
 import { ConfigSession, describe, element } from "./settings.js";
 import { harnessReady } from "./summarize.js";
+import { sendReuse } from "./task-handoff.js";
 import { TASK_NEEDS_HARNESS_MESSAGE, UNSUPPORTED_REQUEST_TEXT } from "./task.js";
 import {
   filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, parseRunHash, type StatusFilter,
@@ -27,7 +27,13 @@ initDiag("tasks");
 export const LIST_REFRESH_MS = 2000;
 const WINDOWS_TEXT = "Tasks are not supported on Windows yet.";
 const REUSE_DONE_TEXT = "Instruction sent to the task bar.";
-const TASK_REUSE_KEY = storageKey("task_reuse_v1");
+
+// This page's own window, read once at load so Reuse's click handler can
+// call `chrome.sidePanel.open` synchronously, before any await (Chrome
+// requires the call to start within the user gesture). A page that cannot
+// read its window (an old Chrome) sends Reuse to any window instead.
+let pageWindowId: number | null = null;
+void chrome.windows.getCurrent().then((current) => { pageWindowId = current.id ?? null; }, () => undefined);
 
 const statusBox = element<HTMLDivElement>("tasks-status-box");
 const statusLine = element<HTMLParagraphElement>("tasks-status");
@@ -94,12 +100,6 @@ function showListError(error: unknown): void {
   } else {
     showStatus(`Could not list tasks: ${describe(error)}`, { problem: true });
   }
-}
-
-/** Reuse: hands the full instruction to the side panel's task bar. Task 7
- * replaces the hand-off; the page only needs it to resolve once sent. */
-export async function reuseInstruction(instruction: string): Promise<void> {
-  await chrome.storage.session.set({ [TASK_REUSE_KEY]: { instruction, window_id: null, at: Date.now() } });
 }
 
 /** An older service ignores `kind` and lists summaries too. */
@@ -273,8 +273,17 @@ const detailDeps: TaskDetailDeps = {
   copy: (text) => navigator.clipboard.writeText(text),
   visible,
   storage,
+  // Opens the side panel for this page's window before any await, as the
+  // user gesture requires, then hands the instruction off to it: to its
+  // window once the panel is known to be there, or to any window once
+  // opening it failed (an older Chrome, or no window to open it in).
   reuse: (instruction) => {
-    void reuseInstruction(instruction).then(
+    const windowId = pageWindowId;
+    const opened = chrome.sidePanel.open(windowId === null ? {} : { windowId });
+    void opened.then(
+      () => sendReuse(chrome.storage.session, instruction, windowId),
+      () => sendReuse(chrome.storage.session, instruction, null),
+    ).then(
       () => showStatus(REUSE_DONE_TEXT),
       (error: unknown) => showStatus(`Could not send the instruction: ${describe(error)}`, { problem: true }),
     );

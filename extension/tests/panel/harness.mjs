@@ -14,6 +14,7 @@ export const { NoteRecovery } = await import("../../dist/note-recovery.js");
 export const { storageKey } = await import("../../dist/brand.js");
 export const { EXTRACT_LIMITS } = await import("../../dist/extract.js");
 export const { starterOffers: starterOffersFor } = await import("../../dist/starter-adapters.js");
+export const { REUSE_KEY } = await import("../../dist/task-handoff.js");
 
 // Run after build:extension. Each test loads a fresh copy of the side panel
 // against a fake DOM built from the shipped panel.html, a scripted native
@@ -208,6 +209,9 @@ export async function install({
   localStorage = memoryStorage(),
   script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
   selection = () => false,
+  // The panel's own window (chrome.windows.getCurrent), and the Tasks tabs
+  // runtime.getContexts reports already open, for Tasks ↗ (task-handoff.ts).
+  windowId = 1, tasksContexts = [],
 }) {
   const elements = pageElements();
   const listeners = () => {
@@ -232,6 +236,10 @@ export async function install({
     local,
     session,
     runtimeMessages: listeners(),
+    windowId,
+    tasksContexts,
+    tabUpdates: [],
+    windowUpdates: [],
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
@@ -301,6 +309,11 @@ export async function install({
       getManifest: () => ({ options_ui: { page: "options.html" } }),
       getURL: (path) => `chrome-extension://test-id/${path}`,
       openOptionsPage: async () => { count("openOptionsPage"); },
+      // Tasks ↗ (task-handoff.ts openTasksPage) looks for an open Tasks
+      // tab this way rather than with the `tabs` permission.
+      async getContexts() {
+        return state.tasksContexts;
+      },
       connectNative() {
         const messageListeners = [];
         const disconnectListeners = [];
@@ -370,6 +383,10 @@ export async function install({
         state.created.push(properties);
         return { id: 99, incognito: false, ...properties };
       },
+      async update(tabId, updateProperties) {
+        state.tabUpdates.push({ tabId, ...updateProperties });
+        return { id: tabId, incognito: false, ...updateProperties };
+      },
       onActivated: tabActivated,
       onUpdated: tabUpdated,
     },
@@ -391,6 +408,14 @@ export async function install({
       onAdded: { addListener(listener) { state.added.push(listener); } },
       onRemoved: { addListener(listener) { state.removed.push(listener); } },
     },
+    windows: {
+      async getCurrent() {
+        return { id: state.windowId };
+      },
+      async update(windowId, updateInfo) {
+        state.windowUpdates.push({ windowId, ...updateInfo });
+      },
+    },
   };
 
   loads += 1;
@@ -409,6 +434,13 @@ export async function install({
     policyChanged(lease = null) {
       for (const listener of chrome.storage.onChanged.registered) {
         listener({ [POLICY_STORAGE_KEY]: { newValue: lease } }, "local");
+      }
+    },
+    // A Reuse value (task-handoff.ts) was written to session storage, by
+    // this panel's own write or another page's.
+    reuseChanged() {
+      for (const listener of chrome.storage.onChanged.registered) {
+        listener({ [REUSE_KEY]: { newValue: session.get(REUSE_KEY) } }, "session");
       }
     },
     el(id) {
