@@ -412,6 +412,21 @@ fn capture_batch_requires_typed_items_and_correlated_results() {
 }
 
 #[test]
+fn standalone_overflow_batches_round_trip_without_a_url_or_path() {
+    let value = json!({
+        "type": "record_batch", "protocol_version": 7, "request_id": "overflow-only",
+        "batch_id": "00000000-0000-4000-8000-000000000099", "events": [],
+        "overflow": { "count": 2, "first_occurred_at": "2026-10-28T08:00:00+00:00",
+            "last_occurred_at": "2026-10-28T09:00:00+00:00" }
+    });
+    let request: Request = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(request).unwrap(), value);
+    let mut forged = value;
+    forged["overflow"]["url"] = json!("file:///tmp/unowned");
+    assert!(serde_json::from_value::<Request>(forged).is_err());
+}
+
+#[test]
 fn artifact_queries_and_note_keys_have_complete_shapes() {
     for request in [
         r#"{"type":"get_artifact","protocol_version":7,"request_id":"r1","url":"https://work.example/items/7","title":"Item 7"}"#,

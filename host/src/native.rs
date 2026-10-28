@@ -788,11 +788,11 @@ fn record_activity(
 /// the current worker uses this response to apply all terminal acknowledgments
 /// to its queue in one storage update.
 fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut ConfigStore) -> Response {
-    if value.events.is_empty() || value.events.len() > 64 {
+    if (value.events.is_empty() && value.overflow.is_none()) || value.events.len() > 64 {
         return error(
             &value.request_id,
             ErrorCode::InvalidRequest,
-            "a capture batch must contain 1 to 64 events",
+            "a capture batch must contain 1 to 64 events or standalone overflow evidence",
         );
     }
     if uuid::Uuid::parse_str(&value.batch_id).is_err() {
@@ -7327,6 +7327,85 @@ id = "work:{host}/{id}"
             other => panic!("expected a rejected trail, got {other:?}"),
         }
         assert!(!root.join("logs").exists());
+    }
+
+    #[test]
+    fn standalone_overflow_uses_the_validated_home_and_obeys_capture_gates() {
+        for scenario in [
+            "valid",
+            "paused",
+            "invalid_adapter",
+            "replaced_home",
+            "no_home",
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let (mut config, root) = adapter_only_config(&folder);
+            let path = folder.path().join("config.toml");
+            match scenario {
+                "paused" => {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    std::fs::write(
+                        &path,
+                        text.replace("capture_enabled = true", "capture_enabled = false"),
+                    )
+                    .unwrap();
+                }
+                "invalid_adapter" => {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    std::fs::write(&path, text.replace("format = 1", "format = 99")).unwrap();
+                }
+                "replaced_home" => {
+                    std::fs::rename(&root, folder.path().join("original-home")).unwrap();
+                    std::fs::create_dir(&root).unwrap();
+                }
+                "no_home" => {
+                    std::fs::write(&path, "version = 6\ncapture_enabled = true\n").unwrap();
+                }
+                _ => {}
+            }
+            let request = brauser_protocol::RecordBatchRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: scenario.into(),
+                batch_id: uuid::Uuid::new_v4().to_string(),
+                events: vec![],
+                overflow: Some(brauser_protocol::OverflowMarker {
+                    count: 2,
+                    first_occurred_at: hour_timestamp(),
+                    last_occurred_at: hour_timestamp(),
+                }),
+            };
+            for _ in 0..2 {
+                let Response::BatchRecorded(result) = record_batch(request.clone(), &mut config)
+                else {
+                    panic!("expected overflow response for {scenario}");
+                };
+                assert_eq!(result.overflow_recorded, scenario == "valid", "{scenario}");
+                assert!(result.results.is_empty());
+            }
+            if scenario == "valid" {
+                let at = hour_timestamp();
+                let log = root
+                    .join("logs")
+                    .join(&at[..4])
+                    .join(&at[5..7])
+                    .join(format!("{}.md", &at[..10]));
+                let text = std::fs::read_to_string(log).unwrap();
+                assert_eq!(text.matches("kind=overflow").count(), 1);
+                assert_eq!(text.matches("2 completed activity hour(s)").count(), 1);
+                assert!(!text.contains("https://"));
+                let mut empty = request.clone();
+                empty.overflow = None;
+                assert!(matches!(
+                    record_batch(empty, &mut config),
+                    Response::Error(_)
+                ));
+            } else {
+                assert!(
+                    !root.join("logs").exists(),
+                    "{scenario} must not write logs"
+                );
+            }
+        }
     }
 
     #[test]
