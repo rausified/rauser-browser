@@ -33,8 +33,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use brauser_protocol::{
-    ErrorCode, HarnessId, RecordKey, RecordKeyKind, RunErrorKind, RunKind, RunState, RunView,
-    SummaryVocabulary,
+    ErrorCode, HarnessId, RecordKey, RecordKeyKind, RunCursor, RunErrorKind, RunKind, RunState,
+    RunView, SummaryVocabulary,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -256,6 +256,16 @@ pub struct StartRun {
     /// A task's instruction and the paths its prompt names as Brauser's
     /// own; `Some` exactly when `kind` is [`RunKind::Task`].
     pub task: Option<TaskStatus>,
+}
+
+/// A [`Supervisor::list_runs_where`] query: an optional kind filter and,
+/// only meaningful with a kind, a cursor into that kind's finished runs
+/// older than a previous page's last view. The `before`-without-`kind`
+/// refusal is checked in `server.rs`, before this is ever built.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListQuery {
+    pub kind: Option<RunKind>,
+    pub before: Option<RunCursor>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -715,8 +725,27 @@ impl Supervisor {
     }
 
     /// Every queued or running run plus the newest finished ones, at most
-    /// [`LIST_LIMIT`], newest first.
+    /// [`LIST_LIMIT`], newest first: [`Supervisor::list_runs_where`] with
+    /// the default [`ListQuery`] (no `kind`, so `more` is always `None`).
     pub fn list_runs(&self) -> Vec<RunView> {
+        self.list_runs_where(&ListQuery::default()).0
+    }
+
+    /// As [`Supervisor::list_runs`], filtered and paged by `query`.
+    ///
+    /// Without `query.kind`, this is exactly [`Supervisor::list_runs`]'s
+    /// answer, and `more` is `None`. With `query.kind` set and no cursor,
+    /// every queued or running run of that kind is kept, then the newest
+    /// finished runs of that kind fill the rest of [`LIST_LIMIT`]; `more`
+    /// is `Some` of whether a further page of finished runs of that kind
+    /// exists beyond that room. With `query.kind` and `query.before`, only
+    /// finished runs of that kind strictly older than the cursor (by
+    /// `(created_at, run_id)`, the order [`super::record::RunStore::list`]
+    /// already sorts by) are returned, newest first, at most `LIST_LIMIT`;
+    /// `more` is `Some` of whether any such run remains older still. The
+    /// `before`-without-`kind` refusal is checked in `server.rs`, before
+    /// this is ever called.
+    pub fn list_runs_where(&self, query: &ListQuery) -> (Vec<RunView>, Option<bool>) {
         self.inner.touch();
         self.inner.settle();
         let mut runs = self.inner.store.list();
@@ -733,23 +762,52 @@ impl Supervisor {
             }
         }
         runs.reverse();
-        let (active, finished): (Vec<_>, Vec<_>) = runs
-            .into_iter()
-            .partition(|run| matches!(run.state, RunState::Queued | RunState::Running));
-        let room = LIST_LIMIT.saturating_sub(active.len());
-        let mut chosen: Vec<RunStatusFile> = active
-            .into_iter()
-            .take(LIST_LIMIT)
-            .chain(finished.into_iter().take(room))
-            .collect();
-        chosen.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| b.run_id.cmp(&a.run_id))
-        });
-        // A site draft's tables and a task's report come only from
-        // `get_run`, and a task's instruction is cut, so twenty views still
-        // fit one outbound frame.
+        let (chosen, more) = match query.kind {
+            None => (newest_overall(runs), None),
+            Some(kind) => {
+                let of_kind = runs.into_iter().filter(|run| run.kind == kind);
+                match &query.before {
+                    None => {
+                        let (active, finished): (Vec<_>, Vec<_>) = of_kind.partition(|run| {
+                            matches!(run.state, RunState::Queued | RunState::Running)
+                        });
+                        let room = LIST_LIMIT.saturating_sub(active.len());
+                        let finished_of_kind = finished.len();
+                        let mut chosen: Vec<RunStatusFile> = active
+                            .into_iter()
+                            .chain(finished.into_iter().take(room))
+                            .collect();
+                        chosen.sort_by(|a, b| {
+                            b.created_at
+                                .cmp(&a.created_at)
+                                .then_with(|| b.run_id.cmp(&a.run_id))
+                        });
+                        (chosen, Some(finished_of_kind > room))
+                    }
+                    Some(cursor) => {
+                        let older: Vec<RunStatusFile> = of_kind
+                            .filter(|run| {
+                                !matches!(run.state, RunState::Queued | RunState::Running)
+                            })
+                            .filter(|run| {
+                                (run.created_at.as_str(), run.run_id.as_str())
+                                    < (cursor.created_at.as_str(), cursor.run_id.as_str())
+                            })
+                            .collect();
+                        let remaining = older.len().saturating_sub(LIST_LIMIT);
+                        let chosen = older.into_iter().take(LIST_LIMIT).collect();
+                        (chosen, Some(remaining > 0))
+                    }
+                }
+            }
+        };
+        (self.views(&chosen), more)
+    }
+
+    /// A site draft's tables and a task's report come only from `get_run`,
+    /// and a task's instruction is cut, so twenty views still fit one
+    /// outbound frame.
+    fn views(&self, chosen: &[RunStatusFile]) -> Vec<RunView> {
         chosen
             .iter()
             .filter_map(|run| {
@@ -1557,6 +1615,28 @@ impl Inner {
         });
         lock(&self.record_locks).retain(|id, _| self.store.run_dir(*id).exists());
     }
+}
+
+/// [`Supervisor::list_runs`]'s selection, shared with the `kind`-absent
+/// case of [`Supervisor::list_runs_where`]: every queued or running run,
+/// then the newest finished ones, at most [`LIST_LIMIT`] in total, newest
+/// first.
+fn newest_overall(runs: Vec<RunStatusFile>) -> Vec<RunStatusFile> {
+    let (active, finished): (Vec<_>, Vec<_>) = runs
+        .into_iter()
+        .partition(|run| matches!(run.state, RunState::Queued | RunState::Running));
+    let room = LIST_LIMIT.saturating_sub(active.len());
+    let mut chosen: Vec<RunStatusFile> = active
+        .into_iter()
+        .take(LIST_LIMIT)
+        .chain(finished.into_iter().take(room))
+        .collect();
+    chosen.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.run_id.cmp(&a.run_id))
+    });
+    chosen
 }
 
 fn no_such_run() -> (ErrorCode, String) {
@@ -3321,6 +3401,212 @@ mod tests {
             .map(|id| id.to_string())
             .collect();
         assert_eq!(listed, expected);
+    }
+
+    fn sentinel_task() -> TaskStatus {
+        TaskStatus {
+            instruction: "Do it".into(),
+            protected: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn list_runs_where_kind_task_skips_other_kinds() {
+        let fixture = Fixture::new(ANSWER);
+        let store = fixture.supervisor.store();
+        let cwd = fixture.dir.path();
+        for index in 0..3 {
+            seed_record(
+                store,
+                cwd,
+                RunState::Succeeded,
+                &format!("2026-10-26T08:00:{index:02}.000000000Z"),
+            );
+        }
+        let mut tasks = Vec::new();
+        for index in 0..2 {
+            let id = seed_task(
+                store,
+                cwd,
+                RunState::Succeeded,
+                &format!("2026-10-26T08:01:{index:02}.000000000Z"),
+                Some(sentinel_task()),
+            );
+            tasks.push(id.to_string());
+        }
+        let (views, more) = fixture.supervisor.list_runs_where(&ListQuery {
+            kind: Some(RunKind::Task),
+            before: None,
+        });
+        assert_eq!(more, Some(false));
+        assert_eq!(views.len(), 2);
+        assert!(views.iter().all(|view| view.kind == Some(RunKind::Task)));
+        let mut got: Vec<String> = views.into_iter().map(|view| view.run_id).collect();
+        got.sort();
+        tasks.sort();
+        assert_eq!(got, tasks);
+    }
+
+    #[test]
+    fn list_runs_where_first_page_has_every_active_task_then_newest_finished() {
+        let fixture = Fixture::new(ANSWER);
+        let store = fixture.supervisor.store();
+        let cwd = fixture.dir.path();
+        let mut finished = Vec::new();
+        for index in 0..30 {
+            let id = seed_task(
+                store,
+                cwd,
+                RunState::Succeeded,
+                &format!(
+                    "2026-10-26T07:{:02}:{:02}.000000000Z",
+                    index / 60,
+                    index % 60
+                ),
+                Some(sentinel_task()),
+            );
+            finished.push(id.to_string());
+        }
+        let mut active = Vec::new();
+        for index in 0..4 {
+            let id = seed_task(
+                store,
+                cwd,
+                RunState::Running,
+                &format!("2026-10-26T09:00:{index:02}.000000000Z"),
+                Some(sentinel_task()),
+            );
+            active.push(id.to_string());
+        }
+        let (views, more) = fixture.supervisor.list_runs_where(&ListQuery {
+            kind: Some(RunKind::Task),
+            before: None,
+        });
+        assert_eq!(views.len(), 20);
+        assert_eq!(more, Some(true));
+        let active_expected: Vec<String> = active.iter().rev().cloned().collect();
+        let got_active: Vec<String> = views[..4].iter().map(|view| view.run_id.clone()).collect();
+        assert_eq!(
+            got_active, active_expected,
+            "active runs come first, newest first"
+        );
+        assert!(
+            views[4..]
+                .iter()
+                .all(|view| finished.contains(&view.run_id)),
+            "the rest are finished runs of the kind"
+        );
+    }
+
+    #[test]
+    fn list_runs_where_before_pages_finished_runs_without_gaps_or_repeats() {
+        let fixture = Fixture::new(ANSWER);
+        let store = fixture.supervisor.store();
+        let cwd = fixture.dir.path();
+        let mut ids = Vec::new();
+        for index in 0..45 {
+            let id = seed_task(
+                store,
+                cwd,
+                RunState::Succeeded,
+                &format!(
+                    "2026-10-26T07:{:02}:{:02}.000000000Z",
+                    index / 60,
+                    index % 60
+                ),
+                Some(sentinel_task()),
+            );
+            ids.push(id.to_string());
+        }
+        let mut seen = Vec::new();
+        let mut before = None;
+        loop {
+            let (views, more) = fixture.supervisor.list_runs_where(&ListQuery {
+                kind: Some(RunKind::Task),
+                before: before.clone(),
+            });
+            assert!(
+                !views.is_empty(),
+                "a page must not be empty while more remains"
+            );
+            for view in &views {
+                seen.push(view.run_id.clone());
+            }
+            let last = views.last().unwrap();
+            before = Some(RunCursor {
+                created_at: last.created_at.clone(),
+                run_id: last.run_id.clone(),
+            });
+            match more {
+                Some(true) => continue,
+                Some(false) => break,
+                None => panic!("list_runs_where with a kind always answers Some"),
+            }
+        }
+        seen.sort();
+        let mut expected = ids;
+        expected.sort();
+        assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn list_runs_where_equal_created_at_orders_by_run_id() {
+        let fixture = Fixture::new(ANSWER);
+        let store = fixture.supervisor.store();
+        let cwd = fixture.dir.path();
+        const CREATED_AT: &str = "2026-10-26T07:00:00.000000000Z";
+        let mut ids = Vec::new();
+        for _ in 0..21 {
+            let id = seed_task(
+                store,
+                cwd,
+                RunState::Succeeded,
+                CREATED_AT,
+                Some(sentinel_task()),
+            );
+            ids.push(id.to_string());
+        }
+        let (first, more) = fixture.supervisor.list_runs_where(&ListQuery {
+            kind: Some(RunKind::Task),
+            before: None,
+        });
+        assert_eq!(first.len(), 20);
+        assert_eq!(more, Some(true));
+        let mut expected_desc = ids.clone();
+        expected_desc.sort_by(|a, b| b.cmp(a));
+        let got_first: Vec<String> = first.iter().map(|view| view.run_id.clone()).collect();
+        assert_eq!(got_first, expected_desc[..20]);
+        let last = first.last().unwrap();
+        let cursor = RunCursor {
+            created_at: last.created_at.clone(),
+            run_id: last.run_id.clone(),
+        };
+        let (second, more) = fixture.supervisor.list_runs_where(&ListQuery {
+            kind: Some(RunKind::Task),
+            before: Some(cursor),
+        });
+        assert_eq!(more, Some(false));
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].run_id, expected_desc[20]);
+        let mut all = got_first;
+        all.push(second[0].run_id.clone());
+        all.sort();
+        let mut expected_all = ids;
+        expected_all.sort();
+        assert_eq!(all, expected_all);
+    }
+
+    #[test]
+    fn list_runs_where_without_kind_matches_list_runs() {
+        let fixture = Fixture::new(ANSWER);
+        for index in 0..(LIST_LIMIT + 2) {
+            let id = fixture.start(&format!("k{index}"));
+            fixture.wait_finished(id);
+        }
+        let expected = fixture.supervisor.list_runs();
+        let (views, more) = fixture.supervisor.list_runs_where(&ListQuery::default());
+        assert_eq!(views, expected);
+        assert_eq!(more, None);
     }
 
     fn seed_record(store: &RunStore, cwd: &Path, state: RunState, created_at: &str) -> Uuid {

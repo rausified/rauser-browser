@@ -28,7 +28,7 @@ use super::open::{list_agent_env, open_target};
 use super::paths::{self, ServicePaths};
 use super::record::{TaskStatus, check_start_run, check_task_instruction};
 use super::setup;
-use super::supervisor::{CwdCheck, EnvSource, ServiceOptions, StartRun, Supervisor};
+use super::supervisor::{CwdCheck, EnvSource, ListQuery, ServiceOptions, StartRun, Supervisor};
 use crate::capture_site::exact_origin;
 use crate::config::{ConfigLock, ConfigStore, default_summary_vocabulary};
 use crate::diag;
@@ -391,14 +391,21 @@ impl Server {
                     Err((code, message)) => error(&id, code, &message),
                 }
             }
-            Request::ListRuns(value) => Response::RunsListed(RunsListed {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: value.request_id,
-                runs: self.supervisor.list_runs(),
-                // kind, before and more are wired up in Task 2; this task
-                // only adds the wire fields.
-                more: None,
-            }),
+            Request::ListRuns(value) => {
+                if value.before.is_some() && value.kind.is_none() {
+                    return error(&id, ErrorCode::InvalidRequest, "before needs kind");
+                }
+                let (runs, more) = self.supervisor.list_runs_where(&ListQuery {
+                    kind: value.kind,
+                    before: value.before,
+                });
+                Response::RunsListed(RunsListed {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    runs,
+                    more,
+                })
+            }
             Request::CancelRun(value) => {
                 let Some(run_id) = parse_run_id(&value.run_id) else {
                     return bad_run_id(&id);
@@ -867,8 +874,8 @@ mod tests {
 
     use brauser_protocol::{
         ErrorCode, GetRunRequest, HarnessId, HelloRequest, ListRunsRequest, PROTOCOL_VERSION,
-        RecordKey, RecordKeyKind, Request, Response, RunKind, RunState, ServiceHelloRequest,
-        StartRunRequest,
+        RecordKey, RecordKeyKind, Request, Response, RunCursor, RunKind, RunState,
+        ServiceHelloRequest, StartRunRequest,
     };
 
     use crate::answer::TEST_ANSWER;
@@ -1156,6 +1163,28 @@ mod tests {
             .unwrap();
             assert_eq!(read_response(&mut stream).request_id(), id);
         }
+    }
+
+    #[test]
+    fn list_runs_before_without_kind_is_invalid_request() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let response = world.call(&Request::ListRuns(ListRunsRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "before-without-kind".into(),
+            kind: None,
+            before: Some(RunCursor {
+                created_at: "2026-10-26T00:00:00.000000000Z".into(),
+                run_id: "00000000-0000-4000-8000-000000000001".into(),
+            }),
+        }));
+        assert_eq!(
+            error_of(response),
+            (ErrorCode::InvalidRequest, "before needs kind".to_string())
+        );
     }
 
     /// The JSON lines written while `body` runs on this thread, and on the
