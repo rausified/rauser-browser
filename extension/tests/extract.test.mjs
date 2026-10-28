@@ -32,7 +32,7 @@ const el = (tag, ...children) => ({
 // getClientRects, as in the older tests.
 function page({
   title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
-  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [],
+  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [], cloneElements = [],
 } = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
   const rects = (shown) => (shown === undefined ? {} : { getClientRects: () => (shown ? [{ width: 1, height: 1 }] : []) });
@@ -44,13 +44,13 @@ function page({
     querySelectorAll: () => mainHeadings,
     cloneNode(deep) {
       seen.clonedDeep = deep;
-      return { clone: true };
+      return { clone: true, querySelectorAll: () => cloneElements };
     },
   };
   const window = { getSelection: () => ({ toString: () => selection }), location: { href } };
   class Readability {
     constructor(doc, options) {
-      assert.deepEqual(doc, { clone: true });
+      assert.equal(doc.clone, true);
       seen.options = options;
     }
     parse() {
@@ -77,6 +77,22 @@ test("a current main heading wins over stale document and Readability titles", (
     });
     assert.equal(run(scope).title, "Fix the release #35");
   }
+});
+
+test("inline handler attributes are dropped from the clone Readability reads", () => {
+  // Readability re-parses the clone's HTML, and Chrome reports each inline
+  // handler it parses against the page's CSP as this extension's error.
+  const element = (attrs) => ({
+    attrs: { ...attrs },
+    getAttributeNames() { return Object.keys(this.attrs); },
+    removeAttribute(name) { delete this.attrs[name]; },
+  });
+  const img = element({ src: "a.png", onerror: "x()", ONLOAD: "y()" });
+  const p = element({ class: "lead", onclick: "z()" });
+  const { scope } = page({ article: el("p", "Body"), cloneElements: [img, p] });
+  run(scope);
+  assert.deepEqual(img.attrs, { src: "a.png" });
+  assert.deepEqual(p.attrs, { class: "lead" });
 });
 
 test("missing or ambiguous main headings retain article and document title fallbacks", () => {
