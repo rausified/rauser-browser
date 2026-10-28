@@ -771,17 +771,19 @@ impl Supervisor {
                         let (active, finished): (Vec<_>, Vec<_>) = of_kind.partition(|run| {
                             matches!(run.state, RunState::Queued | RunState::Running)
                         });
+                        // Capped as `newest_overall` caps it: `LIST_LIMIT`
+                        // active runs already leave no room for a finished
+                        // one, so more active runs of this kind than that
+                        // would still push `chosen` past `LIST_LIMIT`.
+                        let active: Vec<RunStatusFile> =
+                            active.into_iter().take(LIST_LIMIT).collect();
                         let room = LIST_LIMIT.saturating_sub(active.len());
                         let finished_of_kind = finished.len();
                         let mut chosen: Vec<RunStatusFile> = active
                             .into_iter()
                             .chain(finished.into_iter().take(room))
                             .collect();
-                        chosen.sort_by(|a, b| {
-                            b.created_at
-                                .cmp(&a.created_at)
-                                .then_with(|| b.run_id.cmp(&a.run_id))
-                        });
+                        chosen.sort_by(newest_first);
                         (chosen, Some(finished_of_kind > room))
                     }
                     Some(cursor) => {
@@ -1631,12 +1633,18 @@ fn newest_overall(runs: Vec<RunStatusFile>) -> Vec<RunStatusFile> {
         .take(LIST_LIMIT)
         .chain(finished.into_iter().take(room))
         .collect();
-    chosen.sort_by(|a, b| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| b.run_id.cmp(&a.run_id))
-    });
+    chosen.sort_by(newest_first);
     chosen
+}
+
+/// `(created_at, run_id)` descending: the display order a `list_runs_where`
+/// page is sorted into once its active and finished runs of one kind (or,
+/// without a kind, every kind) are chosen, the reverse of the order
+/// [`super::record::RunStore::list`] sorts by.
+fn newest_first(a: &RunStatusFile, b: &RunStatusFile) -> std::cmp::Ordering {
+    b.created_at
+        .cmp(&a.created_at)
+        .then_with(|| b.run_id.cmp(&a.run_id))
 }
 
 fn no_such_run() -> (ErrorCode, String) {
@@ -3495,6 +3503,35 @@ mod tests {
                 .iter()
                 .all(|view| finished.contains(&view.run_id)),
             "the rest are finished runs of the kind"
+        );
+    }
+
+    /// More active runs of a kind than `LIST_LIMIT` must not push the page
+    /// past it: `active` is capped the same way `newest_overall` caps it.
+    #[test]
+    fn list_runs_where_first_page_never_exceeds_list_limit() {
+        let fixture = Fixture::new(ANSWER);
+        let store = fixture.supervisor.store();
+        let cwd = fixture.dir.path();
+        let mut active = Vec::new();
+        for index in 0..25 {
+            let id = seed_record(
+                store,
+                cwd,
+                RunState::Queued,
+                &format!("2026-10-26T09:00:{index:02}.000000000Z"),
+            );
+            active.push(id.to_string());
+        }
+        let (views, more) = fixture.supervisor.list_runs_where(&ListQuery {
+            kind: Some(RunKind::Summary),
+            before: None,
+        });
+        assert_eq!(views.len(), LIST_LIMIT);
+        assert_eq!(more, Some(false));
+        assert!(
+            views.iter().all(|view| active.contains(&view.run_id)),
+            "every view is one of the 25 queued summaries"
         );
     }
 
