@@ -301,6 +301,7 @@ mod tests {
         assert!(refusal.0.contains("rename Notes/ to notes/"), "{refusal}");
     }
 
+    // Uses Unix symlink creation; Windows symlinks require separate privileges.
     #[cfg(unix)]
     #[test]
     fn a_symlinked_older_folder_is_refused() {

@@ -318,6 +318,28 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
   unknown-site Capture Site (below); known-site Capture Site retains its
   current flow.
 
+  **As built (2026-10-28 — restore recorded site rules, `brwr-cua`).**
+  On an unconfigured origin, an explicit Capture Site click first reads
+  `get_site_restore` / `site_restore_loaded` (additive protocol v8), sending
+  only the exact origin and reviewed config revision. Usable contracts from
+  `adapter_id_history` and hand-removed adopted contracts take precedence over
+  a new starter or structural draft. The panel names their page kinds, route
+  shapes and exact account scope, including an explicit every-account line
+  for recorded `unscoped` rules. This restores recognition only: title cleanup,
+  aliases from titles and reference extraction were not recorded and are not
+  reconstructed. Existing notes retain their host-derived keys and bytes.
+  The host deduplicates exact contracts and refuses damaged records or any
+  overlap between recorded adapters, including container fall-throughs whose
+  note-only evidence names several identities. It retains the existing repair
+  guidance; neither Forget nor migration is implicit. The panel re-reads the
+  recorded set before a normal revision-checked `update_config`, refuses a
+  changed set, navigation, revision changes and pending local pauses/removals,
+  and finishes note edits through the existing recovery-aware save boundary.
+  Restoration preserves `capture_enabled` even when this is the only site;
+  a paused installation stays paused. With no recorded contract, the ordinary
+  starter/drafter flow proceeds. No page patterns or content are needed for
+  restoration and the log/cache formats are unchanged.
+
   **As built (2026-10-27 — Capture Site for unknown sites, `brwr-t40`).**
   On any credential-free HTTP(S) origin that has no adapter and is not a
   starter origin, the panel's **Capture Site** button drafts a policy with the

@@ -361,6 +361,7 @@ mod tests {
         }
     }
 
+    // Uses /bin/sh and POSIX child-process tools, unavailable on Windows.
     #[cfg(unix)]
     #[test]
     fn a_dialog_open_past_its_timeout_is_killed() {
@@ -385,6 +386,7 @@ mod tests {
         assert!(!alive.success(), "the timed-out dialog is still running");
     }
 
+    // Uses /bin/sh and POSIX child-process tools, unavailable on Windows.
     #[cfg(unix)]
     #[test]
     fn a_timed_out_dialog_may_close_itself_before_it_is_killed() {
@@ -405,6 +407,7 @@ mod tests {
         );
     }
 
+    // Uses /bin/sh and POSIX child-process tools, unavailable on Windows.
     #[cfg(unix)]
     #[test]
     fn a_dialog_that_answers_in_time_keeps_its_reply() {

@@ -6153,6 +6153,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         assert_eq!(index.reindex().unwrap().written, 2);
     }
 
+    // This fixture removes POSIX read permission bits; Windows uses ACLs.
     #[cfg(unix)]
     #[test]
     fn an_unreadable_log_names_its_path() {
@@ -6274,6 +6275,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         assert_eq!(fs::read_to_string(&edited).unwrap(), kept);
     }
 
+    // This fixture removes POSIX directory write bits; Windows uses ACLs.
     #[cfg(unix)]
     #[test]
     fn one_failing_artifact_path_does_not_block_the_others() {
