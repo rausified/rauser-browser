@@ -57,6 +57,25 @@ callback directly, without waiting for wall-clock polling. Eight regressions
 failed before the fixes; the ordinary-poll control already passed. These tests
 use mocked Chrome and host transport, with no browser or external service.
 
+## External policy changes and note identity
+
+The built-panel tests deliver a valid policy lease for a different host
+revision after loading a URL-keyed note. The next `load_note` returns an
+artifact key, and the following autosave must carry that key and revision
+without a conflict. Two held-save cases cover a pending debounce and newer
+typing during an in-flight save: a `key_changed` response preserves the draft
+in copy-out and synchronous recovery, loads the current host note, and never
+replays the refused text. A later successful artifact save keeps the conflict
+copy. An unchanged host revision leaves the editor and debounce alone; the
+existing editor tests still check retrying failed loads.
+
+Run the focused cases after `npm run build:extension` with
+`node --test --test-isolation=none --test-name-pattern='external.*revision|policy refresh with the same' extension/tests/panel.test.mjs`.
+The clean-note and in-flight rebinding cases failed before the fix. These use
+mocked host/Chrome transport and in-memory browser storage; they do not prove
+real Chrome timing or native host integration. Run the normal full extension
+suite as the gate and keep macOS browser acceptance separate.
+
 ## Older-note migration coverage
 
 The panel tests load an artifact with and without its shared note and check

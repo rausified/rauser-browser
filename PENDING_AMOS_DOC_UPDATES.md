@@ -69,3 +69,11 @@
 - **Brauser — Keep Why drafts private during pending removal (2026-10-28).** The artifact card's Save why action now respects the worker's pending site-removal list. Verified with failing-first regressions and the full local gate; host policy and file ownership protections remain unchanged.
 
 - **Brauser — Keep activity references tied to the retained title (2026-10-28).** When queue pressure combines two undispatched activity totals for the same artifact and hour, the resulting refs now come from the event whose title is retained. Verified with failing-first regressions and the full local gate; host policy and file ownership protections remain unchanged.
+
+- **Brauser — Follow a changed note identity before the next edit (2026-10-28).**
+  An external settings or Capture Site revision now reloads the current note
+  through the editor's serialized save/load queue. The next autosave uses the
+  host's current artifact key; pending or in-flight drafts still receive
+  conflict copy-out and durable recovery instead of being applied to another
+  note. Four new panel cases and the full local gate pass (`brwr-jdi`);
+  real Chrome timing remains macOS acceptance work.

@@ -269,3 +269,24 @@ The artifact card's Save why action now respects the worker's pending site-remov
 ## 2026-10-28 — Keep activity references tied to the retained title
 
 When queue pressure combines two undispatched activity totals for the same artifact and hour, the resulting refs now come from the event whose title is retained. Previously an older title's issue keys could survive after a newer title replaced it, causing the host to reject the whole combined activity event as unverifiable. If the newer event has no title, the existing title and its refs remain together. Refs are still deduplicated and capped, and existing duration, trail, dispatch and byte-bound behavior stays intact. Four worker cases exercise replacement, repeated refs, missing titles and the first title (`brwr-rft`).
+
+
+## 2026-10-28 — Follow external changes to a page's note identity
+
+When settings or another panel installs capture rules while a page is open,
+Brauser now reloads that page's note after reading the changed configuration
+revision. Previously the artifact card could recognize the page while the
+note editor still held its old URL key, so the next edit was refused and sent
+to copy-out. The editor now gets the host's current note and key before the
+next edit. It uses the existing serialized save/load queue: drafts pending
+or already saving retain their old expected key, and a key-change refusal
+keeps all typed text in copy-out and durable local recovery. No recovered
+text is inserted into the new note automatically, and a later successful
+save cannot clear the earlier conflict copy. Refreshes that read the same
+configuration revision leave normal typing and debounce alone.
+
+Four new composed panel cases cover the clean transition, pending and
+in-flight drafts, and the unchanged-revision control. The full local gate
+passed, including 159 panel/editor cases, all 15 extension files and 927 Rust
+outcomes (884 exercised, 43 explicit IPC sandbox skips). macOS Chrome smoke
+remains unverified on this Linux VM. Completes assigned brwr-jdi.

@@ -155,7 +155,7 @@ export class NoteEditor {
     return this.showPage(this.target);
   }
 
-  /** Force a fresh host load after an explicit note migration. */
+  /** Force a fresh host load after a note migration or config revision change. */
   reload(): Promise<void> {
     const page = this.target;
     this.target = null;
