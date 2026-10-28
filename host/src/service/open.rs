@@ -225,6 +225,7 @@ mod tests {
                 first_answered_at: None,
                 save_final: false,
                 kind: RunKind::Summary,
+                task: None,
             };
             self.store.create(&status, "page").unwrap();
             id

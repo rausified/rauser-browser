@@ -609,6 +609,7 @@ impl Supervisor {
                 first_answered_at: None,
                 save_final: false,
                 kind: req.kind,
+                task: None,
             };
             if let Err(error) = inner.store.create(&status, &page) {
                 scheduler.finished(id);
@@ -3173,6 +3174,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             kind: RunKind::Summary,
+            task: None,
         }
     }
 
@@ -3249,6 +3251,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             kind: RunKind::Summary,
+            task: None,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
