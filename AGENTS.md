@@ -247,6 +247,17 @@ capture, or treats a canonical address as autosave identity. No index or
 recorded contracts are needed; ordinary uncovered-page note loads still do
 no scan. Collapse/navigation clear results and invalidate pending reads.
 
+Removed-site restoration (`brwr-cua`, 2026-10-28) uses additive protocol-v8
+`get_site_restore` / `site_restore_loaded` before a new starter or draft, on an
+explicit Capture Site click. The host returns only usable recorded recognition
+contracts for that exact unconfigured origin, deduplicating identical entries
+and refusing damaged or overlapping contracts (container overlaps included).
+The panel names page kinds and fixed account scopes, re-reads the set before
+an explicit revision-checked save, preserves global pauses, and uses the
+existing note-save/recovery boundary. Title cleanup and title-derived aliases
+or references were not recorded and are not reconstructed. No history is
+forgotten, note migrated, page content read or capture resumed implicitly.
+
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety

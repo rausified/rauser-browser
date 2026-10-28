@@ -883,3 +883,37 @@ truncation, response validation, failed/mismatched periods and late replies.
 The existing native overflow regression also queries the new worklog report and
 the unchanged original worklog. No real accounts, model, clipboard or browser
 profile are used. Actual Chrome acceptance stays in the macOS smoke gate.
+
+## Removed-site restore review
+
+`cargo test --locked --workspace site_restore` covers real native framing,
+settings and hand removals of a custom Jira identity, browse/modal note keys,
+byte-for-byte unchanged notes, explicit saves, preserved global pauses, stale
+read/save revisions, exact-origin validation, fixed GitHub scope, deduplication,
+damaged config/adopted history and ambiguous container contracts. It uses only
+disposable local config/vault fixtures. `extension/tests/panel.test.mjs` loads
+the built panel and covers plain-language page kinds, fixed and every-account
+scope, no page-pattern extraction, explicit saves, unchanged notes, stale and
+canceled reads, changed records, pending pauses/removals and malformed replies.
+Ordinary starter/drafter flows remain covered by the same full panel suite.
+Actual Chrome acceptance remains the existing macOS smoke/human gate.
+
+Windows exclusions have fixture-specific reasons beside each Unix-only test:
+POSIX mode-bit denial, Unix symlinks/device-inode identity, /bin/sh process
+tools, or the Unix-only service. The plist lint test states its macOS plutil
+requirement in its skip reason. CI still runs the shared build on Windows and
+macOS; a Linux-only run supplies no current platform-green evidence.
+
+The composed panel tests dynamically import the built panel for each case.
+Finish `build:extension` before starting them and do not rebuild `dist` until
+all panel test processes exit: a diagnostic run overlapped a rebuild in this
+cycle and reproduced `ERR_MODULE_NOT_FOUND`. Its results were discarded and
+the complete gate rerun sequentially after correcting the unscoped fixture
+(`unscoped = "acknowledged"`, not a boolean).
+
+This cycle's optional 5,000-case adapter comparison could not complete in the
+sandbox: the one-case probe also timed out after 30 seconds, while the
+existing child-pipe IPC probe returned EPERM. The long run was interrupted
+and is not validation evidence. Follow-up `brwr-wg5` will identify the exact
+wait and bound the diagnostic; the required gate and engine vectors passed,
+and neither adapter engine changed here.

@@ -354,6 +354,18 @@ export class ConfigSession {
     }, "site_draft_checked");
   }
 
+  /** Read-only recognition rules for an explicit removed-site review. */
+  async siteRestore(origin: string, expectedRevision: string): Promise<AdapterDocument> {
+    const reply = await this.host.call({
+      type: "get_site_restore", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), origin, expected_revision: expectedRevision,
+    }, "site_restore_loaded");
+    if (reply.revision !== expectedRevision || reply.origin !== origin) {
+      throw new Error("Settings changed. Open Capture Site again.");
+    }
+    return reply.adapters;
+  }
+
   /** Read-only starter preflight, including host-only retired identities. */
   async checkCaptureSite(adapters: AdapterDocument, expectedRevision: string): Promise<void> {
     const checked = await this.host.call({

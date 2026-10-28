@@ -965,6 +965,7 @@ mod tests {
         assert_eq!((link.launch)(false), Launch::NotInstalled);
     }
 
+    // launchctl kickstart and its output mapping exist only on macOS.
     #[cfg(target_os = "macos")]
     #[test]
     fn kickstart_output_maps_missing_service_to_not_installed() {

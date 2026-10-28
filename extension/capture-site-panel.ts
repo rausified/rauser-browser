@@ -1,4 +1,5 @@
-import type { SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
+import type { AdapterDocument, SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
+import { previewDocument, validateAdapterDocument } from "./adapter-review.js";
 import type { WorkerStatus } from "./model.js";
 import { HostError } from "./native.js";
 import { ConfigSession, describe, element, leaseFor, withConfigMutationLock, worker } from "./settings.js";
@@ -126,6 +127,12 @@ interface DraftKindView {
   rules: HTMLInputElement[];
 }
 
+interface RestorePlan {
+  origin: string;
+  document: AdapterDocument;
+  startsCapture: boolean;
+}
+
 // The confirmation line names only what is actually checked, in this fixed
 // order, so the privacy-boundary scope line is never wider than the save.
 const GITHUB_RECORD_LABELS: Record<string, string> = {
@@ -182,8 +189,11 @@ export class CaptureSitePanel {
   // worker (never the host) to decide the recurring-pages hint. It is only
   // sent to the host after the user asks to draft rules for these pages.
   private sample: { key: string; samples: SampledShape[] | null; revision: string | null; hint: boolean } | null = null;
-  private target: (CapturePage & { revision: string; mode: CaptureMode; origin: string }) | null = null;
+  private target: (CapturePage & { revision: string; mode: CaptureMode | "restore"; origin: string }) | null = null;
   private plan: CapturePlan | null = null;
+  private restorePlan: RestorePlan | null = null;
+  private restored: AdapterDocument | null = null;
+  private lookingForRestore = false;
   private starterCheck = 0;
   // The drafted flow. The link shapes (in `draftInput`) and the draft live
   // only here and are cleared by close().
@@ -331,15 +341,76 @@ export class CaptureSitePanel {
     this.issues.checked = true;
     // Shown and confirmed, never applied unseen: the user still has to save.
     this.orgs.value = mode === "starter" ? githubOwnerFromUrl(page.url) ?? "" : "";
-    if (mode === "draft") void this.startDraft(this.target);
-    else this.updatePreview();
+    if (mode === "draft" && siteConfigured(this.session.config!, origin)) void this.startDraft(this.target);
+    else void this.startReview(this.target);
     this.heading.focus();
+  }
+
+  /** Prefer recorded identity to a new starter or draft. Only the exact
+   * origin crosses this read boundary; page patterns are read only if the
+   * host reports no recorded rules. */
+  private async startReview(target: NonNullable<CaptureSitePanel["target"]>): Promise<void> {
+    this.lookingForRestore = true;
+    this.previewMessage = "Checking saved site identities…";
+    this.updateControls(this.actions.isBusy());
+    try {
+      const recorded = await this.session.siteRestore(target.origin, target.revision);
+      if (this.target !== target || !this.samePage(this.page, target) || this.session.revision !== target.revision) return;
+      this.lookingForRestore = false;
+      if (!recorded.artifacts.length) {
+        if (target.mode === "draft") await this.startDraft(target);
+        else this.updatePreview();
+        return;
+      }
+      if (recorded.artifacts.some((a) => a.origin !== target.origin)) throw new Error("The host returned rules for another site.");
+      const document: AdapterDocument = {
+        format: 1, artifacts: [...this.session.config!.adapters.artifacts, ...recorded.artifacts],
+      };
+      const problem = validateAdapterDocument(document);
+      if (problem) throw new Error(problem);
+      target.mode = "restore";
+      this.restored = recorded;
+      this.restorePlan = { origin: target.origin, document, startsCapture: this.session.config!.capture_enabled };
+      this.heading.textContent = `Restore capture on ${new URL(target.origin).host}`;
+      this.source.textContent = "Recorded capture rules · existing notes keep their identity. Title cleanup and reference extraction can be adjusted in settings.";
+      this.github.hidden = true;
+      this.preview.replaceChildren();
+      for (const adapter of recorded.artifacts) {
+        const name = GITHUB_RECORD_LABELS[String(adapter.type)] ?? String(adapter.type).replace(/[._]/g, " ");
+        const rules = Array.isArray(adapter.match) ? adapter.match : [];
+        child(this.preview, "p", `Recorded page kind: ${name} — pages like ${rules.map(describeRule).join(" or ")}.`);
+        const scope = adapter.scope;
+        if (typeof scope === "object" && scope !== null && !Array.isArray(scope)) {
+          for (const [key, values] of Object.entries(scope)) {
+            child(this.preview, "p", `Records ${name} only for ${key}: ${(values as string[]).join(", ")}.`);
+          }
+        } else {
+          child(this.preview, "p", adapter.unscoped === "acknowledged"
+            ? `Records ${name} in every account on this site in this Chrome profile.`
+            : `Records matching ${name} pages on this site.`);
+        }
+      }
+      const preview = previewDocument(recorded, target.url, "", false);
+      if (preview.ok) child(this.preview, "p", `This page: ${preview.rows[0]?.result.match ? "will be captured" : "will not be captured"}.`);
+      this.previewMessage = this.restorePlan.startsCapture
+        ? "Restore these recorded page kinds and accounts to capture. Other sites keep their existing rules."
+        : "Restore these rules while keeping capture paused. Resume capture in settings when you are ready.";
+    } catch (error) {
+      if (this.target !== target) return;
+      this.lookingForRestore = false;
+      this.restorePlan = null;
+      this.previewMessage = `Could not review recorded rules: ${describe(error)}`;
+    }
+    if (this.target === target) this.updateControls(this.actions.isBusy());
   }
 
   private close(): void {
     this.starterCheck += 1;
     this.target = null;
     this.plan = null;
+    this.restorePlan = null;
+    this.restored = null;
+    this.lookingForRestore = false;
     this.draft = null;
     this.draftInput = null;
     this.draftPlan = null;
@@ -611,7 +682,7 @@ export class CaptureSitePanel {
       : state?.pause_pending ? "A pause is still being saved. Finish it in settings before capturing a site."
       : removal ? "This site has a pending removal. Finish it in settings before adding it again."
       : null;
-    const plan = this.target?.mode === "draft" ? this.draftPlan : this.plan;
+    const plan = this.target?.mode === "draft" ? this.draftPlan : this.target?.mode === "restore" ? this.restorePlan : this.plan;
     this.message.textContent = problem ?? this.previewMessage;
     this.save.disabled = busy || !plan || !!problem || !this.session.connected;
     this.cancel.disabled = this.saving;
@@ -622,11 +693,13 @@ export class CaptureSitePanel {
     ];
     for (const input of draftInputs) input.disabled = this.saving || stale;
     this.scopeValues.disabled = this.saving || stale || !this.scoped.checked;
-    this.save.textContent = this.saving ? "Saving…" : plan?.startsCapture ? "Start capturing this site" : "Save site · keep capture paused";
+    this.save.textContent = this.saving ? "Saving…" : this.target?.mode === "restore"
+      ? plan?.startsCapture ? "Restore capture rules" : "Restore rules · keep capture paused"
+      : plan?.startsCapture ? "Start capturing this site" : "Save site · keep capture paused";
   }
 
   private updatePreview(): void {
-    if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving) return;
+    if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving || this.lookingForRestore) return;
     this.preview.replaceChildren();
     const result = planCaptureSite(this.session.config, this.target.url, {
       organizations: this.orgs.value,
@@ -704,7 +777,7 @@ export class CaptureSitePanel {
     // A drafted site is saved only after the host re-checks the selection.
     const drafted = target?.mode === "draft" ? this.draftPlan : null;
     const input = this.draftInput;
-    const plan: CapturePlan | DraftPlan | null = target?.mode === "draft" ? drafted : this.plan;
+    const plan: CapturePlan | DraftPlan | RestorePlan | null = target?.mode === "draft" ? drafted : target?.mode === "restore" ? this.restorePlan : this.plan;
     if (!target || !plan || (target.mode === "draft" && !input) || this.save.disabled || this.actions.isBusy()) return;
     this.saving = true;
     this.actions.changed();
@@ -730,6 +803,11 @@ export class CaptureSitePanel {
         if (drafted && input) {
           await checkDraftedSave(this.session, drafted, target.revision, input);
           if (this.target !== target || !this.samePage(this.page, target)) throw new Error("The active page changed. Open Capture Site again.");
+        }
+        if (target.mode === "restore") {
+          const recorded = await this.session.siteRestore(plan.origin, target.revision);
+          if (JSON.stringify(recorded) !== JSON.stringify(this.restored)) throw new Error("Recorded rules changed. Open Capture Site again to review them.");
+          await this.session.checkCaptureSite(plan.document, target.revision);
         }
         // Finish old URL-note edits before enabling artifact identity. The
         // editor keeps a copy-out if saving fails, then reloads under the new

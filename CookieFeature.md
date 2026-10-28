@@ -608,3 +608,40 @@ both Clippy builds, the scripted-dialogs suite, script checks and 10,696 inert
 Markdown renderings. IPC sandbox skips remain explicit. Actual macOS Chrome
 and current Windows/macOS CI acceptance remain with the existing platform gates;
 no real account, model, live service or user clipboard was used.
+
+
+## 2026-10-28 — Restore a removed site's recorded capture rules
+
+Capture Site now recognizes when Brauser has used rules on a site before,
+including custom rules removed through settings or deleted from config.toml.
+An explicit click offers the recorded page kinds, readable route patterns and
+exact account scopes for review, instead of proposing a stock starter with a
+different artifact identity. The review sends only the origin and config
+revision to the host. It does not need page content or link inspection, and
+nothing starts capturing until the user saves. Restoring the only site also
+respects a global pause rather than silently resuming capture.
+
+The host checks that the recorded contracts are usable and unambiguous; the
+panel re-reads the same set before the normal revision-checked save, and
+refuses changed records, stale settings, navigation and pending local pauses
+or removals. Existing note edits use the established save/recovery boundary.
+Real local native tests exercise custom Jira browse and issue-modal routes
+through both removal paths and verify unchanged note keys and exact file
+bytes. Recorded title cleanup, title aliases and reference extraction are not
+reconstructed; settings can add those again. Damaged records retain repair
+guidance. Overlapping historical rules, including repository/PR containers
+that can name several note identities, remain refused; follow-up brwr-7lq
+covers an explicit identity review through the existing migration plan.
+
+Validation adds seven Rust regressions and eleven composed-panel cases. The
+required Linux gate passes 997 Rust outcomes (43 documented IPC sandbox
+skips), all 15 extension files, formatting, builds, typecheck, lint and both
+Clippy configurations; the scripted-dialog suite has 859 passing outcomes.
+The Windows skip-reason audit is complete, while brwr-bzx and brwr-9xg remain
+blocked for current Windows/macOS CI and actual macOS Chrome evidence. This
+cycle makes no platform acceptance claim and uses no real account or model.
+
+The optional 5,000-case engine comparison is not counted as passed: its
+one-case probe timed out, and Node child pipes are denied by this sandbox.
+The run was stopped and recorded as brwr-wg5. Both adapter engines are
+unchanged; their ordinary vector tests passed in the required gate.
