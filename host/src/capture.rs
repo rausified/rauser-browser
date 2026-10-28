@@ -93,6 +93,7 @@ struct BatchEntry {
     timestamp: OffsetDateTime,
     entry: String,
     legacy_entry: Option<String>,
+    urls_within_bound: bool,
     overflow: bool,
 }
 
@@ -131,6 +132,7 @@ struct EventRendering<'a> {
     /// entry logged under an older key, path, or folder must not pass for
     /// the current one. A visit dedupes by ID alone.
     exact_replay: bool,
+    urls_within_bound: bool,
 }
 
 /// Validate new deliveries before replaying adapter matching or writing them.
@@ -700,6 +702,7 @@ impl CaptureStore {
             });
         }
         let normalized = normalize_capture_url(original, policy.strip_params)?;
+        let urls_within_bound = stored_urls_within_bound(&normalized, marker_payload.as_ref());
         let marker_metadata = match marker_payload {
             Some((kind, mut payload)) => {
                 if let Some(object) = payload.as_object_mut() {
@@ -739,6 +742,7 @@ impl CaptureStore {
             timestamp,
             entry,
             legacy_entry,
+            urls_within_bound,
             overflow,
         })
     }
@@ -906,6 +910,7 @@ impl CaptureStore {
             Ok(value) => value,
             Err(outcome) => return outcome,
         };
+        let urls_within_bound = stored_urls_within_bound(&normalized, marker_payload.as_ref());
         let exact_replay = marker_payload
             .as_ref()
             .is_some_and(|(kind, _)| *kind == "summary");
@@ -954,6 +959,7 @@ impl CaptureStore {
                 body: custom_body,
                 marker_metadata: marker_metadata.as_deref(),
                 exact_replay,
+                urls_within_bound,
             },
         ) {
             Ok(outcome) => outcome,
@@ -1006,6 +1012,14 @@ impl CaptureStore {
                 legacy_entry.as_deref(),
                 rendering.exact_replay,
             );
+        }
+
+        // V1 intents predate the stored-URL limit. Only their exact hash and
+        // prefix may complete an old append; every new write keeps the bound.
+        if !rendering.urls_within_bound {
+            return Ok(CaptureOutcome::Rejected {
+                reason: "url_too_long".into(),
+            });
         }
 
         let (relative_dir, filename) = self.log_parts(timestamp);
@@ -1221,13 +1235,6 @@ impl CaptureStore {
         let _lock_file = lock_capture_file(&self.lock_path)?;
 
         self.recover_batch_intent()?;
-        let (relative_dir, filename) = self.log_parts(entries[0].timestamp);
-        if entries.iter().any(|entry| {
-            self.log_parts(entry.timestamp) != (relative_dir.clone(), filename.clone())
-        }) {
-            bail!("capture batch crosses a local calendar-day boundary");
-        }
-
         // Pre-upgrade queue items may already have M1's per-event durable
         // intent. It remains the global event-ID authority across root and
         // log-directory changes, and may name an append that needs finishing.
@@ -1242,10 +1249,26 @@ impl CaptureStore {
                     entry.legacy_entry.as_deref(),
                     false,
                 )?);
+            } else if !entry.urls_within_bound {
+                outcomes[index] = Some(CaptureOutcome::Rejected {
+                    reason: "url_too_long".into(),
+                });
             }
         }
-        if outcomes.iter().all(Option::is_some) {
+        let mut pending = entries
+            .iter()
+            .zip(&outcomes)
+            .filter_map(|(entry, outcome)| outcome.is_none().then_some(entry));
+        let Some(first) = pending.next() else {
             return Ok(outcomes.into_iter().map(Option::unwrap).collect());
+        };
+        // Only new, accepted appends share a day. Rejected candidates and
+        // entries completed in their original logs cannot choose this file.
+        let (relative_dir, filename) = self.log_parts(first.timestamp);
+        if pending.any(|entry| {
+            self.log_parts(entry.timestamp) != (relative_dir.clone(), filename.clone())
+        }) {
+            bail!("capture batch crosses a local calendar-day boundary");
         }
 
         let new_log = !self.root.exists(relative_dir.join(&filename));
@@ -1322,9 +1345,11 @@ impl CaptureStore {
                 .to_str()
                 .context("log path is not UTF-8")?
                 .to_owned(),
-            event_hashes: entries
+            // Recovery checks these markers in this log. Rejected entries and
+            // v1 intents replayed in another log are not part of this append.
+            event_hashes: appended
                 .iter()
-                .map(|entry| entry.event_hash.clone())
+                .map(|&index| entries[index].event_hash.clone())
                 .collect(),
             entry: combined.clone(),
             offset: metadata.len(),
@@ -1343,6 +1368,10 @@ impl CaptureStore {
             return Err(error).context("appending capture batch");
         }
         sync_directory(&day_dir).context("syncing daily log directory")?;
+        #[cfg(test)]
+        if fixtures::INTERRUPT_BATCH_AFTER_SYNC.replace(false) {
+            bail!("simulated interruption before clearing capture batch intent");
+        }
         clear_batch_intent(&self.batch_intent_path())?;
         for index in appended {
             outcomes[index] = Some(CaptureOutcome::Persisted {
@@ -1581,21 +1610,31 @@ fn is_authorized(url: &Url, origins: &[String]) -> bool {
     origins.iter().any(|allowed| allowed == &origin)
 }
 
-/// Bound the stored spelling, after authorization and tracking removal.
-/// URL serialization can expand a short Unicode route through percent encoding;
-/// acknowledging it above the index's URL limit would lose it on a rebuild.
+/// Prepare the stored spelling after authorization and tracking removal.
+/// Defer its length check until the locked v1-intent lookup: an old host may
+/// have partially appended this exact event before the stored bound existed.
 fn normalize_capture_url(
     url: Url,
     strip_params: &[String],
 ) -> std::result::Result<String, CaptureOutcome> {
-    let normalized = normalize_url(url, strip_params)
-        .map_err(|message| CaptureOutcome::Retryable { message })?;
-    if normalized.len() > MAX_URL_BYTES {
-        return Err(CaptureOutcome::Rejected {
-            reason: "url_too_long".into(),
-        });
+    normalize_url(url, strip_params).map_err(|message| CaptureOutcome::Retryable { message })
+}
+
+/// These payloads are built locally from validated events. Keep the normalized
+/// activity URLs in the new-write check as well as the page's stored spelling.
+fn stored_urls_within_bound(url: &str, marker_payload: Option<&(&str, serde_json::Value)>) -> bool {
+    if url.len() > MAX_URL_BYTES {
+        return false;
     }
-    Ok(normalized)
+    let Some(("activity", payload)) = marker_payload else {
+        return true;
+    };
+    let modes = payload["modes"].as_array().into_iter().flatten();
+    let trails = payload["trails"].as_array().into_iter().flatten();
+    modes
+        .map(|mode| &mode["url"])
+        .chain(trails.map(|trail| &trail["from_url"]))
+        .all(|url| url.as_str().is_none_or(|url| url.len() <= MAX_URL_BYTES))
 }
 
 fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<String, String> {
@@ -2125,6 +2164,10 @@ fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
 pub(crate) mod fixtures {
     use std::cell::Cell;
     use time::OffsetDateTime;
+
+    thread_local! {
+        pub(super) static INTERRUPT_BATCH_AFTER_SYNC: Cell<bool> = const { Cell::new(false) };
+    }
 
     std::thread_local! {
         static EVENT_TIME: Cell<OffsetDateTime> = Cell::new(event_time_for(OffsetDateTime::now_utc()));
@@ -2905,6 +2948,289 @@ mod tests {
             CaptureOutcome::Rejected {
                 reason: "invalid_activity".into()
             }
+        );
+    }
+
+    #[test]
+    fn over_limit_normalized_urls_complete_v1_intents_before_rejection() {
+        for batched in [false, true] {
+            for field in ["visit", "page", "mode", "trail"] {
+                let root = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let store = CaptureStore::open_at(&storage(root.path(), "log"), None, state.path())
+                    .unwrap();
+                let origins = ["https://example.com".to_owned()];
+                let policy = CapturePolicy {
+                    enabled: true,
+                    origins: &origins,
+                    strip_params: &[],
+                };
+                let earlier = event();
+                let CaptureOutcome::Persisted { relative_path } = store.record(policy, &earlier)
+                else {
+                    panic!("expected earlier visit");
+                };
+                let log = root.path().join(&relative_path);
+                let original = fs::read(&log).unwrap();
+                let raw = format!("https://example.com/{}a", "ü".repeat(1362));
+                let normalized = canonical_url(&raw, &[]).unwrap();
+                assert!(raw.len() < MAX_URL_BYTES);
+                assert_eq!(normalized.len(), MAX_URL_BYTES + 1);
+                let mut visit = event();
+                let mut activity = activity();
+                activity.event_id = visit.event_id.clone();
+                activity.occurred_at = visit.occurred_at.clone();
+                activity.focused_seconds = 120;
+                activity.background_seconds = 30;
+                activity.modes = vec![ActivityMode {
+                    mode: "edit".into(),
+                    url: "https://example.com/article?keep=1".into(),
+                }];
+                activity.trails.clear();
+                // Reconstruct the old host's exact bytes independently of the
+                // delivery preparation that now enforces the stored URL bound.
+                let (page, body, metadata) = if field == "visit" {
+                    visit.url = raw.clone();
+                    (
+                        normalized.clone(),
+                        safe_title(visit.title.as_deref()),
+                        String::new(),
+                    )
+                } else {
+                    let mut payload = activity.clone();
+                    match field {
+                        "page" => {
+                            activity.url = raw.clone();
+                            payload.url = normalized.clone();
+                        }
+                        "mode" => {
+                            activity.modes[0].url = raw.clone();
+                            payload.modes[0].url = normalized.clone();
+                        }
+                        "trail" => {
+                            let trail = ActivityTrail {
+                                transition: "link".into(),
+                                from_artifact_id: Some("web:example/source".into()),
+                                from_url: Some(raw.clone()),
+                            };
+                            activity.trails.push(trail.clone());
+                            payload.trails.push(ActivityTrail {
+                                from_url: Some(normalized.clone()),
+                                ..trail
+                            });
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert_eq!(activity.focused_seconds, 120);
+                    assert_eq!(activity.background_seconds, 30);
+                    assert_eq!(activity.opens, 2);
+                    assert_eq!(activity.modes.len(), 1);
+                    assert_eq!(activity.modes[0].mode, "edit");
+                    let body = format!(
+                        "{} — focused 120s · background 30s · opened 2 time(s) · modes edit",
+                        safe_title(activity.title.as_deref())
+                    );
+                    (
+                        payload.url.clone(),
+                        body,
+                        format!(
+                            " kind=activity data={}",
+                            hex::encode(
+                                serde_json::to_vec(&serde_json::to_value(&payload).unwrap())
+                                    .unwrap()
+                            )
+                        ),
+                    )
+                };
+                let hash = sha256_hex(visit.event_id.as_bytes());
+                let entry = format!(
+                    "\n- {} — {body} — <{page}>\n{MARKER_PREFIX}{hash} url={} at={}{metadata} -->\n",
+                    visit.occurred_at,
+                    sha256_hex(page.as_bytes()),
+                    visit.occurred_at
+                );
+                let intent = store
+                    .intent(&relative_path, &entry, original.len() as u64)
+                    .unwrap();
+                publish_intent(&store.journal_path(&hash), &intent).unwrap();
+                let mut torn = original.clone();
+                torn.extend_from_slice(&entry.as_bytes()[..entry.len() - 8]);
+                fs::write(&log, &torn).unwrap();
+                let deliver = |visit: &VisitEvent, activity: &ActivityEvent| {
+                    if batched {
+                        store
+                            .record_batch(
+                                policy,
+                                &Uuid::new_v4().to_string(),
+                                &[if field == "visit" {
+                                    CaptureBatchEvent::Visit(visit)
+                                } else {
+                                    CaptureBatchEvent::Activity(activity)
+                                }],
+                                None,
+                            )
+                            .events
+                            .remove(0)
+                            .1
+                    } else if field == "visit" {
+                        store.record(policy, visit)
+                    } else {
+                        store.record_activity(policy, activity)
+                    }
+                };
+                let mut changed_visit = visit.clone();
+                changed_visit.title = Some("Changed".into());
+                let mut changed_activity = activity.clone();
+                changed_activity.title = Some("Changed".into());
+                assert!(
+                    matches!(
+                        deliver(&changed_visit, &changed_activity),
+                        CaptureOutcome::Retryable { .. }
+                    ),
+                    "{field}, batched={batched}: changed payload"
+                );
+                assert_eq!(fs::read(&log).unwrap(), torn);
+                let result = deliver(&visit, &activity);
+                assert!(
+                    matches!(result, CaptureOutcome::Persisted { .. }),
+                    "{field}, batched={batched}: {result:?}"
+                );
+                let mut expected = original;
+                expected.extend_from_slice(entry.as_bytes());
+                assert_eq!(fs::read(&log).unwrap(), expected);
+                assert!(matches!(
+                    deliver(&visit, &activity),
+                    CaptureOutcome::Suppressed { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_over_limit_url_does_not_block_valid_batch_neighbors() {
+        for rejected_first in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let origins = ["https://example.com".to_owned()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let valid = event();
+            let oversized = VisitEvent {
+                url: format!("https://example.com/{}a", "ü".repeat(1362)),
+                // Rejected candidates never participated in the batch's day
+                // check before the length gate moved into the locked append.
+                occurred_at: (parse_event_time(&valid.occurred_at).unwrap()
+                    - time::Duration::days(1))
+                .format(&Rfc3339)
+                .unwrap(),
+                ..event()
+            };
+            let mut events = vec![
+                CaptureBatchEvent::Visit(&valid),
+                CaptureBatchEvent::Visit(&oversized),
+            ];
+            if rejected_first {
+                events.reverse();
+            }
+            let result = store.record_batch(policy, &Uuid::new_v4().to_string(), &events, None);
+            assert_eq!(result.events.len(), 2);
+            assert!(
+                matches!(
+                    result
+                        .events
+                        .iter()
+                        .find(|(id, _)| id == &valid.event_id)
+                        .unwrap()
+                        .1,
+                    CaptureOutcome::Persisted { .. }
+                ),
+                "{:?}",
+                result.events
+            );
+            assert_eq!(
+                result
+                    .events
+                    .iter()
+                    .find(|(id, _)| id == &oversized.event_id)
+                    .unwrap()
+                    .1,
+                CaptureOutcome::Rejected {
+                    reason: "url_too_long".into()
+                }
+            );
+            assert!(
+                !store
+                    .journal_path(&sha256_hex(oversized.event_id.as_bytes()))
+                    .exists()
+            );
+            assert!(!store.batch_intent_path().exists());
+        }
+    }
+
+    #[test]
+    fn completed_mixed_batch_recovers_after_selecting_a_different_home_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let next_root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let origins = ["https://example.com".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        let valid = event();
+        let oversized = VisitEvent {
+            url: format!("https://example.com/{}a", "ü".repeat(1362)),
+            ..event()
+        };
+        // Leave the real published journal behind after the append has synced,
+        // as a process exit or a failed journal cleanup would do.
+        fixtures::INTERRUPT_BATCH_AFTER_SYNC.set(true);
+        let result = store.record_batch(
+            policy,
+            &Uuid::new_v4().to_string(),
+            &[
+                CaptureBatchEvent::Visit(&oversized),
+                CaptureBatchEvent::Visit(&valid),
+            ],
+            None,
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|(_, outcome)| matches!(outcome, CaptureOutcome::Retryable { .. }))
+        );
+        let intent = read_batch_intent(&store.batch_intent_path())
+            .unwrap()
+            .unwrap();
+        let original_log = root.path().join(&intent.relative_log);
+        let before = fs::read(&original_log).unwrap();
+        assert_eq!(
+            before.len() as u64,
+            intent.offset + intent.entry.len() as u64
+        );
+
+        let next =
+            CaptureStore::open_at(&storage(next_root.path(), "log"), None, state.path()).unwrap();
+        let outcome = next.record(policy, &event());
+        assert!(
+            matches!(outcome, CaptureOutcome::Persisted { .. }),
+            "a completed batch must not block capture in the new folder: {outcome:?}"
+        );
+        assert_eq!(fs::read(&original_log).unwrap(), before);
+        assert!(!store.batch_intent_path().exists());
+        assert_eq!(
+            intent.event_hashes,
+            vec![sha256_hex(valid.event_id.as_bytes())]
         );
     }
 

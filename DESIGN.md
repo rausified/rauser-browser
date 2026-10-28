@@ -556,9 +556,18 @@ As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per req
 - Capture bounds both the incoming and stored page URL to 8192 bytes. Mode
   and trail URLs also pass the stored bound after authorization and tracking
   removal; percent encoding that exceeds it is rejected as `url_too_long`
-  before a log append or intent is written. A normalized URL of exactly 8192
-  bytes is accepted. Activity and Why marker payloads use the same lowercase,
-  hyphenated UUID as their marker hash and immediate index update, so alternate
+  before a new log append or intent is written. Existing v1 per-event intents
+  are checked first under the capture lock: an interrupted older write whose
+  normalized page, mode or trail URL exceeds the bound completes only through
+  the existing exact hash/prefix and owned-log recovery checks, through single
+  or batch delivery. A changed payload remains retryable for manual repair;
+  it never becomes a new oversized append. Rejected candidates do not choose
+  the day for accepted new entries in a mixed batch. Compact intents list
+  only the entries actually appended to their log, so rejected or separately
+  recovered events cannot make a completed batch appear unfinished after a
+  home-folder change. A normalized URL of
+  exactly 8192 bytes is accepted. Activity and Why marker payloads use the same
+  lowercase, hyphenated UUID as their marker hash and immediate index update, so alternate
   valid UUID spellings cannot disappear or count twice after a rebuild. Batch
   acknowledgements still echo the request's spelling for correlation. This
   governs new writes; older noncanonical marker/intent recovery is a separate
