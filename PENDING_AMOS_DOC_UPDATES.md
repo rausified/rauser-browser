@@ -202,3 +202,15 @@
   with seven Rust regressions, eleven panel cases, the full required Linux
   gate green (997 Rust outcomes, all 15 extension files) and 859 scripted-build
   outcomes. Platform evidence for brwr-bzx/brwr-9xg remains blocked externally.
+
+
+- **Brauser — review capture re-learning impact:** The host's new
+  `adapters relearn-plan` CLI reviews real owned log/note/summary evidence,
+  including containers, before any rule correction can change identity.
+  It lists splits, merges, swaps, reused keys, insufficient provenance and
+  existing copies on both sides, bound to config/contract/evidence/proposal
+  revisions. No content is moved and URL notes never choose an autosave key.
+  Completes brwr-hq8 with 21 new tests and the full local gate green (1,018
+  workspace Rust outcomes, all 15 extension files, 880 scripted outcomes;
+  explicit IPC sandbox skips included). Durable journal/recovery brwr-wvi,
+  file/index integration and panel Re-learn remain before parent acceptance.

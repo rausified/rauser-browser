@@ -943,6 +943,23 @@ impl ConfigStore {
         &self.note_key_rules.documents
     }
 
+    /// Raw recognition contracts for read-only re-learning review, including
+    /// contracts removed by hand. Never used to widen capture or autosave.
+    pub(crate) fn relearn_contracts(&self) -> Vec<serde_json::Value> {
+        let adopted: &[_] = match &self.adopted {
+            AdoptedContracts::Read { contracts, .. } => contracts,
+            _ => &[],
+        };
+        self.config
+            .adapters
+            .artifacts
+            .iter()
+            .chain(&self.retired_adapter_contracts)
+            .chain(adopted)
+            .cloned()
+            .collect()
+    }
+
     /// Whether the adopted-contract record cannot say which contracts
     /// removed by hand from config.toml still name artifacts on `origin`:
     /// it is unreadable, or holds a damaged entry for that origin. A save
@@ -1329,9 +1346,8 @@ impl ConfigStore {
         Ok(Some(revision))
     }
 
-    /// A second store for the same file, loaded now. The service gives
-    /// harness setup its own, so a long probe never holds the shared one.
-    #[cfg(unix)]
+    /// A second store for the same file, loaded now without layout migration
+    /// or recording adopted contracts. Also used by read-only review.
     pub(crate) fn reopen(&self) -> Self {
         Self::load_from(self.path.clone())
     }

@@ -39,6 +39,7 @@ pub mod native;
 pub mod note;
 pub(crate) mod open;
 mod presentation;
+pub mod relearn;
 // The service is plain POSIX; only its launchd glue is macOS-only.
 #[cfg(unix)]
 pub mod service;

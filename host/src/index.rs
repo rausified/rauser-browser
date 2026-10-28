@@ -19,7 +19,8 @@ use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
-    IncomingTrailView, OverflowMarker, StorageConfig, SummaryView, WhyEvent,
+    IncomingTrailView, OverflowMarker, RecordKey, RecordKeyKind, StorageConfig, SummaryView,
+    WhyEvent,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -1078,7 +1079,7 @@ impl ArtifactIndex {
         rebuild: &mut bool,
         reconcile: bool,
     ) -> Result<CatchUp> {
-        let pass = self.catch_up_logs(state, *rebuild)?;
+        let pass = self.catch_up_logs(state, *rebuild, false)?;
         *rebuild |= pass.reset;
         if !pass.complete {
             self.save_pending(state, *rebuild, reconcile)?;
@@ -1273,10 +1274,25 @@ impl ArtifactIndex {
     /// in sorted order, so a rebuild split over several passes ingests the
     /// logs in the same order as one pass; `state` then checkpoints only the
     /// logs it read. Callers never publish an incomplete pass.
-    fn catch_up_logs(&self, state: &mut IndexState, rebuild: bool) -> Result<LogPass> {
+    fn catch_up_logs(
+        &self,
+        state: &mut IndexState,
+        rebuild: bool,
+        strict: bool,
+    ) -> Result<LogPass> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let log_dir = checked_relative_dir(&self.storage.log_dir)?;
+        // Ordinary indexing skips linked history. An impact review cannot
+        // present that omission as a complete inventory, including when the
+        // entire logs directory is linked within the selected home folder.
+        if strict
+            && root
+                .symlink_metadata(&log_dir)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            bail!("re-learning review cannot inspect symlinked log history");
+        }
         let logs = match root.open_dir(&log_dir) {
             Ok(logs) => logs,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && state.logs.is_empty() => {
@@ -1291,7 +1307,7 @@ impl ArtifactIndex {
             }
         };
         let mut files = Vec::new();
-        collect_markdown(&logs, Path::new(""), 0, &mut files)?;
+        collect_markdown(&logs, Path::new(""), 0, &mut files, strict)?;
         files.sort();
         let shown = |relative: &Path| log_dir.join(relative).display().to_string();
         let mut checkpoints = BTreeMap::new();
@@ -1493,6 +1509,38 @@ impl ArtifactIndex {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect())
+    }
+
+    /// Fresh authoritative evidence for impact review. No cache is trusted,
+    /// published or resumed. Oversized/inconsistent history refuses the plan.
+    /// Caller holds the config and capture locks, in that order.
+    pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
+        let mut state = self.empty_state();
+        let pass = self.catch_up_logs(&mut state, true, true)?;
+        anyhow::ensure!(
+            pass.complete,
+            "re-learning review exceeds the log scan limit"
+        );
+        anyhow::ensure!(
+            state.conflicts.is_empty(),
+            "conflicting recorded event IDs prevent re-learning review"
+        );
+        let revision = sha256_hex(&serde_json::to_vec(&state.events)?);
+        let evidence = state
+            .events
+            .values()
+            .flat_map(|event| {
+                let key = match &event.data {
+                    EventData::Summary(summary) => summary.record_key.clone(),
+                    _ => RecordKey {
+                        kind: RecordKeyKind::Artifact,
+                        value: event.artifact_id().to_owned(),
+                    },
+                };
+                event.urls().map(move |url| (key.clone(), url))
+            })
+            .collect();
+        Ok((revision, evidence))
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of
@@ -2585,6 +2633,7 @@ fn collect_markdown(
     prefix: &Path,
     depth: usize,
     output: &mut Vec<PathBuf>,
+    strict: bool,
 ) -> Result<()> {
     if depth > 8 {
         bail!("artifact log directory nesting exceeds its limit");
@@ -2597,16 +2646,23 @@ fn collect_markdown(
             .symlink_metadata(&name)
             .context("checking artifact log entry")?;
         if metadata.file_type().is_symlink() {
+            if strict {
+                bail!("re-learning review cannot inspect symlinked log history");
+            }
             continue;
         }
         if metadata.is_dir() {
             let child = dir
                 .open_dir(&name)
                 .context("opening artifact log subdirectory")?;
-            collect_markdown(&child, &relative, depth + 1, output)?;
-        } else if metadata.is_file()
-            && relative.extension().and_then(|value| value.to_str()) == Some("md")
-        {
+            collect_markdown(&child, &relative, depth + 1, output, strict)?;
+        } else if relative.extension().and_then(|value| value.to_str()) == Some("md") {
+            if !metadata.is_file() {
+                if strict {
+                    bail!("re-learning review cannot inspect a non-regular log file");
+                }
+                continue;
+            }
             output.push(relative);
             if output.len() > MAX_SCAN_FILES {
                 bail!("artifact log contains too many files to index");
