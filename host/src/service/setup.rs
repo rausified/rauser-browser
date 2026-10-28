@@ -297,7 +297,11 @@ pub fn set_up(
         Some(commit),
     ) {
         Ok(Some(revision)) => {
-            tracing::info!(harness = name, timeout_secs, "harness set up");
+            tracing::info!(
+                harness = crate::native::harness_name(request.harness),
+                timeout_secs,
+                "harness set up"
+            );
             Ok((config.snapshot().clone(), revision))
         }
         Ok(None) => Err(refuse(ErrorCode::Conflict, CHANGED)),

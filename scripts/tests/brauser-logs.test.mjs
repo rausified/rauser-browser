@@ -59,24 +59,15 @@ test("a host line takes proc and pid from the process span, and fields from inne
   assert.equal(fieldOf(event, "missing"), undefined);
 });
 
-test("a span close line lists only its parents, and is named when the current span is recorded", () => {
-  // As diag.rs writes it today: the closing span is absent from `spans`.
-  const bare = parseHostLine(JSON.stringify({
-    timestamp: "2026-10-28T12:02:48.424912Z",
-    level: "INFO",
-    fields: { message: "close", "time.busy": "312µs", "time.idle": "22.0µs" },
-    target: "brauser_host::diag",
-    spans: [],
-  }), "cli");
-  assert.equal(bare.proc, "cli");
-  assert.equal(bare.pid, null);
-  assert.equal(formatEvent(bare, { utc: true }), "2026-10-28 12:02:48.424Z cli INFO  close busy=312µs");
-
-  const line = JSON.parse(hostLine({ ts: "2026-10-28T12:00:00Z", message: "close", fields: { "time.busy": "1.20ms" } }));
-  line.span = { name: "request", request_id: REQUEST };
-  const named = parseHostLine(JSON.stringify(line), "host");
-  assert.equal(named.message, "request close");
-  assert.match(formatEvent(named, { utc: true }), /host:41 INFO  request close request_id=0f8e7d6c busy=1\.20ms$/);
+test("an event's own fields beyond the key ones are printed after them", () => {
+  const line = parseHostLine(hostLine({
+    ts: "2026-10-28T12:00:00Z",
+    message: "harness exited",
+    fields: { exit_code: 1, stderr_bytes: 812, reason: "save failed" },
+    spans: [{ name: "request", request_id: REQUEST, outcome: "ok" }],
+  }), "host");
+  assert.match(formatEvent(line, { utc: true }),
+    /harness exited request_id=0f8e7d6c outcome=ok exit_code=1 stderr_bytes=812 reason="save failed"$/);
 });
 
 test("malformed lines are counted, blank lines are not", () => {

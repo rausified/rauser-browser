@@ -114,13 +114,9 @@ export function parseHostLine(line, proc) {
   if (ts === null || typeof raw.level !== "string") return null;
   const fields = isObject(raw.fields) ? raw.fields : {};
   const spans = Array.isArray(raw.spans) ? raw.spans.filter(isObject) : [];
-  // `spans` lists the event's ancestors. A span's own close line lists only
-  // its parents; when the writer also records the current span (`span`),
-  // it is the innermost, and names the span a close line closes.
-  if (isObject(raw.span)) spans.push(raw.span);
+  // `spans` lists the spans the event happened in, outermost first.
   const root = spans.find((span) => span.name === "process");
-  let message = typeof fields.message === "string" ? fields.message : "";
-  if (message === "close" && isObject(raw.span) && typeof raw.span.name === "string") message = `${raw.span.name} close`;
+  const message = typeof fields.message === "string" ? fields.message : "";
   return {
     ts,
     proc: typeof root?.proc === "string" ? root.proc : proc,
@@ -238,8 +234,12 @@ export function formatEvent(event, options = {}) {
     const value = fieldOf(event, name);
     if (value !== undefined && value !== null) parts.push(`${name}=${formatValue(name, value)}`);
   }
-  const busy = event.fields["time.busy"];
-  if (busy !== undefined) parts.push(`busy=${busy}`);
+  // Then the event's own other fields (exit_code, reason, launch, ...), so
+  // a failure line says why without --json.
+  for (const [name, value] of Object.entries(event.fields)) {
+    if (name === "message" || KEY_FIELDS.includes(name) || value === undefined || value === null) continue;
+    parts.push(`${name}=${formatValue(name, value)}`);
+  }
   return parts.join(" ");
 }
 
