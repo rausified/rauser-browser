@@ -72,6 +72,8 @@ const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
 const artifactMeasures = element<HTMLParagraphElement>("artifact-measures");
 const artifactLinks = element<HTMLParagraphElement>("artifact-links");
+const artifactIncomingList = element<HTMLUListElement>("artifact-incoming-list");
+const artifactIncomingEmpty = element<HTMLParagraphElement>("artifact-incoming-empty");
 const artifactWithin = element<HTMLParagraphElement>("artifact-within");
 const artifactContained = element<HTMLDivElement>("artifact-contained");
 const artifactContainedList = element<HTMLUListElement>("artifact-contained-list");
@@ -269,6 +271,33 @@ function renderContained(contained: readonly ContainedArtifactView[]): void {
   artifactContainedList.append(...contained.map(containedRow));
 }
 
+const NAVIGATION_LABELS: Readonly<Record<string, string>> = {
+  link: "Link", typed: "Address", auto_bookmark: "Bookmark",
+  auto_subframe: "Automatic frame", manual_subframe: "Manual frame",
+  generated: "Generated", start_page: "Start page", form_submit: "Form submission",
+  reload: "Reload", keyword: "Keyword", keyword_generated: "Generated keyword",
+};
+
+function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
+  artifactIncomingList.replaceChildren();
+  artifactIncomingList.hidden = trails.length === 0;
+  artifactIncomingEmpty.hidden = trails.length !== 0;
+  for (const trail of trails) {
+    const row = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${NAVIGATION_LABELS[trail.transition]} navigation from `;
+    const link = document.createElement("a");
+    link.href = trail.source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = trail.source.title || trail.source.artifact_id;
+    const date = document.createElement("span");
+    date.textContent = ` · last recorded ${trail.last_seen}`;
+    row.append(label, link, date);
+    artifactIncomingList.append(row);
+  }
+}
+
 function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
@@ -279,6 +308,7 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
     whyEdited = false;
     renderWithin(null);
     renderContained([]);
+    renderIncoming([]);
     updateControls();
     return;
   }
@@ -300,6 +330,7 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
     : "No linked artifacts yet.";
   renderWithin(artifact.within);
   renderContained(artifact.contained);
+  renderIncoming(artifact.incoming_trails);
   if (artifact.artifact_id !== whyArtifactId) {
     whyArtifactId = artifact.artifact_id;
     whyEdited = false;

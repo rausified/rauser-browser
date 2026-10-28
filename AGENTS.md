@@ -271,6 +271,14 @@ contents on a container's card. Downgrading after adding repositories is
 unsupported: older hosts reject `within` in the adapter config and in adapter
 history.
 
+Incoming navigation (`brwr-1g2`, 2026-10-28): protocol version 8 adds required
+`ArtifactView.incoming_trails`, up to five host-derived source/transition pairs
+ordered by latest recorded local day, then source ID and transition. The panel
+shows text-only source titles, explicit HTTP(S) links and navigation wording.
+Unknown legacy transitions, back/forward, unresolved sources and non-trail
+relationships never supply provenance. Empty results say no known incoming
+source was recorded; log and cache formats are unchanged.
+
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
 Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier

@@ -1253,7 +1253,7 @@ function artifact(id, title, why = null) {
     artifact_id: id, artifact_type: "doc", title, url: `https://docs.example/${id}`,
     first_seen: "2026-10-01", last_seen: "2026-10-27", focused_seconds: 60,
     background_seconds: 0, opens: 1, days_opened: 1, last_mode: null, why, linked_count: 0,
-    within: null, contained: [],
+    within: null, contained: [], incoming_trails: [],
   };
 }
 
@@ -1487,6 +1487,63 @@ test("Save why stays disabled while a local pause waits for the host", async () 
 });
 
 // --- Artifact card: container and contents -----------------------------------
+
+const INCOMING_SOURCE = {
+  artifact_id: "doc:source", artifact_type: "doc", title: "<img src=x onerror=alert(1)> Source",
+  url: "http://localhost:8123/docs/source",
+};
+const INCOMING_TRAIL = { source: INCOMING_SOURCE, transition: "link", last_seen: "2026-10-27" };
+
+test("incoming trail response shapes bound the list and reject unsafe links and unknown transitions", () => {
+  const valid = artifact("doc:target", "Target");
+  const result = (trails) => isResponseShape(recognized({ ...valid, incoming_trails: trails }));
+  assert.equal(result([INCOMING_TRAIL]), true);
+  assert.equal(result(Array(5).fill(INCOMING_TRAIL)), true);
+  assert.equal(result(Array(6).fill(INCOMING_TRAIL)), false);
+  const { incoming_trails: _trails, ...missing } = valid;
+  assert.equal(isResponseShape(recognized(missing)), false);
+  for (const transition of ["mentions", "co-focused", "within", "forward_back", "invented"]) {
+    assert.equal(result([{ ...INCOMING_TRAIL, transition }]), false, transition);
+  }
+  for (const url of ["javascript:alert(1)", "data:text/html,hi", "file:///tmp/note", "/relative", "not a URL"]) {
+    assert.equal(result([{ ...INCOMING_TRAIL, source: { ...INCOMING_SOURCE, url } }]), false, url);
+  }
+  assert.equal(result([{ ...INCOMING_TRAIL, source: null }]), false);
+  assert.equal(result([{ ...INCOMING_TRAIL, last_seen: "<script>" }]), false);
+});
+
+test("incoming source links open the local source fixture and clear when the page changes", async () => {
+  const target = { ...artifact("doc:target", "Target"), incoming_trails: [INCOMING_TRAIL,
+    { ...INCOMING_TRAIL, transition: "form_submit" }] };
+  const page = await install({
+    tab: { id: 1, url: "http://localhost:8123/docs/target", title: "Target" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact"
+      ? recognized(request.url === INCOMING_SOURCE.url ? artifact("doc:source", "Source") : target)
+      : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the target card");
+  const rows = page.el("artifact-incoming-list").children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].textContent, `Link navigation from ${INCOMING_SOURCE.title} · last recorded 2026-10-27`);
+  assert.equal(rows[1].textContent, `Form submission navigation from ${INCOMING_SOURCE.title} · last recorded 2026-10-27`);
+  assert.equal(page.el("artifact-incoming-empty").hidden, true);
+  const link = rows[0].querySelector("a");
+  assert.equal(link.href, INCOMING_SOURCE.url);
+  assert.equal(link.target, "_blank");
+  assert.equal(link.rel, "noopener noreferrer");
+  // The fake DOM has no default anchor action. Follow its explicit URL as
+  // Chrome does when the newly opened source tab becomes active.
+  page.navigate(link.href, 2);
+  await until(() => page.el("artifact-heading").textContent === "Source", "the source fixture card");
+  assert.equal(page.el("artifact-incoming-list").children.length, 0);
+  assert.equal(page.el("artifact-incoming-list").hidden, true);
+  assert.equal(page.el("artifact-incoming-empty").hidden, false);
+  assert.equal(page.calls("permissions.request"), 0);
+  page.navigate("chrome://extensions", 3);
+  await until(() => page.el("artifact-card").hidden, "no card on a Chrome page");
+  assert.equal(page.el("artifact-incoming-list").children.length, 0);
+});
 
 const REPO = {
   artifact_id: "github.repo:github.com/acme-corp/widgets",

@@ -165,6 +165,28 @@ function isContainedArtifact(value: unknown): boolean {
     isUnsignedInteger((value as Record<string, unknown>).focused_seconds);
 }
 
+const INCOMING_TRANSITIONS: ReadonlySet<string> = new Set([
+  "link", "typed", "auto_bookmark", "auto_subframe", "manual_subframe", "generated",
+  "start_page", "form_submit", "reload", "keyword", "keyword_generated",
+]);
+
+function isIncomingTrail(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const trail = value as Record<string, unknown>;
+  if (!hasExactKeys(trail, ["source", "transition", "last_seen"]) ||
+    !isArtifactRef(trail.source) || typeof trail.transition !== "string" ||
+    !INCOMING_TRANSITIONS.has(trail.transition) || typeof trail.last_seen !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(trail.last_seen)) return false;
+  // These become explicit links. Never trust a parseable non-web scheme
+  // from an older or damaged host, even though the schema calls it a string.
+  try {
+    const url = (trail.source as Record<string, unknown>).url as string;
+    return url.length <= 8192 && ["http:", "https:"].includes(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function isArtifact(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Record<string, unknown>;
@@ -176,7 +198,9 @@ function isArtifact(value: unknown): boolean {
     stringOrNull(artifact.why) &&
     (artifact.within === null || isArtifactRef(artifact.within)) &&
     Array.isArray(artifact.contained) && artifact.contained.length <= 20 &&
-    artifact.contained.every(isContainedArtifact);
+    artifact.contained.every(isContainedArtifact) &&
+    Array.isArray(artifact.incoming_trails) && artifact.incoming_trails.length <= 5 &&
+    artifact.incoming_trails.every(isIncomingTrail);
 }
 
 /** Exactly the v6 `SummaryView` keys; the host bounds the strings. */

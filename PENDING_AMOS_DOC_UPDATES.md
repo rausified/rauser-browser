@@ -113,3 +113,14 @@
   Settings receives specific budget/whole-file recovery guidance instead of a
   generic failure. Four new Rust regressions and the full local gate pass
   (`brwr-2iz`); no interactive macOS verification was performed on Linux.
+
+
+- **Brauser — Show where a recorded artifact was opened from (2026-10-28).**
+  Artifact cards now show up to five known incoming source/transition pairs,
+  with safe explicit links, browser-navigation wording and the last recorded
+  day. The host uses existing validated trails; missing, self, back/forward
+  and unknown historical sources never invent provenance. Protocol v8 adds
+  the required list; collection, logs and cache formats stay unchanged.
+  Four new Rust and two panel regressions pass with the full gate and 1,680
+  individually exercised extension tests (`brwr-1g2`). Actual Chrome anchor
+  opening still needs macOS verification.

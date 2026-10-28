@@ -369,12 +369,6 @@ shipped (see Shipped).
   verified preserved notes in the panel so a person can read one deliberately.
   Keep the primary autosave key, separate URL note, ownership checks and
   capture policy unchanged; never turn a read-only choice into a migration.
-- [ ] `brwr-1g2` **Show the incoming trail on the artifact card.** The card
-  currently shows only a linked count even though the host records validated
-  cross-tool edges. After ordered plan work, surface bounded incoming sources
-  with a title, honest navigation wording and explicit safe links, following
-  DESIGN.md §5.7. Keep back/forward and missing sources honest and never turn
-  unknown historical transition text into a relationship.
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -433,6 +427,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Show recorded incoming navigation on artifact cards (2026-10-28).** Completed assigned `brwr-1g2`. The card lists up to five host-derived source/transition pairs with explicit HTTP(S) links, measured navigation wording and the latest recorded day. Repeated observations stay one row; unresolved, self, back/forward and unknown historical sources never invent provenance. Protocol v8 carries the required list without changing logs or cache formats. **Metrics:** 4 new Rust and 2 composed-panel regressions; 944 Rust outcomes (901 exercised, 43 explicit IPC sandbox skips), 1,680 extension tests, the complete required/README gate and 10,696 inert Markdown renderings green.
 
 - **Category:** Bug Fix. **Keep retired adapter history within a reserved config budget (2026-10-28).** Completed assigned `brwr-2iz`. History growth now has a 32 KiB pretty-TOML budget inside the 64 KiB config cap. Older larger histories may stay unchanged or shrink, so Pause and disjoint site additions remain available while the file fits. Exact restoration and duplicate pruning reclaim history space without forgetting distinct note identities; budget and whole-file refusals reach settings with specific recovery actions. **Metrics:** 4 new Rust regressions; 940 Rust outcomes (897 exercised, 43 explicit IPC sandbox skips), all 15 extension and 2 script files, full required gate and 10,696 inert Markdown renderings green.
 
@@ -1097,3 +1093,41 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` on the read-only mount. The completed green diff,
   exported queue and excluded `.bosun_commit_msg` remain for the driver.
   No retry, push, or remote operation was attempted.
+
+
+### Cycle observations (2026-10-28 — incoming navigation)
+
+- Opening health on `21de2229` was clean, with no quarantine report and all
+  required baseline commands passing. Claimed the first ready assigned item,
+  `brwr-1g2`, and completed its native query, protocol, panel and test work.
+  Continue `bd ready --label assigned`; ten assigned items remain, eight ready,
+  with `brwr-3cc` next and the existing two blocked items unchanged.
+- The list is five source/transition pairs, not five inferred relationships
+  or a click count. Source links use the known artifact's current recorded
+  URL. Ordering is by local day, then source ID and transition, so no
+  within-hour chronology is claimed. A known source may appear for multiple
+  navigation kinds; back/forward stays unattributed even in old paired data.
+- Full diff reviewed locally. The initial feature gate caught stale version-7
+  wire fixtures after the v8 bump; updated all current-message fixtures and
+  added an explicit required/bounded/known schema regression. The repeated
+  full required and README gate passes: 944 Rust outcomes (43 explicit IPC
+  skips), all 15 extension files, both script files and 10,696 inert Markdown
+  renderings. Also ran every extension file separately without child test
+  isolation: 1,680 tests passed, including 136 panel cases. Logs are
+  `target/cookie-final-gate.log` and `target/cookie-direct-extension.log`.
+- No live API or external Codex review was invoked; the driver supplies the
+  independent review. Linux cannot run the macOS-only smoke runner. Its
+  protocol constant is v8; the existing three folder-picker answers and
+  dynamic answered-versus-logged dialog check are unchanged. Source-tab
+  activation is covered with local scripted panel fixtures, while real
+  Chrome anchor default behavior remains a macOS verification step.
+- Product direction: existing `brwr-ued` named focus sessions and `brwr-ppn`
+  curated worklogs remain valuable after assigned and ordered work. Explicit
+  sessions can explain the person's intent across tools, while trails only
+  explain measured navigation. Keep those meanings distinct; do not grow
+  another inferred-relationship view or duplicate these existing proposals.
+
+- Commit handoff: the single staging/commit attempt failed creating
+  `.git/index.lock` on the read-only mount. The complete green changes,
+  exported queue, cycle log and excluded `.bosun_commit_msg` are ready for
+  the driver. No commit retry or remote operation was attempted.

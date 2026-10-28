@@ -26,7 +26,7 @@ changes (`unknown` when built outside a Git checkout). The
 panel and settings page show that commit beside the extension's own and flag a
 different commit; nothing else depends on its format.
 
-Protocol version 7 covers host discovery, configuration, native folder
+Protocol version 8 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
 configuration. `get_config` returns a
@@ -104,8 +104,21 @@ version 5, adapter additions or changes required a native confirmation through
 every-account-in-this-Chrome-profile warning to it; version 6 removes that
 confirmation, and an unscoped adapter still needs its `unscoped` acknowledgment.
 
-Version 7 is the current protocol. The host refuses version 6 and earlier
+Version 8 is the current protocol. The host refuses version 7 and earlier
 requests with `unsupported_protocol_version`.
+
+Version 8: incoming navigation. `ArtifactView.incoming_trails` is required
+and holds up to five `IncomingTrailView` entries: `source` is an
+`ArtifactRefView`, `transition` is a known Chrome transition other than
+`forward_back`, and `last_seen` is the latest recorded local day (`YYYY-MM-DD`).
+Entries are distinct source/transition pairs, ordered by day descending,
+then source ID and transition ascending. A source can appear for several
+transition kinds. Only recorded source artifacts with HTTP(S) URLs appear;
+self edges, unresolved sources, unknown historical transitions, mentions,
+co-focus and containment are omitted. No source is inferred from titles or
+back/forward. These are recorded navigation observations, not click counts.
+Host and extension must be rebuilt together; the log and cache formats do
+not change.
 
 Version 7: artifact containers. `ArtifactView` gains two required fields, so
 the artifact card can name what holds an artifact and what it holds:
