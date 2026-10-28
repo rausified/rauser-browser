@@ -34,6 +34,9 @@ use crate::vault::{
 };
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
+/// Reserve at least half the file cap for settings and active adapters when
+/// growing retired history. Older larger histories may stay or shrink.
+const MAX_ADAPTER_HISTORY_BYTES: usize = MAX_CONFIG_BYTES / 2;
 const MAX_ROOT_PATH_BYTES: usize = 4 * 1024;
 const MAX_LOCATION_PATH_BYTES: usize = 512;
 const MAX_PATH_COMPONENT_BYTES: usize = 255;
@@ -284,6 +287,18 @@ struct AgentRefusal {
 
 impl ConfigStore {
     pub fn default_path() -> Result<PathBuf> {
+        #[cfg(feature = "scripted-dialogs")]
+        if let Some(path) = std::env::var_os(crate::brand::TEST_CONFIG_PATH_ENV) {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() || path.file_name().is_none() {
+                bail!("BRAUSER_TEST_CONFIG_PATH must name an absolute config file");
+            }
+            return Ok(path);
+        }
+        Self::platform_default_path()
+    }
+
+    fn platform_default_path() -> Result<PathBuf> {
         let dirs = ProjectDirs::from("", "", APP_NAME)
             .context("cannot locate this user's application config directory")?;
         Ok(dirs.config_dir().join("config.toml"))
@@ -581,7 +596,7 @@ impl ConfigStore {
     /// injected config path keep their disposable index beside that config,
     /// so parallel fixtures never share process-global cache state.
     pub fn cache_dir(&self) -> Result<PathBuf> {
-        if self.path == Self::default_path()? {
+        if self.path == Self::platform_default_path()? {
             let dirs = ProjectDirs::from("", "", APP_NAME)
                 .context("cannot locate this user's application cache directory")?;
             Ok(dirs.cache_dir().to_path_buf())
@@ -884,6 +899,41 @@ impl ConfigStore {
             .collect()
     }
 
+    /// A stripped parameter read by any note contract can make a canonical
+    /// URL satisfy a different query/absence rule. Such evidence may be
+    /// viewed explicitly, but cannot authorize older-note discovery or migration.
+    pub(crate) fn note_url_evidence_is_safe(
+        &self,
+        stored: &crate::url_provenance::StoredUrl,
+    ) -> bool {
+        let Some(names) = &stored.stripped_params else {
+            return true;
+        };
+        if !crate::url_provenance::valid_names(names) {
+            return false;
+        }
+        let Ok(url) = url::Url::parse(&stored.url) else {
+            return false;
+        };
+        let origin = url.origin().ascii_serialization();
+        let adopted: &[serde_json::Value] = match &self.adopted {
+            AdoptedContracts::Read { contracts, .. } => contracts,
+            AdoptedContracts::Unread | AdoptedContracts::Unreadable { .. } => &[],
+        };
+        !self
+            .config
+            .adapters
+            .artifacts
+            .iter()
+            .chain(&self.retired_adapter_contracts)
+            .chain(adopted)
+            .filter(|adapter| {
+                adapter.get("origin").and_then(serde_json::Value::as_str) == Some(origin.as_str())
+            })
+            .flat_map(query_keys_read)
+            .any(|(_, key)| names.iter().any(|name| name.eq_ignore_ascii_case(key)))
+    }
+
     /// The compiled note-only contracts `note_key_rule` reads: retired
     /// `[[adapter_id_history]]` entries, contracts removed from config.toml
     /// by hand, and the current document while it is inert. Each names
@@ -1056,7 +1106,7 @@ impl ConfigStore {
     ) -> Result<Option<String>> {
         let json = serde_json::to_vec(&next).context("serializing config JSON")?;
         if json.len() > MAX_CONFIG_BYTES {
-            bail!("configuration exceeds the 64 KiB size limit");
+            return Err(config_size_refusal(0).into());
         }
         // Full adapter validation happens against the freshly read current
         // document under the config lock below. Base fields are never allowed
@@ -1133,6 +1183,10 @@ impl ConfigStore {
         } else {
             updated_adapter_history(&current.retired_adapter_contracts, &current.config, &next)
         };
+        let history_bytes = validate_adapter_history_budget(
+            &current.retired_adapter_contracts,
+            &retired_adapter_contracts,
+        )?;
         let adapter_extensions = if clear_adapter_extensions {
             BTreeMap::new()
         } else {
@@ -1224,7 +1278,7 @@ impl ConfigStore {
         ))
         .context("serializing config TOML")?;
         if serialized.len() > MAX_CONFIG_BYTES {
-            bail!("configuration exceeds the 64 KiB size limit");
+            return Err(config_size_refusal(history_bytes).into());
         }
 
         // Saving the fixed layout for the same home folder (for example
@@ -1947,6 +2001,62 @@ impl fmt::Display for StripParamsRefusal {
 
 impl std::error::Error for StripParamsRefusal {}
 
+/// A size refusal is a settings problem with a specific recovery action,
+/// rather than an internal I/O failure. It is safe to expose to the client.
+#[derive(Debug)]
+pub(crate) struct ConfigSizeRefusal(pub String);
+
+impl fmt::Display for ConfigSizeRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConfigSizeRefusal {}
+
+fn config_size_refusal(history_bytes: usize) -> ConfigSizeRefusal {
+    let history = if history_bytes == 0 {
+        String::new()
+    } else {
+        format!(
+            " Retired adapter history (adapter_id_history) uses {history_bytes} bytes; keep it intact to protect existing note identities."
+        )
+    };
+    ConfigSizeRefusal(format!(
+        "Configuration exceeds the 64 KiB size limit.{history} Reduce optional adapter display metadata or summary vocabulary and try again."
+    ))
+}
+
+fn adapter_history_bytes(history: &[serde_json::Value]) -> Result<usize> {
+    #[derive(Serialize)]
+    struct History<'a> {
+        adapter_id_history: &'a [serde_json::Value],
+    }
+    if history.is_empty() {
+        return Ok(0);
+    }
+    // JSON undercounts the pretty TOML stored in config.toml, especially the
+    // repeated table headers. Use the same serializer as the config writer.
+    Ok(toml::to_string_pretty(&History {
+        adapter_id_history: history,
+    })?
+    .len())
+}
+
+fn validate_adapter_history_budget(
+    current: &[serde_json::Value],
+    next: &[serde_json::Value],
+) -> Result<usize> {
+    let bytes = adapter_history_bytes(next)?;
+    if bytes > MAX_ADAPTER_HISTORY_BYTES && bytes > adapter_history_bytes(current)? {
+        return Err(ConfigSizeRefusal(format!(
+            "Retired adapter history (adapter_id_history) would use {bytes} bytes, exceeding its 32 KiB budget inside the 64 KiB configuration limit. To pause capture, turn Capture off without removing adapters. To free history budget, restore removed adapters with their exact original rules and IDs in Settings. Do not delete history entries: they protect existing note identities until artifact migrations are available."
+        ))
+        .into());
+    }
+    Ok(bytes)
+}
+
 /// A `strip_params` entry that removes a query parameter an adapter rule
 /// reads: a key in a rule's `query` table or `absent` list
 /// (adapter-templates.md §5.3). Path, title, alias, and ref templates never
@@ -2107,7 +2217,7 @@ impl ConfigStore {
         let mut next = self.config.clone();
         next.adapters = adapters.clone();
         if serde_json::to_vec(&next)?.len() > MAX_CONFIG_BYTES {
-            bail!("configuration exceeds the 64 KiB size limit");
+            return Err(config_size_refusal(0).into());
         }
         validate_update(&self.config, &next)?;
         self.validate_strip_params(&next)?;
@@ -2120,7 +2230,12 @@ impl ConfigStore {
             &self.retired_adapter_contracts,
             &by_hand,
             Some(&state_path),
-        )
+        )?;
+        validate_adapter_history_budget(
+            &self.retired_adapter_contracts,
+            &updated_adapter_history(&self.retired_adapter_contracts, &self.config, &next),
+        )?;
+        Ok(())
     }
 
     /// `validate_strip_params_readers` against this store's last read.
@@ -3018,15 +3133,18 @@ fn updated_adapter_history(
     next: &ConfigSnapshot,
 ) -> Vec<serde_json::Value> {
     let active = adapter_contracts(next);
-    let mut updated: Vec<_> = history
-        .iter()
+    let mut updated = Vec::new();
+    for contract in history {
         // An active adapter only supersedes the exact historical contract.
         // A disjoint or narrowed adapter may deliberately reuse the same ID,
         // but it does not protect routes that only the historical contract
         // recognized from being reintroduced later under a different ID.
-        .filter(|contract| !active.contains(contract))
-        .cloned()
-        .collect();
+        // Duplicate entries carry no extra identity evidence. Prune those,
+        // too, but never prune a distinct contract just to meet the budget.
+        if !active.contains(contract) && !updated.contains(contract) {
+            updated.push(contract.clone());
+        }
+    }
     // Recognition edits that retain an ID also retire the old shape. Keep it
     // for the same reason as a wholly removed adapter: a later update must not
     // be able to assign that old route a new record key. If the whole current
@@ -3264,6 +3382,37 @@ pub(crate) mod fixtures {
             quoted(&root.to_string_lossy()),
         );
         fs::write(path, body).unwrap();
+    }
+
+    /// A legacy file whose history already fills the new reserved budget.
+    /// Uses real serialized TOML sizes, independently of the budget checker.
+    pub(crate) fn with_adapter_history(path: &Path, root: &Path, minimum_bytes: usize) {
+        let mut history = Vec::new();
+        let history_toml = loop {
+            let index = history.len();
+            history.push(serde_json::json!({
+                "type": "work.item",
+                "origin": "https://work.example",
+                "match": [{"path": format!("/retired{index}/{{id:int}}") }],
+                "id": format!("work:{{host}}/retired{index}/{{id}}"),
+            }));
+            let serialized = toml::to_string_pretty(&serde_json::json!({
+                "adapter_id_history": history,
+            }))
+            .unwrap();
+            if serialized.len() >= minimum_bytes {
+                break serialized;
+            }
+        };
+        write(
+            path,
+            root,
+            "",
+            "capture_enabled = true",
+            &format!(
+                "[adapters]\nformat = 1\n[[artifacts]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{{path = \"/active/{{id:int}}\"}}]\nid = \"work:{{host}}/active/{{id}}\"\n{history_toml}"
+            ),
+        );
     }
 
     /// The storage table an older build wrote: `log/`, `pages/`, and
@@ -4851,6 +5000,130 @@ mod tests {
         ]);
         validate(&changed).unwrap();
         assert!(validate_adapter_transition(&current, &changed).is_err());
+    }
+
+    #[test]
+    fn full_adapter_history_keeps_unrelated_writes_and_refuses_growth() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::with_adapter_history(&path, folder.path(), 32 * 1024);
+        let mut store = loaded(&path);
+        assert!(store.issue.is_none());
+        let history = store.retired_adapter_contracts.clone();
+        assert!(validate_adapter_history_budget(&[], &history).is_err());
+        assert_eq!(
+            store.note_key_rule("https://work.example/retired0/7"),
+            NoteKeyRule::Artifact("work:work.example/retired0/7".into())
+        );
+        let mut next = store.snapshot().clone();
+        next.capture_enabled = false;
+        next.strip_params.push("campaign".into());
+        next.adapters.artifacts.push(adapter(
+            "https://other.example",
+            "other.doc",
+            "/docs/{id:int}",
+            "doc:{host}/{id}",
+        ));
+        let revision = store.revision().to_owned();
+        store.update(next, &revision).unwrap().unwrap();
+        assert_eq!(store.retired_adapter_contracts, history);
+
+        let before = fs::read(&path).unwrap();
+        let revision = store.revision().to_owned();
+        let mut next = store.snapshot().clone();
+        next.adapters.artifacts.remove(0);
+        let error = store
+            .update(next.clone(), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Retired adapter history"), "{error}");
+        assert!(error.contains("32 KiB"), "{error}");
+        assert!(error.contains("restore"), "{error}");
+        assert!(error.contains("Capture off"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(store.revision(), revision);
+        assert!(store.check_capture_site(&next.adapters).is_err());
+
+        // Exact restoration prunes safely; old routes keep the same note key
+        // before and after a restart, and the ID remains frozen.
+        let mut next = store.snapshot().clone();
+        next.adapters.artifacts.push(history[0].clone());
+        next.adapters.artifacts.push(history[1].clone());
+        let revision = store.update(next, &revision).unwrap().unwrap();
+        assert_eq!(store.retired_adapter_contracts.len(), history.len() - 2);
+        let mut next = store.snapshot().clone();
+        next.adapters.artifacts.remove(0);
+        let revision = store.update(next, &revision).unwrap().unwrap();
+        assert_eq!(store.retired_adapter_contracts.len(), history.len() - 1);
+        assert!(!store.retired_adapter_contracts.contains(&history[0]));
+        let mut store = loaded(&path);
+        assert_eq!(store.revision(), revision);
+        assert_eq!(
+            store
+                .adapter_match("https://work.example/retired0/7", None)
+                .unwrap()
+                .artifact_id,
+            "work:work.example/retired0/7"
+        );
+        assert_eq!(
+            store.note_key_rule("https://work.example/active/7"),
+            NoteKeyRule::Artifact("work:work.example/active/7".into())
+        );
+        let mut changed = store.snapshot().clone();
+        changed.adapters.artifacts.last_mut().unwrap()["id"] = json!("changed:{host}/{id}");
+        assert!(store.update(changed, &revision).is_err());
+    }
+
+    #[test]
+    fn full_adapter_history_reports_legacy_total_size_pressure() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        fixtures::with_adapter_history(&path, folder.path(), MAX_CONFIG_BYTES - 2 * 1024);
+        let mut store = loaded(&path);
+        assert!(store.issue.is_none());
+        let before = fs::read(&path).unwrap();
+        let revision = store.revision().to_owned();
+        let mut next = store.snapshot().clone();
+        next.summary_vocabulary.categories = (0..64)
+            .map(|n| format!("{n:02}{}", "x".repeat(62)))
+            .collect();
+        assert!(serde_json::to_vec(&next).unwrap().len() < MAX_CONFIG_BYTES);
+        let error = store.update(next, &revision).unwrap_err();
+        assert!(error.downcast_ref::<ConfigSizeRefusal>().is_some());
+        let message = error.to_string();
+        assert!(message.contains("64 KiB"), "{message}");
+        assert!(message.contains("adapter_id_history"), "{message}");
+        assert!(message.contains("summary vocabulary"), "{message}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(store.revision(), revision);
+
+        // Legacy history is grandfathered, rather than making a full file
+        // unusable for a settings change that does not grow it.
+        let mut next = store.snapshot().clone();
+        next.capture_enabled = false;
+        store.update(next, &revision).unwrap().unwrap();
+        assert!(!loaded(&path).snapshot().capture_enabled);
+    }
+
+    #[test]
+    fn adapter_history_prunes_only_exact_duplicates_and_restored_contracts() {
+        let first = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "work:{host}/{id}",
+        );
+        let second = adapter(
+            "https://work.example",
+            "work.item",
+            "/old/{id:int}",
+            "work:{host}/{id}",
+        );
+        let history = vec![first.clone(), second.clone(), first.clone(), second.clone()];
+        assert_eq!(
+            updated_adapter_history(&history, &empty_config(), &adapter_config(vec![first])),
+            vec![second],
+        );
     }
 
     #[test]

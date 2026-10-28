@@ -554,7 +554,7 @@ As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per req
 - Logging is **opt-in**: a site is on exactly when the user has added an adapter for its exact origin (protocol v6; before it, the origin also needed a Chrome grant and a site entry). The host independently checks scheme, host, and the adapter's match rules before recording a visit.
 - Incognito and private windows are never logged, regardless of config. The extension manifest uses `incognito: "not_allowed"`, and the event handler resolves the tab's incognito state and rejects it defensively.
 - A URL no enabled adapter recognizes is dropped by the worker and never buffered. If one arrives anyway (a stale lease, an engine mismatch, or a compromised worker), the host returns the terminal outcome `suppressed` with reason `not_an_artifact` and writes nothing to the home folder.
-- **Buffer pressure.** The buffer holds only artifact events, so it fills far more slowly than a buffer of every visit on an origin would. Hourly activity totals (Coarse log, above) keep it small: each artifact adds at most one buffered event per hour, however often it is opened or switched to. At 80% of either the count or byte cap, the worker sets the toolbar badge (`action.setBadgeText`, no permission needed) to prompt the user to open the panel. Overflow is never silent: the dropped count and time range are kept and shown in the panel's capture strip, and an overflow marker is appended to the log on the next delivery.
+- **Buffer pressure.** The buffer holds only artifact events, so it fills far more slowly than a buffer of every visit on an origin would. Hourly activity totals (Coarse log, above) keep it small: each artifact adds at most one buffered event per hour, however often it is opened or switched to. At 80% of either the count or byte cap, the worker sets the toolbar badge (`action.setBadgeText`, no permission needed) to prompt the user to open the panel. Overflow is never silent: the dropped count and time range are kept and shown in the panel's capture strip, and an overflow marker is appended to the log on the next delivery. If drops arrive while the final event batch is in flight, the worker follows it with a standalone overflow batch (`record_batch` with empty `events` and non-null `overflow`), without waiting for another capture. Its ID and count/range snapshot are stored before dispatch and reused after lost replies or worker restarts; later drops stay counted for a separate marker. A delayed event batch retains ownership of its attached snapshot until acknowledgement. Standalone failures back off and remain visible; ready activity batches take priority over standalone retries so a refused marker cannot block later captures. Pause still prevents dispatch. The host rechecks capture, adapter policy and the selected home folder under the config lock, validates the count and both offset-qualified times (chronological order and the normal delivery window for the last time), and derives the log day from that last time. A standalone marker has no page URL or artifact: its payload is only the count and range, and its legacy marker URL hash is the hash of the empty string. It uses the existing compact intent, owned-log append, sync and duplicate checks. Anchored overflow batches keep their existing rendering for exact recovery.
 - `/log` (§5.6) stays a one-off action on any HTTP(S) page. It records a `web.page` artifact, `web:<host>/<url_id>` (§6.2), unless an enabled adapter recognizes the page, in which case it records that adapter's artifact.
 - M1's site entries recorded nothing until an adapter was enabled for the origin; protocol v6 drops `sites` entirely, and a v5 config's site list is ignored and removed on the next save. Existing daily logs are left as they are, and the indexer reads their M1 visit entries as visits to `web.page` artifacts with the same `web:<host>/<url_id>` IDs, so an M1 visit and a later `/log` of the same URL share one artifact. Each M1 visit entry counts as one open with no measured time, in the artifact's `opens`, Recent, the worklog, and its day's Timeline line (for example `- 2026-10-20 · opened 1×`).
 
@@ -565,14 +565,23 @@ As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per req
 - Capture bounds both the incoming and stored page URL to 8192 bytes. Mode
   and trail URLs also pass the stored bound after authorization and tracking
   removal; percent encoding that exceeds it is rejected as `url_too_long`
-  before a log append or intent is written. A normalized URL of exactly 8192
-  bytes is accepted. Activity and Why marker payloads use the same lowercase,
-  hyphenated UUID as their marker hash and immediate index update, so alternate
+  before a new log append or intent is written. Existing v1 per-event intents
+  are checked first under the capture lock: an interrupted older write whose
+  normalized page, mode or trail URL exceeds the bound completes only through
+  the existing exact hash/prefix and owned-log recovery checks, through single
+  or batch delivery. A changed payload remains retryable for manual repair;
+  it never becomes a new oversized append. Rejected candidates do not choose
+  the day for accepted new entries in a mixed batch. Compact intents list
+  only the entries actually appended to their log, so rejected or separately
+  recovered events cannot make a completed batch appear unfinished after a
+  home-folder change. A normalized URL of
+  exactly 8192 bytes is accepted. Activity and Why marker payloads use the same
+  lowercase, hyphenated UUID as their marker hash and immediate index update, so alternate
   valid UUID spellings cannot disappear or count twice after a rebuild. Batch
   acknowledgements still echo the request's spelling for correlation. This
   governs new writes; older noncanonical marker/intent recovery is a separate
   follow-up, and the log remains append-only.
-- Deliveries are idempotent by event ID recorded in the Markdown log. The current host keeps one compact in-flight batch intent in its OS config directory to find the original daily log across date changes and the one-time layout move (§6.1); only a complete Markdown marker proves persistence. Shared locks cover the current policy check, intent, append, and file sync, so revocation and concurrent panel connections cannot race a write. An interrupted batch append can resume only from an exact byte prefix in the still-selected folder; changed or missing logs require review. The legacy `record_visit` upgrade path retains M1's per-event intent files until old extension queues have drained. For the presentation-sanitizer upgrade, an interrupted v1 entry can resume using the frozen older rendering only when its entire hash matches the durable intent and its partial bytes match exactly. This compatibility applies through single and batch delivery; it completes the original bytes rather than rewriting history, while new appends use the sanitizer. In M1, near-repeat visits within a configurable window (`near_repeat_secs`) were suppressed rather than rewriting a prior Markdown entry; M1.5a retires the window. Hourly totals already give each artifact at most one line per hour, and a `/log` entry is a deliberate act that should never be dropped, while a replayed delivery is absorbed by its event ID. Dwell time is now kept as hourly activity totals (Engagement and Coarse log, above). Scroll depth is not planned.
+- Deliveries are idempotent by event ID recorded in the Markdown log. The current host keeps one compact in-flight batch intent in its OS config directory to find the original daily log across date changes and the one-time layout move (§6.1); only a complete Markdown marker proves persistence. Shared locks cover the current policy check, intent, append, and file sync, so revocation and concurrent panel connections cannot race a write. An interrupted batch append can resume only from an exact byte prefix in the still-selected folder; changed or missing logs require review. The legacy `record_visit` upgrade path retains M1's per-event intent files until old extension queues have drained. For the presentation-sanitizer upgrade, an interrupted v1 entry can resume using the frozen older rendering only when its entire hash matches the durable intent and its partial bytes match exactly. This compatibility applies through single and batch delivery; it completes the original bytes rather than rewriting history, while new appends use the sanitizer. New single-event intents use format 2: they retain at most 512 KiB of prepared append bytes, their SHA-256 hash, and a separate SHA-256 identity over the normalized URL, canonical event ID, original timestamp/title and canonical marker metadata, independent of rendered prose. The complete JSON journal is capped at 1 MiB on publication and bounded reading. An interrupted v2 append resumes its original bytes only when this payload identity and the log tail both match; changing the selected home folder still refuses completion. Complete markers retain visit-ID deduplication, while summaries additionally require the same payload identity and selected folder even on a complete-marker retry. V1 hash-only intents remain readable with both frozen renderer generations (before the presentation sanitizer, and before inline math/code escaping); unknown historical renderings require manual repair. Downgrading to a host that cannot read v2 intents is unsupported. In M1, near-repeat visits within a configurable window (`near_repeat_secs`) were suppressed rather than rewriting a prior Markdown entry; M1.5a retires the window. Hourly totals already give each artifact at most one line per hour, and a `/log` entry is a deliberate act that should never be dropped, while a replayed delivery is absorbed by its event ID. Dwell time is now kept as hourly activity totals (Engagement and Coarse log, above). Scroll depth is not planned.
 
 ### 5.2 Summaries
 
@@ -608,7 +617,7 @@ The older M2 design follows.
    - A `!` at the very end is escaped as `\!`, a trailing run of `~` or of spaces is written as entities whatever its length, and a trailing odd run of backslashes gets one more. So a neutralized fragment can be joined with another, or followed by host text, without re-forming `![`, a fence or indented code, or cancelling a following `\!`. Text written directly before a fragment must not end in an unescaped `!`, an odd run of backslashes, a `~`, a space or a tab; `neutralize_remote` and `markdown::inline` output never does. The summary writer therefore places neutralized text at the start of a line, after a host-written newline, never after a list marker or other prefix ending in a space: a review fuzz found that with a `- ` prefix marked could render a code block from output that held no tab and no run of four spaces.
    - Nothing else changes. Links, emphasis, strikethrough, lists and tables still render. Agent prose loses code formatting by design: code spans and fences show as plain text with their backticks or tildes, and a line indented four or more spaces or by a tab (a list nested that deep, or a continuation paragraph under a wide list marker) loses its structure and joins the text around it. An autolink shows as text. Those costs are accepted.
 
-   An earlier scanner (2026-10-26) turned each construct into a code span. That required mirroring each viewer's handling of fences, list items, table cells, code spans, link titles and autolink literals, and three review rounds kept finding inputs that a real renderer still rendered live, so it was replaced on 2026-10-27. Single-line agent text (type, category, importance reason, entity names, related notes) is backslash-escaped by `markdown::inline`, which also escapes Obsidian's `#` tags, `%%` comments, `==` highlights and `|`, and writes every backtick, `$` and `~` as the same numeric entities and each space from the fourth of a run on as `&#32;`, so no code span, math, fence or indented code block forms wherever the line is placed, at a line start or after a list marker included. In the obsidian profile, entities and related notes are wikilinks, which drop `<` and `>`, which no Obsidian file name can contain, and backticks and `$`, so a viewer without wikilinks (VS Code preview), which parses the inside as Markdown, forms no code span or math there either; entities are not used inside a wikilink, since Obsidian would not decode them in a link target. A summary's entity or related note that the wikilink would change, or that holds a backslash (which would escape the closing bracket), `%%`, `==` or `~~`, is written as escaped single-line text instead; related notes are written with `/` separators and no `.` components in both profiles. The summary's page link puts the host-normalized canonical URL in a bracketed destination; the page chooses that URL and WHATWG serialization leaves a backtick, `$`, `!`, `[` and `]` raw in the query, so the destination writes those, every `&` (or a query's `&amp;` would decode to `&` and link another query), and `%`, `=` or `~` next to the same character, as numeric entities, which CommonMark decodes, so the link target is unchanged; `npm run test:markdown-neutralizer` checks that markdown-it links the page link to exactly the canonical URL. A `~` stays, since a fence cannot open after `[[`. Daily-log lines are not yet covered by the code and math rule: page titles and Why text there still go through `presentation::markdown_line`, which backslash-escapes backticks (and the lines start with a timestamp, so no fence or code block forms), but leaves `$`, so a page title can still make inline math. Routing them through `markdown::inline` is a tracked follow-up; it changes the bytes of new log lines, which intent-journal recovery matches byte-exact, so it needs the frozen previous renderer kept for recovery as `pre_sanitizer_entry` does for the last change. Front matter values are JSON-quoted YAML scalars (`markdown::yaml_string`). Obsidian's properties view and VS Code's preview, which hides front matter by default, show them as text, not Markdown. `yaml_string` also writes `<` and an image `!` as JSON `\u` escapes: a YAML reader gets the same value, and a viewer without front matter support, which renders the block as body text, sees neither character. `npm run test:markdown-neutralizer` renders a shared corpus (`host/tests/fixtures/markdown-neutralize-corpus.json`) as neutralized body text and as front matter with markdown-it, micromark (GFM) and marked. It also renders each input as a single-line field (`markdown::inline`) and as a wikilink, and each output followed by other neutralized fragments (including ones starting with `~~`, spaces, or a newline and four spaces), and fails on any element or attribute outside an allowlist of inert text markup (a table cell's `style` only as `text-align:left|right|center`); neutralized body text, single-line fields and wikilinks must render with no `<code>` or `<pre>` at all; raw body text must hold no backtick, `$`, tab, run of three `~` or run of four spaces, a raw single-line field no backtick, `$`, `~` or run of four spaces, and a raw wikilink no backtick or `$`. The check also requires each renderer to decode the entities to their plain characters. Front matter rendered as body text keeps `<code>` and `<pre>` on its allowlist, since `yaml_string` does not escape backticks; Obsidian reads front matter as properties, not Markdown.
+   An earlier scanner (2026-10-26) turned each construct into a code span. That required mirroring each viewer's handling of fences, list items, table cells, code spans, link titles and autolink literals, and three review rounds kept finding inputs that a real renderer still rendered live, so it was replaced on 2026-10-27. Single-line agent text (type, category, importance reason, entity names, related notes) is backslash-escaped by `markdown::inline`, which also escapes Obsidian's `#` tags, `%%` comments, `==` highlights and `|`, and writes every backtick, `$` and `~` as the same numeric entities and each space from the fourth of a run on as `&#32;`, so no code span, math, fence or indented code block forms wherever the line is placed, at a line start or after a list marker included. In the obsidian profile, entities and related notes are wikilinks, which drop `<` and `>`, which no Obsidian file name can contain, and backticks and `$`, so a viewer without wikilinks (VS Code preview), which parses the inside as Markdown, forms no code span or math there either; entities are not used inside a wikilink, since Obsidian would not decode them in a link target. A summary's entity or related note that the wikilink would change, or that holds a backslash (which would escape the closing bracket), `%%`, `==` or `~~`, is written as escaped single-line text instead; related notes are written with `/` separators and no `.` components in both profiles. The summary's page link puts the host-normalized canonical URL in a bracketed destination; the page chooses that URL and WHATWG serialization leaves a backtick, `$`, `!`, `[` and `]` raw in the query, so the destination writes those, every `&` (or a query's `&amp;` would decode to `&` and link another query), and `%`, `=` or `~` next to the same character, as numeric entities, which CommonMark decodes, so the link target is unchanged; `npm run test:markdown-neutralizer` checks that markdown-it links the page link to exactly the canonical URL. A `~` stays, since a fence cannot open after `[[`. Daily-log page titles (legacy visits and hourly activity) and Why text also use `markdown::inline` (2026-10-28, `brwr-2za`), so new rows cannot form math or code from those fields. Existing log rows are append-only and remain unchanged. V1 hash-only journal recovery retains two frozen text renderers in `host/src/capture/legacy.rs`: the pre-presentation-sanitizer generation and the Unicode-17 presentation-sanitizer generation before inline math/code escaping. A whole-entry hash and exact torn prefix must match before either can complete an interrupted append through single or batch delivery; measurements, canonical URLs and encoded marker payloads remain byte-exact. V2 journals continue to replay their stored prepared bytes and renderer-independent payload identity (§5.1). Front matter values are JSON-quoted YAML scalars (`markdown::yaml_string`). Obsidian's properties view and VS Code's preview, which hides front matter by default, show them as text, not Markdown. `yaml_string` also writes `<` and an image `!` as JSON `\u` escapes: a YAML reader gets the same value, and a viewer without front matter support, which renders the block as body text, sees neither character. `npm run test:markdown-neutralizer` renders a shared corpus (`host/tests/fixtures/markdown-neutralize-corpus.json`) as neutralized body text and as front matter with markdown-it, micromark (GFM) and marked. It also renders each input as a single-line field (`markdown::inline`) and as a wikilink, and each output followed by other neutralized fragments (including ones starting with `~~`, spaces, or a newline and four spaces), and fails on any element or attribute outside an allowlist of inert text markup (a table cell's `style` only as `text-align:left|right|center`); neutralized body text, single-line fields and wikilinks must render with no `<code>` or `<pre>` at all; raw body text must hold no backtick, `$`, tab, run of three `~` or run of four spaces, a raw single-line field no backtick, `$`, `~` or run of four spaces, and a raw wikilink no backtick or `$`. The check also requires each renderer to decode the entities to their plain characters. Front matter rendered as body text keeps `<code>` and `<pre>` on its allowlist, since `yaml_string` does not escape backticks; Obsidian reads front matter as properties, not Markdown.
 
    The guarantee covers CommonMark and GFM inline and block constructs, raw HTML, Obsidian embeds, and, since 2026-10-27, every construct Obsidian hands to another engine through a code span, fence, indented code block or math. Obsidian's handling of `\![[embed]]` and VS Code preview are to be checked by hand (TESTING.md "Real-UI acceptance"); as of 2026-10-27 no manual check has been performed, and its date and result are recorded here once it is.
 7. The final message is `summary_result`, correlated by `request_id`, sent after the write is attempted. Its `outcome` is `created`, `replaced`, `created_with_warning`, `replaced_with_warning` (the file is in place but temp cleanup or directory sync failed, as with page notes; not a failure and not retried), `conflict` (names the occupying file and says to move or delete it), or `retryable` (a transient vault error before publication), with `relative_path` and `message`. After `conflict` or `retryable`, the host keeps the final text in memory, keyed by `request_id`, until the write succeeds, the panel discards it, or the connection closes; Retry sends only the `request_id` and does not rerun the harness. The panel keeps the text on screen with Copy, Retry save, and Discard; if the connection is lost it becomes a copy-only unsaved view. A canceled, timed-out, or failed run shows its partial text marked unsaved.
@@ -627,8 +636,14 @@ The older M2 design follows.
   before the previous one is retired, and a native acknowledgement deletes only
   its own exact snapshot. Another panel's stale acknowledgement or discard
   cannot remove newer edits. On reopen, the current host note loads normally
-  and recovered text appears separately with **Copy** and **Discard recovery
-  copies**. Recovery never fills the editor or sends a save automatically,
+  and recovered text appears separately. Each copy has its page address,
+  reason, read-only text, and individual **Copy** and **Discard** controls
+  (2026-10-28, `brwr-kws`). An empty edit is explicitly labelled as clearing
+  the note; Copy preserves its exact empty text. Discard selects an immutable
+  snapshot ID, including for memory-only conflict copies, and leaves the
+  other displayed copies and live typing alone. Clipboard failures appear
+  beside that copy; a failed local discard leaves it available for retry.
+  Recovery never fills the editor or sends a save automatically,
   including when the note's revision or artifact identity changed. Conflicts,
   failed saves and empty deletions remain recoverable; conflict copies stay
   until explicit discard. Copies contain note text and URLs, stay local to
@@ -701,6 +716,35 @@ reachable again and whenever any worker-status read observes a different
 Dismiss. An unchanged generation does not request another lookup. Refreshes
 keep unsaved context for the same artifact and use the existing coalescing
 refresher so only the current page's response can render.
+
+**Capture exclusions (built 2026-10-28, `brwr-vny`).** A separate plain-language
+line explains why automatic capture is off for the current readable page:
+configuration repair, no home folder, pending site removal, a host or local
+pause, unavailable/expired browser policy, a workspace/account outside scope,
+or no matching page rule. It uses the worker's revision-cached compiler and
+ordered URL evaluator against the current host snapshot, with local narrowing
+state taking precedence. Settings handles repair, pause, scope and rule
+changes; a site without rules links to its existing Capture Site review.
+Recognized enabled pages need no exclusion line. Navigation and policy changes
+recompute it; unreadable/private tabs clear it. Page/link patterns never enter
+this decision, and the line neither enables capture nor changes the host's
+artifact/history verdict.
+
+**Incoming navigation (built 2026-10-28, `brwr-1g2`, protocol v8).** The
+artifact card shows up to five recorded incoming source/transition pairs,
+newest local day first, with ties ordered by source ID then transition.
+Each row names the known source artifact with an explicit HTTP(S) link
+opening a new tab (`noopener noreferrer`), describes the browser transition
+as navigation, and gives its last recorded day. Repeated observations of a
+pair stay one row, and a source can appear under more than one transition.
+The host derives this only from existing validated trail edges and recorded
+artifacts. Back/forward (including historical paired sources), unknown legacy
+transitions, missing source artifacts, self edges, mentions, co-focus and
+containment never supply a row. An empty list says "No known incoming source
+recorded", without claiming that no navigation happened. Titles render as
+text, and following another page clears the previous page's list. No new
+capture, permission or agent request is involved; protocol v8 adds the
+required `ArtifactView.incoming_trails` response field.
 
 ```
 ┌────────────────────────────────────────────┐
@@ -822,6 +866,25 @@ The host works on two record types. A `PageNote` has `url`, `canonical_url`, a r
 
 Because `artifact_id` is the record key below, an `id` template is durable. The adapter template `format` number versions the language, and a later format never changes how a template in an older format builds an ID. Changing the `id` template of an adapter that has recorded activity is a **migration**: the host shows how many artifacts are affected and, on confirmation, writes one `alias` event from each old ID to its new one, so no history, note, or summary is orphaned (adapter-templates.md §8.2). Aliases arrive in M1.5b, so until then the host refuses an `id` change on an adapter with recorded activity. Removing an adapter or changing its recognition rules does not erase this constraint: `config.toml` keeps a host-owned, extension-invisible history of every superseded recognition contract and ID. The same ID may be restored, and a genuinely disjoint route may introduce a new ID, but an overlapping route cannot return under a different type or ID until migrations exist. Only restoring the exact historical contract removes that redundant history entry; a disjoint adapter that happens to reuse the same ID does not.
 
+**Retired history budget (2026-10-28, `brwr-2iz`).** Growing
+`[[adapter_id_history]]` is limited to 32 KiB of pretty-serialized TOML inside
+the existing 64 KiB config cap, reserving room for active adapters and settings.
+A legacy history already over budget may stay unchanged or shrink, so pausing
+capture and other unrelated edits still save while the total file fits.
+An adapter change prunes exact duplicate history entries and entries whose
+exact contract is restored as an active adapter; no distinct contract is
+discarded to make room. The normal ID freeze still applies during restoration:
+restore the old contracts before removing newer adapters, rather than replacing
+one ID with another in a single update. A save or Capture Site preflight that
+grows history past its budget refuses with an actionable message: turn Capture
+off without removing adapters, or restore exact old rules and IDs in settings
+to reclaim history budget. At the total-file cap, a refusal reports history's
+byte cost and asks to reduce optional adapter metadata or summary vocabulary;
+restoring an adapter moves its contract out of history but does not remove it
+from the total file. Both size refusals reach settings as `invalid_config`
+before config replacement or layout I/O. History stays host-only, and the
+adopted-contracts record and note ownership rules remain unchanged.
+
 Before a starter Capture Site review enables Save or promises that saving enables
 its pages, it sends the proposed adapter document and reviewed config revision
 to the host's read-only `check_capture_site` (2026-10-28, `brwr-t8m`). Under
@@ -900,6 +963,28 @@ its history is not recovered. Neither cache
 deletion nor reindex changes these decisions. Optional older-note discovery
 on a recognized page remains best effort, so a broken optional note does not
 hide the primary note.
+
+**Explicit preserved-note viewing (2026-10-28, `brwr-r88`).** The panel's
+**Preserved notes at this address** disclosure runs a separate read-only search
+on demand. It lists up to 24 verified artifact notes whose stored creation
+canonical URL exactly equals the current page normalized with today's
+`strip_params`, including when several historical artifacts share that
+address, no contract remains, or index.db is unavailable. The existing flat
+notes scan bounds apply (4,096 files and 16 MiB); results are explicitly a
+limited search, not a complete history. It verifies ownership at the key's
+actual path and skips malformed, unowned, oversized, symlinked and other-kind
+files. Each row names the title and artifact ID and offers only **View read
+only**. The host rechecks ownership and the stored address on every open.
+
+Stored-address equality authorizes only this explicit read, never identity
+recovery or migration: the primary editor keeps its host-derived key,
+including an occupied URL note, and capture remains unchanged. The viewer is
+separate, text-only and copyable; collapse or navigation clears it and late
+replies cannot restore it. This search does not consult the history index or
+note contracts and cannot make an ordinary uncovered-page load or autosave
+scan the notes folder. If today's stripping no longer produces the stored
+creation address, this disclosure cannot find the note on that route; a route
+that still normalizes to that address or the home folder remains available.
 
 **Hand-removed contracts (2026-10-27, `brwr-hrc`).** Only a removal
 through settings records `[[adapter_id_history]]`, so the host also keeps its
@@ -986,8 +1071,51 @@ revision-checked save. A conflict whose only reader is a retired or adopted
 contract is refused on add but is not shown, because those contracts never
 reach the extension; a known gap, accepted to avoid a protocol change, so
 such a config.toml keeps its colliding stripped URLs until the entry is
-removed by hand. Stored URLs do not record which parameters were
-stripped from them.
+removed by hand.
+
+**Names beside stored URLs (2026-10-28, `brwr-srp`).** New daily-log markers
+carry a host-derived `stripped=<hex JSON>` field beside the existing marker
+payload. Its `url` is the sorted, distinct list of decoded parameter names
+actually removed, preserving their case; `modes` and `trails` hold positional
+lists for each activity mode and optional trail source. This evidence retains
+neither removed values nor original URLs. The canonical URL still preserves
+untouched raw query segments. A known empty list means no query parameter was removed;
+a missing field on an older record means unknown. The log header and event
+payload shapes stay compatible, and old rows are never rewritten.
+
+Index cache format 7 keeps that evidence beside each event and writes the
+SQLite `url_provenance(event_id, artifact_id, role, url, stripped_params)` table
+(`role` is `url`, `mode:<index>`, or `trail:<index>`; the last column is a JSON
+array or SQL NULL for legacy unknown). Trail sources never become URLs for
+the destination artifact's note discovery. V4/V5/V6 caches and V5/V6 saved
+catch-up passes migrate in place with their log checkpoints; records lacking
+evidence stay unknown. Reindex reads both old and new markers; malformed or
+misaligned evidence is skipped rather than guessed, and an unusable cache
+is rebuilt. The existing cache read and publication bounds remain in force.
+
+New page notes and saved summaries write `brauser.stripped_params` beside
+their canonical URL. These exact decoded names use the shared YAML string
+escaping, so a page-controlled name cannot expose HTML or image syntax in a
+Markdown viewer that renders front matter as text. A page note's creation URL
+and its evidence survive later saves from alternate routes and explicit
+re-keying; a legacy note keeps its missing field instead of acquiring today's
+evidence. Older-note
+discovery, View and Use as artifact note refuse a candidate whose recorded
+removed names intersect query or absent keys read by a current, retired or
+adopted contract on that origin. Unrelated tracking names still allow
+contract-verified discovery. Missing legacy evidence keeps the existing
+contract-only checks; it never supplies proof of lossless normalization.
+Explicit preserved-note viewing remains read-only and uses address equality
+only to view, and artifact autosave keys still come exclusively from contracts.
+
+New single-event intents use format 3: the stable payload hash also binds
+names-only evidence. V2 hashes remain frozen and resume their exact prepared
+bytes; V1 hashes can select the pre-provenance current renderer or either
+frozen historical presentation renderer, only with a matching full hash and
+exact torn tail. Batch journals already retain prepared bytes and keep their
+format. A v3 retry with changed removed names refuses without touching the
+log. Downgrading with a pending v3 intent is unsupported; older hosts cannot
+recover it.
 
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing; since PR 4 a changed key is followed, not refused, and the run records the key it wrote (§5.2 step 7).
 
@@ -1369,6 +1497,7 @@ The layout above is the planned release layout. The repository currently contain
 ## 10. Quality
 
 - **Host:** unit tests, property tests on URL normalization and slug generation, and fuzzing (`cargo-fuzz`) on the message parser, frontmatter parser, and path handling.
+- **Scripted host isolation:** debug `scripted-dialogs` lifecycle fixtures use an absolute `BRAUSER_TEST_CONFIG_PATH` under a temporary directory on every platform, with their cache beside it. Ordinary builds ignore the variable; a release build cannot include the feature. The macOS smoke wrapper retains its temporary-HOME defaults (TESTING.md).
 - **Extension:** unit tests, plus Playwright end-to-end tests running the real extension against a real host and a fixture vault.
 - **Round-trip tests:** every profile writes, reads back, and re-writes page notes and summary files with no diff, and user content outside managed blocks survives unchanged.
 - **CI on every PR:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, ESLint, TypeScript strict, dependency review, and the full test suite on macOS and Windows (`macos-15` and `windows-latest`, with `macos-15-intel` (x64) as a fallback only when GitHub cancels a starved `macos-15` job; the headless smoke run and the adapter-template fuzz-target compile check are macOS-only).

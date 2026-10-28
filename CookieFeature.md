@@ -315,3 +315,221 @@ with the full local gate: 134 panel cases and 929 Rust outcomes (886 exercised,
 Linux VM. Completes assigned `brwr-t8m`; `brwr-iqx` remains blocked because its
 acceptance criteria name a deleted finisher whose replacement already has the
 correct notes-folder wording.
+
+
+## 2026-10-28 — Finish interrupted captures after upgrading URL limits
+
+Brauser can now finish an older interrupted capture even when percent encoding
+makes its stored URL exceed the newer 8192-byte limit. Previously, the new
+check rejected the retry before reaching the older host's recovery journal.
+The worker could then drop the event while an unfinished line remained in the
+daily log. The host now checks that journal first, under the existing capture
+lock, for both individual deliveries and batches. This covers the page URL
+and activity mode and incoming-trail URLs.
+
+Recovery still needs the exact entry hash, an unchanged partial prefix, an
+owned log and the same selected folder. A changed retry remains pending for
+repair; it cannot write different content. New events still obey the URL
+limit, and a rejected event cannot block a valid batch neighbor by choosing
+the wrong daily log. Two failing-first regressions cover eight recovery
+combinations and both mixed-batch orders. The full local gate passes with
+931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips), all 15
+extension files and two script files. macOS smoke remains unverified on this
+Linux VM. Completes assigned `brwr-u8r`.
+
+
+## Deliver capture-loss evidence after the last batch (2026-10-28)
+
+Brauser now finishes recording a queue-overflow notice even when there is no
+later page visit to carry it. Previously, hours dropped while the final native
+batch was awaiting acknowledgement stayed visible in the panel but could wait
+indefinitely for their durable log marker. The worker now follows that final
+batch with a standalone delivery containing only the dropped count and time
+range. It stores the delivery ID and exact snapshot before sending; lost
+replies and worker restarts reuse them, while newer losses remain counted for
+a separate marker. Failed deliveries back off and remain visible, and Pause
+still prevents dispatch.
+
+The host takes no page URL or path for this notice. It validates the count,
+timestamps and chronological range, rechecks capture policy and the selected
+home folder, and derives the daily log from the last timestamp. The same owned
+log, compact intent, append/sync and duplicate checks protect this write;
+existing batches keep their historical recovery rendering. Tests reproduce two
+actual dropped hours during the last batch, exercise lost replies and Dismiss
+races, and recover a torn log append exactly once after restart. All required
+checks pass with 936 Rust outcomes including existing sandbox IPC skips, all
+15 extension files and two script files, plus 10,696 inert Markdown renderings.
+Real macOS smoke remains unverified here. Completes assigned `brwr-m64`.
+
+
+## 2026-10-28 — Keep retired adapter history from crowding out settings
+
+Brauser remembers removed adapters so their pages keep the same notes and cannot silently return under a different artifact identity. That history shares config.toml's 64 KiB limit with ordinary settings. Assigned brwr-2iz now gives growing history its own 32 KiB budget, measured as the pretty TOML actually stored. A legacy history already larger than that can stay unchanged or shrink: pausing capture, changing tracking-parameter settings and adding a disjoint site still work while the whole file fits. A refused retirement explains how to pause without removing adapters or restore exact original rules in Settings, rather than returning a generic save failure.
+
+Pruning removes only exact duplicate history entries or contracts restored as active adapters. A distinct older route remains protected even when another adapter uses the same ID. Restoring moves a contract within the file, so it frees history budget rather than total file space; whole-file pressure instead names history's byte cost and asks to reduce optional metadata or summary vocabulary. The usual revision checks and ID freeze still apply, and no note or vault path changes. Four new Rust regressions cover filled histories, native error replies, rejected-write preservation, restoration and identities after restart. The complete local gate passes with 940 Rust outcomes, including 43 explicit sandbox IPC skips, all extension and script files, and the Markdown renderer corpus. Interactive macOS Chrome checks remain unverified on this Linux VM.
+
+
+## 2026-10-28 — Reopen the recorded source of an artifact
+
+A ticket's artifact card can now show which recorded pull request, document or other artifact brought you there. Under Recorded navigation it lists up to five incoming source/transition pairs, each with the source's title, an explicit link opening in a new tab and the latest recorded day. Wording such as “Link navigation from” and “Form submission navigation from” reports the browser observation without claiming why the person followed it. Repeated observations stay one row, while different transition kinds can name the same source. Days determine ordering; the card does not invent an exact within-hour sequence or click count.
+
+The host derives the list from existing trail edges and known source artifacts. Missing sources, self links, back/forward and unknown historical transitions produce no explanation, and mentions, containment and co-focus cannot become navigation evidence. An empty list says that no known incoming source was recorded. Source titles render only as text, links accept HTTP(S) only and use noopener/noreferrer, and following another page clears the old list. Protocol v8 adds a required incoming_trails field, so rebuild the host and extension together; logs, cache formats and collection behavior stay the same.
+
+Completes assigned brwr-1g2. Four new Rust regressions and two composed-panel cases cover native validation, the list cap and ordering, reindex, unknown legacy transitions, hostile titles, unsafe schemes and activating a local source fixture. All 1,680 extension cases pass individually, and the full required and README gate passes with 944 Rust outcomes (901 exercised and 43 explicit sandbox IPC skips), both script files and 10,696 inert Markdown renderings. The first feature gate found old protocol-version fixtures; those were corrected and the entire gate rerun successfully. The fake panel DOM simulates source-tab activation; actual Chrome anchor opening remains unverified on this Linux VM.
+
+
+## 2026-10-28 — Recover interrupted log entries across presentation upgrades
+
+Brauser can now finish a partially written single-event log entry after a new
+version changes how titles or context are displayed. Previously those journals
+kept only a hash of the rendered line, so recovery depended on reconstructing
+exactly the older renderer. New version-2 journals retain the host's prepared
+append, its hash and a separate identity hash of the normalized event fields.
+After a restart, the same event can finish those original bytes through either
+the older single-event delivery or the current worker's batch delivery. The
+shared path covers visits, activity, explicit Why context and summary events.
+
+Recovery checks the payload and exact torn tail before appending and preserves
+unrelated log rows. A different selected folder, changed payload, edited tail,
+corrupt journal or exceeded size limit refuses the write. Completed visit
+markers still deduplicate; summaries also keep their exact path/key and folder
+checks. Prepared entries are capped at 512 KiB and their serialized journals
+at 1 MiB, with a maximum-field activity fixture checking those budgets. Older
+v1 journals retain the frozen-renderer compatibility, and unknown historical
+renderings still need manual repair rather than a guessed append. Four new
+regressions pass alongside the full local gate. No live service was touched.
+
+## 2026-10-28 — Read preserved artifact notes separately
+
+When capture rules disappear or several historical artifacts share the same
+stored address, Brauser keeps the notes but cannot safely choose one for
+editing. The panel now offers **Preserved notes at this address** below the
+editor. Expanding it searches the notes folder and lists matching titles
+with their artifact IDs, so notes with similar names remain distinguishable.
+**View read only** opens one in a separate text-only viewer with Copy and
+Close. The current editable note keeps its original key and revision, even
+when that address already has its own URL note. Viewing never migrates a
+file or restores capture.
+
+The host checks both Brauser ownership and the exact recorded creation
+address at the key's actual file path, then repeats those checks when the
+person opens a result. It rejects unowned or malformed files and reuses the
+existing limited scan, showing at most 24 notes. The operation does not need
+index.db or recorded adapter contracts; a broken history cache therefore
+cannot hide otherwise readable matching notes or choose an autosave target.
+The search can omit files beyond its budget and cannot find a creation
+address that today's stripping rules no longer produce. Collapse and
+navigation clear the viewer, and late replies cannot bring its text back.
+
+Six native regressions, one wire test and eight panel cases cover ambiguity,
+an occupied URL note, missing history, ownership changes, response bounds,
+copying, autosave identity and asynchronous navigation. The full required and
+README gates pass, including all 144 panel cases. macOS Chrome interaction
+remains a separate human check; no live service or external API was touched.
+
+## 2026-10-28 — Isolate scripted host configuration on Windows and Unix
+
+The host lifecycle tests now choose a disposable configuration file explicitly
+instead of relying on HOME alone. Windows obtains application directories
+through Known Folders, so changing HOME did not prevent those tests from
+reading a person's real Brauser settings. The new BRAUSER_TEST_CONFIG_PATH
+seam exists only in debug scripted-dialogs builds; ordinary builds ignore it,
+and the existing release guard prevents shipping that feature. Empty or
+relative overrides fail rather than silently using a real configuration.
+
+Both host-level picker fixtures now set this path, including the test that
+kills the host while a picker is open. Configuration side files and the
+rebuildable cache stay beside the temporary configuration. Process-level
+regressions check the printed path, the exact revision of the file actually
+loaded, disposable cache placement and invalid-path refusal. The ordinary
+build also proves it ignores the override. No dialog count or macOS smoke
+configuration convention changed; Windows execution remains with CI.
+
+## 2026-10-28 — Explain why the current page is outside capture
+
+The panel now gives a readable explanation when automatic capture does not
+apply to the current page. It distinguishes a paused configuration from a
+pause still pending in this browser, a pending site removal, a page outside
+the chosen workspaces or accounts, and a page that matches no rule. It also
+points out missing setup, configuration repair and unavailable browser
+settings. An existing site's button opens settings; a site without rules
+opens the existing Capture Site review and still requires an explicit save.
+
+The explanation uses the same ordered URL evaluator and revision-cached
+compiler as capture, with local pauses and removals taking precedence. It
+does not inspect links, infer visits from link counts or change capture,
+note identity, or the host's history verdict. Navigation, changed scope and
+local status refresh the explanation; unreadable and private tabs clear it.
+Repeated control refreshes retain unchanged status text to avoid repeating
+screen-reader announcements. Fourteen new composed-panel cases cover these
+states and their actions, bringing the individually exercised panel suite to
+158 passing cases. Real macOS Chrome interaction remains human verification.
+
+## 2026-10-28 — Keep daily-log page titles and Why context as text
+
+A page title or the context someone adds with Why can contain dollar signs,
+backticks or Markdown-like text. New daily-log rows now run those fields
+through the same inline escaping used by summaries, so a Markdown viewer
+shows them as text instead of interpreting math or code. This applies to
+older queued visit events and current hourly activity, delivered individually
+or in a batch, as well as Why context. The structured event payload retains
+its original text for indexing and regeneration.
+
+Changing the written bytes also needed care for an interrupted older write.
+Newer journals already store their prepared bytes, but v1 journals only
+stored a hash. Brauser now retains two immutable historical renderers: the
+original text escaper and the later Unicode-aware sanitizer before math/code
+escaping. Recovery completes a historical row only when its whole-entry hash
+and exact torn bytes agree with the journal. It never rewrites completed rows.
+Two regressions cover fifteen new-write/recovery scenarios, including restart,
+a cut inside a multibyte title, refused changed text and edited tails, retained
+unrelated rows and duplicate retries. All required local checks pass; the
+macOS browser smoke runner cannot run on this Linux VM (`brwr-2za`).
+
+
+## 2026-10-28 — Review recovered note copies one at a time
+
+Returning to unsaved notes from several pages now presents a separate recovery
+card for each copy instead of combining everything into one text box. Each
+card shows the page address, why the text was kept, a read-only preview, and
+its own Copy and Discard buttons. Copy preserves exactly that note's text,
+including whitespace; an empty edit is explicitly described as clearing the
+note and copies an empty string. Clipboard errors stay beside the relevant
+copy so the person can retry without losing it.
+
+Discard selects the copy's immutable snapshot ID and removes only that copy.
+This also works for conflicts kept only in memory when local storage is
+unavailable. Other recovered notes, current typing and newer snapshots from
+another panel remain intact, and a storage refusal leaves the chosen copy
+visible and retryable. Recovery still never fills the editor or sends a save
+automatically. Four failing-first built-panel tests and two additional editor
+regressions cover the interaction; the existing teardown, conflict and
+acknowledgement tests now exercise the individual controls. The smoke check
+uses the new card selector, with the same three expected folder-picker
+responses; a real Chrome/macOS pass remains separate verification.
+
+
+## 2026-10-28 — Remember what was removed from a saved page address
+
+Brauser now records which query parameter names it removed when saving an
+address, without keeping their values or a second copy of the original URL.
+This helps distinguish a clean address from one that became ambiguous after
+tracking or identity parameters disappeared. If a later capture rule would
+interpret a stripped parameter differently — including treating its absence
+as meaningful — Brauser refuses to offer that older note for migration into
+another artifact. Its text stays on disk, and explicit preserved-note viewing
+remains a read-only way to inspect copies. Ordinary tracking names do not
+prevent discovery when no recorded rule reads them; primary autosave identity
+continues to come from the existing host contracts.
+
+The evidence travels with daily-log page, mode and trail URLs, the rebuilt
+index and its queryable SQLite table, and note and summary front matter.
+Notes preserve their creation address and evidence through later edits and
+explicit re-keying. Older records remain readable with unknown evidence;
+upgrading or saving them never invents proof that nothing was stripped.
+New interrupted-write intents bind the names as well as the normalized
+content, while the old v1 renderers and v2 hashes still recover only their
+exact original bytes. Ten new regression tests cover these paths, including
+a later-adapter collision and a review-discovered error-classification bug.
+The full required and README gates pass; real macOS browser checks remain
+outside this Linux run. Completes assigned `brwr-srp`.

@@ -60,6 +60,12 @@ The panel updates when settings change, can send pending activity and pause capt
 
 The side panel and settings headers show the extension's build commit, with `-dirty` when tracked files had uncommitted changes, and the host's commit once it answers; a host built from a different commit is flagged, so rebuild both after pulling.
 
+The artifact card's **Recorded navigation** lists up to five incoming
+source/transition pairs with links and the last recorded day. It uses only
+known recorded artifacts; back/forward and missing sources do not invent an
+explanation. One source may appear under several navigation kinds. This
+requires the extension and host built together with protocol v8.
+
 If **Choose folder** is disabled and the settings page says "Native host unavailable," check that the extension ID in the native-host registration matches the ID shown on `chrome://extensions`, rebuild the host at the registered path, then reload the settings page and reopen the panel. The development host registration is per user; the guided macOS smoke run below sets up its own isolated profile automatically.
 
 For a guided macOS Chrome smoke run, build both components as above, then run:
@@ -83,8 +89,10 @@ Page notes are replaced whole under a version the panel names on every save (`lo
 Unsaved note edits also have a local recovery copy in this browser profile,
 written as you type so closing the panel during a save does not lose newer
 typing. Reopening shows the current saved note and a separate recovery box:
-use **Copy** to recover the text yourself, or **Discard recovery copies** to
-remove the displayed copies. Recovery never overwrites a note automatically.
+each copy shows its page address and has its own **Copy** and **Discard**
+controls. Copy keeps just that note's exact text, and Discard removes only
+that copy. Empty edits are labelled clearly as clearing the note. Recovery
+never overwrites a note automatically.
 Confirmed saves clear their own draft; conflicted copies stay until discarded.
 These copies include note text and page addresses, stay outside the home folder,
 and are not synced by Brauser. If browser storage is blocked or full, the panel
@@ -116,6 +124,14 @@ settings shows a warning; nothing is blocked. For a full record it also
 offers **Forget recorded adapters**. Notes alone do not turn
 capture back on.
 
+If capture rules were removed and an artifact note is no longer the page's
+editable note, expand **Preserved notes at this address** below the editor.
+Brauser searches for up to 24 owned artifact notes with the same stored
+address and shows their titles and artifact IDs. Choose **View read only** to
+read or copy one separately. Several pages may share that address; viewing
+never replaces the editable note or turns capture on. This is a limited
+search of the notes folder, and it does not need the history cache.
+
 Expand **Page patterns** in the panel and choose **Review page patterns** to
 inspect the current address and same-site link patterns, including on sites
 without capture rules. It reads up to 500 anchors only on that click, replaces
@@ -123,6 +139,12 @@ identifier and query values with placeholders, and generalizes route words
 seen in only one link shape. Short lowercase route words remain readable;
 closing, collapsing, leaving or reloading the page forgets its link patterns. This is
 a preview and does not enable capture on an unknown site.
+
+The panel also explains when capture is paused, a site's removal is pending,
+the current page is outside the chosen workspaces/accounts, or no page rule
+matches. Use its settings button to review the relevant configuration, or
+**Review Capture Site** when the site has no rules. This explanation uses
+your current capture rules; it does not inspect page links or enable capture.
 
 While capture is on, Brauser keeps up to 20 visited URL patterns per configured
 site for seven days in trusted extension storage, including patterns of pages

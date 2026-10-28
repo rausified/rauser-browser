@@ -141,9 +141,10 @@ or more and code-length space runs as numeric entities), single-line fields
 through `markdown::inline` or wikilinks, and front matter through
 `markdown::yaml_string` with no entities; `npm run test:markdown-neutralizer`
 renders the shared corpus with markdown-it, micromark and marked, in CI too.
-The index cache is format 6 (`STATE_VERSION`; a format-5 cache migrates in
-place); summaries never count as opens or opened days, artifact files gain a
-Summary line and date-ordered Timeline summary lines, and Recent rows,
+The index cache is format 7 (`STATE_VERSION`; older formats 4–6 migrate in
+place, with unknown URL provenance for old records); summaries never count as
+opens or opened days, artifact files gain a Summary line and date-ordered
+Timeline summary lines, and Recent rows,
 `get_artifact` (an unrecognized page included, quietly null on a failed
 lookup), and the worklog carry them. `open_summary` opens only the record's
 owned summary file through the native host's `SetupContext.open` (PR 3's
@@ -222,6 +223,17 @@ history, or adopted contract) is refused as `invalid_config`
 already has one still loads and saves, and settings derives the warning from
 the snapshot and offers **Stop stripping**.
 
+Explicit preserved-note viewing (`brwr-r88`, 2026-10-28) is separate from
+note-key resolution. The panel's **Preserved notes at this address** disclosure
+uses additive protocol-v8 `list_preserved_notes` / `preserved_notes_listed`
+and `view_preserved_note` (answered by `note_loaded`). It uses the existing
+bounded vault scan, verifies an artifact note at its owned path and exact
+stored canonical address, and lists at most 24 titles/IDs. The viewer is
+read-only and copyable; it never enters NoteEditor, migrates a file, restores
+capture, or treats a canonical address as autosave identity. No index or
+recorded contracts are needed; ordinary uncovered-page note loads still do
+no scan. Collapse/navigation clear results and invalidate pending reads.
+
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety
@@ -270,6 +282,39 @@ contained artifact's own card and "Worked on inside" with its rolled-up
 contents on a container's card. Downgrading after adding repositories is
 unsupported: older hosts reject `within` in the adapter config and in adapter
 history.
+
+Single-event recovery (`brwr-3cc`, 2026-10-28): new per-event intents use
+format 2 with prepared bytes (512 KiB cap), their hash and a renderer-independent
+payload hash; the full JSON journal is capped at 1 MiB. Single and batch
+retries check that identity and exact torn bytes before resuming. V1 hash-only
+intents retain two frozen renderer generations in `host/src/capture/legacy.rs`:
+before the presentation sanitizer, and before inline math/code escaping
+(`brwr-2za`). New daily-log titles and Why text use `markdown::inline`. Never
+remove the frozen recovery compatibility when changing presentation.
+Complete visit markers still deduplicate by ID;
+summary retries require the same payload and selected folder too.
+
+Stripped-parameter provenance (`brwr-srp`, 2026-10-28): canonicalization
+records the sorted, distinct decoded names actually removed, never values.
+New daily markers add `stripped=<hex JSON>` with main/mode/trail evidence;
+wire event shapes and the daily-log header are unchanged. Cache format 7
+keeps it beside each event and SQLite's `url_provenance` table exposes it
+(JSON arrays, SQL NULL for legacy unknown). Notes and summaries record
+`brauser.stripped_params`; note saves and migrations preserve creation
+evidence, including a legacy missing field. Older-note discovery/view/migration
+rejects evidence that removed any current or recorded contract's query/absent
+key on that origin. It never chooses a primary autosave key. New single-event
+intents are v3 and bind that evidence; retain the frozen v2 hash and all three
+pre-provenance v1 presentation candidates for exact recovery. Provenance must
+never retain removed values or an extra raw URL.
+
+Incoming navigation (`brwr-1g2`, 2026-10-28): protocol version 8 adds required
+`ArtifactView.incoming_trails`, up to five host-derived source/transition pairs
+ordered by latest recorded local day, then source ID and transition. The panel
+shows text-only source titles, explicit HTTP(S) links and navigation wording.
+Unknown legacy transitions, back/forward, unresolved sources and non-trail
+relationships never supply provenance. Empty results say no known incoming
+source was recorded; log and cache formats are unchanged.
 
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
@@ -395,6 +440,7 @@ These rules exist because repeated review passes, main moving under open PRs, an
 - **One Codex pass.** Run `codex exec review --base origin/main` once, after the full gate. Fix every P1 test-first. File each P2 and P3 as a bead (with the finding text and file) instead of fixing it in the PR, unless the fix is a few lines and needs no new test seam. Run a second pass only when the P1 fixes changed behaviour substantially; never a third.
 - **Run the Codex review alongside CI**, not after it. Both start on the same pushed head.
 - **Announce the final stretch of a big PR.** Before merging main into a PR that touches more than about ten files or a shared seam (protocol schema, `adapter-templates`, `service/`, `config.rs`), tell the other active sessions so they hold merges that touch the same files until it lands. Whoever merges second resolves the conflicts.
+- **Focused checks per task, the full gate once.** In multi-task builds, each task runs only the tests for what it touched (the named tests, the affected crate or extension test file, plus fmt and clippy). The full gate in README.md runs once, before the PR review, and again only after merges or fixes that touch other areas.
 - **Overlap per-task review with the next task** in multi-task plans: review task N while task N+1 is being built, unless N+1 depends on code the review may change. Batch small, low-risk tasks (docs, wiring) into one review.
 - **Check scope before a large build.** For a plan of more than about five tasks, list the user-facing decisions it assumes and confirm any that are open before building.
 

@@ -4,6 +4,8 @@
 //! fragments or configured tracking parameters. A stable lock outside the
 //! chosen home folder covers the event-ID check, append, and file sync.
 
+mod legacy;
+
 use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -21,6 +23,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::brand::{APP_NAME, NAMESPACE};
+use crate::url_provenance::{StoredUrl, UrlProvenance};
 use crate::vault::{
     TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
 };
@@ -28,6 +31,9 @@ use crate::vault::{
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
 const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
+// Includes hex-encoded activity metadata at every accepted field bound.
+const MAX_VISIT_ENTRY_BYTES: usize = 512 * 1024;
+const MAX_VISIT_INTENT_BYTES: usize = 1024 * 1024;
 const MAX_BATCH_INTENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BATCH_ENTRIES: usize = 65;
 const MAX_URL_BYTES: usize = 8192;
@@ -49,7 +55,9 @@ pub struct CaptureStore {
 
 /// A durable intent is published before touching Markdown. On replay, only a
 /// complete marker in the original log is terminal; an intent alone is never
-/// treated as evidence that the visit was saved.
+/// treated as evidence that the visit was saved. V1 retained only a rendered
+/// hash; v2 retains bounded prepared bytes plus a stable unrendered identity.
+/// V3 also binds the removed query names. V1/V2 recovery stays byte-exact.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VisitIntent {
@@ -58,6 +66,10 @@ struct VisitIntent {
     root_identity: String,
     relative_log: String,
     entry_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payload_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry: Option<String>,
     offset: u64,
 }
 
@@ -90,10 +102,19 @@ pub struct CaptureBatchOutcome {
 struct BatchEntry {
     event_id: String,
     event_hash: String,
+    payload_hash: PayloadHashes,
     timestamp: OffsetDateTime,
     entry: String,
-    legacy_entry: Option<String>,
+    legacy_entries: Vec<String>,
+    urls_within_bound: bool,
     overflow: bool,
+}
+
+/// New intents bind names-only provenance as well as normalized event data.
+/// The frozen v2 hash is used only when replaying a pre-provenance intent.
+struct PayloadHashes {
+    current: String,
+    v2: String,
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +143,29 @@ pub enum CaptureOutcome {
     Retryable { message: String },
 }
 
+/// A host-built log payload and evidence from its original URLs. Provenance
+/// is kept outside the wire event; extension fields cannot supply it.
+struct MarkerPayload<'a> {
+    kind: &'a str,
+    data: serde_json::Value,
+    provenance: Option<UrlProvenance>,
+}
+
+impl<'a> MarkerPayload<'a> {
+    fn new(kind: &'a str, data: serde_json::Value) -> Self {
+        Self {
+            kind,
+            data,
+            provenance: None,
+        }
+    }
+
+    fn with_provenance(mut self, provenance: UrlProvenance) -> Self {
+        self.provenance = Some(provenance);
+        self
+    }
+}
+
 struct EventRendering<'a> {
     body: Option<&'a str>,
     marker_metadata: Option<&'a str>,
@@ -131,6 +175,8 @@ struct EventRendering<'a> {
     /// entry logged under an older key, path, or folder must not pass for
     /// the current one. A visit dedupes by ID alone.
     exact_replay: bool,
+    urls_within_bound: bool,
+    provenance: String,
 }
 
 /// Validate new deliveries before replaying adapter matching or writing them.
@@ -299,6 +345,7 @@ impl CaptureStore {
             safe_title(event.title.as_deref()),
             measures.join(" · ")
         );
+        let mut provenance = UrlProvenance::default();
         let mut payload = event.clone();
         for mode in &mut payload.modes {
             let source = match parse_page_url(&mode.url) {
@@ -310,13 +357,20 @@ impl CaptureStore {
                     reason: "mode_site_not_allowed".into(),
                 };
             }
-            mode.url = match normalize_capture_url(source, policy.strip_params) {
-                Ok(normalized) => normalized,
+            let stored = match normalize_capture_url(source, policy.strip_params) {
+                Ok(stored) => stored,
                 Err(outcome) => return outcome,
             };
+            mode.url = stored.url;
+            provenance.modes.push(
+                stored
+                    .stripped_params
+                    .expect("new normalization has evidence"),
+            );
         }
         for trail in &mut payload.trails {
             let Some(raw_source) = trail.from_url.as_deref() else {
+                provenance.trails.push(None);
                 continue;
             };
             let source = match parse_page_url(raw_source) {
@@ -328,10 +382,12 @@ impl CaptureStore {
                     reason: "trail_site_not_allowed".into(),
                 };
             }
-            trail.from_url = match normalize_capture_url(source, policy.strip_params) {
-                Ok(normalized) => Some(normalized),
+            let stored = match normalize_capture_url(source, policy.strip_params) {
+                Ok(stored) => stored,
                 Err(outcome) => return outcome,
             };
+            trail.from_url = Some(stored.url);
+            provenance.trails.push(stored.stripped_params);
         }
         let visit = VisitEvent {
             event_id: event.event_id.clone(),
@@ -352,7 +408,7 @@ impl CaptureStore {
             policy,
             &visit,
             Some(&body),
-            Some(("activity", marker)),
+            Some(MarkerPayload::new("activity", marker).with_provenance(provenance)),
             EntryGate::SiteAllowlist,
         )
     }
@@ -388,7 +444,7 @@ impl CaptureStore {
             policy,
             &visit,
             Some(&body),
-            Some(("why", marker)),
+            Some(MarkerPayload::new("why", marker)),
             EntryGate::SiteAllowlist,
         )
     }
@@ -471,7 +527,7 @@ impl CaptureStore {
             policy,
             &visit,
             Some(&body),
-            Some(("summary", marker)),
+            Some(MarkerPayload::new("summary", marker)),
             EntryGate::AnyHttpPage,
             &mut written,
         );
@@ -537,7 +593,7 @@ impl CaptureStore {
             policy,
             &event,
             Some(&body),
-            Some(("overflow", marker)),
+            Some(MarkerPayload::new("overflow", marker)),
             EntryGate::SiteAllowlist,
         )
     }
@@ -604,12 +660,23 @@ impl CaptureStore {
                     policy,
                     &event,
                     Some(&body),
-                    marker.map(|value| ("overflow", value)),
+                    marker.map(|value| MarkerPayload::new("overflow", value)),
                     true,
                 ) {
                     prepared.push(entry);
                 }
             }
+        }
+
+        // Overflow has no page identity. With no event anchor, its validated
+        // last timestamp alone chooses a day inside the selected home folder.
+        // Retain anchored rendering above for exact retries of older batches.
+        if events.is_empty()
+            && policy.enabled
+            && let Some(overflow) = overflow
+            && let Ok(entry) = self.prepare_standalone_overflow(batch_id, overflow)
+        {
+            prepared.push(entry);
         }
 
         if prepared.is_empty() {
@@ -655,12 +722,52 @@ impl CaptureStore {
         }
     }
 
+    fn prepare_standalone_overflow(
+        &self,
+        batch_id: &str,
+        overflow: &OverflowMarker,
+    ) -> std::result::Result<BatchEntry, String> {
+        let id = parse_event_id(batch_id)?;
+        let first = parse_event_time(&overflow.first_occurred_at)?;
+        let timestamp = parse_event_time(&overflow.last_occurred_at)?;
+        if overflow.count == 0 || first > timestamp {
+            return Err("invalid_overflow_marker".into());
+        }
+        check_event_window(timestamp)?;
+        let event_hash = sha256_hex(id.as_bytes());
+        let url_hash = sha256_hex(b"");
+        let data = hex::encode(serde_json::to_vec(overflow).map_err(|e| e.to_string())?);
+        let entry = format!(
+            "\n- {} — Capture overflow: {} completed activity hour(s) were dropped between {} and {}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={} kind=overflow data={data} -->\n",
+            overflow.last_occurred_at,
+            overflow.count,
+            overflow.first_occurred_at,
+            overflow.last_occurred_at,
+            overflow.last_occurred_at,
+        );
+        Ok(BatchEntry {
+            event_id: batch_id.to_owned(),
+            event_hash,
+            // Standalone overflow has no single-event URL identity. Its
+            // compact batch journal already retains the exact append.
+            payload_hash: PayloadHashes {
+                current: sha256_hex(entry.as_bytes()),
+                v2: String::new(),
+            },
+            timestamp,
+            entry,
+            legacy_entries: Vec::new(),
+            urls_within_bound: true,
+            overflow: true,
+        })
+    }
+
     fn prepare_batch_entry(
         &self,
         policy: CapturePolicy<'_>,
         event: &VisitEvent,
         custom_body: Option<&str>,
-        marker_payload: Option<(&str, serde_json::Value)>,
+        mut marker_payload: Option<MarkerPayload<'_>>,
         overflow: bool,
     ) -> std::result::Result<BatchEntry, CaptureOutcome> {
         if !policy.enabled {
@@ -699,9 +806,21 @@ impl CaptureStore {
                 reason: "site_not_allowed".into(),
             });
         }
-        let normalized = normalize_capture_url(original, policy.strip_params)?;
+        let stored = normalize_capture_url(original, policy.strip_params)?;
+        let provenance = take_provenance(
+            &mut marker_payload,
+            stored
+                .stripped_params
+                .expect("new normalization has evidence"),
+        );
+        let normalized = stored.url;
+        let urls_within_bound = stored_urls_within_bound(&normalized, marker_payload.as_ref());
         let marker_metadata = match marker_payload {
-            Some((kind, mut payload)) => {
+            Some(MarkerPayload {
+                kind,
+                data: mut payload,
+                ..
+            }) => {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("url".into(), serde_json::Value::String(normalized.clone()));
                     // Use the same spelling as the marker hash and live index.
@@ -727,18 +846,22 @@ impl CaptureStore {
         let event_hash = sha256_hex(event_id.as_bytes());
         let url_hash = sha256_hex(normalized.as_bytes());
         let entry = format!(
-            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
-            event.occurred_at, marker_metadata
+            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{marker_metadata}{provenance} -->\n",
+            event.occurred_at
         );
-        let legacy_entry = pre_sanitizer_entry(&entry, event, false);
+        let legacy_entries = legacy_entries(&entry, event, false);
+        let payload_hash =
+            visit_payload_hash(&event_id, &normalized, event, &marker_metadata, &provenance);
         Ok(BatchEntry {
             // Replies correlate to the original request; only durable identity
             // and the payload use the canonical spelling above.
             event_id: event.event_id.clone(),
             event_hash,
+            payload_hash,
             timestamp,
             entry,
-            legacy_entry,
+            legacy_entries,
+            urls_within_bound,
             overflow,
         })
     }
@@ -777,6 +900,7 @@ impl CaptureStore {
                 reason: "empty_activity".into(),
             });
         }
+        let mut provenance = UrlProvenance::default();
         let mut payload = event.clone();
         for mode in &mut payload.modes {
             let source =
@@ -786,10 +910,17 @@ impl CaptureStore {
                     reason: "mode_site_not_allowed".into(),
                 });
             }
-            mode.url = normalize_capture_url(source, policy.strip_params)?;
+            let stored = normalize_capture_url(source, policy.strip_params)?;
+            mode.url = stored.url;
+            provenance.modes.push(
+                stored
+                    .stripped_params
+                    .expect("new normalization has evidence"),
+            );
         }
         for trail in &mut payload.trails {
             let Some(raw_source) = trail.from_url.as_deref() else {
+                provenance.trails.push(None);
                 continue;
             };
             let source =
@@ -799,7 +930,9 @@ impl CaptureStore {
                     reason: "trail_site_not_allowed".into(),
                 });
             }
-            trail.from_url = Some(normalize_capture_url(source, policy.strip_params)?);
+            let stored = normalize_capture_url(source, policy.strip_params)?;
+            trail.from_url = Some(stored.url);
+            provenance.trails.push(stored.stripped_params);
         }
         let body = format!(
             "{} — {} — {}",
@@ -820,7 +953,7 @@ impl CaptureStore {
                 incognito: event.incognito,
             },
             Some(&body),
-            Some(("activity", marker)),
+            Some(MarkerPayload::new("activity", marker).with_provenance(provenance)),
             false,
         )
     }
@@ -830,7 +963,7 @@ impl CaptureStore {
         policy: CapturePolicy<'_>,
         event: &VisitEvent,
         custom_body: Option<&str>,
-        marker_payload: Option<(&str, serde_json::Value)>,
+        marker_payload: Option<MarkerPayload<'_>>,
         gate: EntryGate,
     ) -> CaptureOutcome {
         self.record_entry_with_payload(policy, event, custom_body, marker_payload, gate, &mut None)
@@ -845,7 +978,7 @@ impl CaptureStore {
         policy: CapturePolicy<'_>,
         event: &VisitEvent,
         custom_body: Option<&str>,
-        marker_payload: Option<(&str, serde_json::Value)>,
+        mut marker_payload: Option<MarkerPayload<'_>>,
         gate: EntryGate,
         written: &mut Option<serde_json::Value>,
     ) -> CaptureOutcome {
@@ -902,15 +1035,27 @@ impl CaptureStore {
                 reason: "site_not_allowed".into(),
             };
         }
-        let normalized = match normalize_capture_url(original, policy.strip_params) {
+        let stored = match normalize_capture_url(original, policy.strip_params) {
             Ok(value) => value,
             Err(outcome) => return outcome,
         };
+        let provenance = take_provenance(
+            &mut marker_payload,
+            stored
+                .stripped_params
+                .expect("new normalization has evidence"),
+        );
+        let normalized = stored.url;
+        let urls_within_bound = stored_urls_within_bound(&normalized, marker_payload.as_ref());
         let exact_replay = marker_payload
             .as_ref()
-            .is_some_and(|(kind, _)| *kind == "summary");
+            .is_some_and(|payload| payload.kind == "summary");
         let marker_metadata = match marker_payload {
-            Some((kind, mut payload)) => {
+            Some(MarkerPayload {
+                kind,
+                data: mut payload,
+                ..
+            }) => {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("url".into(), serde_json::Value::String(normalized.clone()));
                     // Use the same spelling as the marker hash and live index.
@@ -954,6 +1099,8 @@ impl CaptureStore {
                 body: custom_body,
                 marker_metadata: marker_metadata.as_deref(),
                 exact_replay,
+                urls_within_bound,
+                provenance,
             },
         ) {
             Ok(outcome) => outcome,
@@ -985,14 +1132,22 @@ impl CaptureStore {
             || format!("{} — {} — <{}>", event.occurred_at, title, normalized_url),
             |prefix| format!("{prefix} — <{normalized_url}>"),
         );
+        let metadata = rendering.marker_metadata.unwrap_or("");
+        let provenance = &rendering.provenance;
         let entry = format!(
-            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{} -->\n",
+            "\n- {body}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={}{metadata}{provenance} -->\n",
             event.occurred_at,
-            rendering.marker_metadata.unwrap_or("")
         );
         let journal_path = self.journal_path(&event_hash);
+        let payload_hash = visit_payload_hash(
+            event_id,
+            normalized_url,
+            event,
+            rendering.marker_metadata.unwrap_or(""),
+            &rendering.provenance,
+        );
         if let Some(intent) = read_intent(&journal_path)? {
-            let legacy_entry = pre_sanitizer_entry(
+            let legacy_entries = legacy_entries(
                 &entry,
                 event,
                 rendering
@@ -1003,9 +1158,18 @@ impl CaptureStore {
                 &intent,
                 &event_hash,
                 entry.as_bytes(),
-                legacy_entry.as_deref(),
+                &legacy_entries,
+                &payload_hash,
                 rendering.exact_replay,
             );
+        }
+
+        // V1 intents predate the stored-URL limit. Only their exact hash and
+        // prefix may complete an old append; every new write keeps the bound.
+        if !rendering.urls_within_bound {
+            return Ok(CaptureOutcome::Rejected {
+                reason: "url_too_long".into(),
+            });
         }
 
         let (relative_dir, filename) = self.log_parts(timestamp);
@@ -1057,7 +1221,12 @@ impl CaptureStore {
             // file sync. Do not acknowledge replay until it is durable.
             file.sync_all()
                 .context("syncing replayed daily log entry")?;
-            let intent = self.intent(&relative_dir.join(&filename), &entry, metadata.len())?;
+            let intent = self.intent(
+                &relative_dir.join(&filename),
+                &entry,
+                metadata.len(),
+                &payload_hash.current,
+            )?;
             publish_intent(&journal_path, &intent)?;
             return Ok(CaptureOutcome::Suppressed {
                 reason: "duplicate_event".into(),
@@ -1069,7 +1238,12 @@ impl CaptureStore {
                 reason: "daily_log_full".into(),
             });
         }
-        let intent = self.intent(&relative_dir.join(&filename), &entry, metadata.len())?;
+        let intent = self.intent(
+            &relative_dir.join(&filename),
+            &entry,
+            metadata.len(),
+            &payload_hash.current,
+        )?;
         publish_intent(&journal_path, &intent)
             .context("recording visit intent before Markdown append")?;
         if let Err(error) = file
@@ -1098,9 +1272,18 @@ impl CaptureStore {
             .join(format!("{event_hash}.json"))
     }
 
-    fn intent(&self, relative_log: &Path, entry: &str, offset: u64) -> Result<VisitIntent> {
+    fn intent(
+        &self,
+        relative_log: &Path,
+        entry: &str,
+        offset: u64,
+        payload_hash: &str,
+    ) -> Result<VisitIntent> {
+        if entry.len() > MAX_VISIT_ENTRY_BYTES {
+            bail!("visit entry exceeds its size limit");
+        }
         Ok(VisitIntent {
-            version: 1,
+            version: 3,
             root_path: self
                 .root_path
                 .to_str()
@@ -1112,8 +1295,19 @@ impl CaptureStore {
                 .context("log path is not UTF-8")?
                 .to_owned(),
             entry_hash: sha256_hex(entry.as_bytes()),
+            payload_hash: Some(payload_hash.to_owned()),
+            entry: Some(entry.to_owned()),
             offset,
         })
+    }
+
+    #[cfg(test)]
+    fn legacy_intent(&self, relative_log: &Path, entry: &str, offset: u64) -> Result<VisitIntent> {
+        let mut intent = self.intent(relative_log, entry, offset, "")?;
+        intent.version = 1;
+        intent.payload_hash = None;
+        intent.entry = None;
+        Ok(intent)
     }
 
     fn replay_intent(
@@ -1121,18 +1315,44 @@ impl CaptureStore {
         intent: &VisitIntent,
         event_hash: &str,
         entry: &[u8],
-        legacy_entry: Option<&str>,
+        legacy_entries: &[String],
+        payload_hash: &PayloadHashes,
         exact: bool,
     ) -> Result<CaptureOutcome> {
+        match intent.version {
+            1 if intent.entry.is_none() && intent.payload_hash.is_none() => {}
+            2 | 3
+                if intent.entry.as_ref().is_some_and(|prepared| {
+                    prepared.len() <= MAX_VISIT_ENTRY_BYTES
+                        && intent.entry_hash == sha256_hex(prepared.as_bytes())
+                }) && intent
+                    .payload_hash
+                    .as_ref()
+                    .is_some_and(|hash| is_sha256(hash)) => {}
+            _ => bail!("visit intent is invalid; manual repair is required"),
+        }
+        let payload_matches = if intent.version >= 2 {
+            let expected = if intent.version == 2 {
+                &payload_hash.v2
+            } else {
+                &payload_hash.current
+            };
+            intent.payload_hash.as_deref() == Some(expected.as_str())
+        } else {
+            intent.entry_hash == sha256_hex(entry)
+                || legacy_entries
+                    .iter()
+                    .any(|legacy| intent.entry_hash == sha256_hex(legacy.as_bytes()))
+        };
         if exact {
             if self.root_identity != intent.root_identity {
                 bail!("visit belongs to a previously selected home folder; do not append there");
             }
-            if intent.entry_hash != sha256_hex(entry) {
+            if !payload_matches {
                 bail!("queued visit changed after a partial write; manual repair is required");
             }
         }
-        if intent.version != 1 || intent.entry_hash.len() != 64 || intent.offset > MAX_LOG_BYTES {
+        if !is_sha256(&intent.entry_hash) || intent.offset > MAX_LOG_BYTES {
             bail!("visit intent is invalid; manual repair is required");
         }
         let relative_log = checked_relative_dir(&intent.relative_log)?;
@@ -1177,14 +1397,21 @@ impl CaptureStore {
         if self.root_identity != intent.root_identity {
             bail!("visit belongs to a previously selected home folder; do not append there");
         }
-        // V1 intents hash presentation bytes. For an interrupted pre-sanitizer
-        // append, accept only the exact older rendering whose complete hash
+        if !payload_matches {
+            bail!("queued visit changed after a partial write; manual repair is required");
+        }
+        // V2 intents retain their exact prepared bytes, independent of the
+        // current renderer. V1 intents hash presentation bytes: accept only
+        // the exact historical rendering whose complete hash
         // matches the durable intent. Complete markers above still dedupe,
         // and the tail check below must match this same historical entry.
-        let entry = if intent.entry_hash == sha256_hex(entry) {
+        let entry = if let Some(prepared) = &intent.entry {
+            prepared.as_bytes()
+        } else if intent.entry_hash == sha256_hex(entry) {
             entry
-        } else if let Some(legacy) = legacy_entry
-            && intent.entry_hash == sha256_hex(legacy.as_bytes())
+        } else if let Some(legacy) = legacy_entries
+            .iter()
+            .find(|legacy| intent.entry_hash == sha256_hex(legacy.as_bytes()))
         {
             legacy.as_bytes()
         } else {
@@ -1202,6 +1429,13 @@ impl CaptureStore {
         let tail = &region[complete_entries_len(&region)..];
         if tail.len() > entry.len() || tail != &entry[..tail.len()] {
             bail!("original daily log was edited after visit intent; manual repair is required");
+        }
+        if metadata
+            .len()
+            .saturating_add((entry.len() - tail.len()) as u64)
+            > MAX_LOG_BYTES
+        {
+            bail!("original daily log is full; manual repair is required");
         }
         let resume_from = metadata.len() - tail.len() as u64;
         if let Err(error) = file
@@ -1221,13 +1455,6 @@ impl CaptureStore {
         let _lock_file = lock_capture_file(&self.lock_path)?;
 
         self.recover_batch_intent()?;
-        let (relative_dir, filename) = self.log_parts(entries[0].timestamp);
-        if entries.iter().any(|entry| {
-            self.log_parts(entry.timestamp) != (relative_dir.clone(), filename.clone())
-        }) {
-            bail!("capture batch crosses a local calendar-day boundary");
-        }
-
         // Pre-upgrade queue items may already have M1's per-event durable
         // intent. It remains the global event-ID authority across root and
         // log-directory changes, and may name an append that needs finishing.
@@ -1239,13 +1466,30 @@ impl CaptureStore {
                     &intent,
                     &entry.event_hash,
                     entry.entry.as_bytes(),
-                    entry.legacy_entry.as_deref(),
+                    &entry.legacy_entries,
+                    &entry.payload_hash,
                     false,
                 )?);
+            } else if !entry.urls_within_bound {
+                outcomes[index] = Some(CaptureOutcome::Rejected {
+                    reason: "url_too_long".into(),
+                });
             }
         }
-        if outcomes.iter().all(Option::is_some) {
+        let mut pending = entries
+            .iter()
+            .zip(&outcomes)
+            .filter_map(|(entry, outcome)| outcome.is_none().then_some(entry));
+        let Some(first) = pending.next() else {
             return Ok(outcomes.into_iter().map(Option::unwrap).collect());
+        };
+        // Only new, accepted appends share a day. Rejected candidates and
+        // entries completed in their original logs cannot choose this file.
+        let (relative_dir, filename) = self.log_parts(first.timestamp);
+        if pending.any(|entry| {
+            self.log_parts(entry.timestamp) != (relative_dir.clone(), filename.clone())
+        }) {
+            bail!("capture batch crosses a local calendar-day boundary");
         }
 
         let new_log = !self.root.exists(relative_dir.join(&filename));
@@ -1322,9 +1566,11 @@ impl CaptureStore {
                 .to_str()
                 .context("log path is not UTF-8")?
                 .to_owned(),
-            event_hashes: entries
+            // Recovery checks these markers in this log. Rejected entries and
+            // v1 intents replayed in another log are not part of this append.
+            event_hashes: appended
                 .iter()
-                .map(|entry| entry.event_hash.clone())
+                .map(|&index| entries[index].event_hash.clone())
                 .collect(),
             entry: combined.clone(),
             offset: metadata.len(),
@@ -1343,6 +1589,10 @@ impl CaptureStore {
             return Err(error).context("appending capture batch");
         }
         sync_directory(&day_dir).context("syncing daily log directory")?;
+        #[cfg(test)]
+        if fixtures::INTERRUPT_BATCH_AFTER_SYNC.replace(false) {
+            bail!("simulated interruption before clearing capture batch intent");
+        }
         clear_batch_intent(&self.batch_intent_path())?;
         for index in appended {
             outcomes[index] = Some(CaptureOutcome::Persisted {
@@ -1551,6 +1801,14 @@ fn parse_page_url(value: &str) -> std::result::Result<Url, String> {
 /// Return a canonical page URL. Callers must authorize `raw` first.
 pub fn canonical_url(raw: &str, strip_params: &[String]) -> Result<String> {
     let url = parse_page_url(raw).map_err(anyhow::Error::msg)?;
+    normalize_url(url, strip_params)
+        .map(|value| value.url)
+        .map_err(anyhow::Error::msg)
+}
+
+/// Canonicalize while recording removed names, after authorizing `raw`.
+pub fn canonical_url_with_provenance(raw: &str, strip_params: &[String]) -> Result<StoredUrl> {
+    let url = parse_page_url(raw).map_err(anyhow::Error::msg)?;
     normalize_url(url, strip_params).map_err(anyhow::Error::msg)
 }
 
@@ -1581,24 +1839,51 @@ fn is_authorized(url: &Url, origins: &[String]) -> bool {
     origins.iter().any(|allowed| allowed == &origin)
 }
 
-/// Bound the stored spelling, after authorization and tracking removal.
-/// URL serialization can expand a short Unicode route through percent encoding;
-/// acknowledging it above the index's URL limit would lose it on a rebuild.
+/// Prepare the stored spelling after authorization and tracking removal.
+/// Defer its length check until the locked v1-intent lookup: an old host may
+/// have partially appended this exact event before the stored bound existed.
 fn normalize_capture_url(
     url: Url,
     strip_params: &[String],
-) -> std::result::Result<String, CaptureOutcome> {
-    let normalized = normalize_url(url, strip_params)
-        .map_err(|message| CaptureOutcome::Retryable { message })?;
-    if normalized.len() > MAX_URL_BYTES {
-        return Err(CaptureOutcome::Rejected {
-            reason: "url_too_long".into(),
-        });
-    }
-    Ok(normalized)
+) -> std::result::Result<StoredUrl, CaptureOutcome> {
+    normalize_url(url, strip_params).map_err(|message| CaptureOutcome::Retryable { message })
 }
 
-fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<String, String> {
+/// Combine nested evidence gathered during activity validation with the
+/// main URL's evidence, gathered after authorizing its original spelling.
+fn take_provenance(payload: &mut Option<MarkerPayload<'_>>, names: Vec<String>) -> String {
+    let mut provenance = payload
+        .as_mut()
+        .and_then(|payload| payload.provenance.take())
+        .unwrap_or_default();
+    provenance.url = names;
+    provenance.marker()
+}
+
+/// These payloads are built locally from validated events. Keep the normalized
+/// activity URLs in the new-write check as well as the page's stored spelling.
+fn stored_urls_within_bound(url: &str, marker_payload: Option<&MarkerPayload<'_>>) -> bool {
+    if url.len() > MAX_URL_BYTES {
+        return false;
+    }
+    let Some(MarkerPayload {
+        kind: "activity",
+        data: payload,
+        ..
+    }) = marker_payload
+    else {
+        return true;
+    };
+    let modes = payload["modes"].as_array().into_iter().flatten();
+    let trails = payload["trails"].as_array().into_iter().flatten();
+    modes
+        .map(|mode| &mode["url"])
+        .chain(trails.map(|trail| &trail["from_url"]))
+        .all(|url| url.as_str().is_none_or(|url| url.len() <= MAX_URL_BYTES))
+}
+
+fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<StoredUrl, String> {
+    let mut removed = std::collections::BTreeSet::new();
     if strip_params.len() > MAX_STRIP_RULES {
         return Err("too many URL parameter rules".into());
     }
@@ -1627,9 +1912,13 @@ fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<S
                     .next()
                     .map(|(key, _)| key.into_owned())
                     .unwrap_or_default();
-                !strip_params
+                let stripped = strip_params
                     .iter()
-                    .any(|pattern| matches_param(&key, pattern))
+                    .any(|pattern| matches_param(&key, pattern));
+                if stripped {
+                    removed.insert(key);
+                }
+                !stripped
             })
             .collect();
         if kept.len() != segments.len() {
@@ -1640,7 +1929,10 @@ fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<S
             }
         }
     }
-    Ok(url.to_string())
+    Ok(StoredUrl {
+        url: url.to_string(),
+        stripped_params: Some(removed.into_iter().collect()),
+    })
 }
 
 /// Whether a `strip_params` entry removes the query key `key`. Config
@@ -1660,27 +1952,73 @@ fn sha256_hex(value: &[u8]) -> String {
     hex::encode(Sha256::digest(value))
 }
 
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Hash unrendered fields and canonical metadata. V2 is frozen for old
+/// prepared-byte intents; v3 also binds the removed parameter names. Neither
+/// hashes presentation text, so exact prepared bytes survive display changes.
+fn visit_payload_hash(
+    event_id: &str,
+    normalized_url: &str,
+    event: &VisitEvent,
+    marker_metadata: &str,
+    provenance: &str,
+) -> PayloadHashes {
+    let hash = |version, metadata: &str| {
+        let bytes = serde_json::to_vec(&(
+            version,
+            event_id,
+            normalized_url,
+            &event.occurred_at,
+            &event.title,
+            metadata,
+        ))
+        .expect("string-only visit identity");
+        sha256_hex(&bytes)
+    };
+    PayloadHashes {
+        current: hash(
+            "visit-intent-payload-v3",
+            &format!("{marker_metadata}{provenance}"),
+        ),
+        v2: hash("visit-intent-payload-v2", marker_metadata),
+    }
+}
+
 fn read_intent(path: &Path) -> Result<Option<VisitIntent>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("checking visit intent"),
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 8192 {
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_VISIT_INTENT_BYTES as u64
+    {
         bail!("visit intent is invalid; manual repair is required");
     }
-    let bytes = fs::read(path).context("reading visit intent")?;
-    if bytes.len() > 8192 {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .context("opening visit intent")?
+        .take(MAX_VISIT_INTENT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("reading visit intent")?;
+    if bytes.len() > MAX_VISIT_INTENT_BYTES {
         bail!("visit intent exceeds its size limit");
     }
     let intent: VisitIntent = serde_json::from_slice(&bytes)
         .context("visit intent is malformed; manual repair is required")?;
+    if intent.version == 1 && bytes.len() > 8192 {
+        bail!("visit intent exceeds its size limit");
+    }
     Ok(Some(intent))
 }
 
 fn publish_intent(path: &Path, intent: &VisitIntent) -> Result<()> {
     let bytes = serde_json::to_vec(intent).context("serializing visit intent")?;
-    if bytes.len() > 8192 {
+    if bytes.len() > MAX_VISIT_INTENT_BYTES {
         bail!("visit intent exceeds its size limit");
     }
     let parent = path.parent().context("visit intent has no parent")?;
@@ -2070,13 +2408,17 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
     Some((id, url, at))
 }
 
-/// Reconstruct only the text prefix changed by the sanitizer upgrade, keeping
-/// the URL, measurements, and encoded marker payload byte-exact. The caller
-/// must verify the hash of this entire candidate against a durable v1 intent;
-/// it is never used for a new append. This also permits completion of old text
-/// containing formatting characters, just as compact batch recovery retains
-/// its original prepared bytes. Do not use this frozen renderer for display.
-fn pre_sanitizer_entry(entry: &str, event: &VisitEvent, why: bool) -> Option<String> {
+/// Reconstruct the two frozen historical text prefixes, keeping the URL,
+/// measurements and encoded marker payload byte-exact. Only a whole-entry
+/// hash matching a durable v1 intent may select one for recovery; neither
+/// generation is used for new appends or display.
+fn legacy_entries(entry: &str, event: &VisitEvent, why: bool) -> Vec<String> {
+    // Pre-provenance hosts had no `stripped` field. Preserve all three
+    // presentation generations from those hosts for v1 hash-only replay.
+    let old_entry = entry
+        .rsplit_once(" stripped=")
+        .map(|(prefix, _)| format!("{prefix} -->\n"));
+    let entry = old_entry.as_deref().unwrap_or(entry);
     let limit = if why { 500 } else { 300 };
     let label = if why { "Why: " } else { "" };
     let prefix = format!("\n- {} — {label}", event.occurred_at);
@@ -2084,29 +2426,17 @@ fn pre_sanitizer_entry(entry: &str, event: &VisitEvent, why: bool) -> Option<Str
         "{prefix}{}",
         safe_markdown_line(event.title.as_deref(), limit)
     );
-    let suffix = entry.strip_prefix(&current)?;
-    let mut text = String::new();
-    for ch in event
-        .title
-        .as_deref()
-        .unwrap_or("Untitled")
-        .trim()
-        .chars()
-        .take(limit)
-    {
-        if ch.is_control() {
-            text.push(' ');
-        } else {
-            if matches!(ch, '\\' | '[' | ']' | '<' | '>' | '*' | '_' | '`' | '|') {
-                text.push('\\');
-            }
-            text.push(ch);
-        }
-    }
-    if text.trim().is_empty() {
-        text = "Untitled".into();
-    }
-    Some(format!("{prefix}{text}{suffix}"))
+    let Some(suffix) = entry.strip_prefix(&current) else {
+        // Summary and overflow prose has no visit-title prefix, but its
+        // pre-provenance bytes still form a valid v1 recovery candidate.
+        return vec![entry.to_owned()];
+    };
+    let mut candidates = legacy::lines(event.title.as_deref().unwrap_or("Untitled"), limit)
+        .into_iter()
+        .map(|text| format!("{prefix}{text}{suffix}"))
+        .collect::<Vec<_>>();
+    candidates.push(entry.to_owned());
+    candidates
 }
 
 fn safe_title(value: Option<&str>) -> String {
@@ -2116,7 +2446,7 @@ fn safe_title(value: Option<&str>) -> String {
 /// An optional visit field as one escaped line, `Untitled` when absent;
 /// present-only fields go straight through `markdown::inline`.
 fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
-    crate::presentation::markdown_line(value.unwrap_or("Untitled"), limit)
+    crate::markdown::inline(value.unwrap_or("Untitled"), limit)
 }
 
 /// Recent, stable event timestamps shared by capture and native tests. Only
@@ -2125,6 +2455,10 @@ fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
 pub(crate) mod fixtures {
     use std::cell::Cell;
     use time::OffsetDateTime;
+
+    thread_local! {
+        pub(super) static INTERRUPT_BATCH_AFTER_SYNC: Cell<bool> = const { Cell::new(false) };
+    }
 
     std::thread_local! {
         static EVENT_TIME: Cell<OffsetDateTime> = Cell::new(event_time_for(OffsetDateTime::now_utc()));
@@ -2207,6 +2541,93 @@ mod tests {
                 .unwrap(),
             incognito: false,
         }
+    }
+
+    #[test]
+    fn provenance_keeps_invalid_activity_urls_terminal_in_single_and_batch_delivery() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "logs"), None, state.path()).unwrap();
+        let origins = ["https://example.com".into()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        for field in ["page", "mode", "trail"] {
+            let mut event = activity();
+            match field {
+                "page" => event.url = "invalid URL".into(),
+                "mode" => event.modes[0].url = "invalid URL".into(),
+                _ => event.trails[0].from_url = Some("invalid URL".into()),
+            }
+            assert!(
+                matches!(
+                    store.record_activity(policy, &event),
+                    CaptureOutcome::Rejected { .. }
+                ),
+                "{field}"
+            );
+            let batch = store.record_batch(
+                policy,
+                &Uuid::new_v4().to_string(),
+                &[CaptureBatchEvent::Activity(&event)],
+                None,
+            );
+            assert!(
+                matches!(batch.events[0].1, CaptureOutcome::Rejected { .. }),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn stripped_query_provenance_is_names_only_for_every_stored_activity_url() {
+        let folder = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(folder.path(), "logs"), None, state.path()).unwrap();
+        let mut event = activity();
+        event.url =
+            "https://example.com/article?keep=1&UtM_Source=private-value&utm_source=other".into();
+        let origins = ["https://example.com".into()];
+        let strip = ["utm_*".into(), "secret".into()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &strip,
+        };
+        let outcome = store.record_activity(policy, &event);
+        let CaptureOutcome::Persisted { relative_path } = outcome else {
+            panic!("{outcome:?}")
+        };
+        let log = fs::read_to_string(folder.path().join(relative_path)).unwrap();
+        let marker = log
+            .lines()
+            .find(|line| line.starts_with(MARKER_PREFIX))
+            .unwrap();
+        let encoded = marker
+            .split(" stripped=")
+            .nth(1)
+            .expect("missing stripped query provenance")
+            .trim_end_matches(" -->");
+        let provenance: serde_json::Value =
+            serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+        assert_eq!(
+            provenance["url"],
+            serde_json::json!(["UtM_Source", "utm_source"])
+        );
+        assert_eq!(
+            provenance["modes"],
+            serde_json::json!([["secret"], ["secret"]])
+        );
+        assert!(!log.contains("private-value"));
+        assert!(
+            !String::from_utf8(hex::decode(encoded).unwrap())
+                .unwrap()
+                .contains("private-value")
+        );
     }
 
     #[test]
@@ -2447,6 +2868,159 @@ mod tests {
     }
 
     #[test]
+    fn standalone_overflow_recovers_a_partial_append_and_deduplicates_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let storage = storage(root.path(), "logs");
+        let store = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+        let timestamp = fixtures::event_time()
+            .to_offset(time::UtcOffset::from_hms(-7, 0, 0).unwrap())
+            .replace_nanosecond(0)
+            .unwrap();
+        let overflow = OverflowMarker {
+            count: 2,
+            first_occurred_at: (timestamp - time::Duration::hours(1))
+                .format(&Rfc3339)
+                .unwrap(),
+            last_occurred_at: timestamp.format(&Rfc3339).unwrap(),
+        };
+        let batch_id = Uuid::new_v4().to_string();
+        // No origin or URL is needed to record a system-level loss notice.
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        assert!(
+            store
+                .record_batch(policy, &batch_id, &[], Some(&overflow))
+                .overflow_recorded
+        );
+        let (dir, filename) = store.log_parts(timestamp);
+        let relative_log = dir.join(filename);
+        let log = root.path().join(&relative_log);
+        let original = fs::read(&log).unwrap();
+        let markdown = String::from_utf8(original.clone()).unwrap();
+        assert_eq!(markdown.matches("kind=overflow").count(), 1);
+        assert!(markdown.contains("2 completed activity hour(s)"));
+        assert!(markdown.contains(&overflow.first_occurred_at));
+        assert!(markdown.contains(&overflow.last_occurred_at));
+        assert!(!markdown.contains("https://"));
+        let encoded = markdown
+            .split("data=")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&hex::decode(encoded).unwrap()).unwrap(),
+            serde_json::to_value(&overflow).unwrap()
+        );
+
+        let offset = format!("{LOG_HEADER}\n").len();
+        let entry = String::from_utf8(original[offset..].to_vec()).unwrap();
+        let intent = BatchIntent {
+            version: 2,
+            batch_id: batch_id.clone(),
+            root_path: store.root_path.to_string_lossy().into_owned(),
+            root_identity: store.root_identity.clone(),
+            relative_log: relative_log.to_string_lossy().into_owned(),
+            event_hashes: vec![sha256_hex(batch_id.as_bytes())],
+            entry: entry.clone(),
+            offset: offset as u64,
+        };
+        publish_batch_intent(&store.batch_intent_path(), &intent).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len((offset + entry.len() / 2) as u64)
+            .unwrap();
+        drop(store);
+        let reopened = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+        for _ in 0..2 {
+            let outcome = reopened.record_batch(policy, &batch_id, &[], Some(&overflow));
+            assert!(outcome.overflow_recorded);
+            assert!(outcome.events.is_empty());
+            assert_eq!(fs::read(&log).unwrap(), original);
+        }
+        assert!(!reopened.batch_intent_path().exists());
+    }
+
+    #[test]
+    fn standalone_overflow_rejects_invalid_ranges_and_preserves_unowned_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "logs"), None, state.path()).unwrap();
+        let now = fixtures::event_time().replace_nanosecond(0).unwrap();
+        let stamp = now.format(&Rfc3339).unwrap();
+        let valid = OverflowMarker {
+            count: 1,
+            first_occurred_at: stamp.clone(),
+            last_occurred_at: stamp,
+        };
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        for invalid in [
+            OverflowMarker {
+                count: 0,
+                ..valid.clone()
+            },
+            OverflowMarker {
+                first_occurred_at: "../../outside".into(),
+                ..valid.clone()
+            },
+            OverflowMarker {
+                last_occurred_at: "2026-10-28T12:00:00Z\n- forged".into(),
+                ..valid.clone()
+            },
+            OverflowMarker {
+                first_occurred_at: (now + time::Duration::hours(1)).format(&Rfc3339).unwrap(),
+                ..valid.clone()
+            },
+            OverflowMarker {
+                last_occurred_at: "9999-12-31T00:00:00Z".into(),
+                ..valid.clone()
+            },
+        ] {
+            assert!(
+                !store
+                    .record_batch(policy, &Uuid::new_v4().to_string(), &[], Some(&invalid))
+                    .overflow_recorded
+            );
+        }
+        assert!(!root.path().join("logs").exists());
+        assert!(
+            !store
+                .record_batch(
+                    CapturePolicy {
+                        enabled: false,
+                        ..policy
+                    },
+                    &Uuid::new_v4().to_string(),
+                    &[],
+                    Some(&valid)
+                )
+                .overflow_recorded
+        );
+        let (dir, filename) = store.log_parts(now);
+        fs::create_dir_all(root.path().join(&dir)).unwrap();
+        let log = root.path().join(dir).join(filename);
+        fs::write(&log, "My own daily journal\n").unwrap();
+        assert!(
+            !store
+                .record_batch(policy, &Uuid::new_v4().to_string(), &[], Some(&valid))
+                .overflow_recorded
+        );
+        assert_eq!(fs::read_to_string(log).unwrap(), "My own daily journal\n");
+    }
+
+    #[test]
     fn daily_log_fixtures_work_at_midnight() {
         let before_midnight = OffsetDateTime::now_utc()
             .date()
@@ -2501,6 +3075,717 @@ mod tests {
     }
 
     #[test]
+    fn prepared_single_intents_survive_renderer_changes_in_single_and_batch_delivery() {
+        for batched in [false, true] {
+            for measured in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let elsewhere = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let storage_config = storage(root.path(), "log");
+                let store = CaptureStore::open_at(&storage_config, None, state.path()).unwrap();
+                let earlier = event();
+                let CaptureOutcome::Persisted { relative_path } = record(&store, &earlier) else {
+                    panic!("expected unrelated visit");
+                };
+                let log = root.path().join(relative_path);
+                let unrelated = fs::read(&log).unwrap();
+                let mut visit = event();
+                // Different text past the display limit must still be a
+                // changed payload, even when the rendered title is identical.
+                visit.title = Some(format!("{}original", "x".repeat(300)));
+                let mut activity = activity();
+                activity.event_id = visit.event_id.clone();
+                activity.title = visit.title.clone();
+                let origins = ["https://example.com".to_owned()];
+                let policy = CapturePolicy {
+                    enabled: true,
+                    origins: &origins,
+                    strip_params: &[],
+                };
+                let deliver =
+                    |store: &CaptureStore, visit: &VisitEvent, activity: &ActivityEvent| {
+                        if batched {
+                            store
+                                .record_batch(
+                                    policy,
+                                    &Uuid::new_v4().to_string(),
+                                    &[if measured {
+                                        CaptureBatchEvent::Activity(activity)
+                                    } else {
+                                        CaptureBatchEvent::Visit(visit)
+                                    }],
+                                    None,
+                                )
+                                .events
+                                .remove(0)
+                                .1
+                        } else if measured {
+                            store.record_activity(policy, activity)
+                        } else {
+                            store.record(policy, visit)
+                        }
+                    };
+                // Single delivery creates the durable per-event journal;
+                // a newer worker may later drain it through batch delivery.
+                let outcome = if measured {
+                    store.record_activity(policy, &activity)
+                } else {
+                    store.record(policy, &visit)
+                };
+                assert!(matches!(outcome, CaptureOutcome::Persisted { .. }));
+                let journal = store.journal_path(&sha256_hex(visit.event_id.as_bytes()));
+                let mut intent: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+                assert_eq!(
+                    intent["version"], 3,
+                    "new intents must retain prepared bytes"
+                );
+                let offset = intent["offset"].as_u64().unwrap() as usize;
+                let current = fs::read_to_string(&log).unwrap();
+                // An independently prepared older prose format: no current
+                // or frozen renderer can reconstruct this display sentence.
+                // Keep its canonical machine marker unchanged.
+                let marker = current[offset..].split_once(MARKER_PREFIX).unwrap().1;
+                let prepared = format!("\n- Archived renderer: café\n{MARKER_PREFIX}{marker}");
+                intent["entry"] = prepared.clone().into();
+                intent["entry_hash"] = sha256_hex(prepared.as_bytes()).into();
+                fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+                let mut torn = unrelated.clone();
+                let cut = prepared.find('é').unwrap() + 1;
+                torn.extend_from_slice(&prepared.as_bytes()[..cut]);
+                fs::write(&log, &torn).unwrap();
+                drop(store);
+                let reopened = CaptureStore::open_at(&storage_config, None, state.path()).unwrap();
+                let mut changed_visit = visit.clone();
+                changed_visit.title = Some(format!("{}changed", "x".repeat(300)));
+                let mut changed_activity = activity.clone();
+                changed_activity.title = changed_visit.title.clone();
+                assert!(matches!(
+                    deliver(&reopened, &changed_visit, &changed_activity),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), torn);
+                let other =
+                    CaptureStore::open_at(&storage(elsewhere.path(), "log"), None, state.path())
+                        .unwrap();
+                assert!(matches!(
+                    deliver(&other, &visit, &activity),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert!(!elsewhere.path().join("log").exists());
+                assert_eq!(fs::read(&log).unwrap(), torn);
+                let mut edited = torn.clone();
+                *edited.last_mut().unwrap() ^= 1;
+                fs::write(&log, &edited).unwrap();
+                assert!(matches!(
+                    deliver(&reopened, &visit, &activity),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), edited);
+                fs::write(&log, &torn).unwrap();
+                let outcome = deliver(&reopened, &visit, &activity);
+                assert!(
+                    matches!(outcome, CaptureOutcome::Persisted { .. }),
+                    "{outcome:?}"
+                );
+                let mut expected = unrelated;
+                expected.extend_from_slice(prepared.as_bytes());
+                assert_eq!(fs::read(&log).unwrap(), expected);
+                assert!(matches!(
+                    deliver(&reopened, &visit, &activity),
+                    CaptureOutcome::Suppressed { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_why_and_summary_intents_recover_without_rerendering() {
+        for summary in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let page = page_summary("https://example.com/article");
+            let context = WhyEvent {
+                event_id: page.event_id.clone(),
+                artifact_id: "web:example/article".into(),
+                url: page.url.clone(),
+                occurred_at: page.occurred_at.clone(),
+                incognito: false,
+                text: "Review the report".into(),
+            };
+            let origins = ["https://example.com".into()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let deliver = |changed: bool| {
+                if summary {
+                    let mut page = page.clone();
+                    if changed {
+                        page.summary_path = "summaries/changed.summary.md".into();
+                    }
+                    store.record_summary(policy, &page).0
+                } else {
+                    let mut context = context.clone();
+                    if changed {
+                        context.artifact_id = "web:example/changed".into();
+                    }
+                    store.record_why(policy, &context)
+                }
+            };
+            let CaptureOutcome::Persisted { relative_path } = deliver(false) else {
+                panic!("expected fixture event");
+            };
+            let log = root.path().join(relative_path);
+            let original = fs::read_to_string(&log).unwrap();
+            let journal = store.journal_path(&sha256_hex(page.event_id.as_bytes()));
+            let mut intent: serde_json::Value =
+                serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+            let offset = intent["offset"].as_u64().unwrap() as usize;
+            let marker = original[offset..].split_once(MARKER_PREFIX).unwrap().1;
+            let prepared = format!("\n- Historical prose\n{MARKER_PREFIX}{marker}");
+            intent["entry"] = prepared.clone().into();
+            intent["entry_hash"] = sha256_hex(prepared.as_bytes()).into();
+            fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+            let mut torn = original.as_bytes()[..offset].to_vec();
+            torn.extend_from_slice(&prepared.as_bytes()[..prepared.len() - 8]);
+            fs::write(&log, &torn).unwrap();
+            assert!(matches!(deliver(true), CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&log).unwrap(), torn);
+            let outcome = deliver(false);
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            let expected = format!("{}{prepared}", &original[..offset]);
+            assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+            assert!(matches!(deliver(false), CaptureOutcome::Suppressed { .. }));
+            if summary {
+                // Summary acknowledgement must still refer to the exact
+                // saved path/key even when a complete marker exists.
+                assert!(matches!(deliver(true), CaptureOutcome::Retryable { .. }));
+            }
+            assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn pre_provenance_v1_summary_and_overflow_intents_resume_exact_bytes() {
+        for summary in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let storage = storage(root.path(), "log");
+            let store = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+            let page = page_summary("https://example.com/article");
+            let overflow = OverflowMarker {
+                count: 3,
+                first_occurred_at: page.occurred_at.clone(),
+                last_occurred_at: page.occurred_at.clone(),
+            };
+            let origins = ["https://example.com".into()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let deliver = |store: &CaptureStore| {
+                if summary {
+                    store.record_summary(policy, &page).0
+                } else {
+                    store.record_overflow(policy, &page.event_id, &page.url, &overflow)
+                }
+            };
+            let CaptureOutcome::Persisted { relative_path } = deliver(&store) else {
+                panic!("fixture")
+            };
+            let log = root.path().join(relative_path);
+            let journal = store.journal_path(&sha256_hex(page.event_id.as_bytes()));
+            let mut intent = read_intent(&journal).unwrap().unwrap();
+            let old = format!(
+                "{} -->\n",
+                intent
+                    .entry
+                    .as_ref()
+                    .unwrap()
+                    .rsplit_once(" stripped=")
+                    .unwrap()
+                    .0
+            );
+            intent.version = 1;
+            intent.entry_hash = sha256_hex(old.as_bytes());
+            intent.entry = None;
+            intent.payload_hash = None;
+            fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+            let original = fs::read(&log).unwrap();
+            let prefix = &original[..intent.offset as usize];
+            let mut torn = prefix.to_vec();
+            torn.extend_from_slice(&old.as_bytes()[..old.len() / 2]);
+            fs::write(&log, &torn).unwrap();
+            drop(store);
+            let store = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+            let changed = if summary {
+                let mut changed = page.clone();
+                changed.summary_path = "summaries/changed.summary.md".into();
+                store.record_summary(policy, &changed).0
+            } else {
+                let mut changed = overflow.clone();
+                changed.count += 1;
+                store.record_overflow(policy, &page.event_id, &page.url, &changed)
+            };
+            assert!(matches!(changed, CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&log).unwrap(), torn);
+            let mut edited = torn.clone();
+            *edited.last_mut().unwrap() = b'X';
+            fs::write(&log, &edited).unwrap();
+            assert!(matches!(deliver(&store), CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&log).unwrap(), edited);
+            fs::write(&log, &torn).unwrap();
+            let outcome = deliver(&store);
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            let expected = [prefix, old.as_bytes()].concat();
+            assert_eq!(fs::read(&log).unwrap(), expected);
+            assert!(matches!(deliver(&store), CaptureOutcome::Suppressed { .. }));
+            assert_eq!(fs::read(&log).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn pre_provenance_v2_intents_resume_exact_bytes_through_single_and_batch_delivery() {
+        for (kind, batched) in [
+            ("visit", false),
+            ("visit", true),
+            ("activity", false),
+            ("activity", true),
+            ("why", false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let config = storage(root.path(), "log");
+            let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+            let source = activity();
+            let CaptureOutcome::Persisted { relative_path } =
+                deliver_presentation_fixture(&store, kind, false, &source)
+            else {
+                panic!("fixture")
+            };
+            let log = root.path().join(&relative_path);
+            let journal = store.journal_path(&sha256_hex(source.event_id.as_bytes()));
+            let mut intent = read_intent(&journal).unwrap().unwrap();
+            let current = intent.entry.as_ref().unwrap();
+            let old = format!("{} -->\n", current.rsplit_once(" stripped=").unwrap().0);
+            let normalized = canonical_url(&source.url, &[]).unwrap();
+            let metadata = old
+                .split_once(" kind=")
+                .map(|(_, tail)| format!(" kind={}", tail.strip_suffix(" -->\n").unwrap()))
+                .unwrap_or_default();
+            // Frozen v2 tuple, independent of the current hash helper.
+            let hash = sha256_hex(
+                &serde_json::to_vec(&(
+                    "visit-intent-payload-v2",
+                    &source.event_id,
+                    &normalized,
+                    &source.occurred_at,
+                    &source.title,
+                    &metadata,
+                ))
+                .unwrap(),
+            );
+            intent.version = 2;
+            intent.entry_hash = sha256_hex(old.as_bytes());
+            intent.entry = Some(old.clone());
+            intent.payload_hash = Some(hash);
+            fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+            let original = fs::read(&log).unwrap();
+            let prefix = &original[..intent.offset as usize];
+            let mut torn = prefix.to_vec();
+            torn.extend_from_slice(&old.as_bytes()[..old.len() / 2]);
+            fs::write(&log, &torn).unwrap();
+            drop(store);
+            let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+            let mut changed = source.clone();
+            changed.title = Some("changed".into());
+            assert!(matches!(
+                deliver_presentation_fixture(&store, kind, batched, &changed),
+                CaptureOutcome::Retryable { .. }
+            ));
+            assert_eq!(fs::read(&log).unwrap(), torn);
+            let mut edited = torn.clone();
+            *edited.last_mut().unwrap() = b'X';
+            fs::write(&log, &edited).unwrap();
+            assert!(matches!(
+                deliver_presentation_fixture(&store, kind, batched, &source),
+                CaptureOutcome::Retryable { .. }
+            ));
+            assert_eq!(fs::read(&log).unwrap(), edited);
+            fs::write(&log, torn).unwrap();
+            assert!(
+                matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &source),
+                    CaptureOutcome::Persisted { .. }
+                ),
+                "{kind}, {batched}"
+            );
+            assert_eq!(fs::read(&log).unwrap(), [prefix, old.as_bytes()].concat());
+        }
+    }
+
+    #[test]
+    fn new_intents_bind_removed_names_and_keep_removed_values_private() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut visit = event();
+        visit.url = "https://example.com/p?utm_source=private-value".into();
+        let origins = ["https://example.com".into()];
+        let strip = ["utm_*".into()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &strip,
+        };
+        let CaptureOutcome::Persisted { relative_path } = store.record(policy, &visit) else {
+            panic!("fixture")
+        };
+        let log = root.path().join(relative_path);
+        let journal = store.journal_path(&sha256_hex(visit.event_id.as_bytes()));
+        let intent = read_intent(&journal).unwrap().unwrap();
+        assert_eq!(intent.version, 3);
+        assert!(
+            !fs::read_to_string(&journal)
+                .unwrap()
+                .contains("private-value")
+        );
+        let original = fs::read(&log).unwrap();
+        let torn = &original[..intent.offset as usize + 8];
+        fs::write(&log, torn).unwrap();
+        let mut changed = visit.clone();
+        changed.url = "https://example.com/p?utm_campaign=private-value".into();
+        assert!(matches!(
+            store.record(policy, &changed),
+            CaptureOutcome::Retryable { .. }
+        ));
+        assert_eq!(fs::read(&log).unwrap(), torn);
+        assert!(matches!(
+            store.record(policy, &visit),
+            CaptureOutcome::Persisted { .. }
+        ));
+        assert_eq!(fs::read(&log).unwrap(), original);
+    }
+
+    #[test]
+    fn prepared_intents_refuse_corrupt_or_unbounded_journals_without_touching_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let visit = event();
+        let CaptureOutcome::Persisted { relative_path } = record(&store, &visit) else {
+            panic!("expected fixture event");
+        };
+        let log = root.path().join(relative_path);
+        let original = fs::read(&log).unwrap();
+        let journal = store.journal_path(&sha256_hex(visit.event_id.as_bytes()));
+        let valid: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        let offset = valid["offset"].as_u64().unwrap() as usize;
+        let torn = &original[..offset + 8];
+        fs::write(&log, torn).unwrap();
+        for (field, value) in [
+            ("version", serde_json::json!(4)),
+            ("entry", serde_json::Value::Null),
+            ("entry", "edited prepared entry".into()),
+            ("payload_hash", serde_json::Value::Null),
+            ("payload_hash", "z".repeat(64).into()),
+            ("payload_hash", "0".repeat(64).into()),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            fs::write(&journal, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(
+                matches!(record(&store, &visit), CaptureOutcome::Retryable { .. }),
+                "{field}"
+            );
+            assert_eq!(fs::read(&log).unwrap(), torn);
+        }
+        let mut invalid = valid.clone();
+        let oversized = "x".repeat(MAX_VISIT_ENTRY_BYTES + 1);
+        invalid["entry_hash"] = sha256_hex(oversized.as_bytes()).into();
+        invalid["entry"] = oversized.into();
+        fs::write(&journal, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(matches!(
+            record(&store, &visit),
+            CaptureOutcome::Retryable { .. }
+        ));
+        assert_eq!(fs::read(&log).unwrap(), torn);
+        fs::write(&journal, vec![b' '; MAX_VISIT_INTENT_BYTES + 1]).unwrap();
+        assert!(matches!(
+            record(&store, &visit),
+            CaptureOutcome::Retryable { .. }
+        ));
+        assert_eq!(fs::read(&log).unwrap(), torn);
+        assert!(
+            store
+                .intent(
+                    Path::new("log/day.md"),
+                    &"x".repeat(MAX_VISIT_ENTRY_BYTES + 1),
+                    0,
+                    &"0".repeat(64)
+                )
+                .is_err()
+        );
+        let mut invalid: VisitIntent = serde_json::from_value(valid.clone()).unwrap();
+        invalid.root_path = "x".repeat(MAX_VISIT_INTENT_BYTES);
+        let unpublished = state.path().join("unpublished.json");
+        assert!(publish_intent(&unpublished, &invalid).is_err());
+        assert!(!unpublished.exists());
+        fs::write(&journal, serde_json::to_vec(&valid).unwrap()).unwrap();
+        assert!(matches!(
+            record(&store, &visit),
+            CaptureOutcome::Persisted { .. }
+        ));
+        assert_eq!(fs::read(&log).unwrap(), original);
+    }
+
+    #[test]
+    fn prepared_intent_fits_activity_at_all_field_bounds() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut event = activity();
+        event.url = format!("https://example.com/{}", "x".repeat(MAX_URL_BYTES - 20));
+        assert_eq!(event.url.len(), MAX_URL_BYTES);
+        event.title = Some("\0".repeat(MAX_TITLE_BYTES));
+        event.artifact_id = "\0".repeat(512);
+        event.artifact_type = "\0".repeat(64);
+        event.modes = vec![
+            ActivityMode {
+                mode: "view".into(),
+                url: event.url.clone()
+            };
+            3
+        ];
+        event.trails = vec![
+            ActivityTrail {
+                from_artifact_id: Some("\0".repeat(512)),
+                from_url: Some(event.url.clone()),
+                transition: "link".into(),
+            };
+            10
+        ];
+        event.refs = vec![
+            ActivityRef {
+                artifact_type: "\0".repeat(64),
+                value: "\0".repeat(512)
+            };
+            20
+        ];
+        let outcome = record_activity(&store, &event);
+        assert!(
+            matches!(outcome, CaptureOutcome::Persisted { .. }),
+            "{outcome:?}"
+        );
+        let journal = store.journal_path(&sha256_hex(event.event_id.as_bytes()));
+        let intent = read_intent(&journal).unwrap().unwrap();
+        assert!(intent.entry.as_ref().unwrap().len() <= MAX_VISIT_ENTRY_BYTES);
+        assert!(fs::metadata(journal).unwrap().len() <= MAX_VISIT_INTENT_BYTES as u64);
+    }
+
+    #[test]
+    fn daily_log_titles_and_why_neutralize_math_and_code() {
+        for (kind, batched) in [
+            ("visit", false),
+            ("visit", true),
+            ("activity", false),
+            ("activity", true),
+            ("why", false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let mut source = activity();
+            source.title = Some("Budget $x$ $$y$$ `=query` ~~~    end".into());
+            let CaptureOutcome::Persisted { relative_path } =
+                deliver_presentation_fixture(&store, kind, batched, &source)
+            else {
+                panic!("expected {kind} fixture, batched={batched}");
+            };
+            let log = fs::read_to_string(root.path().join(relative_path)).unwrap();
+            let row = log.lines().find(|line| line.starts_with("- ")).unwrap();
+            assert!(row.contains(
+                r"Budget &#36;x&#36; &#36;&#36;y&#36;&#36; &#96;\=query&#96; &#126;&#126;&#126;   &#32;end"
+            ), "{kind}, batched={batched}: {row}");
+            assert!(!row.contains(['$', '`', '~']));
+            // Escaping affects presentation only, never the machine payload.
+            if kind != "visit" {
+                let encoded = log
+                    .split_once(" data=")
+                    .unwrap()
+                    .1
+                    .split(' ')
+                    .next()
+                    .unwrap();
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+                let field = if kind == "why" { "text" } else { "title" };
+                assert_eq!(payload[field], source.title.as_deref().unwrap());
+            }
+        }
+    }
+
+    fn deliver_presentation_fixture(
+        store: &CaptureStore,
+        kind: &str,
+        batched: bool,
+        source: &ActivityEvent,
+    ) -> CaptureOutcome {
+        let visit = VisitEvent {
+            event_id: source.event_id.clone(),
+            url: source.url.clone(),
+            title: source.title.clone(),
+            occurred_at: source.occurred_at.clone(),
+            incognito: false,
+        };
+        let origins = ["https://example.com".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        if batched {
+            let event = match kind {
+                "visit" => CaptureBatchEvent::Visit(&visit),
+                "activity" => CaptureBatchEvent::Activity(source),
+                _ => unreachable!(),
+            };
+            store
+                .record_batch(policy, &Uuid::new_v4().to_string(), &[event], None)
+                .events
+                .remove(0)
+                .1
+        } else {
+            match kind {
+                "visit" => store.record(policy, &visit),
+                "activity" => store.record_activity(policy, source),
+                "why" => store.record_why(
+                    policy,
+                    &WhyEvent {
+                        event_id: source.event_id.clone(),
+                        artifact_id: source.artifact_id.clone(),
+                        url: source.url.clone(),
+                        occurred_at: source.occurred_at.clone(),
+                        incognito: false,
+                        text: source.title.clone().unwrap(),
+                    },
+                ),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn both_frozen_v1_renderers_recover_exact_titles_and_why_after_restart() {
+        // Independent historical literals: neither expected output calls a
+        // production renderer. Include characters changed by both upgrades.
+        for historical in [
+            "\u{202e}Budget $x$ \\`=q\\` ~~~    café %%hide%% #tag",
+            "Budget $x$ \\`\\=q\\` ~~~    café \\%\\%hide\\%\\% \\#tag",
+        ] {
+            for (kind, batched) in [
+                ("visit", false),
+                ("visit", true),
+                ("activity", false),
+                ("activity", true),
+                ("why", false),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let config = storage(root.path(), "log");
+                let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+                let mut source = activity();
+                source.title = Some(" \u{202e}Budget $x$ `=q` ~~~    café %%hide%% #tag ".into());
+                // Keep an unrelated complete row before the interrupted one.
+                let CaptureOutcome::Persisted { relative_path } = record(&store, &event()) else {
+                    panic!("expected earlier row");
+                };
+                let log = root.path().join(&relative_path);
+                let earlier = fs::read(&log).unwrap();
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, false, &source),
+                    CaptureOutcome::Persisted { .. }
+                ));
+                let current = fs::read_to_string(&log).unwrap();
+                // Retain exact measurements, URL, and encoded machine marker.
+                let entry = &current[earlier.len()..];
+                let suffix_start = if kind == "activity" {
+                    " — focused"
+                } else {
+                    " — <"
+                };
+                let suffix = &entry[entry.find(suffix_start).unwrap()..];
+                let label = if kind == "why" { "Why: " } else { "" };
+                let suffix = suffix
+                    .split_once(" stripped=")
+                    .map_or_else(|| suffix.to_owned(), |(old, _)| format!("{old} -->\n"));
+                let previous = format!("\n- {} — {label}{historical}{suffix}", source.occurred_at);
+                let hash = sha256_hex(source.event_id.as_bytes());
+                let intent = store
+                    .legacy_intent(&relative_path, &previous, earlier.len() as u64)
+                    .unwrap();
+                fs::write(
+                    store.journal_path(&hash),
+                    serde_json::to_vec(&intent).unwrap(),
+                )
+                .unwrap();
+                // Tear inside a multibyte title, before its marker exists.
+                let cut = previous.find('é').unwrap() + 1;
+                let mut torn = earlier.clone();
+                torn.extend_from_slice(&previous.as_bytes()[..cut]);
+                fs::write(&log, &torn).unwrap();
+                drop(store);
+                let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+                let mut changed = source.clone();
+                changed.title.as_mut().unwrap().push('!');
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &changed),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), torn);
+                let mut edited = torn.clone();
+                *edited.last_mut().unwrap() = b'X';
+                fs::write(&log, &edited).unwrap();
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &source),
+                    CaptureOutcome::Retryable { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), edited);
+                fs::write(&log, &torn).unwrap();
+                let outcome = deliver_presentation_fixture(&store, kind, batched, &source);
+                assert!(
+                    matches!(outcome, CaptureOutcome::Persisted { .. }),
+                    "{kind}, batched={batched}: {outcome:?}"
+                );
+                let mut expected = earlier;
+                expected.extend_from_slice(previous.as_bytes());
+                assert_eq!(fs::read(&log).unwrap(), expected);
+                assert!(matches!(
+                    deliver_presentation_fixture(&store, kind, batched, &source),
+                    CaptureOutcome::Suppressed { .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn pre_sanitizer_activity_and_why_recovery_keeps_exact_marker_payloads() {
         for why in [false, true] {
             let root = tempfile::tempdir().unwrap();
@@ -2538,11 +3823,17 @@ mod tests {
             let hash = sha256_hex(activity.event_id.as_bytes());
             let journal = store.journal_path(&hash);
             let mut intent = read_intent(&journal).unwrap().unwrap();
+            intent.version = 1;
+            intent.payload_hash = None;
+            intent.entry = None;
             let log = root.path().join(relative_path);
             let current = fs::read_to_string(&log).unwrap();
             // Only the rendered prose changes; the hex payload is retained.
-            let previous =
-                current.replace(r"Draft \#tag \%\%comment\%\%", "Draft #tag %%comment%%");
+            let previous = current
+                .split_once(" stripped=")
+                .map(|(old, _)| format!("{old} -->\n"))
+                .unwrap()
+                .replace(r"Draft \#tag \%\%comment\%\%", "Draft #tag %%comment%%");
             assert_ne!(previous, current);
             let entry = &previous[intent.offset as usize..];
             intent.entry_hash = sha256_hex(entry.as_bytes());
@@ -2585,7 +3876,7 @@ mod tests {
                 visit.occurred_at
             );
             let intent = store
-                .intent(
+                .legacy_intent(
                     log.strip_prefix(root.path()).unwrap(),
                     &old_entry,
                     unrelated.len() as u64,
@@ -2909,6 +4200,289 @@ mod tests {
     }
 
     #[test]
+    fn over_limit_normalized_urls_complete_v1_intents_before_rejection() {
+        for batched in [false, true] {
+            for field in ["visit", "page", "mode", "trail"] {
+                let root = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let store = CaptureStore::open_at(&storage(root.path(), "log"), None, state.path())
+                    .unwrap();
+                let origins = ["https://example.com".to_owned()];
+                let policy = CapturePolicy {
+                    enabled: true,
+                    origins: &origins,
+                    strip_params: &[],
+                };
+                let earlier = event();
+                let CaptureOutcome::Persisted { relative_path } = store.record(policy, &earlier)
+                else {
+                    panic!("expected earlier visit");
+                };
+                let log = root.path().join(&relative_path);
+                let original = fs::read(&log).unwrap();
+                let raw = format!("https://example.com/{}a", "ü".repeat(1362));
+                let normalized = canonical_url(&raw, &[]).unwrap();
+                assert!(raw.len() < MAX_URL_BYTES);
+                assert_eq!(normalized.len(), MAX_URL_BYTES + 1);
+                let mut visit = event();
+                let mut activity = activity();
+                activity.event_id = visit.event_id.clone();
+                activity.occurred_at = visit.occurred_at.clone();
+                activity.focused_seconds = 120;
+                activity.background_seconds = 30;
+                activity.modes = vec![ActivityMode {
+                    mode: "edit".into(),
+                    url: "https://example.com/article?keep=1".into(),
+                }];
+                activity.trails.clear();
+                // Reconstruct the old host's exact bytes independently of the
+                // delivery preparation that now enforces the stored URL bound.
+                let (page, body, metadata) = if field == "visit" {
+                    visit.url = raw.clone();
+                    (
+                        normalized.clone(),
+                        safe_title(visit.title.as_deref()),
+                        String::new(),
+                    )
+                } else {
+                    let mut payload = activity.clone();
+                    match field {
+                        "page" => {
+                            activity.url = raw.clone();
+                            payload.url = normalized.clone();
+                        }
+                        "mode" => {
+                            activity.modes[0].url = raw.clone();
+                            payload.modes[0].url = normalized.clone();
+                        }
+                        "trail" => {
+                            let trail = ActivityTrail {
+                                transition: "link".into(),
+                                from_artifact_id: Some("web:example/source".into()),
+                                from_url: Some(raw.clone()),
+                            };
+                            activity.trails.push(trail.clone());
+                            payload.trails.push(ActivityTrail {
+                                from_url: Some(normalized.clone()),
+                                ..trail
+                            });
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert_eq!(activity.focused_seconds, 120);
+                    assert_eq!(activity.background_seconds, 30);
+                    assert_eq!(activity.opens, 2);
+                    assert_eq!(activity.modes.len(), 1);
+                    assert_eq!(activity.modes[0].mode, "edit");
+                    let body = format!(
+                        "{} — focused 120s · background 30s · opened 2 time(s) · modes edit",
+                        safe_title(activity.title.as_deref())
+                    );
+                    (
+                        payload.url.clone(),
+                        body,
+                        format!(
+                            " kind=activity data={}",
+                            hex::encode(
+                                serde_json::to_vec(&serde_json::to_value(&payload).unwrap())
+                                    .unwrap()
+                            )
+                        ),
+                    )
+                };
+                let hash = sha256_hex(visit.event_id.as_bytes());
+                let entry = format!(
+                    "\n- {} — {body} — <{page}>\n{MARKER_PREFIX}{hash} url={} at={}{metadata} -->\n",
+                    visit.occurred_at,
+                    sha256_hex(page.as_bytes()),
+                    visit.occurred_at
+                );
+                let intent = store
+                    .legacy_intent(&relative_path, &entry, original.len() as u64)
+                    .unwrap();
+                publish_intent(&store.journal_path(&hash), &intent).unwrap();
+                let mut torn = original.clone();
+                torn.extend_from_slice(&entry.as_bytes()[..entry.len() - 8]);
+                fs::write(&log, &torn).unwrap();
+                let deliver = |visit: &VisitEvent, activity: &ActivityEvent| {
+                    if batched {
+                        store
+                            .record_batch(
+                                policy,
+                                &Uuid::new_v4().to_string(),
+                                &[if field == "visit" {
+                                    CaptureBatchEvent::Visit(visit)
+                                } else {
+                                    CaptureBatchEvent::Activity(activity)
+                                }],
+                                None,
+                            )
+                            .events
+                            .remove(0)
+                            .1
+                    } else if field == "visit" {
+                        store.record(policy, visit)
+                    } else {
+                        store.record_activity(policy, activity)
+                    }
+                };
+                let mut changed_visit = visit.clone();
+                changed_visit.title = Some("Changed".into());
+                let mut changed_activity = activity.clone();
+                changed_activity.title = Some("Changed".into());
+                assert!(
+                    matches!(
+                        deliver(&changed_visit, &changed_activity),
+                        CaptureOutcome::Retryable { .. }
+                    ),
+                    "{field}, batched={batched}: changed payload"
+                );
+                assert_eq!(fs::read(&log).unwrap(), torn);
+                let result = deliver(&visit, &activity);
+                assert!(
+                    matches!(result, CaptureOutcome::Persisted { .. }),
+                    "{field}, batched={batched}: {result:?}"
+                );
+                let mut expected = original;
+                expected.extend_from_slice(entry.as_bytes());
+                assert_eq!(fs::read(&log).unwrap(), expected);
+                assert!(matches!(
+                    deliver(&visit, &activity),
+                    CaptureOutcome::Suppressed { .. }
+                ));
+                assert_eq!(fs::read(&log).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_over_limit_url_does_not_block_valid_batch_neighbors() {
+        for rejected_first in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let origins = ["https://example.com".to_owned()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let valid = event();
+            let oversized = VisitEvent {
+                url: format!("https://example.com/{}a", "ü".repeat(1362)),
+                // Rejected candidates never participated in the batch's day
+                // check before the length gate moved into the locked append.
+                occurred_at: (parse_event_time(&valid.occurred_at).unwrap()
+                    - time::Duration::days(1))
+                .format(&Rfc3339)
+                .unwrap(),
+                ..event()
+            };
+            let mut events = vec![
+                CaptureBatchEvent::Visit(&valid),
+                CaptureBatchEvent::Visit(&oversized),
+            ];
+            if rejected_first {
+                events.reverse();
+            }
+            let result = store.record_batch(policy, &Uuid::new_v4().to_string(), &events, None);
+            assert_eq!(result.events.len(), 2);
+            assert!(
+                matches!(
+                    result
+                        .events
+                        .iter()
+                        .find(|(id, _)| id == &valid.event_id)
+                        .unwrap()
+                        .1,
+                    CaptureOutcome::Persisted { .. }
+                ),
+                "{:?}",
+                result.events
+            );
+            assert_eq!(
+                result
+                    .events
+                    .iter()
+                    .find(|(id, _)| id == &oversized.event_id)
+                    .unwrap()
+                    .1,
+                CaptureOutcome::Rejected {
+                    reason: "url_too_long".into()
+                }
+            );
+            assert!(
+                !store
+                    .journal_path(&sha256_hex(oversized.event_id.as_bytes()))
+                    .exists()
+            );
+            assert!(!store.batch_intent_path().exists());
+        }
+    }
+
+    #[test]
+    fn completed_mixed_batch_recovers_after_selecting_a_different_home_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let next_root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let origins = ["https://example.com".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        let valid = event();
+        let oversized = VisitEvent {
+            url: format!("https://example.com/{}a", "ü".repeat(1362)),
+            ..event()
+        };
+        // Leave the real published journal behind after the append has synced,
+        // as a process exit or a failed journal cleanup would do.
+        fixtures::INTERRUPT_BATCH_AFTER_SYNC.set(true);
+        let result = store.record_batch(
+            policy,
+            &Uuid::new_v4().to_string(),
+            &[
+                CaptureBatchEvent::Visit(&oversized),
+                CaptureBatchEvent::Visit(&valid),
+            ],
+            None,
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|(_, outcome)| matches!(outcome, CaptureOutcome::Retryable { .. }))
+        );
+        let intent = read_batch_intent(&store.batch_intent_path())
+            .unwrap()
+            .unwrap();
+        let original_log = root.path().join(&intent.relative_log);
+        let before = fs::read(&original_log).unwrap();
+        assert_eq!(
+            before.len() as u64,
+            intent.offset + intent.entry.len() as u64
+        );
+
+        let next =
+            CaptureStore::open_at(&storage(next_root.path(), "log"), None, state.path()).unwrap();
+        let outcome = next.record(policy, &event());
+        assert!(
+            matches!(outcome, CaptureOutcome::Persisted { .. }),
+            "a completed batch must not block capture in the new folder: {outcome:?}"
+        );
+        assert_eq!(fs::read(&original_log).unwrap(), before);
+        assert!(!store.batch_intent_path().exists());
+        assert_eq!(
+            intent.event_hashes,
+            vec![sha256_hex(valid.event_id.as_bytes())]
+        );
+    }
+
+    #[test]
     fn encoded_page_urls_over_the_limit_are_rejected_before_writing() {
         let origins = ["https://example.com".to_owned()];
         let policy = CapturePolicy {
@@ -3135,7 +4709,7 @@ mod tests {
         let data = marker_line
             .split(" data=")
             .nth(1)
-            .and_then(|rest| rest.strip_suffix(" -->"))
+            .and_then(|rest| rest.split_whitespace().next())
             .expect("data field present");
         serde_json::from_slice(&hex::decode(data).unwrap()).unwrap()
     }
@@ -3275,7 +4849,7 @@ mod tests {
                     let data = line
                         .split(" data=")
                         .nth(1)
-                        .and_then(|rest| rest.strip_suffix(" -->"))
+                        .and_then(|rest| rest.split_whitespace().next())
                         .unwrap();
                     serde_json::from_slice::<serde_json::Value>(&hex::decode(data).unwrap())
                         .unwrap()
@@ -3482,7 +5056,7 @@ mod tests {
         let data = marker_line
             .split(" data=")
             .nth(1)
-            .and_then(|rest| rest.strip_suffix(" -->"))
+            .and_then(|rest| rest.split_whitespace().next())
             .expect("data field present");
         let payload: serde_json::Value =
             serde_json::from_slice(&hex::decode(data).unwrap()).unwrap();

@@ -2,13 +2,16 @@ import {
   PANEL_NOTICE_KEY,
   PANEL_NOTICE_MAX_AGE_MS,
   SITE_ACCESS_ORIGINS,
+  PolicyLeaseCache,
+  captureUrl,
   isHttpUrl,
   isPanelNotice,
   localTimestamp,
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, captureStateText, describe, element, setupProblem, worker } from "./settings.js";
+import { ConfigSession, captureStateText, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
+import { evaluate } from "./adapter-templates.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
@@ -17,8 +20,8 @@ import { SETUP_WARNING } from "./agent.js";
 import { NEEDS_HARNESS_MESSAGE, harnessReady, summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
-import { NoteEditor, type UnsavedText } from "./note-editor.js";
-import { NoteRecovery } from "./note-recovery.js";
+import { NoteEditor } from "./note-editor.js";
+import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
 } from "./artifact-refresh.js";
@@ -61,17 +64,20 @@ const noteStatus = element<HTMLSpanElement>("note-status");
 const noteEditor = element<HTMLDivElement>("note-editor");
 const noteBody = element<HTMLTextAreaElement>("note-body");
 const noteConflict = element<HTMLDivElement>("note-conflict");
-const noteConflictMessage = noteConflict.querySelector("p")!;
-const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
-const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
+const noteRecoveryList = element<HTMLUListElement>("note-recovery-list");
 const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
-const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
+const captureExplanation = element<HTMLDivElement>("capture-explanation");
+const captureExplanationText = element<HTMLParagraphElement>("capture-explanation-text");
+const captureExplanationAction = element<HTMLButtonElement>("capture-explanation-action");
+const capturePolicy = new PolicyLeaseCache();
 const artifactCard = element<HTMLElement>("artifact-card");
 const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
 const artifactMeasures = element<HTMLParagraphElement>("artifact-measures");
 const artifactLinks = element<HTMLParagraphElement>("artifact-links");
+const artifactIncomingList = element<HTMLUListElement>("artifact-incoming-list");
+const artifactIncomingEmpty = element<HTMLParagraphElement>("artifact-incoming-empty");
 const artifactWithin = element<HTMLParagraphElement>("artifact-within");
 const artifactContained = element<HTMLDivElement>("artifact-contained");
 const artifactContainedList = element<HTMLUListElement>("artifact-contained-list");
@@ -86,6 +92,13 @@ const olderNoteViewTitle = element<HTMLParagraphElement>("older-note-view-title"
 const olderNoteViewBody = element<HTMLTextAreaElement>("older-note-view-body");
 const copyOlderNoteViewButton = element<HTMLButtonElement>("copy-older-note-view");
 const closeOlderNoteViewButton = element<HTMLButtonElement>("close-older-note-view");
+const preservedNotes = element<HTMLDetailsElement>("preserved-notes");
+const preservedNotesStatus = element<HTMLParagraphElement>("preserved-notes-status");
+const preservedNoteList = element<HTMLUListElement>("preserved-note-list");
+const preservedNoteView = element<HTMLDivElement>("preserved-note-view");
+const preservedNoteTitle = element<HTMLParagraphElement>("preserved-note-title");
+const preservedNoteBody = element<HTMLTextAreaElement>("preserved-note-body");
+let preservedNotesSeq = 0;
 const pageTab = element<HTMLButtonElement>("tab-page");
 const recentTab = element<HTMLButtonElement>("tab-recent");
 const pageView = element<HTMLDivElement>("page-view");
@@ -268,6 +281,33 @@ function renderContained(contained: readonly ContainedArtifactView[]): void {
   artifactContainedList.append(...contained.map(containedRow));
 }
 
+const NAVIGATION_LABELS: Readonly<Record<string, string>> = {
+  link: "Link", typed: "Address", auto_bookmark: "Bookmark",
+  auto_subframe: "Automatic frame", manual_subframe: "Manual frame",
+  generated: "Generated", start_page: "Start page", form_submit: "Form submission",
+  reload: "Reload", keyword: "Keyword", keyword_generated: "Generated keyword",
+};
+
+function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
+  artifactIncomingList.replaceChildren();
+  artifactIncomingList.hidden = trails.length === 0;
+  artifactIncomingEmpty.hidden = trails.length !== 0;
+  for (const trail of trails) {
+    const row = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${NAVIGATION_LABELS[trail.transition]} navigation from `;
+    const link = document.createElement("a");
+    link.href = trail.source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = trail.source.title || trail.source.artifact_id;
+    const date = document.createElement("span");
+    date.textContent = ` · last recorded ${trail.last_seen}`;
+    row.append(label, link, date);
+    artifactIncomingList.append(row);
+  }
+}
+
 function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
@@ -278,6 +318,7 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
     whyEdited = false;
     renderWithin(null);
     renderContained([]);
+    renderIncoming([]);
     updateControls();
     return;
   }
@@ -299,6 +340,7 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
     : "No linked artifacts yet.";
   renderWithin(artifact.within);
   renderContained(artifact.contained);
+  renderIncoming(artifact.incoming_trails);
   if (artifact.artifact_id !== whyArtifactId) {
     whyArtifactId = artifact.artifact_id;
     whyEdited = false;
@@ -449,6 +491,78 @@ function whySaveBlocked(): string | null {
   return null;
 }
 
+function clearPreservedNoteView(): void {
+  preservedNoteView.hidden = true;
+  preservedNoteTitle.textContent = "";
+  preservedNoteBody.value = "";
+}
+
+function resetPreservedNotes(): void {
+  preservedNotesSeq++;
+  preservedNotes.open = false;
+  preservedNoteList.replaceChildren();
+  preservedNotesStatus.textContent = "";
+  clearPreservedNoteView();
+}
+
+async function listPreservedNotes(): Promise<void> {
+  const page = currentPage;
+  const seq = ++preservedNotesSeq;
+  preservedNoteList.replaceChildren();
+  clearPreservedNoteView();
+  if (!page || !preservedNotes.open) {
+    preservedNotesStatus.textContent = "";
+    return;
+  }
+  const current = () => seq === preservedNotesSeq && preservedNotes.open && currentPage?.url === page.url;
+  preservedNotesStatus.textContent = "Looking for preserved notes…";
+  try {
+    const response = await session.host.call({
+      type: "list_preserved_notes", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), url: page.url,
+    }, "preserved_notes_listed");
+    if (!current()) return;
+    preservedNotesStatus.textContent = response.notes.length
+      ? "Choose a note to view read only."
+      : "No matching preserved artifact notes found in this bounded search.";
+    for (const entry of response.notes) {
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = `${entry.title || entry.canonical_url} — ${entry.key.value} `;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary compact";
+      button.textContent = "View read only";
+      button.addEventListener("click", () => void viewPreservedNote(entry, page.url));
+      item.append(label, button);
+      preservedNoteList.append(item);
+    }
+  } catch (error) {
+    if (current()) preservedNotesStatus.textContent = `Could not find preserved notes: ${describe(error)}`;
+  }
+}
+
+async function viewPreservedNote(entry: OlderNote, url: string): Promise<void> {
+  if (!preservedNotes.open || currentPage?.url !== url) return;
+  const seq = ++preservedNotesSeq;
+  const current = () => seq === preservedNotesSeq && preservedNotes.open && currentPage?.url === url;
+  clearPreservedNoteView();
+  preservedNotesStatus.textContent = "Opening preserved note…";
+  try {
+    const response = await session.host.call({
+      type: "view_preserved_note", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), url, key: entry.key,
+    }, "note_loaded");
+    if (!current()) return;
+    preservedNoteTitle.textContent = `${response.title || entry.canonical_url} — ${entry.key.value}`;
+    preservedNoteBody.value = response.body;
+    preservedNoteView.hidden = false;
+    preservedNotesStatus.textContent = "Read only. This page's editable note is unchanged.";
+  } catch (error) {
+    if (current()) preservedNotesStatus.textContent = `Could not open preserved note: ${describe(error)}`;
+  }
+}
+
 function renderOlderNotes(entries: readonly OlderNote[], canUseAsArtifactNote: boolean): void {
   olderNoteEntries = entries.map((entry) => ({ ...entry, key: { ...entry.key } }));
   olderNoteList.replaceChildren();
@@ -538,8 +652,72 @@ function changing(): boolean {
   return busy || replaying || tickRunning || captureSite?.saving === true;
 }
 
+/** Explain automatic capture from the host snapshot and local narrowing
+ * state. Use the worker's compiler/evaluator; page links never enter this
+ * decision. Recognition and history on the artifact card remain host-owned. */
+function renderCaptureExplanation(): void {
+  captureExplanationAction.dataset.action = "settings";
+  captureExplanationAction.textContent = "Open settings";
+  captureExplanationAction.disabled = changing();
+  const config = session.config;
+  if (!currentPage || !config || !session.revision) {
+    captureExplanation.hidden = true;
+    captureExplanationText.textContent = "";
+    return;
+  }
+  const state = session.status;
+  let reason: string;
+  if (session.configIssue || session.adapterIssue) {
+    reason = "Capture is unavailable until the configuration is repaired in settings.";
+  } else if (!config.storage) {
+    reason = "Capture needs a home folder. Choose one in settings.";
+  } else if (state?.pending_removals.includes(new URL(currentPage.url).origin)) {
+    reason = "This site's removal is pending. Capture stays off here until settings finishes the removal.";
+  } else if (!config.capture_enabled) {
+    reason = "Capture is paused. Resume capture in settings to remember work on matching pages.";
+  } else if (state?.pause_pending) {
+    reason = "Capture is paused in this browser. Open settings to finish saving the pause.";
+  } else if (!captureUrl(currentPage.url)) {
+    reason = "Pages whose addresses include sign-in credentials are excluded from capture.";
+  } else if (!session.connected || !state || state.policy_expires_at === null || state.policy_expires_at <= Date.now()) {
+    reason = "Capture settings are unavailable or out of date in this browser. Open settings to refresh them.";
+  } else {
+    const lease = capturePolicy.restore(leaseFor(config, session.revision));
+    const compiled = lease && capturePolicy.compiledFor(lease);
+    if (!compiled) {
+      reason = "Capture rules could not be read. Repair them in settings.";
+    } else {
+      const result = evaluate(compiled, currentPage.url, currentPage.title);
+      if (result.match) {
+        captureExplanation.hidden = true;
+        captureExplanationText.textContent = "";
+        return;
+      }
+      switch (result.reason) {
+        case "out_of_scope":
+          reason = "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
+          break;
+        case "no_adapter":
+          reason = "This site has no capture rules. Review Capture Site to choose which pages to remember.";
+          captureExplanationAction.textContent = "Review Capture Site";
+          captureExplanationAction.dataset.action = "capture-site";
+          captureExplanationAction.disabled ||= element<HTMLButtonElement>("capture-site").disabled;
+          break;
+        case "no_rule":
+          reason = "This page does not match this site's capture rules. Only matching pages are remembered. Review the rules in settings.";
+          break;
+        default:
+          reason = "This page's address cannot safely match the capture rules. Review the rules in settings.";
+      }
+    }
+  }
+  if (captureExplanationText.textContent !== reason) captureExplanationText.textContent = reason;
+  captureExplanation.hidden = false;
+}
+
 function updateControls(): void {
   captureSite?.render(currentPage, changing());
+  renderCaptureExplanation();
   const connected = session.connected;
   const config = session.config;
   const state = session.status;
@@ -893,14 +1071,49 @@ async function showStoredNotice(dropOthers: boolean): Promise<void> {
 
 // --- Page area and note (§5.3, §5.7) ---------------------------------------
 
-function showUnsavedText(entries: readonly UnsavedText[]): void {
-  const only = entries.length === 1 ? entries[0]! : null;
-  noteConflictMessage.textContent = only
-    ? `${only.reason} Copy your text for ${only.url} back in below:`
-    : "Some note text could not be saved. Copy it back in below:";
-  noteUnsaved.value = only
-    ? only.text
-    : entries.map((entry) => `${entry.url}\n${entry.reason}\n\n${entry.text}`).join("\n\n");
+function showUnsavedText(entries: readonly RecoveryText[]): void {
+  noteRecoveryList.replaceChildren();
+  for (const entry of entries) {
+    const row = document.createElement("li");
+    const page = document.createElement("p");
+    page.className = "page-url";
+    page.textContent = entry.url;
+    const reason = document.createElement("p");
+    reason.textContent = entry.reason;
+    const text = document.createElement("textarea");
+    text.rows = 4;
+    text.readOnly = true;
+    text.setAttribute("aria-label", `Recovered note text for ${entry.url}`);
+    text.value = entry.text;
+    row.append(page, reason, text);
+    if (entry.text === "") {
+      const empty = document.createElement("p");
+      empty.textContent = "Empty edit: this copy would clear the note.";
+      row.append(empty);
+    }
+    const status = document.createElement("p");
+    status.setAttribute("role", "status");
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "secondary compact";
+    copy.textContent = "Copy";
+    copy.setAttribute("aria-label", `Copy recovered note for ${entry.url}`);
+    copy.addEventListener("click", () => {
+      void navigator.clipboard.writeText(entry.text).then(() => {
+        status.textContent = "Copied";
+      }).catch((error: unknown) => {
+        status.textContent = `Could not copy: ${describe(error)}`;
+      });
+    });
+    const discard = document.createElement("button");
+    discard.type = "button";
+    discard.className = "secondary compact";
+    discard.textContent = "Discard";
+    discard.setAttribute("aria-label", `Discard recovered note for ${entry.url}`);
+    discard.addEventListener("click", () => notes.discardUnsaved(entry.id));
+    row.append(copy, discard, status);
+    noteRecoveryList.append(row);
+  }
   noteConflict.hidden = entries.length === 0;
 }
 
@@ -947,12 +1160,6 @@ captureSite = new CaptureSitePanel(session, {
   openSettings,
   agentReady: () => harnessReady(session),
 });
-
-function copyUnsavedText(): void {
-  void navigator.clipboard.writeText(noteUnsaved.value).catch((error: unknown) => {
-    showNoteStatus(`Could not copy: ${describe(error)}`, true);
-  });
-}
 
 function localDate(date: Date): string {
   const year = date.getFullYear();
@@ -1163,9 +1370,11 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
   pageUnusable.hidden = state !== "unusable";
   siteAccessWarning.hidden = state !== "site-access";
   noteEditor.hidden = state !== "note";
+  preservedNotes.hidden = state !== "note";
 }
 
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
+  resetPreservedNotes();
   currentPage = null;
   updateControls();
   void refreshArtifact();
@@ -1215,6 +1424,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
   showPageArea("note");
+  if (currentPage?.url !== tab.url || currentPage.tabId !== tab.id) resetPreservedNotes();
   currentPage = { url: tab.url, title, tabId: tab.id };
   // Another page's summary line, and its Open summary, go now rather than
   // when this page's lookup returns.
@@ -1230,6 +1440,12 @@ function reenableSiteAccess(): void {
 }
 
 settingsButton.addEventListener("click", openSettings);
+captureExplanationAction.addEventListener("click", () => {
+  if (captureExplanationAction.dataset.action === "capture-site") {
+    selectView("page");
+    element<HTMLButtonElement>("capture-site").click();
+  } else openSettings();
+});
 setupSettingsButton.addEventListener("click", openSettings);
 pauseButton.addEventListener("click", () => void pauseCapture());
 replayButton.addEventListener("click", () => void replayVisits());
@@ -1237,8 +1453,6 @@ discardButton.addEventListener("click", () => void discardPendingVisits());
 dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
-copyUnsavedButton.addEventListener("click", copyUnsavedText);
-discardUnsavedButton.addEventListener("click", () => notes.discardUnsaved());
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
@@ -1256,6 +1470,17 @@ olderNoteList.addEventListener("click", (event) => {
 });
 copyOlderNoteViewButton.addEventListener("click", copyOlderNoteView);
 closeOlderNoteViewButton.addEventListener("click", closeOlderNoteView);
+preservedNotes.addEventListener("toggle", () => void listPreservedNotes());
+element<HTMLButtonElement>("close-preserved-note").addEventListener("click", () => {
+  preservedNotesSeq++;
+  clearPreservedNoteView();
+  preservedNotesStatus.textContent = "Choose a note to view read only.";
+});
+element<HTMLButtonElement>("copy-preserved-note").addEventListener("click", () => {
+  void navigator.clipboard.writeText(preservedNoteBody.value).catch((error: unknown) => {
+    preservedNotesStatus.textContent = `Could not copy: ${describe(error)}`;
+  });
+});
 pageTab.addEventListener("click", () => selectView("page"));
 recentTab.addEventListener("click", () => selectView("recent"));
 recentType.addEventListener("change", () => void loadRecent());

@@ -86,3 +86,77 @@
   still save with one click, and the host independently validates every save.
   Seven panel cases plus native and wire regressions pass with the full local
   gate (`brwr-t8m`); macOS Chrome acceptance remains human work.
+
+
+- **Brauser — Complete interrupted captures after the URL-limit upgrade (2026-10-28).**
+  Existing v1 capture journals now get exact-byte recovery before the new
+  normalized URL bound can reject a retry, including activity mode and trail
+  URLs through single and batch delivery. Changed payloads remain retryable,
+  new oversized events remain rejected, and valid batch neighbors still save.
+  Two failing-first regressions and the full local gate pass (`brwr-u8r`);
+  real macOS smoke remains unverified on this Linux VM.
+
+
+- **Brauser — Deliver capture-loss evidence after the last batch (2026-10-28).**
+  Overflow that arrives during the final native delivery now gets its own
+  durable count/range marker without waiting for another captured page. Frozen
+  IDs and snapshots make lost replies retryable without duplication; Pause,
+  folder identity and owned-log checks still apply, and the extension supplies
+  no URL or path. Three worker cases and four Rust regressions pass with the
+  full local gate (`brwr-m64`); macOS Chrome smoke remains human/CI work.
+
+
+- **Brauser — Reserve config space for ordinary settings (2026-10-28).**
+  Retired adapter history now has a 32 KiB growth budget within config.toml's
+  64 KiB cap. Older larger histories remain usable for unchanged or shrinking
+  writes, and exact restoration or duplicate pruning preserves note identity.
+  Settings receives specific budget/whole-file recovery guidance instead of a
+  generic failure. Four new Rust regressions and the full local gate pass
+  (`brwr-2iz`); no interactive macOS verification was performed on Linux.
+
+
+- **Brauser — Show where a recorded artifact was opened from (2026-10-28).**
+  Artifact cards now show up to five known incoming source/transition pairs,
+  with safe explicit links, browser-navigation wording and the last recorded
+  day. The host uses existing validated trails; missing, self, back/forward
+  and unknown historical sources never invent provenance. Protocol v8 adds
+  the required list; collection, logs and cache formats stay unchanged.
+  Four new Rust and two panel regressions pass with the full gate and 1,680
+  individually exercised extension tests (`brwr-1g2`). Actual Chrome anchor
+  opening still needs macOS verification.
+
+- **Brauser — interrupted log recovery survives presentation changes:** New single-event journals retain bounded prepared append bytes and a separate normalized-payload identity, allowing visits, activity, Why context and summaries to finish after renderer upgrades through single or batch delivery. Edited log tails, changed home folders and mismatched payloads remain refused; complete markers deduplicate and existing v1 frozen-renderer recovery remains supported. Four new regressions and the complete local gate pass; no live service or external API was used.
+
+- **Brauser — read preserved notes without changing the editable page note:** The panel now lists up to 24 verified historical artifact notes sharing a stored address and opens an explicit choice in a separate read-only, copyable viewer. This makes ambiguous or forgotten-rule notes accessible without restoring capture, migrating files, or guessing an autosave key. Ownership and address are rechecked on every open; the bounded lookup works without index.db or recorded contracts. Seven new Rust and eight panel regressions pass with the full local gate; actual macOS Chrome interaction remains human verification (`brwr-r88`).
+
+- **Brauser — isolate scripted host lifecycle tests across platforms:** Debug scripted-dialogs builds can use an explicit temporary config path, keeping configuration and cache state away from real user settings even when Windows Known Folders ignores HOME. Host-kill and knowledge-base picker fixtures use the seam; ordinary builds ignore it and release builds cannot enable it. Four process-level regressions cover loading, path refusal and cache placement (`brwr-3rt`); macOS smoke conventions and dialog counts are unchanged.
+
+- **Brauser — explain skipped capture from the current page:** The panel now distinguishes pauses, pending site removals, excluded workspaces/accounts and unmatched page rules, with an existing settings or Capture Site review action. Explanations use the current compiled policy without inspecting links, inventing visits or changing capture. Fourteen new composed-panel cases cover policy changes, navigation and local status updates (`brwr-vny`); actual macOS Chrome interaction remains human verification.
+
+- **Brauser — keep daily-log titles and Why context as literal text:** New
+  visit/activity titles and Why text use the shared inline escaper so math
+  and code syntax cannot activate a Markdown viewer's secondary engines.
+  Both historical v1 renderer generations remain frozen for exact interrupted
+  write recovery, while machine payloads and completed rows stay unchanged.
+  Two regressions cover fifteen delivery/recovery scenarios, and the full
+  required/README gate passes (`brwr-2za`). macOS browser verification remains
+  outside this Linux run.
+
+- **Brauser — individual recovered-note review:** The panel now shows each
+  recovered copy with its page address, read-only text and separate Copy and
+  Discard controls, so recovering one page never requires handling every
+  unsaved note. Empty edits are clearly labelled, Copy keeps exact text, and
+  Discard targets only the immutable snapshot selected. Live typing, other
+  copies and newer snapshots from another panel stay intact; recovery never
+  automatically fills or saves a note, and clipboard/storage failures remain
+  visible and retryable. Completes assigned `brwr-kws`.
+
+- **Brauser — names-only URL provenance:** Saved canonical addresses now carry
+  the actual removed query names, never their values, through daily logs,
+  cache format 7, a queryable SQLite table, notes and summaries. Older-note
+  discovery and migration refuse evidence that lost a key read by current or
+  recorded capture rules; primary autosave identity stays contract-derived.
+  Legacy records remain readable with unknown evidence, note edits/re-keying
+  preserve creation evidence, and frozen v1/v2 interrupted-write recovery is
+  retained alongside new v3 intents. Ten new regression tests and the complete
+  required/README gate pass (`brwr-srp`); macOS acceptance remains separate.

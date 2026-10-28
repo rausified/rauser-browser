@@ -42,7 +42,7 @@ const OPEN_LOG_ENV = `${BINARY_NAME.toUpperCase()}_OPEN_LOG`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
-const PROTOCOL_VERSION = 7;
+const PROTOCOL_VERSION = 8;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 // Keep in step with POLICY_STORAGE_KEY in extension/model.ts.
@@ -1709,7 +1709,7 @@ async function run() {
         const hidden = await page.hidden("#note-conflict");
         requireCondition(hidden === false, "The conflict copy-out box did not appear");
       }), { timeout: 20_000 });
-      const [unsaved, shown] = await Promise.all([fieldValue("note-unsaved"), fieldValue("note-body")]);
+      const [unsaved, shown] = await Promise.all([onPanel((page) => page.evaluate('document.querySelector("#note-recovery-list textarea").value')), fieldValue("note-body")]);
       requireCondition(unsaved === unsavedLocalEdit, `Unsaved copy-out shows: ${unsaved}`);
       requireCondition(shown === externalBody, `Note editor shows: ${shown}`);
       const files = await markdownFiles(path.join(notesRoot, "notes"));

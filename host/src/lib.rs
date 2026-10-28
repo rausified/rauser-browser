@@ -46,4 +46,5 @@ pub mod service;
 #[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) mod site_draft_answer;
 mod summary;
+pub mod url_provenance;
 pub mod vault;

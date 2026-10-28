@@ -47,7 +47,7 @@ use super::record::RunStatusFile;
 use super::supervisor::{RunFinisher, SaveFailure, SavedRun, accept_summary_answer, timestamp};
 use crate::answer::SummaryAnswer;
 use crate::brand::{APP_NAME, NAMESPACE};
-use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url};
+use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url_with_provenance};
 use crate::config::{ADOPTED_CONTRACTS_PAUSED, ConfigStore};
 use crate::index::ArtifactIndex;
 use crate::layout;
@@ -147,10 +147,15 @@ impl RunFinisher for SummaryFinisher {
             return Err(NEEDS_REPAIR.into());
         }
         let key = resolve_record_key(&mut config, &run.url).map_err(key_error)?;
-        let canonical = canonical_url(&run.url, &config.snapshot().strip_params).map_err(|_| {
-            SaveFailure::final_reason("The page URL is invalid; this run cannot be saved.", None)
-        })?;
+        let stored = canonical_url_with_provenance(&run.url, &config.snapshot().strip_params)
+            .map_err(|_| {
+                SaveFailure::final_reason(
+                    "The page URL is invalid; this run cannot be saved.",
+                    None,
+                )
+            })?;
 
+        let canonical = stored.url;
         let style = link_style(&storage.profile);
         let relative = vault
             .summary_relative_path(&key, &canonical)
@@ -173,6 +178,7 @@ impl RunFinisher for SummaryFinisher {
         let document = SummaryDocument {
             key: &key,
             canonical_url: &canonical,
+            stripped_params: stored.stripped_params.as_deref(),
             title: &title,
             summarized_at: &answered,
             harness: run.harness,
@@ -810,6 +816,37 @@ mod tests {
         let summary = summary.unwrap();
         assert_eq!(summary.importance, ImportanceLevel::High);
         assert_eq!(summary.summary_path, slash(&relative));
+    }
+
+    #[test]
+    fn summaries_keep_removed_query_names_in_file_log_and_index() {
+        let world = World::new();
+        let raw = format!("{PAGE}?utm_source=private-value");
+        let run = run(&world, &raw, HarnessId::Codex);
+        let saved = world.finisher().save(&run, &answer()).unwrap();
+        let relative = saved.summary_path.unwrap();
+        let file = fs::read_to_string(world.root.join(relative)).unwrap();
+        assert!(file.contains("  stripped_params: [\"utm_source\"]"));
+        assert!(!file.contains("private-value"));
+        let events = world.summary_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].url, PAGE);
+        let evidence = world
+            .index()
+            .artifact_url_evidence(&events[0].artifact_id)
+            .unwrap();
+        assert_eq!(
+            evidence,
+            [crate::url_provenance::StoredUrl {
+                url: PAGE.into(),
+                stripped_params: Some(vec!["utm_source".into()])
+            }]
+        );
+        assert!(
+            !fs::read_to_string(world.log_file())
+                .unwrap()
+                .contains("private-value")
+        );
     }
 
     /// A 64-character label of multibyte letters passes the answer's

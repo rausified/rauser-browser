@@ -263,15 +263,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
-- [ ] `brwr-u8r` **Replay existing v1 capture intents before the normalized-URL
-  bound rejects their event (P2).** From #139's review: a partial v1 intent left
-  by an older host for an event whose normalized URL exceeds 8192 bytes is now
-  rejected (`url_too_long`) before `record_authorized` can replay it, so the
-  worker drops the event and strands the log tail (host/src/capture.rs
-  `normalized_bounded_url`).
-- [ ] `brwr-srp` **Record which query parameters were stripped beside stored
-  canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
-  artifacts apart in history; changes the log and index formats.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -281,40 +272,21 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   panel already has; do not rewrite shipped views solely to create an
   abstraction. Close it as not needed if no second consumer appears by PR 3.
 
-- [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
-  drop that races the last in-flight batch stays counted and visible, but its
-  marker currently waits for another authorized event to provide a safe log
-  anchor. Make that evidence independently deliverable without accepting an
-  unvalidated URL or vault path.
+- [ ] `brwr-9r7` **Show capture gaps beside copied worklogs.** Surface durable
+  overflow ranges where people review a day or week, and let them include a
+  clear gap note in copied text. Missing hours must never become activity.
 - [ ] `brwr-o1l` **Share one authorize-and-open path across delivery entry
   points.** `record_visit`, `record_activity`, and `record_batch` repeat the
   lock, refresh, policy, and store setup, and `capture.rs` has twin
   mode/trail authorization loops. Extract the shared steps and set a removal
   release for the legacy paths.
-- [ ] `brwr-2iz` **Bound `adapter_id_history` inside the 64 KiB config cap.**
-  When it fills, unrelated writes fail with a generic size error. Add a
-  budget, a specific error, and a safe prune, or fold it into `brwr-6x2`.
 - [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
   dated as-built and probe records to `docs/history.md`, and make AGENTS.md
   "Current state" a short table.
-- [ ] `brwr-3cc` **Preserve single-event recovery across presentation changes.**
-  Legacy intents retain a rendered-entry hash rather than prepared bytes.
-  Independent review added exact-hash compatibility for this sanitizer
-  upgrade; future rendering changes still need recovery independent of the
-  renderer, with the same integrity checks. Compact batches retain their bytes.
 
-- [ ] `brwr-3rt` **Isolate scripted host lifecycle tests on Windows.** Add a
-  debug-only disposable config-path seam before running host-kill tests on
-  Windows, whose Known Folders lookup ignores the Unix HOME fixture.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
-- [ ] `brwr-2za` **Neutralize `$` math in daily-log titles and Why text.**
-  `safe_markdown_line` (host/src/capture.rs) still allows `$` math there.
-  Moving them to `markdown::inline` needs a second frozen renderer generation
-  so intent-journal recovery (`pre_sanitizer_entry`) still matches lines
-  journaled byte-exact in the old form. DESIGN.md §5.2 and spec §7.1 record
-  the gap. From Lane E / PR 4; related to `brwr-3cc`.
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
@@ -364,28 +336,6 @@ shipped (see Shipped).
   product follow-up surfaced in the starter preflight and waits behind
   assigned/plan work.
 
-- [ ] `brwr-kws` **Review recovered note copies individually.** Let a person
-  recover one page's text or discard one copy without handling the whole set.
-  Keep copy-only recovery, explicit empty-edit wording and immutable snapshot
-  cleanup across panels. Discovered while restoring local note recovery; this optional
-  UX follow-up comes after assigned work.
-
-- [ ] `brwr-vny` **Explain why the current page is outside capture.** Use
-  the compiled policy to distinguish a paused site, pending removal, tenant
-  scope and an unmatched page rule, with the relevant settings/review action.
-  Link patterns must never become evidence that a page was visited.
-
-- [ ] `brwr-r88` **Show ambiguous historical notes for explicit read-only viewing.**
-  When several artifacts share a canonical URL after removal, list the
-  verified preserved notes in the panel so a person can read one deliberately.
-  Keep the primary autosave key, separate URL note, ownership checks and
-  capture policy unchanged; never turn a read-only choice into a migration.
-- [ ] `brwr-1g2` **Show the incoming trail on the artifact card.** The card
-  currently shows only a linked count even though the host records validated
-  cross-tool edges. After ordered plan work, surface bounded incoming sources
-  with a title, honest navigation wording and explicit safe links, following
-  DESIGN.md §5.7. Keep back/forward and missing sources honest and never turn
-  unknown historical transition text into a relationship.
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -447,6 +397,29 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Keep stripped query names beside saved page addresses (2026-10-28).** Host-derived, names-only evidence now accompanies daily-log URLs (including activity modes and trail sources), cache format 7, a queryable SQLite provenance table, and note/summary creation addresses. Older-note discovery and migration refuse candidates that lost a query or absence key read by a current or recorded contract, while tracking-only removal stays usable. Legacy evidence remains unknown; note re-keying and later saves preserve it, and frozen v1/v2 recovery completes only original bytes while new v3 intents bind the names. Completes assigned `brwr-srp`. **Metrics:** 10 new regression tests; 968 workspace Rust outcomes (43 IPC skips), 831 scripted-dialog outcomes (53 IPC skips, one ignored doctest), 15 extension files, two script files, 10,696 Markdown renderings; full required/README gate green.
+
+
+- **Category:** User Experience. **Review recovered notes one copy at a time (2026-10-28).** Completed assigned `brwr-kws`. Each recovered copy now shows its page address, reason and read-only text with individual Copy and Discard controls; empty edits are explicitly labelled. Copy preserves exact text, and Discard selects an immutable snapshot ID, leaving live typing, other copies and newer snapshots from another panel intact. Clipboard and storage failures remain visible and retryable, and review never fills or saves the editor automatically. **Metrics:** Six new regressions; 34 editor and 163 built-panel cases, all 15 extension files, 915 exercised Rust tests plus 43 explicit IPC skips, two script files, both Clippy configurations and 10,696 Markdown renderings pass.
+
+- **Category:** Security & Privacy. **Keep daily-log titles and context inert in Markdown (2026-10-28).** Completed assigned `brwr-2za`. New visit/activity titles and Why text use the shared inline escaper so page-supplied math and code stay text. Both historical v1 renderer generations are frozen for recovery, with whole-entry hash and exact torn-byte checks; machine markers and existing rows remain unchanged. **Metrics:** Two new Rust regressions cover 15 delivery/recovery scenarios; all 54 capture tests, 933 workspace Rust outcomes, 821 scripted-dialogs outcomes (plus one ignored doctest), 15 extension files, two script files and 10,696 Markdown renderings pass.
+
+- **Category:** User Experience. **Explain why the current page is outside capture (2026-10-28).** Completed assigned `brwr-vny`. The panel distinguishes host and browser-local pauses, pending site removals, workspace/account scope exclusions and unmatched page rules, with settings or the existing Capture Site review as the next action. It reuses the revision-cached policy compiler and ordered evaluator, follows navigation and policy/status changes, clears on unreadable/private tabs, and never inspects links or changes capture or note identity. **Metrics:** 14 new composed-panel cases; all 158 panel cases and 15 extension files pass; 956 workspace Rust outcomes (43 explicit IPC skips), scripted-dialogs suite, full required/README gates and 10,696 inert Markdown renderings green.
+
+- **Category:** Testing & Verification. **Isolate scripted host lifecycle configuration across platforms (2026-10-28).** Completed assigned `brwr-3rt`. A debug scripted-dialogs-only absolute config-path override keeps both host picker fixtures and their cache inside temporary directories despite Windows Known Folders ignoring HOME. Ordinary builds ignore the override, invalid overrides refuse without fallback, and release builds retain the feature prohibition; macOS smoke defaults and dialog counts are unchanged. **Metrics:** Four process-boundary regressions pass in scripted builds; ordinary-build exclusion passes; all seven scripted picker lifecycle tests and the full required/README gates pass. Windows execution remains with CI.
+
+- **Category:** New Capability. **Browse preserved artifact notes without changing autosave (2026-10-28).** Completed assigned `brwr-r88`. Added an explicit panel disclosure listing verified note titles and artifact IDs when multiple historical notes share a stored address. Each opens in a separate text-only, copyable read-only viewer; the occupied URL note, primary autosave key, migrations and capture policy stay unchanged. The host rechecks ownership and address on open, uses the existing bounded scan with at most 24 results, and works without the history cache or recorded contracts. **Metrics:** 955 Rust outcomes (43 explicit IPC skips; 7 new tests), all 15 extension files, 144 panel cases (+8), two script files, and 10,696 inert Markdown renderings.
+
+- **Category:** Reliability. **Recover interrupted log entries across renderer upgrades (2026-10-28).** Completed assigned `brwr-3cc`. New single-event journals retain bounded prepared bytes plus a hash of unrendered normalized event fields, so visits, activity, Why and summaries resume the original append after presentation changes. Single and batch retries preserve edited tails, unrelated rows, changed-folder refusals and complete-marker deduplication; v1 frozen-renderer recovery remains covered explicitly. **Metrics:** Four new Rust regressions; 52 capture tests and 923 workspace Rust outcomes (43 explicit IPC sandbox skips), all 15 extension and two script files, full required/README gate and 10,696 inert Markdown renderings green.
+
+- **Category:** New Capability. **Show recorded incoming navigation on artifact cards (2026-10-28).** Completed assigned `brwr-1g2`. The card lists up to five host-derived source/transition pairs with explicit HTTP(S) links, measured navigation wording and the latest recorded day. Repeated observations stay one row; unresolved, self, back/forward and unknown historical sources never invent provenance. Protocol v8 carries the required list without changing logs or cache formats. **Metrics:** 4 new Rust and 2 composed-panel regressions; 944 Rust outcomes (901 exercised, 43 explicit IPC sandbox skips), 1,680 extension tests, the complete required/README gate and 10,696 inert Markdown renderings green.
+
+- **Category:** Bug Fix. **Keep retired adapter history within a reserved config budget (2026-10-28).** Completed assigned `brwr-2iz`. History growth now has a 32 KiB pretty-TOML budget inside the 64 KiB config cap. Older larger histories may stay unchanged or shrink, so Pause and disjoint site additions remain available while the file fits. Exact restoration and duplicate pruning reclaim history space without forgetting distinct note identities; budget and whole-file refusals reach settings with specific recovery actions. **Metrics:** 4 new Rust regressions; 940 Rust outcomes (897 exercised, 43 explicit IPC sandbox skips), all 15 extension and 2 script files, full required gate and 10,696 inert Markdown renderings green.
+
+- **Category:** Reliability. **Deliver capture-loss evidence when the last batch drains (2026-10-28).** Completed assigned `brwr-m64`. Overflow arriving during the final native delivery now follows it as a standalone batch without waiting for another capture. A stored ID and frozen count/range survive lost replies, later drops and worker restarts; retries back off, Pause still gates delivery, and the host chooses the owned log only from validated timestamps and the checked home folder. Existing anchored batches keep their recovery bytes. **Metrics:** 3 new worker cases and 4 new Rust regressions; 936 Rust outcomes including existing IPC sandbox skips, all 15 extension and 2 script files, the full required gate and 10,696 inert Markdown renderings green.
+
+- **Category:** Bug Fix. **Complete interrupted captures before applying the new URL limit (2026-10-28).** Completed assigned `brwr-u8r`. A retry now reaches its existing v1 intent before an oversized normalized page, mode or trail URL can reject the event. Recovery retains the exact old bytes and all hash, prefix, ownership and folder checks; changed payloads stay retryable, while new oversized writes remain rejected. Rejected events cannot choose the log day for valid batch neighbors. **Metrics:** 2 new failing-first Rust regressions covering 8 recovery variants and both mixed-batch orders; 931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips), all 15 extension and 2 script files, full required gate and 10,696 inert Markdown renderings green.
 
 - **Category:** Bug Fix. **Check recorded identities before Capture Site offers Save (2026-10-28).** Completed assigned `brwr-t8m`. Starter reviews now wait for the host to check the proposed rules against active, retired and hand-removed contracts, then name a conflicting recorded type and ID template before Save is available. Edited selections and closed reviews discard older replies; an unsupported host or mismatched response leaves Save disabled. Existing revision-checked saves remain authoritative, and a fresh site still enables in one click. **Metrics:** 7 new panel cases, 1 native regression and 1 protocol round trip; 134 panel cases, all 15 extension and 2 script files pass; 929 Rust outcomes (886 exercised, 43 explicit IPC sandbox skips); full required gate and 10,696 inert Markdown renderings green.
 
@@ -634,11 +607,10 @@ shipped (see Shipped).
   coverage for the composed panel. The Rust boundary tests, note-state test,
   and settings fake DOM do not prove the full card/filter/worklog click path;
   extend the existing headless smoke fixture rather than add another harness.
-- An overflow that appears while the final queued batch is in flight is now
-  preserved rather than over-acknowledged, but it needs a later artifact event
-  before it has a validated log anchor. `brwr-m64` records the follow-up for an
-  independently deliverable marker; do not solve it by letting the extension
-  choose a file or smuggle an unchecked URL into the host.
+- Overflow that races the final queued batch is now independently delivered
+  (`brwr-m64`, 2026-10-28). The extension supplies no URL or path; the host
+  derives the log day from its validated last timestamp inside the checked
+  home folder. `brwr-9r7` follows up on showing gaps in worklog review.
 - Step 6.6 can use the batch boundary as the natural dirty-index transaction:
   derive affected artifact IDs from the same canonical payloads after the log
   sync, but keep the Markdown markers as the rebuild authority so index loss
@@ -997,3 +969,341 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` because the Git mount is read-only. The complete green
   diff, exported queue and excluded `.bosun_commit_msg` remain for the
   driver. No retry, remote operation or live-service action was attempted.
+
+### Cycle observations (2026-10-28 — capture recovery before URL limits)
+
+- Opening health on `e604019b` passed with a clean tree and no quarantine
+  report. Claimed and completed highest-priority ready assignment `brwr-u8r`.
+  No live service, credential, remote Git operation or external API was used.
+- The regression independently reconstructs pre-limit presentation and payload
+  bytes, publishes a v1 intent and truncates the log. The original code
+  terminally rejected the oversized event before checking that intent. The
+  new test covers visit/page/mode/trail URLs through single and batch paths,
+  refuses changed payloads, completes the original bytes and deduplicates a
+  second delivery. An initial fixture serialized the struct directly rather
+  than the old host's JSON value; corrected its JSON key ordering.
+- Review caught and tested an implementation issue before handoff: delaying
+  the bound left rejected oversized candidates participating in the batch's
+  calendar-day check. The new mixed-batch regression failed, then passed
+  after only accepted new writes were allowed to select the log day. The
+  existing raw and stored URL caps and exact 8192-byte boundary still pass.
+- Final gate: 931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips),
+  all 15 extension and two script files, current-state consistency and 10,696
+  inert Markdown renderings pass. Evidence is in `target/cookie-u8r-*.log`.
+  The macOS headless smoke runner explicitly refused Linux. Complete code,
+  test and documentation diff reviewed manually; external Codex review was
+  not invoked because this run forbids live APIs. The driver's independent
+  reviewer remains the publication gate.
+- Queue priorities remain authoritative: 13 assigned items remain, including
+  the two blocked items; do not jump to self-directed product work. The
+  existing `brwr-1g2` incoming-trail card and `brwr-kws` individual recovery
+  review offer visible workflow improvements after higher-priority work.
+  For future recovery-format changes, keep a fixture of exact historical
+  bytes: regenerating both the fixture and expected output with today's
+  renderer can hide the compatibility failure.
+
+- Commit handoff: the single `git add -A` / commit attempt failed creating
+  `.git/index.lock` on the read-only mount. The green diff, exported queue
+  and excluded `.bosun_commit_msg` remain for the driver. No retry or remote
+  operation was attempted.
+
+### Cycle observations (2026-10-28 — standalone overflow evidence)
+
+- Opening health on `f4f12f7c` was clean; no quarantine report or incomplete
+  tree. Completed the first ready assignment, `brwr-m64`. The next ready
+  assignment is `brwr-2iz`; twelve assigned items remain, two blocked.
+- The worker regression failed before implementation. Its final fixture
+  freezes two actual completed hours while one byte-full native batch is in
+  flight, drops both through the real pressure path, then sends their marker
+  without a later navigation. A first fixture used URLs beyond the adapter
+  engine's 2,048-character match bound; it was corrected to use valid URLs
+  and bounded mode/title evidence to fill the queue instead.
+- Full code, test and documentation diff reviewed manually. Snapshot ownership
+  remains with a delayed event batch, so a separate marker cannot duplicate
+  its attached evidence. Standalone replies that report false retain the
+  marker and stop the send loop; older v7 hosts safely leave evidence pending.
+  Rust tests cover partial-write recovery, duplicate retries and all selected
+  folder/policy gates. Regenerating protocol types produces no changes: only
+  the schema array minimum was widened.
+- Full required gate passes: 936 Rust outcomes (including existing sandbox
+  IPC skips), 15 extension files and 2 script files; 191 Markdown corpus
+  inputs produce 10,696 inert renderings. macOS headless smoke was not run on
+  Linux; its dialog flow and `dialogsShown === logged` check are unchanged.
+  External Codex review was not invoked because this run forbids live APIs;
+  the driver's independent review remains the publication gate.
+- New proposal `brwr-9r7` makes existing gap evidence visible during worklog
+  review and optional in copied text. It is deliberately unassigned; finish
+  assigned work first. Durable evidence is useful only if the person sharing
+  their work can notice an incomplete day without opening raw Markdown logs.
+  Existing named focus sessions (`brwr-ued`) remain the larger product swing
+  after assigned work and ordered plan work are complete.
+
+- Commit handoff: the single staging/commit attempt could not create
+  `.git/index.lock` on the read-only mount. The green diff, exported queue
+  and excluded `.bosun_commit_msg` are ready for the driver; no retry or
+  remote operation was attempted. Local validation logs are under
+  `target/cookie-m64-*`; the worker file contains 87 passing cases.
+
+
+### Cycle observations (2026-10-28 — retired adapter history budget)
+
+- Opening health on `a7ed9437` was clean: no quarantine file or incomplete
+  tree, and every required baseline check passed. Completed first ready
+  assigned item `brwr-2iz`. Continue `bd ready --label assigned`; eleven
+  assigned items remain, including two blocked ones, with `brwr-1g2` next.
+- Plan implemented: a 32 KiB pretty-TOML growth budget, grandfathered legacy
+  histories, actionable typed size refusals through native settings, and
+  pruning limited to exact duplicates and exact active restorations. The
+  adopted state file and all distinct recorded route contracts remain intact.
+- The first store and native regressions failed before implementation. Test
+  iteration caught fixture assumptions: restoring a different same-type ID
+  must precede removing the current one; enough contracts must be restored
+  to get below the history budget before growing it again; active adapters
+  resolve through adapter_match, with note_key_rule reserved for fallback.
+- Reviewed the complete code/test/design diff. Full required and README gate
+  passes: 940 Rust outcomes (897 exercised, 43 explicit IPC skips), all 15
+  extension and 2 script files, and 10,696 inert Markdown renderings. Logs:
+  `target/cookie-2iz-final-*.log`. External Codex review was not invoked because
+  live APIs are forbidden; the driver supplies independent review. macOS
+  headless smoke was not run on Linux; dialog behavior is unchanged.
+- Existing proposal `brwr-cua` is the useful next extension of this work:
+  offer the original recorded rules in an explicit restore review instead of
+  requiring reconstruction in the advanced editor. Reuse that issue rather
+  than create a duplicate. Show history budget separately from total-file
+  space: restoring an adapter frees the first but moves bytes within the
+  second. After assigned and ordered work, curated worklogs (`brwr-ppn`)
+  remain a larger product improvement for sharing only relevant work.
+
+- Commit handoff: the single staging/commit attempt failed creating
+  `.git/index.lock` on the read-only mount. The completed green diff,
+  exported queue and excluded `.bosun_commit_msg` remain for the driver.
+  No retry, push, or remote operation was attempted.
+
+
+### Cycle observations (2026-10-28 — incoming navigation)
+
+- Opening health on `21de2229` was clean, with no quarantine report and all
+  required baseline commands passing. Claimed the first ready assigned item,
+  `brwr-1g2`, and completed its native query, protocol, panel and test work.
+  Continue `bd ready --label assigned`; ten assigned items remain, eight ready,
+  with `brwr-3cc` next and the existing two blocked items unchanged.
+- The list is five source/transition pairs, not five inferred relationships
+  or a click count. Source links use the known artifact's current recorded
+  URL. Ordering is by local day, then source ID and transition, so no
+  within-hour chronology is claimed. A known source may appear for multiple
+  navigation kinds; back/forward stays unattributed even in old paired data.
+- Full diff reviewed locally. The initial feature gate caught stale version-7
+  wire fixtures after the v8 bump; updated all current-message fixtures and
+  added an explicit required/bounded/known schema regression. The repeated
+  full required and README gate passes: 944 Rust outcomes (43 explicit IPC
+  skips), all 15 extension files, both script files and 10,696 inert Markdown
+  renderings. Also ran every extension file separately without child test
+  isolation: 1,680 tests passed, including 136 panel cases. Logs are
+  `target/cookie-final-gate.log` and `target/cookie-direct-extension.log`.
+- No live API or external Codex review was invoked; the driver supplies the
+  independent review. Linux cannot run the macOS-only smoke runner. Its
+  protocol constant is v8; the existing three folder-picker answers and
+  dynamic answered-versus-logged dialog check are unchanged. Source-tab
+  activation is covered with local scripted panel fixtures, while real
+  Chrome anchor default behavior remains a macOS verification step.
+- Product direction: existing `brwr-ued` named focus sessions and `brwr-ppn`
+  curated worklogs remain valuable after assigned and ordered work. Explicit
+  sessions can explain the person's intent across tools, while trails only
+  explain measured navigation. Keep those meanings distinct; do not grow
+  another inferred-relationship view or duplicate these existing proposals.
+
+- Commit handoff: the single staging/commit attempt failed creating
+  `.git/index.lock` on the read-only mount. The complete green changes,
+  exported queue, cycle log and excluded `.bosun_commit_msg` are ready for
+  the driver. No commit retry or remote operation was attempted.
+
+
+### Cycle observations (2026-10-28 — single-event prepared recovery)
+
+- Health started clean at `ba8ee6b3`, with no quarantine and a clean working
+  tree; all required baseline checks passed. Completed first ready assigned
+  `brwr-3cc`, with the new-format regression failing first against version 1.
+- Prepared bytes are bounded per journal (512 KiB entry, 1 MiB JSON), not a
+  global retention policy. Journals remain the event-ID authority as before;
+  future cleanup must not forget duplicate IDs. The raw payload hash includes
+  text past display truncation and shares one fixed tuple across delivery paths.
+- Old v1 intents have no prepared bytes to recover from: only exact known
+  renderings may complete them. `brwr-2za` still needs the second frozen
+  generation when daily-log escaping changes; this task does not close it.
+- Full diff reviewed locally, including the version-specific legacy fixtures.
+  Full required and README gates passed: 923 Rust outcomes, including 43
+  explicit IPC sandbox skips, all 15 extension files, two script files, and
+  10,696 inert Markdown renderings. No remote Codex review was invoked under
+  the no-live-API constraint; the driver supplies independent review. macOS
+  headless smoke remains unavailable on this Linux VM; no browser/UI changes.
+- Continue `bd ready --label assigned`; `brwr-r88` is next. Read-only viewing
+  of ambiguous preserved notes and explaining skipped capture (`brwr-vny`)
+  remain useful visible improvements already queued; no duplicate proposal
+  or new robustness task is needed while assigned work remains.
+- The single commit attempt failed at `git add` because `.git/index.lock`
+  cannot be created on this read-only mount. No retry or remote operation:
+  the completed green diff, closed/exported bead and excluded
+  `.bosun_commit_msg` are ready for the driver.
+
+### Cookie cycle — preserved artifact-note viewing (2026-10-28)
+
+- Began from a clean tree without a quarantine report; every required health
+  check passed. Claimed and completed the first ready assigned bead,
+  `brwr-r88`. Read the complete code, tests, generated protocol and doc diff
+  fresh, and reused existing response validators and vault scan boundaries.
+- The explicit read-only lookup is intentionally independent of note identity:
+  canonical-address equality is useful for a person choosing what to read but
+  remains insufficient evidence for an autosave or migration. No new ordinary
+  note-load scan or dependency on index.db was introduced. The limitation is
+  documented: today's stripped page address must equal the stored creation
+  address, and the bounded scan can omit notes.
+- Required and README gates passed: 955 Rust outcomes (912 exercised and 43
+  explicit IPC skips), all 15 extension files, 144 panel cases exercised
+  individually, two script files and 10,696 inert Markdown renderings. No
+  remote Codex review ran under the no-live-API instruction; the driver
+  supplies independent review. Interactive macOS Chrome styling and keyboard
+  acceptance remain human work, not claimed by the mocked panel checks.
+- Test development exposed two fixture assumptions, both corrected: fake DOM
+  `disabled` does not initialize from HTML, and Serde does not enforce schema
+  array caps. Panel waits now observe an actual note request; wire bounds use
+  the existing schema validator. These are recorded in TESTING.md.
+- Continue assigned work with `bd ready --label assigned`; `brwr-3rt` is next
+  unless the driver changes the queue. Existing `brwr-kws` individual recovery
+  review and `brwr-vny` capture explanations remain useful visible follow-ups;
+  prefer those over another internal robustness idea. A future search view
+  should reuse this deliberate read-only boundary instead of changing note
+  identity from a selected search result. No duplicate proposal was added.
+- The single commit attempt failed at `git add`: `.git/index.lock` is on a
+  read-only mount. No retry or remote operation was attempted. The completed
+  green diff, closed/exported bead and excluded `.bosun_commit_msg` are ready
+  for the driver to commit with Cookie as author.
+
+### Cycle 13 — Capture explanations and isolated host fixtures (2026-10-28)
+
+- Health started clean: no gate-failure quarantine and no incomplete working
+  tree. The complete baseline passed before assigned work began. Completed
+  `brwr-3rt` and `brwr-vny`; both beads are closed and exported. Follow the
+  remaining assigned queue with `bd ready --label assigned` next cycle.
+- Final required and README gates pass: 956 workspace Rust outcomes (43
+  explicit IPC-denial skips), 819 scripted-dialogs outcomes (53 explicit IPC
+  skips and one ignored documentation example), all 15 extension files,
+  158 panel cases exercised individually (+14), both script files, and
+  10,696 inert Markdown renderings. Four new config-path process tests pass;
+  the ordinary build exercises the shared override-exclusion test too.
+- Fresh full-diff review checked recognition precedence, policy revision
+  changes, action wiring, privacy and config/cache isolation. It caught
+  repeated live-region text replacement, which now updates only when the
+  reason changes. Test development also corrected an invalid URL-shape
+  placeholder and an assertion that expected parser details instead of the
+  host's intentional generic configuration error; exact file revision now
+  proves which configuration was read.
+- macOS smoke explicitly refuses Linux; Windows execution is with CI. No
+  scripted dialog or smoke-step count changed. No remote Codex review was
+  run under the no-live-API instruction; the driver supplies independent
+  review. No live service, deployment, credential or git remote was touched.
+- Product direction: the capture explanation answers a concrete question
+  without becoming another monitoring view. Keep further capture diagnostics
+  subordinate to the remaining assigned work. Existing individual recovery
+  (`brwr-kws`), curated worklog sharing (`brwr-ppn`) and explicit focus sessions
+  (`brwr-ued`) offer more visible value than another internal status surface;
+  reuse those proposals rather than filing duplicates. Scope explanations
+  should continue to point to deliberate rule review, never silently widen
+  capture in response to a skipped page.
+- The required single commit attempt failed at `git add` because
+  `.git/index.lock` is on a read-only filesystem. No retry or remote operation
+  was attempted. The green working tree, closed/exported queue and excluded
+  `.bosun_commit_msg` are ready for the driver to commit as Cookie.
+
+### Cycle 14 — Inert daily-log text with historical recovery (2026-10-28)
+
+- Health started clean: no quarantine notice and no incomplete working tree.
+  The required baseline passed before Cookie claimed the first ready assigned
+  bead, `brwr-2za`. It is now closed and exported; continue assigned work with
+  `bd ready --label assigned` next cycle (`brwr-srp` is next unless the driver
+  changes priorities). Do not take blocked index work ahead of its dependency.
+- The title regression first failed with live `$x$` and code syntax. New prose
+  uses the existing inline escaper. Historical v1 recovery now has two frozen
+  renderer generations, including a frozen Unicode table: this deliberate
+  duplication is part of the on-disk compatibility contract, so do not merge
+  it back into live presentation helpers. V2 prepared-byte recovery and
+  summary rendering did not change. Old rows stay append-only.
+- Fresh full-diff review covered current and historical renderers, prefix
+  reconstruction, payload hashes, exact tails, fallback text, limits and
+  single/batch paths. Two independent historical literals cover ten restart
+  recovery scenarios; five new-write scenarios cover inert output and original
+  marker text. Changed payloads and edited torn bytes remain untouched.
+- Required and README gates pass: 933 workspace Rust outcomes and 821
+  scripted-dialogs outcomes (plus one ignored doctest), including all 54
+  capture tests; 15 extension files, two script files, and 10,696 inert
+  Markdown renderings. Some IPC tests return explicit sandbox-denial skips
+  within those Rust outcomes; the driver/CI supplies unrestricted verification.
+  The macOS smoke runner refuses Linux. No remote Codex review ran under the
+  no-live-API instruction; the driver supplies independent review.
+- Product direction: the next assigned parameter-provenance work should store
+  parameter names without retaining stripped values, and preserve the rule
+  that a stored canonical URL cannot establish autosave identity. Individual
+  recovered-copy review (`brwr-kws`) remains the visible follow-up for note
+  recovery; timestamps and separate copy/discard actions can help a person
+  choose a draft without introducing automatic restore. Reuse those existing
+  beads rather than duplicating proposals or adding another diagnostic view.
+- The one authorized commit attempt stopped at `git add`: `.git/index.lock`
+  is on a read-only filesystem. No retry or remote operation was attempted.
+  The green complete diff, closed/exported bead, cycle log and excluded
+  `.bosun_commit_msg` are ready for the driver to commit as Cookie.
+
+
+- **2026-10-28 recovery review observation:** Individual copy review completes
+  the visible follow-up to durable note recovery (`brwr-kws`). Keep recovery
+  as a deliberate copy-out workspace; automatic Restore would have to resolve
+  changed host keys/revisions and risks blurring that boundary. For later
+  product cycles, the existing named focus sessions (`brwr-ued`) and curated
+  worklog sharing (`brwr-ppn`) offer larger user value than adding further
+  recovery infrastructure. Continue the remaining assigned queue first:
+  stripped-parameter provenance (`brwr-srp`) and historical UUID recovery
+  (`brwr-smu`); concurrent index work (`brwr-7vf`) remains dependency-blocked,
+  and the deleted-finisher wording report (`brwr-iqx`) needs operator
+  reconciliation. No new duplicate proposals or human gates were closed.
+
+- **2026-10-28 `brwr-kws` handoff:** The single git add/commit attempt
+  refused `.git/index.lock` on the read-only Git mount. The completed green
+  diff, closed/exported bead and excluded `.bosun_commit_msg` remain for the
+  driver; no commit retry or remote operation was attempted. Queue consistency
+  passes. The required and README gates passed before documentation-only
+  closure updates; the macOS smoke explicitly refused this Linux platform.
+
+### Stripped-parameter provenance handoff (2026-10-28)
+
+- Completed assigned `brwr-srp` after a clean health gate. Continue with
+  `bd ready --label assigned`; `brwr-smu` is the remaining ready historical
+  UUID recovery task. Preserve all pre-provenance v1 presentation candidates
+  and the frozen v2 payload hash while adding that compatibility. Concurrent
+  index work (`brwr-7vf`) still depends on real SQLite (`brwr-b2e`), and
+  `brwr-iqx` remains blocked for operator reconciliation.
+- Source/test/doc review found an implementation regression where early URL
+  evidence parsing changed malformed activity URLs from terminal rejection to
+  retryable. A failing-first regression covers page, mode and trail URLs in
+  single/batch delivery. Capture now gathers evidence during its original
+  authorized normalization, keeping the previous error semantics and avoiding
+  duplicate URL parsing. The complete diff was read, including the final fix.
+- Names cannot recover a removed value or distinguish values of the same
+  parameter. They are negative identity evidence: refuse a collision, never
+  recover an autosave target from a stripped address. Missing legacy evidence
+  must not become an empty list on cache migration or the next note save.
+  Future real-SQLite work must retain the v7 event evidence and SQL NULL
+  distinction; preserve trail-source separation from note candidates.
+- Existing focus sessions (`brwr-ued`), curated worklog sharing (`brwr-ppn`)
+  and deliberate restoration of recorded capture rules (`brwr-cua`) remain
+  stronger product opportunities after assigned work than another internal
+  diagnostics panel. Reuse those beads rather than filing duplicates. Explicit
+  preserved-note viewing remains the copy-only route for ambiguous records.
+- Required and README gates pass, including scripted-dialog tests and both
+  Clippy builds. IPC guards explicitly skip 43 ordinary and 53 scripted cases
+  in this sandbox. The macOS smoke runner refuses Linux; no browser acceptance
+  is claimed. No live external API, remote Codex review, credential, deployment,
+  service, systemd or git remote was touched; independent review belongs to the
+  external driver under the unattended-run instructions.
+
+- The single commit attempt refused `.git/index.lock` on the read-only Git
+  mount. The complete green diff, closed/exported queue and excluded
+  `.bosun_commit_msg` remain for the driver; no retry or remote operation was
+  attempted. Final queue/current-state consistency and whitespace checks pass.

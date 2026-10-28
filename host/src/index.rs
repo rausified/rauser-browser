@@ -19,7 +19,7 @@ use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
-    StorageConfig, SummaryView, WhyEvent,
+    IncomingTrailView, StorageConfig, SummaryView, WhyEvent,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -37,6 +37,7 @@ use crate::capture::{
 };
 use crate::markdown::{self, yaml_string};
 use crate::summary::SummaryEvent;
+use crate::url_provenance::{StoredUrl, UrlProvenance};
 use crate::vault::{
     OwnedWrite, PostPublishWarning, STALE_TEMPORARY_AGE, checked_relative_dir,
     is_generated_temporary, open_selected_root, owned_frontmatter, replace_owned_file,
@@ -44,15 +45,17 @@ use crate::vault::{
 };
 
 // v2 (main, independently) forces a rescan for the artifact-history
-// recovery fix. v3 adds `CachedEvent::Summary` on top of it; bumping again
+// recovery fix. v3 adds `EventData::Summary` on top of it; bumping again
 // forces a v1 *or* v2 cache to rescan rather than silently omit summaries
 // already durable in the log. v4 records log positions and the adapter
 // document fingerprint. v5 counts M1 visits as opens and bounds logged
 // titles. v6 gives `SummaryEvent` its record key and harness, attaches
 // summaries to adapter artifacts, and dates summary Timeline lines. A v4 or
 // v5 cache is migrated in place (`migrate_state`) rather than rescanned, so
-// its checkpoints survive the upgrade.
-const STATE_VERSION: u8 = 6;
+// its checkpoints survive the upgrade. V7 adds per-URL stripped query names;
+// v6 caches and v5/v6 pending passes keep their checkpoints with unknown
+// evidence for older events, never manufactured empty lists.
+const STATE_VERSION: u8 = 7;
 // How often a long regeneration pass publishes its progress. Chrome ends a
 // host soon after its port closes; without checkpoints a pass killed that
 // way would restart at the same sorted prefix every time.
@@ -298,34 +301,113 @@ impl LogCheckpoint {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum CachedEvent {
+enum EventData {
     Activity(ActivityEvent),
     Why(WhyEvent),
     Legacy(LegacyVisit),
     Summary(SummaryEvent),
 }
 
+/// Cache format 7 adds names-only provenance beside each event. Flattening
+/// retains the previous tagged event shape; old records deserialize with
+/// unknown evidence and migrate without dropping their log checkpoints.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CachedEvent {
+    #[serde(flatten)]
+    data: EventData,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url_provenance: Option<UrlProvenance>,
+}
+
+impl From<EventData> for CachedEvent {
+    fn from(data: EventData) -> Self {
+        Self {
+            data,
+            url_provenance: None,
+        }
+    }
+}
+
 impl CachedEvent {
     fn artifact_id(&self) -> &str {
-        match self {
-            Self::Activity(event) => &event.artifact_id,
-            Self::Why(event) => &event.artifact_id,
-            Self::Legacy(event) => &event.artifact_id,
-            Self::Summary(event) => &event.artifact_id,
+        match &self.data {
+            EventData::Activity(event) => &event.artifact_id,
+            EventData::Why(event) => &event.artifact_id,
+            EventData::Legacy(event) => &event.artifact_id,
+            EventData::Summary(event) => &event.artifact_id,
         }
     }
 
-    /// Only URLs durably attributed to this artifact, never trail sources
-    /// (which belong to another artifact). Share this evidence in both note
-    /// lookup directions so primary recovery and older-note discovery agree.
-    fn urls(&self) -> impl Iterator<Item = &str> {
-        let (url, modes): (&str, &[brauser_protocol::ActivityMode]) = match self {
-            Self::Activity(event) => (&event.url, &event.modes),
-            Self::Why(event) => (&event.url, &[]),
-            Self::Legacy(event) => (&event.url, &[]),
-            Self::Summary(event) => (&event.url, &[]),
+    /// URLs attributed to the event, with separate positional evidence for
+    /// modes and trail sources. Trail URLs never name this artifact's notes.
+    fn url_records(&self) -> Vec<(String, StoredUrl)> {
+        let (url, modes, trails): (&str, &[_], &[_]) = match &self.data {
+            EventData::Activity(event) => {
+                (&event.url, event.modes.as_slice(), event.trails.as_slice())
+            }
+            EventData::Why(event) => (&event.url, &[], &[]),
+            EventData::Legacy(event) => (&event.url, &[], &[]),
+            EventData::Summary(event) => (&event.url, &[], &[]),
         };
-        std::iter::once(url).chain(modes.iter().map(|mode| mode.url.as_str()))
+        let provenance = self.url_provenance.as_ref();
+        let mut result = vec![(
+            "url".into(),
+            StoredUrl {
+                url: url.into(),
+                stripped_params: provenance.map(|p| p.url.clone()),
+            },
+        )];
+        result.extend(modes.iter().enumerate().map(|(index, mode)| {
+            (
+                format!("mode:{index}"),
+                StoredUrl {
+                    url: mode.url.clone(),
+                    stripped_params: provenance.map(|p| p.modes[index].clone()),
+                },
+            )
+        }));
+        result.extend(trails.iter().enumerate().filter_map(|(index, trail)| {
+            trail.from_url.as_ref().map(|url| {
+                (
+                    format!("trail:{index}"),
+                    StoredUrl {
+                        url: url.clone(),
+                        stripped_params: provenance.and_then(|p| p.trails[index].clone()),
+                    },
+                )
+            })
+        }));
+        result
+    }
+
+    fn urls(&self) -> impl Iterator<Item = StoredUrl> {
+        self.url_records()
+            .into_iter()
+            .filter(|(role, _)| !role.starts_with("trail:"))
+            .map(|(_, url)| url)
+    }
+
+    fn valid_provenance(&self) -> bool {
+        self.url_provenance
+            .as_ref()
+            .is_none_or(|provenance| match &self.data {
+                EventData::Activity(event) => provenance.valid(
+                    event.modes.len(),
+                    &event
+                        .trails
+                        .iter()
+                        .map(|trail| trail.from_url.is_some())
+                        .collect::<Vec<_>>(),
+                ),
+                _ => provenance.valid(0, &[]),
+            })
+    }
+
+    fn activity(event: &ActivityEvent, strip: &[String]) -> Result<Self> {
+        Ok(Self {
+            data: EventData::Activity(normalized_activity(event, strip)?),
+            url_provenance: Some(UrlProvenance::activity(event, strip)?),
+        })
     }
 }
 
@@ -378,7 +460,7 @@ struct VisitRow {
     mode: Option<String>,
     title: String,
     url: String,
-    /// Set only for a visit derived from a `CachedEvent::Summary`, so
+    /// Set only for a visit derived from an `EventData::Summary`, so
     /// `worklog` can report it distinctly instead of as a zero-measure,
     /// merely-"seen" artifact.
     summary: Option<SummaryEvent>,
@@ -473,15 +555,18 @@ impl ArtifactIndex {
     }
 
     pub fn record_activity(&self, event: &ActivityEvent, strip_params: &[String]) -> Result<()> {
-        let event = normalized_activity(event, strip_params)?;
-        self.record_events([CachedEvent::Activity(event)])
+        self.record_events([CachedEvent::activity(event, strip_params)?])
     }
 
     pub fn record_why(&self, event: &WhyEvent, strip_params: &[String]) -> Result<()> {
+        let provenance = UrlProvenance::page(&event.url, strip_params)?;
         let mut event = event.clone();
         event.event_id = parse_event_id(&event.event_id).map_err(anyhow::Error::msg)?;
         event.url = canonical_url(&event.url, strip_params)?;
-        self.record_events([CachedEvent::Why(event)])
+        self.record_events([CachedEvent {
+            data: EventData::Why(event),
+            url_provenance: Some(provenance),
+        }])
     }
 
     /// Index a "Summarize & log" result already durable in the daily log
@@ -489,7 +574,7 @@ impl ArtifactIndex {
     /// and `event.artifact_id` must already be normalized/derived, exactly as
     /// that writer leaves them.
     pub fn record_summary(&self, event: &SummaryEvent) -> Result<()> {
-        self.record_events([CachedEvent::Summary(event.clone())])
+        self.record_events([EventData::Summary(event.clone()).into()])
     }
 
     pub fn record_activities<'a>(
@@ -499,7 +584,7 @@ impl ArtifactIndex {
     ) -> Result<()> {
         let events = events
             .into_iter()
-            .map(|event| normalized_activity(event, strip_params).map(CachedEvent::Activity))
+            .map(|event| CachedEvent::activity(event, strip_params))
             .collect::<Result<Vec<_>>>()?;
         self.record_events(events)
     }
@@ -513,7 +598,7 @@ impl ArtifactIndex {
         for event in events {
             let (event_id, artifact_id) = event_identity(&event);
             match state.events.get(&event_id) {
-                Some(previous) if previous != &event => conflicts += 1,
+                Some(previous) if previous.data != event.data => conflicts += 1,
                 Some(_) => {
                     state.dirty.insert(artifact_id);
                 }
@@ -612,10 +697,10 @@ impl ArtifactIndex {
         }
         let mut found = BTreeSet::new();
         for event in state.events.values() {
-            let (url, artifact_id) = match event {
-                CachedEvent::Activity(event) => (&event.url, &event.artifact_id),
-                CachedEvent::Legacy(event) => (&event.url, &event.artifact_id),
-                CachedEvent::Why(_) | CachedEvent::Summary(_) => continue,
+            let (url, artifact_id) = match &event.data {
+                EventData::Activity(event) => (&event.url, &event.artifact_id),
+                EventData::Legacy(event) => (&event.url, &event.artifact_id),
+                EventData::Why(_) | EventData::Summary(_) => continue,
             };
             if state.dirty.contains(artifact_id)
                 && let Some((_, container, _)) = containers.of(url, artifact_id)
@@ -1079,11 +1164,16 @@ impl ArtifactIndex {
     /// An unreadable one is ignored like an unreadable cache.
     fn read_pending(&self) -> Option<PendingCatchUp> {
         let mut pending: PendingCatchUp = read_bounded_json(&self.pending_path()).ok()??;
-        // Only version 5 progress can exist from an older build (#90 added
-        // the file at version 5); anything else restarts the pass.
+        // The progress file exists since v5. V5/v6 passes migrate with
+        // unknown provenance; older or future progress restarts the pass.
         if !self.state_location_matches(&pending.state)
-            || !matches!(pending.state.version, 5 | STATE_VERSION)
+            || !matches!(pending.state.version, 5 | 6 | STATE_VERSION)
             || !migrate_state(&mut pending.state)
+            || pending
+                .conflicts
+                .values()
+                .flatten()
+                .any(|(event, _)| !event.valid_provenance())
         {
             return None;
         }
@@ -1280,7 +1370,7 @@ impl ArtifactIndex {
         if bytes.len() as u64 > MAX_STATE_BYTES {
             bail!("artifact index state exceeds its 64 MiB limit");
         }
-        let database = sqlite_snapshot(&self.derive(state), &state.dirty)?;
+        let database = sqlite_snapshot(&self.derive(state), &state.dirty, &state.events)?;
         if database.skipped_rows > 0 {
             // index.db is a derived snapshot; the log and the ingestion
             // cache keep the event. One bad row never stops publication.
@@ -1335,10 +1425,8 @@ impl ArtifactIndex {
         let cache = self.load_or_rebuild()?;
         let mut summaries = ordered_events(&cache)
             .into_iter()
-            .filter_map(|event| match event {
-                CachedEvent::Summary(summary) if summary.artifact_id == artifact_id => {
-                    Some(summary)
-                }
+            .filter_map(|event| match &event.data {
+                EventData::Summary(summary) if summary.artifact_id == artifact_id => Some(summary),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -1352,12 +1440,21 @@ impl ArtifactIndex {
     /// lookup uses these to discover URL-keyed M1 notes.
     pub fn artifact_urls(&self, artifact_id: &str) -> Result<Vec<String>> {
         Ok(self
+            .artifact_url_evidence(artifact_id)?
+            .into_iter()
+            .map(|stored| stored.url)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
+    pub fn artifact_url_evidence(&self, artifact_id: &str) -> Result<Vec<StoredUrl>> {
+        Ok(self
             .load_or_rebuild()?
             .events
             .values()
             .filter(|event| event.artifact_id() == artifact_id)
             .flat_map(CachedEvent::urls)
-            .map(str::to_owned)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect())
@@ -1372,8 +1469,8 @@ impl ArtifactIndex {
         Ok(ordered_events(&state)
             .into_iter()
             .rev()
-            .find_map(|event| match event {
-                CachedEvent::Why(why) if why.artifact_id == artifact_id => Some(why.text.clone()),
+            .find_map(|event| match &event.data {
+                EventData::Why(why) if why.artifact_id == artifact_id => Some(why.text.clone()),
                 _ => None,
             }))
     }
@@ -1580,17 +1677,24 @@ impl ArtifactIndex {
 /// `STATE_VERSION` without rereading the logs. False means it must be
 /// rebuilt from the logs instead.
 fn migrate_state(state: &mut IndexState) -> bool {
+    if state.events.values().any(|event| !event.valid_provenance()) {
+        return false;
+    }
     match state.version {
         STATE_VERSION => return true,
         4 => migrate_v4_state(state),
         5 => {}
+        6 => {
+            state.version = STATE_VERSION;
+            return true;
+        }
         _ => return false,
     }
     migrate_v5_state(state);
     true
 }
 
-/// Upgrade a version 5 cache. It holds no `CachedEvent::Summary`: #59's
+/// Upgrade a version 5 cache. It holds no `EventData::Summary`: #59's
 /// summary events had no caller, so no log held one, and a cached event of
 /// #59's shape (no record key or harness) fails to deserialize, which makes
 /// the whole cache unreadable and rescanned. Version 6 changes summary
@@ -1622,7 +1726,7 @@ fn migrate_v4_state(state: &mut IndexState) {
         .events
         .iter()
         .filter(|(_, event)| {
-            matches!(event, CachedEvent::Activity(event) if !logged_activity_is_bounded(event))
+            matches!(&event.data, EventData::Activity(event) if !logged_activity_is_bounded(event))
         })
         .map(|(id, _)| id.clone())
         .collect::<Vec<_>>();
@@ -1634,7 +1738,7 @@ fn migrate_v4_state(state: &mut IndexState) {
         state.sequence.remove(&id);
     }
     for event in state.events.values() {
-        if let CachedEvent::Legacy(event) = event {
+        if let EventData::Legacy(event) = &event.data {
             state.dirty.insert(event.artifact_id.clone());
         }
     }
@@ -1671,6 +1775,47 @@ fn saturating_u32(value: u64) -> u32 {
 
 /// The most artifacts an artifact view lists as contained in it.
 const MAX_CONTAINED: usize = 20;
+
+const MAX_INCOMING_TRAILS: usize = 5;
+
+fn incoming_trails(id: &str, derived: &Derived) -> Vec<IncomingTrailView> {
+    let mut incoming = derived
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.target == id
+                && edge.source != id
+                && trail_transition_is_valid(&edge.kind)
+                // Back/forward has no attributed same-tab source. Do not
+                // turn a historical paired source into apparent provenance.
+                && edge.kind != "forward_back"
+        })
+        .filter_map(|edge| Some((edge, derived.artifacts.get(&edge.source)?)))
+        .filter(|(_, source)| {
+            Url::parse(&source.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        })
+        .collect::<Vec<_>>();
+    incoming.sort_by(|(a, _), (b, _)| {
+        b.last_seen
+            .cmp(&a.last_seen)
+            .then_with(|| a.source.cmp(&b.source))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+    incoming
+        .into_iter()
+        .take(MAX_INCOMING_TRAILS)
+        .map(|(edge, source)| IncomingTrailView {
+            source: ArtifactRefView {
+                artifact_id: source.artifact_id.clone(),
+                artifact_type: source.artifact_type.clone(),
+                title: source.title.clone(),
+                url: source.url.clone(),
+            },
+            transition: edge.kind.clone(),
+            last_seen: edge.last_seen.clone(),
+        })
+        .collect()
+}
 
 fn artifact_view(row: &ArtifactRow, derived: &Derived) -> ArtifactView {
     let id = row.artifact_id.as_str();
@@ -1730,6 +1875,7 @@ fn artifact_view(row: &ArtifactRow, derived: &Derived) -> ArtifactView {
         linked_count: saturating_u32(linked as u64),
         within,
         contained,
+        incoming_trails: incoming_trails(id, derived),
     }
 }
 
@@ -1785,20 +1931,20 @@ fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result
 }
 
 fn event_identity(event: &CachedEvent) -> (String, String) {
-    match event {
-        CachedEvent::Activity(event) => (event.event_id.clone(), event.artifact_id.clone()),
-        CachedEvent::Why(event) => (event.event_id.clone(), event.artifact_id.clone()),
-        CachedEvent::Legacy(event) => (event.marker_id.clone(), event.artifact_id.clone()),
-        CachedEvent::Summary(event) => (event.event_id.clone(), event.artifact_id.clone()),
+    match &event.data {
+        EventData::Activity(event) => (event.event_id.clone(), event.artifact_id.clone()),
+        EventData::Why(event) => (event.event_id.clone(), event.artifact_id.clone()),
+        EventData::Legacy(event) => (event.marker_id.clone(), event.artifact_id.clone()),
+        EventData::Summary(event) => (event.event_id.clone(), event.artifact_id.clone()),
     }
 }
 
 fn event_time(event: &CachedEvent) -> OffsetDateTime {
-    let at = match event {
-        CachedEvent::Activity(event) => &event.occurred_at,
-        CachedEvent::Why(event) => &event.occurred_at,
-        CachedEvent::Legacy(event) => &event.occurred_at,
-        CachedEvent::Summary(event) => &event.occurred_at,
+    let at = match &event.data {
+        EventData::Activity(event) => &event.occurred_at,
+        EventData::Why(event) => &event.occurred_at,
+        EventData::Legacy(event) => &event.occurred_at,
+        EventData::Summary(event) => &event.occurred_at,
     };
     parsed_timestamp(at).unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
@@ -1835,8 +1981,8 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
     let mut whys = BTreeMap::<String, (OffsetDateTime, String)>::new();
     let mut containers = Containers::new(adapters);
     for event in ordered_events(state) {
-        match event {
-            CachedEvent::Activity(event) => {
+        match &event.data {
+            EventData::Activity(event) => {
                 let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
                 let day = at.date().to_string();
                 let site = Url::parse(&event.url)
@@ -1972,7 +2118,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     );
                 }
             }
-            CachedEvent::Why(event) => {
+            EventData::Why(event) => {
                 let candidate = (
                     parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH),
                     event.text.clone(),
@@ -1984,7 +2130,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     whys.insert(event.artifact_id.clone(), candidate);
                 }
             }
-            CachedEvent::Legacy(event) => {
+            EventData::Legacy(event) => {
                 let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
                 let day = at.date().to_string();
                 let site = Url::parse(&event.url)
@@ -2063,7 +2209,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     );
                 }
             }
-            CachedEvent::Summary(event) => {
+            EventData::Summary(event) => {
                 let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
                 let day = at.date().to_string();
                 let site = Url::parse(&event.url)
@@ -2460,7 +2606,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
     let data = metadata
         .iter()
         .find_map(|field| field.strip_prefix("data="));
-    match (kind, data) {
+    let data = match (kind, data) {
         (Some("activity"), Some(data)) => {
             let bytes = hex::decode(data).ok()?;
             if bytes.len() > 256 * 1024 {
@@ -2486,7 +2632,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             {
                 return None;
             }
-            Some(CachedEvent::Activity(event))
+            Some(EventData::Activity(event))
         }
         (Some("why"), Some(data)) => {
             let bytes = hex::decode(data).ok()?;
@@ -2505,7 +2651,7 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             {
                 return None;
             }
-            Some(CachedEvent::Why(event))
+            Some(EventData::Why(event))
         }
         (Some("summary"), Some(data)) => {
             let bytes = hex::decode(data).ok()?;
@@ -2523,11 +2669,45 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             {
                 return None;
             }
-            Some(CachedEvent::Summary(event))
+            Some(EventData::Summary(event))
         }
-        (None, None) => parse_legacy(previous, id_hash, url_hash, at).map(CachedEvent::Legacy),
+        (None, None) => parse_legacy(previous, id_hash, url_hash, at).map(EventData::Legacy),
         _ => None,
-    }
+    }?;
+    let encoded = metadata
+        .iter()
+        .filter_map(|field| field.strip_prefix("stripped="))
+        .collect::<Vec<_>>();
+    let url_provenance = match encoded.as_slice() {
+        [] => None,
+        [encoded] => {
+            if encoded.len() > 512 * 1024 {
+                return None;
+            }
+            let provenance: UrlProvenance =
+                serde_json::from_slice(&hex::decode(encoded).ok()?).ok()?;
+            let (modes, trails) = match &data {
+                EventData::Activity(event) => (
+                    event.modes.len(),
+                    event
+                        .trails
+                        .iter()
+                        .map(|trail| trail.from_url.is_some())
+                        .collect::<Vec<_>>(),
+                ),
+                _ => (0, Vec::new()),
+            };
+            if !provenance.valid(modes, &trails) {
+                return None;
+            }
+            Some(provenance)
+        }
+        _ => return None,
+    };
+    Some(CachedEvent {
+        data,
+        url_provenance,
+    })
 }
 
 fn parse_legacy(line: &str, marker_id: &str, url_hash: &str, at: &str) -> Option<LegacyVisit> {
@@ -3088,7 +3268,11 @@ struct SqlTable {
     rows: Vec<Vec<SqlValue>>,
 }
 
-fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<SqliteImage> {
+fn sqlite_snapshot(
+    derived: &Derived,
+    dirty: &BTreeSet<String>,
+    events: &BTreeMap<String, CachedEvent>,
+) -> Result<SqliteImage> {
     let artifacts = derived
         .artifacts
         .values()
@@ -3148,7 +3332,28 @@ fn sqlite_snapshot(derived: &Derived, dirty: &BTreeSet<String>) -> Result<Sqlite
         .iter()
         .map(|id| vec![SqlValue::Text(id.clone())])
         .collect();
+    let provenance_rows = events
+        .iter()
+        .flat_map(|(id, event)| {
+            event.url_records().into_iter().map(move |(role, stored)| {
+                vec![
+                    SqlValue::Text(id.clone()),
+                    SqlValue::Text(event.artifact_id().into()),
+                    SqlValue::Text(role),
+                    SqlValue::Text(stored.url),
+                    stored.stripped_params.map_or(SqlValue::Null, |names| {
+                        SqlValue::Text(serde_json::to_string(&names).expect("query names"))
+                    }),
+                ]
+            })
+        })
+        .collect();
     build_sqlite(&[
+        SqlTable {
+            name: "url_provenance",
+            sql: "CREATE TABLE url_provenance(event_id TEXT,artifact_id TEXT,role TEXT,url TEXT,stripped_params TEXT)",
+            rows: provenance_rows,
+        },
         SqlTable {
             name: "artifacts",
             sql: "CREATE TABLE artifacts(artifact_id TEXT,artifact_type TEXT,site TEXT,title TEXT,url TEXT,first_seen TEXT,last_seen TEXT,focused_secs INTEGER,background_secs INTEGER,opens INTEGER,days_opened INTEGER,last_mode TEXT,why TEXT)",
@@ -3577,9 +3782,10 @@ mod tests {
                 .find(|line| line.starts_with(MARKER_PREFIX) && line.contains(marker_kind))
                 .unwrap();
             let (prefix, data) = marker.split_once(" data=").unwrap();
-            let mut payload: serde_json::Value =
-                serde_json::from_slice(&hex::decode(data.strip_suffix(" -->").unwrap()).unwrap())
-                    .unwrap();
+            let mut payload: serde_json::Value = serde_json::from_slice(
+                &hex::decode(data.split_whitespace().next().unwrap()).unwrap(),
+            )
+            .unwrap();
             assert_eq!(payload["event_id"], canonical, "{kind} {raw_id}");
             assert!(prefix.contains(&format!("id={}", sha256_hex(canonical.as_bytes()))));
             let expected_count = if kind == "why" { 2 } else { 1 };
@@ -3821,7 +4027,7 @@ mod tests {
                 ("why", serde_json::to_value(&why).unwrap()),
             ] {
                 let expected = hex::encode(serde_json::to_vec(&payload).unwrap());
-                assert!(original.contains(&format!(" kind={kind} data={expected} -->")));
+                assert!(original.contains(&format!(" kind={kind} data={expected} stripped=")));
             }
             let rows = original.lines().filter(|line| line.starts_with("- "));
             assert_eq!(rows.clone().count(), 3);
@@ -3835,11 +4041,11 @@ mod tests {
             // Rebuild from the actual markers, not a second sanitized event.
             let decoded = parse_log(&original);
             assert_eq!(decoded.len(), 3);
-            assert!(decoded.iter().any(|stored| matches!(stored,
-                CachedEvent::Activity(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&event).unwrap()
+            assert!(decoded.iter().any(|stored| matches!(&stored.data,
+                EventData::Activity(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&event).unwrap()
             )));
-            assert!(decoded.iter().any(|stored| matches!(stored,
-                CachedEvent::Why(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&why).unwrap()
+            assert!(decoded.iter().any(|stored| matches!(&stored.data,
+                EventData::Why(value) if serde_json::to_value(value).unwrap() == serde_json::to_value(&why).unwrap()
             )));
             let index = index(&root, &cache);
             assert_eq!(index.reindex().unwrap().written, 2);
@@ -3933,10 +4139,132 @@ print(json.dumps([tables,row]))"#;
         let decoded: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
             decoded[0],
-            serde_json::json!(["artifacts", "dirty_artifacts", "edges", "visits"])
+            serde_json::json!([
+                "artifacts",
+                "dirty_artifacts",
+                "edges",
+                "url_provenance",
+                "visits"
+            ])
         );
         assert_eq!(decoded[1][0], hostile);
         assert_eq!(decoded[1][1], "https://example.com/items/ABC");
+    }
+
+    #[test]
+    fn stripped_url_evidence_survives_cache_rebuild_and_sqlite_queries() {
+        use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore};
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let capture = CaptureStore::open_in(&index.storage, None, state.path()).unwrap();
+        let mut event = activity(
+            "00000000-0000-4000-8000-000000000333",
+            "ABC",
+            "Item",
+            &crate::capture::fixtures::event_time()
+                .format(&Rfc3339)
+                .unwrap(),
+        );
+        event.url = "https://example.com/items/ABC?utm_source=private-value".into();
+        event.modes = vec![ActivityMode {
+            mode: "edit".into(),
+            url: "https://example.com/items/ABC/edit?utm_campaign=other-private-value".into(),
+        }];
+        event.trails = vec![ActivityTrail {
+            from_artifact_id: Some("source:1".into()),
+            from_url: Some("https://example.com/source?utm_source=secret".into()),
+            transition: "link".into(),
+        }];
+        let origins = ["https://example.com".into()];
+        let strip = ["utm_*".into()];
+        assert!(matches!(
+            capture.record_activity(
+                CapturePolicy {
+                    enabled: true,
+                    origins: &origins,
+                    strip_params: &strip
+                },
+                &event
+            ),
+            CaptureOutcome::Persisted { .. }
+        ));
+        index.record_activity(&event, &strip).unwrap();
+        let evidence = index.artifact_url_evidence(&event.artifact_id).unwrap();
+        assert_eq!(
+            evidence,
+            vec![
+                StoredUrl {
+                    url: "https://example.com/items/ABC".into(),
+                    stripped_params: Some(vec!["utm_source".into()])
+                },
+                StoredUrl {
+                    url: "https://example.com/items/ABC/edit".into(),
+                    stripped_params: Some(vec!["utm_campaign".into()])
+                },
+            ]
+        );
+        let original = fs::read(index.state_path()).unwrap();
+        assert!(!String::from_utf8_lossy(&original).contains("private-value"));
+        index.reindex().unwrap();
+        assert_eq!(
+            index.artifact_url_evidence(&event.artifact_id).unwrap(),
+            evidence
+        );
+        let script = r#"import sqlite3,sys,json
+c=sqlite3.connect(sys.argv[1])
+print(json.dumps(list(c.execute('select role,url,stripped_params from url_provenance order by role'))))"#;
+        let output = Command::new("python3")
+            .args(["-c", script])
+            .arg(index.database_path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            rows,
+            serde_json::json!([
+                [
+                    "mode:0",
+                    "https://example.com/items/ABC/edit",
+                    "[\"utm_campaign\"]"
+                ],
+                ["trail:0", "https://example.com/source", "[\"utm_source\"]"],
+                ["url", "https://example.com/items/ABC", "[\"utm_source\"]"],
+            ])
+        );
+        // A v6 cache has no evidence. Upgrade preserves checkpoints and does
+        // not manufacture an empty list for an older stripped address.
+        let mut old: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        old["version"] = 6.into();
+        for event in old["events"].as_object_mut().unwrap().values_mut() {
+            event.as_object_mut().unwrap().remove("url_provenance");
+        }
+        fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
+        let (migrated, changed) = index.read_current_state().unwrap();
+        assert!(changed);
+        assert_eq!(migrated.version, 7);
+        assert_eq!(serde_json::to_value(&migrated.logs).unwrap(), old["logs"]);
+        assert!(
+            migrated
+                .events
+                .values()
+                .all(|event| event.url_provenance.is_none())
+        );
+        // Malformed positional evidence is ignored as an unusable cache.
+        let mut invalid: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        invalid["events"][&event.event_id]["url_provenance"]["modes"] = serde_json::json!([]);
+        fs::write(index.state_path(), serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(index.read_current_state().is_none());
+        assert_eq!(
+            index.artifact_url_evidence(&event.artifact_id).unwrap(),
+            evidence
+        );
     }
 
     #[test]
@@ -4022,6 +4350,161 @@ print(json.dumps([tables,row]))"#;
         assert!(text.starts_with("Opened 2 artifacts"));
         assert!(text.contains("Release blocker"));
         assert!(text.contains("Why: blocking the release"));
+    }
+
+    #[test]
+    fn incoming_trails_only_show_known_navigation_sources() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let source = activity(
+            &Uuid::new_v4().to_string(),
+            "SOURCE",
+            "<img src=x onerror=alert(1)>",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activities([&source], &[]).unwrap();
+        for transition in [
+            "link",
+            "typed",
+            "auto_bookmark",
+            "auto_subframe",
+            "manual_subframe",
+            "generated",
+            "start_page",
+            "form_submit",
+            "reload",
+            "keyword",
+            "keyword_generated",
+            "forward_back",
+        ] {
+            let mut target = activity(
+                &Uuid::new_v4().to_string(),
+                transition,
+                "Target mentions SOURCE",
+                "2026-10-16T13:00:00Z",
+            );
+            target.trails = vec![
+                ActivityTrail {
+                    from_artifact_id: Some(source.artifact_id.clone()),
+                    from_url: Some(source.url.clone()),
+                    transition: transition.into(),
+                },
+                ActivityTrail {
+                    from_artifact_id: Some("work:example.com/MISSING".into()),
+                    from_url: Some("https://example.com/items/MISSING".into()),
+                    transition: "link".into(),
+                },
+                ActivityTrail {
+                    from_artifact_id: Some(target.artifact_id.clone()),
+                    from_url: Some(target.url.clone()),
+                    transition: "link".into(),
+                },
+                ActivityTrail {
+                    from_artifact_id: None,
+                    from_url: None,
+                    transition: "forward_back".into(),
+                },
+            ];
+            index.record_activities([&target], &[]).unwrap();
+            let incoming = index
+                .artifact(&target.artifact_id)
+                .unwrap()
+                .unwrap()
+                .incoming_trails;
+            if transition == "forward_back" {
+                assert!(incoming.is_empty(), "{transition}");
+            } else {
+                assert_eq!(incoming.len(), 1, "{transition}");
+                assert_eq!(incoming[0].transition, transition);
+                assert_eq!(incoming[0].source.artifact_id, source.artifact_id);
+                assert_eq!(
+                    incoming[0].source.title,
+                    source.title.as_ref().unwrap().as_str()
+                );
+                assert_eq!(incoming[0].last_seen, "2026-10-16");
+            }
+        }
+        assert!(
+            index
+                .artifact(&source.artifact_id)
+                .unwrap()
+                .unwrap()
+                .incoming_trails
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn incoming_trails_are_bounded_sorted_and_deduplicated_after_rebuild() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let mut sources = Vec::new();
+        let mut targets = Vec::new();
+        for day in 10..18 {
+            let at = format!("2026-10-{day}T12:00:00Z");
+            let source = activity(
+                &Uuid::new_v4().to_string(),
+                &format!("S{day}"),
+                "Source",
+                &at,
+            );
+            let mut target = activity(&Uuid::new_v4().to_string(), "TARGET", "Target", &at);
+            target.trails.push(ActivityTrail {
+                from_artifact_id: Some(source.artifact_id.clone()),
+                from_url: Some(source.url.clone()),
+                transition: "link".into(),
+            });
+            sources.push(source);
+            targets.push(target);
+        }
+        // Repeated source/transition observations are still one incoming row.
+        let mut repeated = targets.last().unwrap().clone();
+        repeated.event_id = Uuid::new_v4().to_string();
+        targets.push(repeated);
+        index
+            .record_activities(sources.iter().chain(targets.iter()), &[])
+            .unwrap();
+        let check = || {
+            let incoming = index
+                .artifact("work:example.com/TARGET")
+                .unwrap()
+                .unwrap()
+                .incoming_trails;
+            assert_eq!(incoming.len(), MAX_INCOMING_TRAILS);
+            assert_eq!(
+                incoming
+                    .iter()
+                    .map(|trail| trail.last_seen.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "2026-10-17",
+                    "2026-10-16",
+                    "2026-10-15",
+                    "2026-10-14",
+                    "2026-10-13"
+                ]
+            );
+            assert_eq!(incoming[0].source.artifact_id, "work:example.com/S17");
+        };
+        check();
+        // Persist owned markers so reindex proves the same query from logs.
+        let logs = root.path().join("log/2026/10");
+        fs::create_dir_all(&logs).unwrap();
+        let mut log = format!("{LOG_HEADER}\n");
+        for event in sources.iter().chain(targets.iter()) {
+            log.push_str(&format!(
+                "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
+                sha256_hex(event.event_id.as_bytes()),
+                sha256_hex(event.url.as_bytes()),
+                event.occurred_at,
+                hex::encode(serde_json::to_vec(event).unwrap()),
+            ));
+        }
+        fs::write(logs.join("2026-10-17.md"), log).unwrap();
+        index.reindex().unwrap();
+        check();
     }
 
     #[test]
@@ -4584,9 +5067,10 @@ print(json.dumps([tables,row]))"#;
         // Simulate an ingestion cache from before transition validation.
         let mut state = index.empty_state();
         for event in [&source, &target] {
-            state
-                .events
-                .insert(event.event_id.clone(), CachedEvent::Activity(event.clone()));
+            state.events.insert(
+                event.event_id.clone(),
+                EventData::Activity(event.clone()).into(),
+            );
             state.dirty.insert(event.artifact_id.clone());
         }
         index.publish_state_and_database(&state).unwrap();
@@ -4596,6 +5080,8 @@ print(json.dumps([tables,row]))"#;
             assert_eq!(artifact.focused_seconds, 125);
             assert_eq!(artifact.background_seconds, 61);
             assert_eq!(artifact.linked_count, 1);
+            assert_eq!(artifact.incoming_trails.len(), 1);
+            assert_eq!(artifact.incoming_trails[0].transition, "link");
             let output = Command::new("python3")
                 .args([
                     "-c",
@@ -4616,7 +5102,7 @@ print(json.dumps([tables,row]))"#;
             // conflicting reuse of an event ID during replay and rebuilding.
             assert!(
                 index.load_or_rebuild().unwrap().events[&target.event_id]
-                    == CachedEvent::Activity(target.clone())
+                    == EventData::Activity(target.clone()).into()
             );
         };
         check();
@@ -6530,8 +7016,8 @@ print(json.dumps([tables,row]))"#;
             let log = fs::read_to_string(root.path().join(relative_path)).unwrap();
             let replayed = parse_log(&log)
                 .into_iter()
-                .filter_map(|replayed| match replayed {
-                    CachedEvent::Summary(replayed) => Some(replayed),
+                .filter_map(|replayed| match replayed.data {
+                    EventData::Summary(replayed) => Some(replayed),
                     _ => None,
                 })
                 .find(|replayed| replayed.event_id == event.event_id)
@@ -7048,7 +7534,7 @@ print(json.dumps([tables,row]))"#;
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("2026-10-26.md"), format!("{LOG_HEADER}\n{line}")).unwrap();
 
-        // A cache written by a build that predates `CachedEvent::Summary`
+        // A cache written by a build that predates `EventData::Summary`
         // (version 1) must never be trusted as-is: it cannot contain this
         // summary, so loading it unchanged would hide it until a manual
         // reindex. Write one by hand and confirm it is rescanned instead.
@@ -7468,7 +7954,7 @@ print(json.dumps([tables,row]))"#;
 
     #[test]
     fn a_version_5_state_cache_is_migrated() {
-        assert_eq!(STATE_VERSION, 6);
+        assert_eq!(STATE_VERSION, 7);
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let index = index(&root, &cache);
@@ -7682,7 +8168,7 @@ print(json.dumps([tables,row]))"#;
         );
         let mut state = index.empty_state();
         for event in [&oversize, &good] {
-            state.ingest(CachedEvent::Activity(event.clone()), None, false);
+            state.ingest(EventData::Activity(event.clone()).into(), None, false);
         }
         index.publish_state_and_database(&state).unwrap();
         let later = activity(

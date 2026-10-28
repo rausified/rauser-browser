@@ -19,6 +19,19 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Retired adapter history budget
+
+`cargo test --locked -p brauser adapter_history` exercises real config.toml
+fixtures at the 32 KiB history budget and near the 64 KiB whole-file cap.
+It covers pausing capture and adding a disjoint site without changing history,
+refused growth with byte-for-byte preservation, Capture Site preflight, and
+safe duplicate/exact-restoration pruning. A restart checks that restored and
+still-retired routes keep their artifact identities. Native dispatch tests
+both budget and total-file refusals as actionable `invalid_config` replies.
+Restoration must precede retirement of a different same-type ID; the existing
+ID freeze still applies. All fixtures use disposable folders and no browser,
+network, native dialog, or user config.
+
 ## Capture fixture clocks
 
 Capture and native unit-test event helpers share `capture::fixtures::event_time`:
@@ -29,6 +42,75 @@ Production clock validation is unchanged. `daily_log_fixtures_work_at_midnight`
 reruns the compact-batch/recovery and full-log rejection tests with fixture
 clocks at 23:59:59 and the following midnight in UTC, UTC-12 and UTC+14.
 The midnight batch regression failed before the safe-noon fixture was applied.
+
+## Legacy capture recovery and normalized URL bounds
+
+`capture::tests::over_limit_normalized_urls_complete_v1_intents_before_rejection`
+seeds real v1 intents and torn owned logs with independently reconstructed
+pre-limit bytes. It covers legacy visits and activity page, mode and trail
+URLs expanded by percent encoding, through both single and batch delivery.
+Changed payloads leave the partial bytes intact and remain retryable; the
+original payload completes exactly once. Existing encoded-URL tests keep new
+oversized writes rejected without creating logs or intents, and accept the
+exact 8192-byte boundary. The mixed-batch regression checks that a rejected
+oversized event cannot select the day or block a valid neighbor, in either
+order. `completed_mixed_batch_recovers_after_selecting_a_different_home_folder`
+interrupts cleanup after a real batch append has synced, then selects another
+home folder. It checks that only appended rows are journaled, recovery clears
+the completed intent without touching the old log, and capture continues in
+the new folder. The interruption seam is compiled only into unit tests. All
+use disposable local directories; no browser or network is used.
+
+## Single-event recovery across renderer upgrades
+
+`cargo test --locked -p brauser capture::tests` includes independently prepared
+historical prose with unchanged machine markers in prepared-byte journals
+(v3 for new events, plus explicit pre-provenance v2 fixtures). A restart
+recovers a tail torn inside a multibyte character through both single and batch
+delivery, preserving unrelated rows and deduplicating completed markers. Changes
+past the title display limit, a different selected root, and edited tails are
+refused without writes. Why and summary fixtures cover the same prepared-byte
+path, including summary path changes before and after marker completion.
+Missing fields, bad hashes, unknown versions, corrupt bytes and oversized
+journals/entries leave logs intact. An activity at all field bounds, with
+JSON-escaped control characters, verifies the 512 KiB entry and 1 MiB journal
+budgets. Existing pre-sanitizer and normalized-URL fixtures explicitly retain
+v1 hash-only journals, so new fixtures cannot silently replace legacy coverage.
+All use disposable directories and no browser, network or user configuration.
+
+`daily_log_titles_and_why_neutralize_math_and_code` verifies new visit,
+activity and Why rows through every applicable delivery path, including exact
+entity output and unchanged machine payloads. The regression reproduced live
+math before the fix. `both_frozen_v1_renderers_recover_exact_titles_and_why_after_restart`
+uses independent historical text literals for both v1 renderer generations,
+with Unicode formatting, math, code, tags, comments and space runs. After a
+restart, it refuses changed payloads and edited tails without writing, then
+finishes the original bytes torn inside a multibyte title, retains an earlier
+row and deduplicates a retry. It covers single delivery for all three kinds
+and batch delivery for visits/activity (Why is not a batch event).
+
+## Standalone overflow delivery
+
+`extension/tests/worker.test.mjs` fills the byte-capped queue with one final
+batch, holds its native reply, then freezes two completed activity hours through
+the real pressure path. Both are dropped; acknowledging the final batch must
+immediately send their count and range with empty `events`, without another
+navigation. Other cases lose a standalone reply, read its frozen ID/snapshot
+back from storage, add later drops, observe backoff and retry, and pause a
+pending delivery. A refused-retry regression queues new activity beside an expired
+standalone snapshot and checks that the activity drains first, even when the
+marker receives `overflow_recorded: false` or an older host's `invalid_request`.
+Existing attached-snapshot and Dismiss races remain covered.
+
+`capture::tests::standalone_overflow_*` checks the offset-derived log day,
+exact marker payload, torn compact-intent recovery, duplicate retries after
+restart, malformed/range-invalid times, and preservation of unowned logs.
+`native::tests::standalone_overflow_uses_the_validated_home_and_obeys_capture_gates`
+checks real writes and duplicate delivery plus Pause, invalid adapter policy,
+missing home selection and a replaced home directory. The wire test rejects
+an invented URL in an overflow payload. All fixtures are local; no browser,
+external service or real user directory is involved. The macOS smoke dialog
+count is unchanged.
 
 ## Summary title extraction
 
@@ -92,6 +174,58 @@ that URL again. Existing ownership, stale-revision and occupied-destination
 tests still guard the move. All of these use local fixtures and mocked host
 transport; interactive Chrome acceptance remains separate.
 
+## Preserved artifact-note viewing
+
+`cargo test --locked -p brauser --lib preserved_note_browsing` covers multiple
+ambiguous historical notes beside an occupied URL note, lost contracts,
+stripped addresses, unavailable index/adopted history, rechecked ownership,
+duplicate ownership fields, unrelated file kinds and bounded response metadata.
+The primary key, stale-key save refusal and capture config stay unchanged.
+Protocol wire tests round-trip both additive requests and the list response
+and check the 24-item schema bound. `extension/tests/panel.test.mjs` checks
+explicit discovery, text-only titles and bodies, Copy, the original autosave
+key/revision, errors and empty lists, and stale list/view replies after
+navigation, collapse, close or another selection. Run after building the
+extension; `node --test --test-isolation=none --test-name-pattern=preserved
+extension/tests/panel.test.mjs` exposes all eight focused cases individually.
+The fake DOM does not initialize `disabled` from HTML: waits must observe a
+sent `load_note` as well as an enabled editor before interacting with it.
+Actual Chrome disclosure styling and keyboard interaction still need the
+separate macOS interactive check; these tests do not claim that acceptance.
+
+## Stripped-parameter provenance coverage
+
+`cargo test --locked -p brauser --lib` exercises actual removed names
+(including encoded keys, repeated names, case, wildcard rules and known empty
+lists), names-only activity markers, canonical note creation and a later
+absence-rule collision, plus SQLite evidence before and after reindex.
+`note::tests::note_provenance_survives_migration_and_saves_without_inventing_legacy_evidence`
+checks re-keying, alternate-route saves and preservation of missing legacy
+metadata. The index test preserves v6 cache checkpoints with unknown evidence
+and rebuilds malformed positional evidence. Existing fixtures continue to
+parse legacy activity, Why, summaries and M1 markers.
+
+`capture::tests::pre_provenance_v2_intents_resume_exact_bytes_through_single_and_batch_delivery`
+seeds the frozen v2 hash tuple and pre-provenance bytes, restarts the store,
+and verifies single/batch recovery, changed-payload refusal and untouched
+edited tails. The v1 frozen-renderer fixtures omit the new metadata explicitly.
+`capture::tests::new_intents_bind_removed_names_and_keep_removed_values_private`
+checks v3 evidence binding without retaining removed values. These are local
+filesystem tests; they need no browser or real agent. No smoke step or dialog
+count changed, and real Chrome/macOS acceptance remains separate. The summary
+finisher test checks names-only evidence in the file, daily log and index.
+`provenance_keeps_invalid_activity_urls_terminal_in_single_and_batch_delivery`
+failed first during review and protects the existing terminal-rejection
+semantics for malformed main, mode and trail URLs.
+
+Independent review added failing-first coverage for page-controlled HTML and
+image syntax in stripped names: note creation round-trips the exact names
+through escaped front matter, and every summary corpus case now also supplies
+a stripped name. The shared renderer check exercises those summary fields.
+`pre_provenance_v1_summary_and_overflow_intents_resume_exact_bytes` covers
+interrupted v1 events without visit-title prose, preserving exact old bytes,
+refusing changed payloads and edited tails, and deduplicating after recovery.
+
 ## Page-note recovery coverage
 
 `extension/tests/note-editor.test.mjs` drives the real recovery store with
@@ -129,7 +263,9 @@ removals, missing folders, note edits and copy-out across identity changes,
 title refreshes during a held save, page switches during a held post-save
 note reload (including saving the next edit to the new page), and a failure
 after config commit. It asserts no Chrome permission request or native
-confirmation is sent. The worker regression installs policy with pages
+confirmation is sent. The capture-explanation action is also exercised from
+Recent: it switches to This page so the Capture Site review is visible, and
+still requires an explicit save. The worker regression installs policy with pages
 already open and verifies that
 attention begins immediately, private/non-artifact tabs stay excluded, and no
 cold open is invented; existing expired-lease and upgrade-navigation tests
@@ -412,6 +548,20 @@ Brauser's only native dialog is the folder picker, used for the home folder and 
 
 Reference implementation: `host/src/dialog.rs` (`scripted` module) and `scripts/smoke-macos.mjs --headless`.
 
+Host lifecycle fixtures in `host/tests/scripted_dialogs.rs` also set
+`BRAUSER_TEST_CONFIG_PATH` to an absolute config file inside their temporary
+directory. Only debug `scripted-dialogs` builds honor this override; ordinary
+builds ignore it, and release builds with the feature cannot compile. Empty
+or relative overrides fail without falling back to user configuration.
+`--config-path` reports the override, and an injected path keeps the cache
+beside that config. This is necessary on Windows, where Known Folders ignore
+the fixture's `HOME`. The host-kill and knowledge-base picker tests run on
+both Windows and Unix without reading the user's config. `host/tests/config_path.rs`
+checks the process boundary, including the loaded file's exact revision and
+ordinary-build isolation. The macOS smoke wrapper still uses its cleared
+environment and temporary `HOME`; its config-path expectations and dialog
+count are unchanged.
+
 ### Browser permission prompts
 
 Brauser asks for nothing at run time. Its manifest requests `http://*/*` and `https://*/*` as install-time `host_permissions`, with `webNavigation` and `scripting` required, so loading the extension grants all of it and the UI-free run needs no grant-ahead step. The panel's site-access banner is covered by unit tests with a fake `chrome.permissions`. *Withdrawing and restoring access in headless Chrome (for example with `chrome.developerPrivate` from a `chrome://extensions` tab) has not been exercised here; confirm it and update this line.*
@@ -500,6 +650,11 @@ This standard is meant to improve with use. When you change it:
 - If a change alters the hard rule, confirm it with the user first.
 
 ## Learning log
+
+- 2026-10-28 (`brwr-2iz`): Size history fixtures with pretty TOML, rather than
+  JSON, because repeated table headers contribute to the persisted cap.
+  Check both the store error and native reply: an otherwise helpful size
+  error becomes a generic internal failure without a typed dispatch mapping.
 
 - 2026-10-28: Branch `feat/capture-site-agent` (`brwr-f45`). One agent-answer fixture per step 7.7 case under `host/tests/fixtures/site-draft-answers/` drives the crate, service and host layers, so a case cannot pass in one layer with a different answer than another. The service's form check must keep forbidden keys and failing rules unchanged for the host to judge; a repair turn that removed them would hide what the agent tried. `scripts/check_current_state.py` now rejects the retired "agent drafting (`brwr-f45`) … are not built" claim and the DESIGN.md rule that the hint drafted with the agent.
 - 2026-10-27: Branch `feat/capture-site-unknown` (`brwr-t40`). Unknown-site Capture Site pins the host catalog and real URL shapes in `protocol/capture-site/` and reads them from both the Rust and extension suites, so neither side keeps a private copy of the probe list, fill values or shaper expectations ("Unknown-site drafting" above). Scope, `unscoped` and title overlays are tested on both sides of `check_site_draft`: the checked request never carries them, and a table that does is still refused. `scripts/check_current_state.py` now rejects the retired "Unknown-site automatic drafting is still in development" claim. After merging #126 (protocol v7), the drafter's scoped-tenant anchor is pinned on both sides: `validate.drafted.*` vectors (rust, ts) show a drafted shared-origin adapter whose only anchor is its tenant validating scoped and failing `no_literal_segment` unscoped in both engines, plus the drafted Notion adapter and the ID-less rule (`id_unknown_capture`); `draft_rules` vectors and host `check_site_draft` tests show the same tables kept, `scope_anchored`, and refused unscoped as `draft_scope_choice`. The step 7.6 shared-origin panel test now expects the tab's tenant pre-filled and chosen as "Capture for <tenant>" (one-click Save), and a tab with no tenant in its URL still waiting for a choice.
@@ -716,3 +871,34 @@ config filename; another config file in the same directory is not a fresh
 installation. Panel tests hold and reorder preflight replies to verify that
 edits, invalid selections and closing/reopening cannot reuse an older verdict.
 These fixtures use local storage and scripted native replies only.
+
+Incoming navigation (`brwr-1g2`) is covered by the native request test
+`artifact_query_exposes_bounded_validated_incoming_sources` and index tests
+`incoming_trails_only_show_known_navigation_sources`,
+`incoming_trails_are_bounded_sorted_and_deduplicated_after_rebuild`, and
+`old_unknown_trail_transitions_preserve_activity_but_never_become_edges`.
+They cover known browser transitions, unresolved/self/back-forward sources,
+the five-pair cap, deterministic ordering, repeated observations and reindex
+from owned markers. The composed panel tests validate links and hostile
+text against scripted local source/target fixtures and simulate activating
+the linked source; the fake DOM does not implement a browser's anchor
+default action. The macOS smoke runner now uses protocol v8 with the same
+dialog count; actual Chrome link opening still needs macOS verification.
+
+- 2026-10-28: Independent review reproduced a standalone overflow retry
+  starving every newer capture batch when its old log or timestamp is refused.
+  Ready activity now drains before standalone retries, while the failed marker
+  retains its original ID, snapshot and backoff. The failing-first worker
+  regression covers both a false acknowledgement and an older-host error.
+
+Individual recovered-note review (`brwr-kws`) is covered by the built-panel
+`individual recovery` cases and the editor's immutable-ID and memory-only
+conflict tests. Fixtures include several pages, several copies at one address,
+empty edits, exact whitespace and hostile text, stale controls, newer snapshots
+from another panel, live typing, clipboard refusal/retry and blocked local
+discard/retry. They assert review never sends a save or fills the editor.
+Run `npm run build:extension` first, then `node extension/tests/note-editor.test.mjs`
+and `node extension/tests/panel.test.mjs` separately for detailed case counts.
+The macOS smoke's refused-save check reads the first recovery-card textarea;
+its steps and expected dialog count are unchanged.
+Actual Chrome layout and clipboard behavior still need macOS verification.

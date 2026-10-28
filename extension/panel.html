@@ -38,6 +38,10 @@
         <p id="page-url" class="page-url"></p>
         <p id="page-unusable" class="warning" hidden>{{APP_NAME}} can't use this tab. Switch to an http(s) page to see its note.</p>
         <p id="artifact-status" class="artifact-status"></p>
+        <div id="capture-explanation" hidden>
+          <p id="capture-explanation-text" role="status" aria-live="polite"></p>
+          <button id="capture-explanation-action" type="button" class="secondary">Open settings</button>
+        </div>
       </section>
 
       <nav class="panel-tabs" aria-label="Panel views">
@@ -116,6 +120,11 @@
         <p id="artifact-identity" class="page-url"></p>
         <p id="artifact-measures"></p>
         <p id="artifact-links"></p>
+        <div id="artifact-incoming">
+          <h3 class="artifact-label">Recorded navigation · up to 5</h3>
+          <p id="artifact-incoming-empty">No known incoming source recorded.</p>
+          <ul id="artifact-incoming-list" class="plain-list"></ul>
+        </div>
         <p id="artifact-within" hidden></p>
         <div id="artifact-contained" hidden>
           <h3 id="artifact-contained-heading" class="artifact-label">Worked on inside</h3>
@@ -156,9 +165,7 @@
         <p id="note-recovery-warning" class="warning" role="status" hidden></p>
         <div id="note-conflict" class="setup-warning" hidden>
           <p>Recovered note text. Check the current note before copying it back:</p>
-          <textarea id="note-unsaved" rows="4" readonly></textarea>
-          <button id="copy-unsaved" type="button" class="secondary">Copy</button>
-          <button id="discard-unsaved" type="button" class="secondary">Discard recovery copies</button>
+          <ul id="note-recovery-list" class="note-recovery-list" aria-label="Recovered note copies"></ul>
         </div>
         <div id="older-notes" hidden>
           <h3>Older notes on this artifact</h3>
@@ -171,6 +178,18 @@
             <button id="close-older-note-view" type="button" class="secondary compact">Close</button>
           </div>
         </div>
+        <details id="preserved-notes" hidden>
+          <summary>Preserved notes at this address</summary>
+          <p class="page-url">These artifact notes share this stored address and may belong to different pages. Viewing one never changes this page's note or capture rules. This limited search shows up to 24 matching notes.</p>
+          <p id="preserved-notes-status" role="status"></p>
+          <ul id="preserved-note-list" class="plain-list"></ul>
+          <div id="preserved-note-view" hidden>
+            <p id="preserved-note-title"></p>
+            <textarea id="preserved-note-body" aria-label="Preserved note (read only)" rows="6" readonly></textarea>
+            <button id="copy-preserved-note" type="button" class="secondary compact">Copy</button>
+            <button id="close-preserved-note" type="button" class="secondary compact">Close</button>
+          </div>
+        </details>
       </section>
       </div>
 

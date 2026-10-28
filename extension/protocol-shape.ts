@@ -98,6 +98,14 @@ function isOlderNote(value: unknown): boolean {
     typeof note.title === "string" && typeof note.revision === "string";
 }
 
+function isPreservedNote(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["key", "canonical_url", "title", "revision"]) &&
+    isPlainObject(value.key) && hasExactKeys(value.key, ["kind", "value"]) &&
+    value.key.kind === "artifact" && isBoundedString(value.key.value, 512, 1) &&
+    isBoundedString(value.canonical_url, 8192, 1) && isBoundedString(value.title, 2048) &&
+    isBoundedString(value.revision, 128, 1);
+}
+
 function isUnsignedInteger(value: unknown): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -184,6 +192,28 @@ function isContainedArtifact(value: unknown): boolean {
     isUnsignedInteger((value as Record<string, unknown>).focused_seconds);
 }
 
+const INCOMING_TRANSITIONS: ReadonlySet<string> = new Set([
+  "link", "typed", "auto_bookmark", "auto_subframe", "manual_subframe", "generated",
+  "start_page", "form_submit", "reload", "keyword", "keyword_generated",
+]);
+
+function isIncomingTrail(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const trail = value as Record<string, unknown>;
+  if (!hasExactKeys(trail, ["source", "transition", "last_seen"]) ||
+    !isArtifactRef(trail.source) || typeof trail.transition !== "string" ||
+    !INCOMING_TRANSITIONS.has(trail.transition) || typeof trail.last_seen !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(trail.last_seen)) return false;
+  // These become explicit links. Never trust a parseable non-web scheme
+  // from an older or damaged host, even though the schema calls it a string.
+  try {
+    const url = (trail.source as Record<string, unknown>).url as string;
+    return url.length <= 8192 && ["http:", "https:"].includes(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function isArtifact(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Record<string, unknown>;
@@ -195,7 +225,9 @@ function isArtifact(value: unknown): boolean {
     stringOrNull(artifact.why) &&
     (artifact.within === null || isArtifactRef(artifact.within)) &&
     Array.isArray(artifact.contained) && artifact.contained.length <= 20 &&
-    artifact.contained.every(isContainedArtifact);
+    artifact.contained.every(isContainedArtifact) &&
+    Array.isArray(artifact.incoming_trails) && artifact.incoming_trails.length <= 5 &&
+    artifact.incoming_trails.every(isIncomingTrail);
 }
 
 /** Exactly the v6 `SummaryView` keys; the host bounds the strings. */
@@ -407,6 +439,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
             .includes(String((result as Record<string, unknown>).outcome)) &&
           stringOrNull((result as Record<string, unknown>).reason) &&
           stringOrNull((result as Record<string, unknown>).relative_path));
+    case "preserved_notes_listed":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "notes"]) &&
+        isBoundedList(value.notes, 24, isPreservedNote);
     case "note_loaded":
       return typeof value.exists === "boolean" && typeof value.revision === "string" &&
         typeof value.title === "string" && typeof value.body === "string" &&

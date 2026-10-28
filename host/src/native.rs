@@ -150,6 +150,8 @@ fn panel_request(body: &[u8]) -> bool {
                     | "save_note"
                     | "use_artifact_note"
                     | "view_older_note"
+                    | "list_preserved_notes"
+                    | "view_preserved_note"
                     | "get_artifact"
                     | "record_why"
                     | "list_artifacts"
@@ -412,9 +414,11 @@ fn dispatch(
                 Err(save_error) => match (
                     save_error.downcast_ref::<crate::layout::Refusal>(),
                     save_error.downcast_ref::<config::StripParamsRefusal>(),
+                    save_error.downcast_ref::<config::ConfigSizeRefusal>(),
                 ) {
-                    (Some(crate::layout::Refusal(message)), _)
-                    | (_, Some(config::StripParamsRefusal(message))) => {
+                    (Some(crate::layout::Refusal(message)), _, _)
+                    | (_, Some(config::StripParamsRefusal(message)), _)
+                    | (_, _, Some(config::ConfigSizeRefusal(message))) => {
                         error(&value.request_id, ErrorCode::InvalidConfig, message)
                     }
                     _ => error(
@@ -466,6 +470,8 @@ fn dispatch(
         Request::SaveNote(value) => save_note(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
         Request::ViewOlderNote(value) => view_older_note(value, config),
+        Request::ListPreservedNotes(value) => list_preserved_notes(value, config),
+        Request::ViewPreservedNote(value) => view_preserved_note(value, config),
         Request::GetArtifact(value) => get_artifact(value, config),
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
@@ -811,11 +817,11 @@ fn record_activity(
 /// the current worker uses this response to apply all terminal acknowledgments
 /// to its queue in one storage update.
 fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut ConfigStore) -> Response {
-    if value.events.is_empty() || value.events.len() > 64 {
+    if (value.events.is_empty() && value.overflow.is_none()) || value.events.len() > 64 {
         return error(
             &value.request_id,
             ErrorCode::InvalidRequest,
-            "a capture batch must contain 1 to 64 events",
+            "a capture batch must contain 1 to 64 events or standalone overflow evidence",
         );
     }
     if uuid::Uuid::parse_str(&value.batch_id).is_err() {
@@ -1307,6 +1313,7 @@ fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
 /// not a `Response`, so callers pay for the large `Response` enum only once.
 struct NoteContext {
     canonical: String,
+    stripped_params: Option<Vec<String>>,
     vault: Vault,
     key: RecordKey,
     older_urls: Vec<String>,
@@ -1331,6 +1338,7 @@ pub(crate) fn resolve_record_key(
 /// it without opening the vault or matching adapters a second time.
 struct KeyParts {
     canonical: String,
+    stripped_params: Option<Vec<String>>,
     vault: Vault,
     key: RecordKey,
 }
@@ -1371,8 +1379,10 @@ fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Re
             "choose a home folder first".into(),
         ));
     };
-    let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
-        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
+    let stored =
+        crate::capture::canonical_url_with_provenance(url, &config.snapshot().strip_params)
+            .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
+    let canonical = stored.url;
     let vault = Vault::open_checked(storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))?;
     // Match on the original URL, not the stripped canonical form: capture
@@ -1420,6 +1430,7 @@ fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Re
     };
     Ok(KeyParts {
         canonical,
+        stripped_params: stored.stripped_params,
         vault,
         key,
     })
@@ -1432,6 +1443,7 @@ fn note_context(
 ) -> Result<NoteContext, Refusal> {
     let KeyParts {
         canonical,
+        stripped_params,
         vault,
         key,
     } = resolve_key_parts(config, url)?;
@@ -1461,7 +1473,11 @@ fn note_context(
         }
     };
     let mut older_urls = Vec::new();
-    if names_artifact(&canonical) {
+    if config.note_url_evidence_is_safe(&crate::url_provenance::StoredUrl {
+        url: canonical.clone(),
+        stripped_params: stripped_params.clone(),
+    }) && names_artifact(&canonical)
+    {
         older_urls.push(canonical.clone());
     }
     if key.kind == RecordKeyKind::Artifact && include_older_notes {
@@ -1473,29 +1489,52 @@ fn note_context(
         };
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = open_index(config, storage, &cache_dir)
-            && let Ok(urls) = index.artifact_urls(&key.value)
+            && let Ok(urls) = index.artifact_url_evidence(&key.value)
         {
-            older_urls.extend(urls.into_iter().filter(|url| names_artifact(url)));
+            older_urls.extend(
+                urls.into_iter()
+                    .filter(|stored| {
+                        config.note_url_evidence_is_safe(stored) && names_artifact(&stored.url)
+                    })
+                    .map(|stored| stored.url),
+            );
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
                 let candidates = [
-                    note::artifact_keyed_note_url(&contents, &key),
-                    note::url_keyed_note_url(&contents),
+                    note::artifact_keyed_note_evidence(&contents, &key),
+                    note::url_keyed_note_evidence(&contents),
                 ];
                 older_urls.extend(
                     candidates
                         .into_iter()
                         .flatten()
-                        .filter(|candidate| names_artifact(candidate)),
+                        .filter(|candidate| {
+                            config.note_url_evidence_is_safe(candidate)
+                                && names_artifact(&candidate.url)
+                        })
+                        .map(|candidate| candidate.url),
                 );
             }
         }
         older_urls.sort();
         older_urls.dedup();
     }
+    if include_older_notes {
+        older_urls.retain(|url| {
+            let Ok(key) = crate::vault::url_record_key(url) else {
+                return false;
+            };
+            let Ok(Some(contents)) = vault.read_note(&key, url) else {
+                return false;
+            };
+            note::url_keyed_note_evidence(&contents)
+                .is_some_and(|stored| config.note_url_evidence_is_safe(&stored))
+        });
+    }
     Ok(NoteContext {
         canonical,
+        stripped_params,
         vault,
         key,
         older_urls,
@@ -1594,9 +1633,12 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             Err(note_error_value) => note_error(&value.request_id, note_error_value),
         };
     }
-    match note::save_keyed_note(
+    match note::save_keyed_note_with_provenance(
         &context.vault,
-        &context.canonical,
+        &crate::url_provenance::StoredUrl {
+            url: context.canonical.clone(),
+            stripped_params: context.stripped_params.clone(),
+        },
         &context.key,
         &value.title,
         &value.body,
@@ -1756,6 +1798,78 @@ fn view_older_note(
     }
 }
 
+// Callers hold the config lock. This deliberately does not resolve a note key.
+fn preserved_note_context(config: &mut ConfigStore, url: &str) -> Result<(Vault, String), Refusal> {
+    let vault = open_vault(config)?;
+    let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
+        .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
+    Ok((vault, canonical))
+}
+
+/// An explicit read-only lookup independent of both note-key resolution and
+/// index.db. Missing or ambiguous contracts must not promote a viewed note to
+/// an autosave target; even an unavailable history cache permits this lookup.
+fn list_preserved_notes(
+    value: brauser_protocol::ListPreservedNotesRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let (vault, canonical) = match preserved_note_context(config, &value.url) {
+        Ok(context) => context,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    match note::preserved_notes(&vault, &canonical) {
+        Ok(notes) => Response::PreservedNotesListed(brauser_protocol::PreservedNotesListed {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            notes,
+        }),
+        Err(err) => note_error(&value.request_id, err),
+    }
+}
+
+fn view_preserved_note(
+    value: brauser_protocol::ViewPreservedNoteRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let (vault, canonical) = match preserved_note_context(config, &value.url) {
+        Ok(context) => context,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    match note::load_preserved_note(&vault, &canonical, &value.key) {
+        Ok(loaded) => Response::NoteLoaded(NoteLoaded {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            exists: loaded.exists,
+            revision: loaded.revision,
+            title: loaded.title,
+            body: loaded.body,
+            key: loaded.key,
+            older_notes: Vec::new(),
+        }),
+        Err(err) => note_error(&value.request_id, err),
+    }
+}
+
 fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut ConfigStore) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
@@ -1899,6 +2013,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                     linked_count: 0,
                     within,
                     contained: Vec::new(),
+                    incoming_trails: Vec::new(),
                 },
                 None,
             )
@@ -2750,6 +2865,49 @@ mod tests {
         assert!(config.snapshot().strip_params.is_empty());
     }
 
+    #[test]
+    fn update_config_reports_full_adapter_history_with_recovery_steps() {
+        for (history_bytes, expected) in [
+            (32 * 1024, "Capture off"),
+            (62 * 1024, "summary vocabulary"),
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            config::fixtures::with_adapter_history(&path, folder.path(), history_bytes);
+            let mut config = ConfigStore::for_test(path.clone());
+            config.refresh().unwrap();
+            let before = std::fs::read(&path).unwrap();
+            let revision = config.revision().to_owned();
+            let mut next = config.snapshot().clone();
+            if history_bytes == 32 * 1024 {
+                next.adapters.artifacts.clear();
+            } else {
+                next.summary_vocabulary.categories = (0..64)
+                    .map(|n| format!("{n:02}{}", "x".repeat(62)))
+                    .collect();
+            }
+            match dispatch(
+                update_request(&revision, next),
+                &mut config,
+                &mut ConsentAuthority::new(),
+                &SetupContext::new(),
+            ) {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("Retired adapter history"),
+                        "{}",
+                        value.message
+                    );
+                    assert!(value.message.contains(expected), "{}", value.message);
+                }
+                other => panic!("expected actionable history refusal, got {other:?}"),
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(config.revision(), revision);
+        }
+    }
+
     fn configured_store(root: &std::path::Path) -> ConfigStore {
         let mut store = ConfigStore::for_test(root.join("config.toml"));
         let snapshot = brauser_protocol::ConfigSnapshot {
@@ -2913,6 +3071,76 @@ id = "gdoc:{host}/{id}"
         let loaded = note_load(&mut config, edit);
         assert_eq!(loaded.key, first.key);
         assert_eq!(loaded.body, "same document");
+    }
+
+    #[test]
+    fn stripped_note_creation_evidence_cannot_authorize_a_colliding_older_note() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "strip_params = [\"selected\", \"utm_*\"]",
+            "",
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let raw = "https://work.example/items/7?selected=private-value&utm_source=private-campaign";
+        let initial = note_load(&mut config, raw);
+        assert!(matches!(
+            note_save(
+                &mut config,
+                raw,
+                "do not migrate",
+                &initial.revision,
+                initial.key.clone()
+            ),
+            Response::NoteSaved(_)
+        ));
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        let relative = vault.note_relative_path(&initial.key, url).unwrap();
+        let original = std::fs::read_to_string(root.join(&relative)).unwrap();
+        assert!(original.contains("  stripped_params: [\"selected\",\"utm_source\"]"));
+        assert!(!original.contains("private-value"));
+        assert!(!original.contains("private-campaign"));
+        // The later adapter interprets an absent selected parameter as the
+        // item itself. The old stripped note actually belonged to a modal.
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}", absent = ["selected"] }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let loaded = note_load(&mut config, url);
+        assert_eq!(loaded.key.kind, RecordKeyKind::Artifact);
+        assert!(
+            loaded.older_notes.is_empty(),
+            "stripped absence conditions must not identify an older note"
+        );
+        let response = use_artifact_note(
+            brauser_protocol::UseArtifactNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "collision".into(),
+                url: url.into(),
+                source_url: url.into(),
+                expected_revision: initial.revision,
+            },
+            &mut config,
+        );
+        assert!(
+            matches!(response, Response::Error(value) if value.code == ErrorCode::Unauthorized)
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(relative)).unwrap(),
+            original
+        );
     }
 
     #[test]
@@ -3115,6 +3343,231 @@ id = "{prefix}:{{host}}/{{id}}"
                 assert_eq!(conflict.key.value, "replacement:work.example/7");
             }
             other => panic!("expected key_changed conflict, got {other:?}"),
+        }
+    }
+
+    mod preserved_note_browsing {
+        use super::*;
+
+        const URL: &str = "https://work.example/items/7";
+
+        fn setup() -> (
+            tempfile::TempDir,
+            std::path::PathBuf,
+            ConfigStore,
+            Vec<RecordKey>,
+        ) {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("home");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &root, "");
+            let mut contents = std::fs::read_to_string(&path).unwrap();
+            for prefix in ["first", "second"] {
+                contents.push_str(&format!(
+                    "\n[[adapter_id_history]]\ntype = \"work.{prefix}\"\norigin = \"https://work.example\"\nmatch = [{{ path = \"/items/{{id:int}}\" }}]\nid = \"{prefix}:{{host}}/{{id}}\"\n"
+                ));
+            }
+            std::fs::write(&path, contents).unwrap();
+            let config = loaded(&path);
+            assert_eq!(config.note_key_rule(URL), NoteKeyRule::Ambiguous);
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            let keys = ["first", "second"]
+                .map(|prefix| RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: format!("{prefix}:work.example/7"),
+                })
+                .to_vec();
+            for key in &keys {
+                note::save_keyed_note(&vault, URL, key, &key.value, &key.value, "missing").unwrap();
+            }
+            (folder, root, config, keys)
+        }
+
+        fn list(config: &mut ConfigStore) -> Vec<brauser_protocol::OlderNote> {
+            match list_preserved_notes(
+                brauser_protocol::ListPreservedNotesRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "preserved".into(),
+                    url: URL.into(),
+                },
+                config,
+            ) {
+                Response::PreservedNotesListed(result) => result.notes,
+                other => panic!("expected preserved notes, got {other:?}"),
+            }
+        }
+
+        fn view(config: &mut ConfigStore, url: &str, key: RecordKey) -> Response {
+            view_preserved_note(
+                brauser_protocol::ViewPreservedNoteRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "view".into(),
+                    url: url.into(),
+                    key,
+                },
+                config,
+            )
+        }
+
+        #[test]
+        fn ambiguous_candidates_are_read_only_beside_an_occupied_url_note() {
+            let (_folder, _root, mut config, keys) = setup();
+            let primary = note_load(&mut config, URL);
+            assert_eq!(primary.key.kind, RecordKeyKind::Url);
+            note_save(
+                &mut config,
+                URL,
+                "URL note",
+                &primary.revision,
+                primary.key.clone(),
+            );
+            let revision = config.revision().to_owned();
+            let policy = config.snapshot().clone();
+            let entries = list(&mut config);
+            assert_eq!(entries.len(), 2);
+            for key in keys {
+                assert!(entries.iter().any(|entry| entry.key == key));
+                match view(&mut config, URL, key.clone()) {
+                    Response::NoteLoaded(note) => assert_eq!(note.body, key.value),
+                    other => panic!("expected read-only note, got {other:?}"),
+                }
+                assert!(
+                    matches!(note_save(&mut config, URL, "overwrite", "missing", key),
+                    Response::NoteConflict(reply) if reply.reason == "key_changed")
+                );
+            }
+            let after = note_load(&mut config, URL);
+            assert_eq!(after.key, primary.key);
+            assert_eq!(after.body, "URL note");
+            assert_eq!(config.revision(), revision);
+            assert_eq!(config.snapshot(), &policy);
+        }
+
+        #[test]
+        fn discovery_does_not_open_unavailable_history_or_need_note_contracts() {
+            let (folder, _root, mut config, keys) = setup();
+            let cache = config.cache_dir().unwrap();
+            std::fs::create_dir_all(&cache).unwrap();
+            let db = cache.join("index.db");
+            std::fs::write(&db, b"unavailable history").unwrap();
+            // Damaged adopted state refuses primary note identity, but is not
+            // needed to inspect an owned note at its exact stored address.
+            std::fs::write(config::adopted_contracts_path(folder.path()), b"{").unwrap();
+            assert_eq!(list(&mut config).len(), 2);
+            assert!(matches!(
+                view(&mut config, URL, keys[0].clone()),
+                Response::NoteLoaded(_)
+            ));
+            assert_eq!(std::fs::read(db).unwrap(), b"unavailable history");
+        }
+
+        #[test]
+        fn opening_rechecks_ownership_address_and_artifact_kind() {
+            let (_folder, root, mut config, keys) = setup();
+            assert_eq!(list(&mut config).len(), 2);
+            assert!(matches!(
+                view(&mut config, "https://work.example/items/8", keys[0].clone()),
+                Response::Error(_)
+            ));
+            let path = root
+                .join("notes")
+                .join(crate::vault::note_filename(&keys[0], URL).unwrap());
+            std::fs::write(&path, "unowned private text").unwrap();
+            assert_eq!(list(&mut config).len(), 1);
+            assert!(matches!(
+                view(&mut config, URL, keys[0].clone()),
+                Response::Error(_)
+            ));
+            let url_key = crate::vault::url_record_key(URL).unwrap();
+            assert!(matches!(
+                view(&mut config, URL, url_key),
+                Response::Error(_)
+            ));
+        }
+
+        #[test]
+        fn lost_contracts_and_stripped_addresses_allow_viewing_without_identity_recovery() {
+            let (folder, _root, _config, keys) = setup();
+            let path = folder.path().join("config.toml");
+            let mut table: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            table.remove("adapter_id_history");
+            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            let mut config = loaded(&path);
+            assert_eq!(config.note_key_rule(URL), NoteKeyRule::Uncovered);
+            assert_eq!(list(&mut config).len(), 2);
+            assert!(matches!(
+                view(
+                    &mut config,
+                    &format!("{URL}?utm_source=test"),
+                    keys[0].clone()
+                ),
+                Response::NoteLoaded(_)
+            ));
+            assert_eq!(note_load(&mut config, URL).key.kind, RecordKeyKind::Url);
+        }
+
+        #[test]
+        fn changed_or_duplicate_ownership_is_refused_after_listing() {
+            for inserted in [
+                "  kind: summary\n",
+                "  artifact_id: \"duplicate\"\n",
+                "brauser:\n  artifact_id: \"duplicate\"\n",
+            ] {
+                let (_folder, root, mut config, keys) = setup();
+                assert_eq!(list(&mut config).len(), 2);
+                let path = root
+                    .join("notes")
+                    .join(crate::vault::note_filename(&keys[0], URL).unwrap());
+                let before = std::fs::read_to_string(&path).unwrap();
+                let changed = before.replace("\n---\n\n", &format!("\n{inserted}---\n\n"));
+                std::fs::write(&path, &changed).unwrap();
+                assert_eq!(list(&mut config).len(), 1);
+                assert!(matches!(
+                    view(&mut config, URL, keys[0].clone()),
+                    Response::Error(_)
+                ));
+                assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
+            }
+        }
+
+        #[test]
+        fn discovery_is_bounded_and_ignores_other_file_kinds_and_duplicate_ownership() {
+            let (_folder, root, mut config, keys) = setup();
+            let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+            for index in 0..30 {
+                let key = RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: format!("extra:{index}"),
+                };
+                note::save_keyed_note(&vault, URL, &key, &"\u{1}".repeat(2048), "body", "missing")
+                    .unwrap();
+            }
+            let notes = root.join("notes");
+            for (index, content) in [
+                "not owned",
+                "  kind: summary\n",
+                "  artifact_id: \"duplicate\"\n",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let path = notes.join(crate::vault::note_filename(&keys[index % 2], URL).unwrap());
+                let original = std::fs::read_to_string(path).unwrap();
+                let copy = original.replace("\n---\n\n", &format!("\n{content}---\n\n"));
+                std::fs::write(notes.join(format!("000-copy-{index}.md")), copy).unwrap();
+            }
+            let entries = list(&mut config);
+            assert_eq!(entries.len(), 24);
+            let response = Response::PreservedNotesListed(brauser_protocol::PreservedNotesListed {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "\"".repeat(128),
+                notes: entries,
+            });
+            assert!(
+                serde_json::to_vec(&response).unwrap().len() <= crate::frame::MAX_OUTBOUND_BYTES
+            );
         }
     }
 
@@ -6918,6 +7371,113 @@ id = "github.repo:{host}/{owner}/{repo}"
     }
 
     #[test]
+    fn artifact_query_exposes_bounded_validated_incoming_sources() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+title = "{title}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut trails = Vec::new();
+        for (id, transition) in (1..=7).zip([
+            "link",
+            "form_submit",
+            "typed",
+            "auto_bookmark",
+            "generated",
+            "keyword",
+            "reload",
+        ]) {
+            let mut source = activity_for_invalid_policy();
+            source.artifact_id = format!("work:work.example/{id}");
+            source.url = format!("https://work.example/issues/{id}");
+            source.title = Some(format!("Source {id}"));
+            trails.push(ActivityTrail {
+                from_artifact_id: Some(source.artifact_id.clone()),
+                from_url: Some(source.url.clone()),
+                transition: transition.into(),
+            });
+            assert_eq!(
+                deliver_activity(&mut config, source),
+                VisitOutcome::Persisted
+            );
+        }
+        // A valid source need not have its own delivered history yet. Keep
+        // that case unresolved rather than inventing a title or a URL.
+        trails.push(ActivityTrail {
+            from_artifact_id: Some("work:work.example/999".into()),
+            from_url: Some("https://work.example/issues/999".into()),
+            transition: "link".into(),
+        });
+        trails.push(ActivityTrail {
+            from_artifact_id: None,
+            from_url: None,
+            transition: "forward_back".into(),
+        });
+        let mut target = activity_for_invalid_policy();
+        target.artifact_id = "work:work.example/99".into();
+        target.url = "https://work.example/issues/99".into();
+        target.trails = trails;
+        assert_eq!(
+            deliver_activity(&mut config, target.clone()),
+            VisitOutcome::Persisted
+        );
+        let query = |config: &mut ConfigStore, url: &str| {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "incoming".into(),
+                    url: url.into(),
+                    title: None,
+                },
+                config,
+            ) else {
+                panic!("expected artifact result");
+            };
+            reply.artifact.unwrap()
+        };
+        let incoming = query(&mut config, &target.url).incoming_trails;
+        assert_eq!(incoming.len(), 5);
+        for (index, trail) in incoming.iter().enumerate() {
+            let id = index + 1;
+            assert_eq!(trail.source.artifact_id, format!("work:work.example/{id}"));
+            assert_eq!(trail.source.title, format!("Source {id}"));
+            assert_eq!(
+                trail.source.url,
+                format!("https://work.example/issues/{id}")
+            );
+            assert_eq!(trail.last_seen, target.occurred_at[..10]);
+        }
+        assert_eq!(incoming[0].transition, "link");
+        assert_eq!(incoming[1].transition, "form_submit");
+        assert!(
+            query(&mut config, "https://work.example/issues/1")
+                .incoming_trails
+                .is_empty()
+        );
+        assert!(
+            query(&mut config, "https://work.example/issues/999")
+                .incoming_trails
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn title_refs_resolve_through_the_confirmed_adapters_into_links() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
@@ -7350,6 +7910,85 @@ id = "work:{host}/{id}"
             other => panic!("expected a rejected trail, got {other:?}"),
         }
         assert!(!root.join("logs").exists());
+    }
+
+    #[test]
+    fn standalone_overflow_uses_the_validated_home_and_obeys_capture_gates() {
+        for scenario in [
+            "valid",
+            "paused",
+            "invalid_adapter",
+            "replaced_home",
+            "no_home",
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let (mut config, root) = adapter_only_config(&folder);
+            let path = folder.path().join("config.toml");
+            match scenario {
+                "paused" => {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    std::fs::write(
+                        &path,
+                        text.replace("capture_enabled = true", "capture_enabled = false"),
+                    )
+                    .unwrap();
+                }
+                "invalid_adapter" => {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    std::fs::write(&path, text.replace("format = 1", "format = 99")).unwrap();
+                }
+                "replaced_home" => {
+                    std::fs::rename(&root, folder.path().join("original-home")).unwrap();
+                    std::fs::create_dir(&root).unwrap();
+                }
+                "no_home" => {
+                    std::fs::write(&path, "version = 6\ncapture_enabled = true\n").unwrap();
+                }
+                _ => {}
+            }
+            let request = brauser_protocol::RecordBatchRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: scenario.into(),
+                batch_id: uuid::Uuid::new_v4().to_string(),
+                events: vec![],
+                overflow: Some(brauser_protocol::OverflowMarker {
+                    count: 2,
+                    first_occurred_at: hour_timestamp(),
+                    last_occurred_at: hour_timestamp(),
+                }),
+            };
+            for _ in 0..2 {
+                let Response::BatchRecorded(result) = record_batch(request.clone(), &mut config)
+                else {
+                    panic!("expected overflow response for {scenario}");
+                };
+                assert_eq!(result.overflow_recorded, scenario == "valid", "{scenario}");
+                assert!(result.results.is_empty());
+            }
+            if scenario == "valid" {
+                let at = hour_timestamp();
+                let log = root
+                    .join("logs")
+                    .join(&at[..4])
+                    .join(&at[5..7])
+                    .join(format!("{}.md", &at[..10]));
+                let text = std::fs::read_to_string(log).unwrap();
+                assert_eq!(text.matches("kind=overflow").count(), 1);
+                assert_eq!(text.matches("2 completed activity hour(s)").count(), 1);
+                assert!(!text.contains("https://"));
+                let mut empty = request.clone();
+                empty.overflow = None;
+                assert!(matches!(
+                    record_batch(empty, &mut config),
+                    Response::Error(_)
+                ));
+            } else {
+                assert!(
+                    !root.join("logs").exists(),
+                    "{scenario} must not write logs"
+                );
+            }
+        }
     }
 
     #[test]

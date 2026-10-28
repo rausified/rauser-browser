@@ -26,7 +26,7 @@ changes (`unknown` when built outside a Git checkout). The
 panel and settings page show that commit beside the extension's own and flag a
 different commit; nothing else depends on its format.
 
-Protocol version 7 covers host discovery, configuration, native folder
+Protocol version 8 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
 configuration. `get_config` returns a
@@ -38,6 +38,18 @@ file. The host compares it with the current file before replacement. An invalid
 or newer TOML file yields an inert empty snapshot, its raw-file revision, and a
 `config_issue` in `hello_result` and `config_result`. A revision-checked repair
 backs up those exact bytes before replacing the file.
+
+`record_batch` accepts 1–64 typed events, or empty `events` with non-null
+`overflow` for standalone loss evidence. A batch with neither is refused.
+Standalone evidence contains no URL or path: the host validates its count and
+time range, derives the daily log from the last timestamp inside the checked
+home folder, and uses normal compact-intent durability and idempotency. The
+worker freezes the batch ID and snapshot in local storage before dispatch;
+`overflow_recorded: false` retains it for retry even with no event outcomes.
+This widens protocol v7's existing request without adding fields. Earlier v7
+hosts refuse the empty batch, leaving its evidence pending until host upgrade.
+The schema's array minimum changes; regenerated Rust and TypeScript types are
+unchanged because both already represent `events` as an array.
 
 `ConfigSnapshot.storage` must be present: use `null` only to explicitly clear
 the selected home folder. `storage.root` is the home folder; the content
@@ -93,8 +105,21 @@ version 5, adapter additions or changes required a native confirmation through
 every-account-in-this-Chrome-profile warning to it; version 6 removes that
 confirmation, and an unscoped adapter still needs its `unscoped` acknowledgment.
 
-Version 7 is the current protocol. The host refuses version 6 and earlier
+Version 8 is the current protocol. The host refuses version 7 and earlier
 requests with `unsupported_protocol_version`.
+
+Version 8: incoming navigation. `ArtifactView.incoming_trails` is required
+and holds up to five `IncomingTrailView` entries: `source` is an
+`ArtifactRefView`, `transition` is a known Chrome transition other than
+`forward_back`, and `last_seen` is the latest recorded local day (`YYYY-MM-DD`).
+Entries are distinct source/transition pairs, ordered by day descending,
+then source ID and transition ascending. A source can appear for several
+transition kinds. Only recorded source artifacts with HTTP(S) URLs appear;
+self edges, unresolved sources, unknown historical transitions, mentions,
+co-focus and containment are omitted. No source is inferred from titles or
+back/forward. These are recorded navigation observations, not click counts.
+Host and extension must be rebuilt together; the log and cache formats do
+not change.
 
 Version 7: artifact containers. `ArtifactView` gains two required fields, so
 the artifact card can name what holds an artifact and what it holds:
@@ -290,7 +315,7 @@ answers `invalid_request` for the unknown types, and the panel then asks for
 a host rebuild; a version 6 host refuses every version 7 request as
 `unsupported_protocol_version`. The host enforces every bound above at runtime.
 
-Version 7 additions: Capture Site agent drafting (Improve with AI), all
+Version 8 additions: Capture Site agent drafting (Improve with AI), all
 additive. No existing field changes type or becomes required, so a property
 left out of a definition's `required` list is new and optional: the generated
 Rust reads a missing key (or `null`) as `None` and does not write `None`, and
@@ -323,7 +348,7 @@ the TypeScript field is optional.
 - `SiteDrafter` gains `agent`, and `UncheckedReason` gains `unseen`: an
   AI-drafted rule that no visited or link shape matches starts unchecked.
 
-A version 7 host built before these additions answers `invalid_request` for
+A version 8 host built before these additions answers `invalid_request` for
 `start_site_draft` and for a `draft_site` that carries `run_id`, and the
 panel then asks for a host rebuild.
 
@@ -471,3 +496,22 @@ or authorization token: the usual `update_config` rechecks the revision and
 history independently. This additive pair leaves existing message shapes and
 the unknown-site `draft_site` / `check_site_draft` flow unchanged; an older host
 refuses it, leaving Save disabled.
+
+### Explicit preserved-note viewing (added within version 8)
+
+`list_preserved_notes` takes `url` and answers `preserved_notes_listed` with
+`notes`, at most 24 `OlderNote` metadata entries (all artifact keys), without
+bodies. The host scans up to 4,096 flat note files and 16 MiB with the existing
+vault scanner, verifying ownership at the key's real path. Only notes whose
+stored canonical creation URL exactly equals this page's URL after current
+`strip_params` qualify. No index or note contracts are consulted. The result
+is a limited search; omitted files do not imply no preserved note exists.
+
+`view_preserved_note` takes `url` and an explicit `key` from that list. It
+reopens only that artifact key's owned page note, rechecks the exact stored
+address, and returns the existing `note_loaded` shape with empty `older_notes`.
+A URL key, changed ownership/address, missing file or inaccessible vault is
+refused. These requests never authorize `save_note` or `use_artifact_note`:
+normal host-derived note identity still applies. A panel must keep the result
+outside the editor and clear it on navigation/collapse. No existing message
+changed shape; older v8 hosts may refuse these new requests.
