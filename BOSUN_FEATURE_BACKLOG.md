@@ -329,11 +329,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
 
 ## In Progress / This Iteration
 
-- In progress in the Columbus session (John's request, 2026-10-28), not Cookie. Cookie must not claim these:
-- [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
-  dated as-built and probe records to `docs/history.md`, and make AGENTS.md
-  "Current state" a short table.
-
 - [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
   Cookie claimed the highest-priority ready item after the coordinator cleared
   the assigned queue. The [four-stage plan](docs/superpowers/plans/2026-10-28-capture-relearning.md)
@@ -369,6 +364,8 @@ strip_params note-identity follow-up has shipped (see Shipped).
 Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Docs. **Split DESIGN.md into the current contract and an append-only history (2026-10-28).** Completed `brwr-m68` (Columbus session, John's request). Dated decision and as-built notes, probe results, review reproductions, superseded designs and the done-step build log moved verbatim to `docs/history.md`, grouped by DESIGN.md section, with pointers where a current rule depended on them; every section number, heading and §12.2 step number stays. AGENTS.md "Current state" is now a component table with invariants, and both files say new dated records go to `docs/history.md`. **Metrics:** DESIGN.md 341,373 → 275,922 bytes (1,831 → 1,604 lines); `docs/history.md` 111,854 bytes; AGENTS.md 48,143 → 22,567 bytes; 2,809 original sentences checked, none lost or duplicated beyond five glue edits. An independent review's findings are folded in: rules it found moved to history (credential refusal, the log marker format, the frozen-ID sibling rule, four headless limits now in TESTING.md) are restated, and stale §14 records are trimmed or moved.
 
 - **Category:** New Capability. **Restore removed sites from their recorded capture rules (2026-10-28).** Completed assigned `brwr-cua`: Capture Site reviews usable recorded page kinds and account scope before a new starter or draft, then re-reads the set before an explicit revision-checked save. Custom identities, note bytes, other sites and global pauses stay intact; no page content or agent is needed. Damaged or overlapping history remains refused, with container identity review tracked in `brwr-7lq`. **Metrics:** 997 workspace Rust outcomes (+7 regressions; 43 documented IPC sandbox skips), 11 new panel cases and all 15 extension files, both Clippy configurations and 859 scripted-build outcomes green.
 
