@@ -16,7 +16,7 @@ use crate::document::{Adapter, Document, MAX_SCOPE_VALUES, QueryCond, Rule, SHAR
 use crate::error::{DraftErrorCode, ValidationError};
 use crate::eval::{Prepared, match_rule};
 use crate::overlap::rules_may_overlap;
-use crate::path::Segment;
+use crate::path::{Segment, is_scope_anchor};
 use crate::policy::DraftPolicy;
 use crate::value::Value;
 
@@ -201,8 +201,11 @@ fn before_first_identifier(rule: &Rule) -> &[Segment] {
 /// It anchors a template as a literal does (adapter-templates §4.1, §6:
 /// the listed values pin it). An `unscoped` adapter has no such capture.
 fn scope_restricted(a: &Adapter, s: &Segment) -> bool {
-    matches!(s, Segment::Capture { name, optional: false, .. }
-        if a.scope.as_ref().is_some_and(|scope| scope.iter().any(|(key, _)| key == name)))
+    is_scope_anchor(s, |name| {
+        a.scope
+            .as_ref()
+            .is_some_and(|scope| scope.iter().any(|(key, _)| key == name))
+    })
 }
 
 /// Step 4: an anchor before the first identifier capture, then `{*}` not
