@@ -72,7 +72,9 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
     return cut(longest, low);
   };
 
-  const DROPPED = new Set(["IMG", "SCRIPT", "STYLE"]);
+  // NOSCRIPT and TEMPLATE hold no rendered text either; Readability already
+  // strips them from an article, and the body fallback walks past them.
+  const DROPPED = new Set(["IMG", "SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
   const BLOCKS = new Set([
     "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DD", "DETAILS", "DIV", "DL", "DT", "FIGCAPTION", "FIGURE",
     "FOOTER", "HEADER", "HR", "MAIN", "NAV", "OL", "P", "SECTION", "SUMMARY", "TABLE", "TBODY", "TD", "TFOOT",
@@ -136,11 +138,24 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   }
   const headingTitle = headings.size === 1 ? [...headings][0] : "";
 
+  // Whether an element has layout boxes. An element that is not being
+  // rendered (in a display:none iframe, or under display:none) has no client
+  // rects, which is exactly when innerText returns textContent, inline
+  // script and style text included. checkVisibility would also count
+  // visibility and opacity, which innerText does not. An element without
+  // getClientRects (not a real DOM) counts as rendered.
+  const hasBoxes = (node: Element | null | undefined): boolean =>
+    typeof node?.getClientRects !== "function" || node.getClientRects().length > 0;
+  // A frame whose document is not rendered (Office's hidden token-factory
+  // iframe) shows the user nothing, so it contributes no content or
+  // selection and can never be the frame a summary reads.
+  const rendered = hasBoxes(document.documentElement);
+
   let title = "";
   let content = "";
   let readable = false;
   try {
-    if (typeof Readability === "function") {
+    if (rendered && typeof Readability === "function") {
       const article = new Readability(document.cloneNode(true), { serializer: (el) => el }).parse();
       if (article !== null) {
         title = article.title ?? "";
@@ -153,15 +168,26 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   } catch {
     // An unparseable page reads as body text below.
   }
-  if (!readable) {
-    content = (document.body?.innerText ?? "").trim();
+  if (!readable && rendered && document.body) {
+    if (hasBoxes(document.body)) {
+      content = (document.body.innerText ?? "").trim();
+    } else {
+      // A body that is not rendered: its text without script, style,
+      // noscript, or template contents, never its textContent.
+      blocks.length = 0;
+      current = "";
+      prefix = "";
+      walk(document.body);
+      flush();
+      content = blocks.join("\n\n");
+    }
   }
   // Replaced before measuring, so a cut never meets a lone half either.
   content = whole(content);
   const fullTitle = whole(headingTitle || title || document.title || "");
   title = cut(fullTitle, Math.min(fullTitle.length, limits.maxTitleChars));
 
-  const picked = whole(window.getSelection()?.toString() ?? "");
+  const picked = rendered ? whole(window.getSelection()?.toString() ?? "") : "";
   let selection: string | null = picked.trim() === "" ? null : picked;
   let truncated = false;
   if (selection !== null) {
