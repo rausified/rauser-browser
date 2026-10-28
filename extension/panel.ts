@@ -1223,6 +1223,9 @@ async function runTask(): Promise<void> {
   } finally {
     taskStarting = false;
     updateControls();
+    // A Reuse value that arrived while this start was in flight was left in
+    // storage (checkReuse); take it now that the bar is free again.
+    void checkReuse();
   }
 }
 
@@ -1284,10 +1287,13 @@ function openTasks(): void {
 }
 
 /** Takes any Reuse instruction left for this panel's window and fills the
- * task bar with it, unless a start is already in flight: `taskStarting`
- * gates the fill, not the take, so a value meant for this window is always
- * consumed once seen, never left to surprise a later, unrelated start. */
+ * task bar with it. While a start is in flight, the value is left in
+ * storage untouched (`taskStarting` gates the take itself, not just the
+ * fill): `runTask`'s `finally` calls this again once the start settles, so
+ * the value still arrives, just later, rather than being taken and
+ * dropped. */
 async function checkReuse(): Promise<void> {
+  if (taskStarting) return;
   const windowId = await panelWindowId;
   if (windowId === null) return;
   const instruction = await takeReuse(chrome.storage.session, windowId).catch(() => null);

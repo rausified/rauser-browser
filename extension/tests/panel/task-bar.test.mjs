@@ -854,7 +854,7 @@ test("Tasks ↗ focuses an already-open Tasks tab instead of opening a second on
   assert.deepEqual(page.state.windowUpdates, [{ windowId: 3, focused: true }]);
 });
 
-test("the bar is never filled from a reuse value while a start is in flight", async () => {
+test("a reuse value that arrives during a start fills the bar once the start settles", async () => {
   const start = held();
   const page = await taskPanel({ intercept: (request) => request.type === "start_task" ? start.promise : startsTask()(request) });
   type(page, "My own draft");
@@ -863,12 +863,13 @@ test("the bar is never filled from a reuse value while a start is in flight", as
   assert.equal(page.el("task-run").disabled, true, "a start is in flight");
   // A Reuse value for this panel's window (and the harness's default
   // windowId, 1) arrives while the start is in flight.
-  page.state.session.set(REUSE_KEY, { instruction: "Reused while starting", window_id: 1, at: Date.now() });
+  page.state.session.set(REUSE_KEY, { instruction: "Reused once settled", window_id: 1, at: Date.now() });
   page.reuseChanged();
   await settle(20);
-  assert.equal(page.el("task-input").value, "My own draft", "the draft stays");
+  // Left in storage, and the bar untouched, while the start is still going.
+  assert.equal(page.el("task-input").value, "My own draft", "the draft stays during the start");
+  assert.equal(page.state.session.has(REUSE_KEY), true, "the value is still in storage");
   start.release({ type: "run_started", run: TASK_VIEW, existing: false });
-  await until(() => page.el("task-input").value === "", "the bar to clear on success");
-  // The value is gone either way: Reuse is taken once, not retried after.
+  await until(() => page.el("task-input").value === "Reused once settled", "the bar fills once the start settles");
   assert.equal(page.state.session.has(REUSE_KEY), false);
 });

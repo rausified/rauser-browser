@@ -32,6 +32,7 @@ const REUSE_DONE_TEXT = "Instruction sent to the task bar.";
 // call `chrome.sidePanel.open` synchronously, before any await (Chrome
 // requires the call to start within the user gesture). A page that cannot
 // read its window (an old Chrome) sends Reuse to any window instead.
+// `pageWindowId` can briefly still be null here; the `{}` reject path below already covers that.
 let pageWindowId: number | null = null;
 void chrome.windows.getCurrent().then((current) => { pageWindowId = current.id ?? null; }, () => undefined);
 
