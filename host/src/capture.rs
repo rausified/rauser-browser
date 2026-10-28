@@ -2408,11 +2408,42 @@ fn parse_marker(line: &str) -> Option<(&str, &str, i64)> {
     Some((id, url, at))
 }
 
-/// Reconstruct the two frozen historical text prefixes, keeping the URL,
-/// measurements and encoded marker payload byte-exact. Only a whole-entry
-/// hash matching a durable v1 intent may select one for recovery; neither
-/// generation is used for new appends or display.
+/// Reconstruct historical entries only for hash-checked v1 intent recovery.
+/// Older activity/Why payloads kept the queued UUID spelling even though
+/// their marker hashed its canonical form. Retain both spellings through
+/// every frozen presentation generation; never use these for new writes.
 fn legacy_entries(entry: &str, event: &VisitEvent, why: bool) -> Vec<String> {
+    let mut candidates = legacy_presentation_entries(entry, event, why);
+    if let Some(original) = legacy_uuid_entry(entry, &event.event_id) {
+        candidates.extend(legacy_presentation_entries(&original, event, why));
+    }
+    candidates
+}
+
+fn legacy_uuid_entry(entry: &str, raw_id: &str) -> Option<String> {
+    let canonical = parse_event_id(raw_id).ok()?;
+    if canonical == raw_id {
+        return None;
+    }
+    let (prefix, rest) = entry.rsplit_once(" data=")?;
+    if !prefix.ends_with(" kind=activity") && !prefix.ends_with(" kind=why") {
+        return None;
+    }
+    let (data, suffix) = rest.split_once(' ')?;
+    let mut payload: serde_json::Value = serde_json::from_slice(&hex::decode(data).ok()?).ok()?;
+    let object = payload.as_object_mut()?;
+    if object.get("event_id")?.as_str()? != canonical {
+        return None;
+    }
+    object.insert("event_id".into(), raw_id.into());
+    Some(format!(
+        "{prefix} data={} {suffix}",
+        hex::encode(serde_json::to_vec(&payload).ok()?)
+    ))
+}
+
+/// Frozen historical text prefixes, preserving measurements and marker data.
+fn legacy_presentation_entries(entry: &str, event: &VisitEvent, why: bool) -> Vec<String> {
     // Pre-provenance hosts had no `stripped` field. Preserve all three
     // presentation generations from those hosts for v1 hash-only replay.
     let old_entry = entry
@@ -3688,6 +3719,124 @@ mod tests {
                     },
                 ),
                 _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn noncanonical_v1_uuid_intents_resume_only_original_bytes() {
+        let canonical = "abcdef01-2345-4678-9abc-def012345678";
+        for raw in [
+            canonical.to_uppercase(),
+            canonical.replace('-', ""),
+            canonical.to_uppercase().replace('-', ""),
+        ] {
+            for (kind, batched) in [("activity", false), ("activity", true), ("why", false)] {
+                for historical_title in [
+                    None,
+                    Some("\u{202e}Budget $x$ \\`=q\\` ~~~    café %%hide%% #tag"),
+                    Some("Budget $x$ \\`\\=q\\` ~~~    café \\%\\%hide\\%\\% \\#tag"),
+                ] {
+                    let root = tempfile::tempdir().unwrap();
+                    let state = tempfile::tempdir().unwrap();
+                    let config = storage(root.path(), "log");
+                    let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+                    let mut source = activity();
+                    source.event_id = raw.clone();
+                    source.title =
+                        Some(" \u{202e}Budget $x$ `=q` ~~~    café %%hide%% #tag ".into());
+                    let CaptureOutcome::Persisted { relative_path } =
+                        deliver_presentation_fixture(&store, kind, false, &source)
+                    else {
+                        panic!("fixture");
+                    };
+                    let hash = sha256_hex(canonical.as_bytes());
+                    let journal = store.journal_path(&hash);
+                    let current = read_intent(&journal).unwrap().unwrap();
+                    let entry = current.entry.as_ref().unwrap();
+                    let (prefix, data) = entry.split_once(" data=").unwrap();
+                    let mut payload: serde_json::Value = serde_json::from_slice(
+                        &hex::decode(data.split_whitespace().next().unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    payload["event_id"] = raw.clone().into();
+                    let mut old = format!(
+                        "{prefix} data={} -->\n",
+                        hex::encode(serde_json::to_vec(&payload).unwrap())
+                    );
+                    if let Some(historical_title) = historical_title {
+                        let suffix_start = if kind == "activity" {
+                            " — focused"
+                        } else {
+                            " — <"
+                        };
+                        let suffix = &old[old.find(suffix_start).unwrap()..];
+                        let label = if kind == "why" { "Why: " } else { "" };
+                        old = format!(
+                            "\n- {} — {label}{historical_title}{suffix}",
+                            source.occurred_at
+                        );
+                    }
+                    let intent = store
+                        .legacy_intent(&relative_path, &old, current.offset)
+                        .unwrap();
+                    fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+                    let log = root.path().join(&relative_path);
+                    let original = fs::read(&log).unwrap();
+                    let prefix = &original[..current.offset as usize];
+                    // Tear inside the payload, so ID bytes as well as prose must match.
+                    let cut = old.len() - 12;
+                    let torn = [prefix, &old.as_bytes()[..cut]].concat();
+                    fs::write(&log, &torn).unwrap();
+                    drop(store);
+                    let store = CaptureStore::open_at(&config, None, state.path()).unwrap();
+                    let mut changed = source.clone();
+                    changed.title.as_mut().unwrap().push('!');
+                    assert!(matches!(
+                        deliver_presentation_fixture(&store, kind, batched, &changed),
+                        CaptureOutcome::Retryable { .. }
+                    ));
+                    assert_eq!(fs::read(&log).unwrap(), torn);
+                    // A different payload UUID cannot authorize recovery, even if the
+                    // intent lives at the request's canonical journal path.
+                    let mut wrong = payload.clone();
+                    wrong["event_id"] = Uuid::new_v4().to_string().into();
+                    let wrong_entry = old.replace(
+                        &hex::encode(serde_json::to_vec(&payload).unwrap()),
+                        &hex::encode(serde_json::to_vec(&wrong).unwrap()),
+                    );
+                    let wrong_intent = store
+                        .legacy_intent(&relative_path, &wrong_entry, current.offset)
+                        .unwrap();
+                    fs::write(&journal, serde_json::to_vec(&wrong_intent).unwrap()).unwrap();
+                    assert!(matches!(
+                        deliver_presentation_fixture(&store, kind, batched, &source),
+                        CaptureOutcome::Retryable { .. }
+                    ));
+                    assert_eq!(fs::read(&log).unwrap(), torn);
+                    fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+                    let mut edited = torn.clone();
+                    *edited.last_mut().unwrap() ^= 1;
+                    fs::write(&log, &edited).unwrap();
+                    assert!(matches!(
+                        deliver_presentation_fixture(&store, kind, batched, &source),
+                        CaptureOutcome::Retryable { .. }
+                    ));
+                    assert_eq!(fs::read(&log).unwrap(), edited);
+                    fs::write(&log, &torn).unwrap();
+                    let outcome = deliver_presentation_fixture(&store, kind, batched, &source);
+                    assert!(
+                        matches!(outcome, CaptureOutcome::Persisted { .. }),
+                        "{kind} {raw}: {outcome:?}"
+                    );
+                    let expected = [prefix, old.as_bytes()].concat();
+                    assert_eq!(fs::read(&log).unwrap(), expected);
+                    assert!(matches!(
+                        deliver_presentation_fixture(&store, kind, batched, &source),
+                        CaptureOutcome::Suppressed { .. }
+                    ));
+                    assert_eq!(fs::read(&log).unwrap(), expected);
+                }
             }
         }
     }

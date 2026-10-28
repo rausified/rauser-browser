@@ -299,15 +299,6 @@ fix, and keep each fix to one cycle. If the test does not fail on current
 main, check the item off as "not reproduced" and say why. The decided
 strip_params note-identity follow-up has shipped (see Shipped).
 
-- [ ] `brwr-smu` **Recover older noncanonical UUID markers and partial
-  intents.** New writes use canonical UUIDs (see Shipped); older uppercase or
-  unhyphenated payload IDs still fail reindex's raw hash check, and incomplete
-  v1 intents with those payloads cannot match the new rendering. Recover their
-  original bytes and canonical cache identity without rewriting logs or
-  weakening intent/hash/tail validation. Discovered during the UUID fix (see
-  Shipped).
-
-
 ### Cross-PR seam review defects (lane C2, 2026-10-27)
 
 A 2026-10-27 review of the seams between the PRs merged that night (main at
@@ -394,6 +385,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Recover older activity and context without rewriting history (2026-10-28).** Historical uppercase and unhyphenated UUID payloads now survive reindex with canonical cache identities, preserving measured work and Why context. Older v1 interrupted appends reconstruct the original queued UUID spelling across all three historical renderers and resume only with the exact intent hash and torn tail; edited tails and mismatched payloads remain refused. Completes assigned `brwr-smu`. **Metrics:** Two failing-first regression matrices (33 cases); 972 workspace Rust outcomes (43 IPC skips), 835 scripted-dialog outcomes (53 IPC skips, one ignored doctest), 15 extension files, two script files, and 10,696 Markdown renderings; full required/README gate green.
 
 - **Category:** New Capability. **Keep stripped query names beside saved page addresses (2026-10-28).** Host-derived, names-only evidence now accompanies daily-log URLs (including activity modes and trail sources), cache format 7, a queryable SQLite provenance table, and note/summary creation addresses. Older-note discovery and migration refuse candidates that lost a query or absence key read by a current or recorded contract, while tracking-only removal stays usable. Legacy evidence remains unknown; note re-keying and later saves preserve it, and frozen v1/v2 recovery completes only original bytes while new v3 intents bind the names. Completes assigned `brwr-srp`. **Metrics:** 10 new regression tests; 968 workspace Rust outcomes (43 IPC skips), 831 scripted-dialog outcomes (53 IPC skips, one ignored doctest), 15 extension files, two script files, 10,696 Markdown renderings; full required/README gate green.
 
@@ -1304,3 +1297,36 @@ stop product work, and no history reset or production IPC change is called for.
   mount. The complete green diff, closed/exported queue and excluded
   `.bosun_commit_msg` remain for the driver; no retry or remote operation was
   attempted. Final queue/current-state consistency and whitespace checks pass.
+
+
+### Historical UUID recovery handoff (2026-10-28)
+
+- Completed assigned `brwr-smu` from a clean opening gate. Both new regression
+  matrices failed before the fix, then passed with 27 restart/recovery cases
+  and six reindex cases. Complete source/test/doc diff reviewed for hash and
+  tail integrity, UUID identity, cache deduplication, legacy renderer reuse,
+  hostile payloads and bounds; no further defect found. The original queued
+  UUID spelling remains necessary for a hash-only intent; never guess an
+  arbitrary spelling or rewrite an authoritative log to recover it.
+- The required and README gates are green: 972 workspace Rust outcomes with
+  43 explicit IPC skips, 835 scripted-dialog outcomes with 53 IPC skips and
+  one ignored doctest, both Clippy configurations, 15 extension files, two
+  script files and 10,696 inert Markdown renderings. The macOS smoke runner
+  refused Linux before browser setup; its three picker responses are unchanged.
+  No live harness, external API or remote Codex review ran; the driver provides
+  independent review and unrestricted IPC verification.
+- Remaining assigned work has external blockers: `brwr-7vf` needs `brwr-b2e`,
+  which needs human-owned `brwr-mff` to add/cache bundled rusqlite; `brwr-iqx`
+  needs operator reconciliation because VaultCheckFinisher no longer exists.
+  Neither assigned item nor any human gate was closed. A later real-SQLite
+  implementation must preserve canonical event IDs and unknown legacy URL
+  provenance when moving away from snapshots.
+- Product direction: existing `brwr-ued` focus sessions and `brwr-ppn` worklog
+  curation remain worthwhile larger steps after assigned/ordered work clears.
+  Show known missing capture alongside worklog sharing (`brwr-9r7`) so a
+  person can distinguish an incomplete record from an uneventful day. Reuse
+  those proposals; another internal recovery/status surface is lower value.
+- The single authorized commit attempt stopped at `git add` because
+  `.git/index.lock` is on a read-only filesystem. No retry or remote command
+  ran. The complete green diff, closed/exported bead and excluded
+  `.bosun_commit_msg` are ready for the driver to commit as Cookie.
