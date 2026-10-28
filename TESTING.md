@@ -30,6 +30,19 @@ reruns the compact-batch/recovery and full-log rejection tests with fixture
 clocks at 23:59:59 and the following midnight in UTC, UTC-12 and UTC+14.
 The midnight batch regression failed before the safe-noon fixture was applied.
 
+## Legacy capture recovery and normalized URL bounds
+
+`capture::tests::over_limit_normalized_urls_complete_v1_intents_before_rejection`
+seeds real v1 intents and torn owned logs with independently reconstructed
+pre-limit bytes. It covers legacy visits and activity page, mode and trail
+URLs expanded by percent encoding, through both single and batch delivery.
+Changed payloads leave the partial bytes intact and remain retryable; the
+original payload completes exactly once. Existing encoded-URL tests keep new
+oversized writes rejected without creating logs or intents, and accept the
+exact 8192-byte boundary. The mixed-batch regression checks that a rejected
+oversized event cannot select the day or block a valid neighbor, in either
+order. All use disposable local directories; no browser or network is used.
+
 ## Summary title extraction
 
 `extension/tests/extract.test.mjs` serializes the real extractor into a fresh
