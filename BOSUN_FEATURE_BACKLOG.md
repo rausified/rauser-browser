@@ -283,9 +283,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   lock, refresh, policy, and store setup, and `capture.rs` has twin
   mode/trail authorization loops. Extract the shared steps and set a removal
   release for the legacy paths.
-- [ ] `brwr-2iz` **Bound `adapter_id_history` inside the 64 KiB config cap.**
-  When it fills, unrelated writes fail with a generic size error. Add a
-  budget, a specific error, and a safe prune, or fold it into `brwr-6x2`.
 - [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
   dated as-built and probe records to `docs/history.md`, and make AGENTS.md
   "Current state" a short table.
@@ -436,6 +433,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Keep retired adapter history within a reserved config budget (2026-10-28).** Completed assigned `brwr-2iz`. History growth now has a 32 KiB pretty-TOML budget inside the 64 KiB config cap. Older larger histories may stay unchanged or shrink, so Pause and disjoint site additions remain available while the file fits. Exact restoration and duplicate pruning reclaim history space without forgetting distinct note identities; budget and whole-file refusals reach settings with specific recovery actions. **Metrics:** 4 new Rust regressions; 940 Rust outcomes (897 exercised, 43 explicit IPC sandbox skips), all 15 extension and 2 script files, full required gate and 10,696 inert Markdown renderings green.
 
 - **Category:** Reliability. **Deliver capture-loss evidence when the last batch drains (2026-10-28).** Completed assigned `brwr-m64`. Overflow arriving during the final native delivery now follows it as a standalone batch without waiting for another capture. A stored ID and frozen count/range survive lost replies, later drops and worker restarts; retries back off, Pause still gates delivery, and the host chooses the owned log only from validated timestamps and the checked home folder. Existing anchored batches keep their recovery bytes. **Metrics:** 3 new worker cases and 4 new Rust regressions; 936 Rust outcomes including existing IPC sandbox skips, all 15 extension and 2 script files, the full required gate and 10,696 inert Markdown renderings green.
 
@@ -1063,3 +1062,38 @@ stop product work, and no history reset or production IPC change is called for.
   and excluded `.bosun_commit_msg` are ready for the driver; no retry or
   remote operation was attempted. Local validation logs are under
   `target/cookie-m64-*`; the worker file contains 87 passing cases.
+
+
+### Cycle observations (2026-10-28 — retired adapter history budget)
+
+- Opening health on `a7ed9437` was clean: no quarantine file or incomplete
+  tree, and every required baseline check passed. Completed first ready
+  assigned item `brwr-2iz`. Continue `bd ready --label assigned`; eleven
+  assigned items remain, including two blocked ones, with `brwr-1g2` next.
+- Plan implemented: a 32 KiB pretty-TOML growth budget, grandfathered legacy
+  histories, actionable typed size refusals through native settings, and
+  pruning limited to exact duplicates and exact active restorations. The
+  adopted state file and all distinct recorded route contracts remain intact.
+- The first store and native regressions failed before implementation. Test
+  iteration caught fixture assumptions: restoring a different same-type ID
+  must precede removing the current one; enough contracts must be restored
+  to get below the history budget before growing it again; active adapters
+  resolve through adapter_match, with note_key_rule reserved for fallback.
+- Reviewed the complete code/test/design diff. Full required and README gate
+  passes: 940 Rust outcomes (897 exercised, 43 explicit IPC skips), all 15
+  extension and 2 script files, and 10,696 inert Markdown renderings. Logs:
+  `target/cookie-2iz-final-*.log`. External Codex review was not invoked because
+  live APIs are forbidden; the driver supplies independent review. macOS
+  headless smoke was not run on Linux; dialog behavior is unchanged.
+- Existing proposal `brwr-cua` is the useful next extension of this work:
+  offer the original recorded rules in an explicit restore review instead of
+  requiring reconstruction in the advanced editor. Reuse that issue rather
+  than create a duplicate. Show history budget separately from total-file
+  space: restoring an adapter frees the first but moves bytes within the
+  second. After assigned and ordered work, curated worklogs (`brwr-ppn`)
+  remain a larger product improvement for sharing only relevant work.
+
+- Commit handoff: the single staging/commit attempt failed creating
+  `.git/index.lock` on the read-only mount. The completed green diff,
+  exported queue and excluded `.bosun_commit_msg` remain for the driver.
+  No retry, push, or remote operation was attempted.

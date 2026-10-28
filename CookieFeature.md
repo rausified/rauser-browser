@@ -360,3 +360,10 @@ races, and recover a torn log append exactly once after restart. All required
 checks pass with 936 Rust outcomes including existing sandbox IPC skips, all
 15 extension files and two script files, plus 10,696 inert Markdown renderings.
 Real macOS smoke remains unverified here. Completes assigned `brwr-m64`.
+
+
+## 2026-10-28 — Keep retired adapter history from crowding out settings
+
+Brauser remembers removed adapters so their pages keep the same notes and cannot silently return under a different artifact identity. That history shares config.toml's 64 KiB limit with ordinary settings. Assigned brwr-2iz now gives growing history its own 32 KiB budget, measured as the pretty TOML actually stored. A legacy history already larger than that can stay unchanged or shrink: pausing capture, changing tracking-parameter settings and adding a disjoint site still work while the whole file fits. A refused retirement explains how to pause without removing adapters or restore exact original rules in Settings, rather than returning a generic save failure.
+
+Pruning removes only exact duplicate history entries or contracts restored as active adapters. A distinct older route remains protected even when another adapter uses the same ID. Restoring moves a contract within the file, so it frees history budget rather than total file space; whole-file pressure instead names history's byte cost and asks to reduce optional metadata or summary vocabulary. The usual revision checks and ID freeze still apply, and no note or vault path changes. Four new Rust regressions cover filled histories, native error replies, rejected-write preservation, restoration and identities after restart. The complete local gate passes with 940 Rust outcomes, including 43 explicit sandbox IPC skips, all extension and script files, and the Markdown renderer corpus. Interactive macOS Chrome checks remain unverified on this Linux VM.
