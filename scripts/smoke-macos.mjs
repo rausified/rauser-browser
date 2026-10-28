@@ -63,6 +63,10 @@ const TASK_REPAIR_PREFIX = "Your previous final message was empty";
 const TASK_CANARY = "SMOKE-TASK-CANARY";
 const TASK_REPORT = "Did the smoke task.\n- Read the page.";
 const TASK_REPORT_START = "Did the smoke task.";
+// A task's fake reply is delayed this long before it completes, so the
+// task bar's "Tasks · 1 running ↗" is reliably observable; every other
+// reply (the setup probe, a summary, a site draft) stays immediate.
+const TASK_REPLY_DELAY_MS = 1_500;
 const EXTENSION_ID_ALPHABET = "abcdefghijklmnop";
 
 function usage() {
@@ -328,6 +332,11 @@ const logInputPath = (prompt) => {
   const found = /^Input file: (.+)$/m.exec(prompt);
   if (found) log({ input_path: found[1] });
 };
+// Whether \`prompt\` is a task turn or its repair, which answer after a
+// short delay (TASK_REPLY_DELAY_MS) rather than at once, so the task bar's
+// "running" count is observable before the task finishes.
+const isTaskPrompt = (prompt) => prompt.startsWith(${JSON.stringify(TASK_PROMPT_START)}) ||
+  prompt.startsWith(${JSON.stringify(TASK_REPAIR_PREFIX)});
 const halves = (text) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
 const args = process.argv.slice(2);
 log({ argv: args, cwd: process.cwd(), env: Object.keys(process.env).sort() });
@@ -359,14 +368,18 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   logInputPath(prompt);
   const answer = reply(prompt);
   if (answer.slow) return;
-  if (answer.fail) {
-    process.stderr.write("fake failure\\n");
-    return notify("turn/completed", { turn: { id: turn, status: "failed", error: { message: "fake failure" } } });
-  }
-  const item = "msg-" + turns;
-  for (const delta of halves(answer.text)) notify("item/agentMessage/delta", { turnId: turn, itemId: item, delta });
-  notify("item/completed", { turnId: turn, item: { type: "agentMessage", id: item, text: answer.text } });
-  notify("turn/completed", { turn: { id: turn, status: "completed", error: null } });
+  const finish = () => {
+    if (answer.fail) {
+      process.stderr.write("fake failure\\n");
+      return notify("turn/completed", { turn: { id: turn, status: "failed", error: { message: "fake failure" } } });
+    }
+    const item = "msg-" + turns;
+    for (const delta of halves(answer.text)) notify("item/agentMessage/delta", { turnId: turn, itemId: item, delta });
+    notify("item/completed", { turnId: turn, item: { type: "agentMessage", id: item, text: answer.text } });
+    notify("turn/completed", { turn: { id: turn, status: "completed", error: null } });
+  };
+  if (isTaskPrompt(prompt)) setTimeout(finish, ${TASK_REPLY_DELAY_MS});
+  else finish();
 });
 `;
 
@@ -393,13 +406,17 @@ process.stdin.on("end", () => {
     setTimeout(() => undefined, 60_000);
     return;
   }
-  for (const text of halves(answer.text)) {
-    line({ type: "stream_event", session_id: ${JSON.stringify(FAKE_SESSION)},
-      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
-  }
-  line({ type: "assistant", session_id: ${JSON.stringify(FAKE_SESSION)},
-    message: { role: "assistant", content: [{ type: "text", text: answer.text }] } });
-  line({ type: "result", subtype: "success", is_error: false, result: answer.text, session_id: ${JSON.stringify(FAKE_SESSION)} });
+  const finish = () => {
+    for (const text of halves(answer.text)) {
+      line({ type: "stream_event", session_id: ${JSON.stringify(FAKE_SESSION)},
+        event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+    }
+    line({ type: "assistant", session_id: ${JSON.stringify(FAKE_SESSION)},
+      message: { role: "assistant", content: [{ type: "text", text: answer.text }] } });
+    line({ type: "result", subtype: "success", is_error: false, result: answer.text, session_id: ${JSON.stringify(FAKE_SESSION)} });
+  };
+  if (isTaskPrompt(prompt)) setTimeout(finish, ${TASK_REPLY_DELAY_MS});
+  else finish();
 });
 `;
 
@@ -586,7 +603,8 @@ class Cdp {
   }
 
   async targetFor(url) {
-    return (await this.targets()).find((target) => target.url === url || target.url.startsWith(`${url}?`)) ?? null;
+    return (await this.targets()).find((target) => target.url === url ||
+      target.url.startsWith(`${url}?`) || target.url.startsWith(`${url}#`)) ?? null;
   }
 
   /** Attach to a target for one operation, then detach. */
@@ -1074,6 +1092,7 @@ async function run() {
   let extensionId = null;
   const panelUrl = () => `chrome-extension://${extensionId}/panel.html`;
   const settingsUrl = () => `chrome-extension://${extensionId}/options.html`;
+  const tasksPageUrl = () => `chrome-extension://${extensionId}/tasks.html`;
 
   async function step(title, action) {
     console.log(`\n${title}`);
@@ -1111,14 +1130,25 @@ async function run() {
     }, { timeout: 60 * 60_000, interval: 500, signal: abort.signal });
   }
 
-  async function onPage(url, action) {
+  async function onPage(url, name, action) {
     const target = await cdp.targetFor(url);
-    requireCondition(target, `${url.endsWith("panel.html") ? "The side panel" : "The settings page"} is not open`);
+    requireCondition(target, `${name} is not open`);
     return cdp.withTarget(target.targetId, action);
   }
 
-  const onPanel = (action) => onPage(panelUrl(), action);
-  const onSettings = (action) => onPage(settingsUrl(), action);
+  const onPanel = (action) => onPage(panelUrl(), "The side panel", action);
+  const onSettings = (action) => onPage(settingsUrl(), "The settings page", action);
+  // The Tasks page's own tab, wherever `#task-open` last sent it (it is
+  // reused, not reopened, so its hash can name any run by the time this
+  // runs — `targetFor`'s `#` case matches it regardless). Activated first:
+  // input events reach only a visible tab, and the page does not poll (or
+  // fetch a task's report) while `document.hidden`.
+  async function onTasksPage(action) {
+    const target = await cdp.targetFor(tasksPageUrl());
+    requireCondition(target, "The Tasks page is not open");
+    await cdp.send("Target.activateTarget", { targetId: target.targetId });
+    return cdp.withTarget(target.targetId, action);
+  }
 
   async function inSettings(action) {
     const target = await cdp.targetFor(settingsUrl());
@@ -2039,12 +2069,37 @@ async function run() {
     }
     const newRuns = async (since) => (await harnessRuns(argvLog)).slice(since).filter((run) => !isVersionCheck(run));
 
-    // The panel's task cards, in the task bar's own area.
-    const taskCards = () => onPanel((page) => page.evaluate(`[...document.querySelectorAll("#task-run-area .run-card")]
-      .map((card) => ({ id: card.dataset.runId, state: card.querySelector(".run-card-state")?.textContent ?? "",
-        instruction: card.querySelector(".run-card-instruction")?.textContent ?? "",
-        report: card.querySelector(".run-card-report")?.textContent ?? "",
-        buttons: [...card.querySelectorAll(".run-card-actions button")].map((button) => button.textContent) }))`));
+    // A task's card lives on the Tasks page now, not in the task bar's own
+    // area: `taskDetail` reads `runId`'s state (the meta line), headline,
+    // report and buttons from its `TaskDetail`, once the Tasks page shows
+    // it selected (`select`).
+    const taskDetail = (runId) => onTasksPage((page) => page.evaluate(`(() => {
+      const detail = document.querySelector(${JSON.stringify(`#tasks-detail .task-detail[data-run-id="${runId}"]`)});
+      if (!detail) return null;
+      return { state: detail.querySelector(".task-detail-meta")?.textContent ?? "",
+        headline: detail.querySelector(".task-detail-instruction")?.textContent ?? "",
+        report: detail.querySelector(".task-detail-report")?.textContent ?? "",
+        buttons: [...detail.querySelectorAll(".run-card-actions button")].map((button) => button.textContent) };
+    })()`));
+    // Selects `runId`'s row on the already-open Tasks page, the way a
+    // person clicks it.
+    const selectTaskRow = (runId) => waitFor(() => onTasksPage((page) => page.click(`#task-row-${runId}`)),
+      { timeout: 20_000, signal: abort.signal });
+    // Resolves once the Tasks page's detail for `runId` shows one of
+    // `states` (matched against the meta line's state segment).
+    const taskDetailIn = (runId, states, timeout = 60_000) => waitUntil(
+      `the Tasks page's detail for run ${runId} to show ${states.join(" or ")}`,
+      () => taskDetail(runId),
+      // Done's report arrives through the detail's own get_run fetch, after
+      // its first render from the list; wait for it too, so a freshly
+      // selected (or just-restored) detail is not read mid-fetch.
+      (shown) => shown !== null && states.some((state) => shown.state.includes(state)) &&
+        (!shown.state.includes("Done") || shown.report !== ""),
+      { timeout, interval: 500, signal: abort.signal, diagnose: async () => {
+        const reply = await getRun(runId);
+        return reply.type === "run_fetched"
+          ? { service: { state: reply.run.state, error_kind: reply.run.error_kind, error: reply.run.error } } : reply;
+      } });
     // Every file in the home folder's content folders and the knowledge
     // base; a task writes none of them.
     const contentFiles = async () => (await Promise.all([
@@ -2073,43 +2128,54 @@ async function run() {
       }), { timeout: 20_000 });
       const listed = await agentRequest({ type: "list_runs" });
       requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
-      const before = new Set([...listed.runs.map((run) => run.run_id), ...(await taskCards()).map((card) => card.id)]);
+      const before = new Set(listed.runs.map((run) => run.run_id));
       const filesBefore = await contentFiles();
       const since = (await harnessRuns(argvLog)).length;
       await onPanel((page) => page.fill("#task-input", instruction));
       await onPanel((page) => page.press("#task-input", "Enter"));
-      const { cards } = await waitUntil("a new task card after Enter", async () => {
-        const [cards, line] = await Promise.all([taskCards(), onPanel((page) => page.evaluate(`(() => {
+      // The task bar shows no card of its own now (DESIGN.md §5.7): Tasks ↗
+      // counts this task while it is the only one running. This is read
+      // over the panel's own live connection, polled tightly, before any
+      // `agentRequest` below: each of those spawns a fresh host process
+      // (hostRequest), which is slow enough under load to miss the running
+      // count entirely if read first.
+      await waitFor(() => onPanel(async (page) => {
+        const line = await page.evaluate(`(() => {
           const line = document.querySelector("#task-run-area .run-line");
           return line ? { text: line.textContent, warning: line.classList.contains("warning") } : null;
-        })()`))]);
+        })()`);
         if (line?.warning) {
           throw Object.assign(new Error(`Enter did not start a task; the panel says: ${line.text}`), { fatal: true });
         }
-        return { cards, line: line?.text ?? null };
-      }, ({ cards: shown }) => shown.some((card) => !before.has(card.id)), { timeout: 30_000, signal: abort.signal });
-      const fresh = cards.filter((card) => !before.has(card.id));
-      requireCondition(fresh.length === 1, `Enter showed ${fresh.length} new task cards: ${JSON.stringify(fresh)}`);
-      const runId = fresh[0].id;
+        const label = await page.text("#task-open");
+        requireCondition(label === "Tasks · 1 running ↗", `The Tasks button: ${label}`);
+      }), { timeout: 10_000, interval: 20 });
       requireCondition(await fieldValue("task-input") === "", "The task bar still holds the instruction");
-      const { card } = await waitUntil(`the task card for run ${runId} to show Done`,
-        async () => ({ card: (await taskCards()).find((candidate) => candidate.id === runId) ?? null }),
-        ({ card: shown }) => shown !== null && ["Done", "Failed", "Canceled"].some((state) => shown.state.startsWith(state)),
-        { timeout: 60_000, interval: 500, signal: abort.signal, diagnose: async () => {
-          const reply = await getRun(runId);
-          return reply.type === "run_fetched"
-            ? { service: { state: reply.run.state, error_kind: reply.run.error_kind, error: reply.run.error } } : reply;
-        } });
-      requireCondition(card.state.startsWith("Done"), `The task card says: ${card.state}`);
-      requireCondition(card.report === TASK_REPORT, `The task card's report: ${JSON.stringify(card.report)}`);
-      requireCondition(card.instruction === instruction, `The task card's headline: ${card.instruction}`);
-      requireCondition(card.buttons.includes("Copy report") && !card.buttons.includes("Retry save"),
-        `The task card offers ${JSON.stringify(card.buttons)}`);
+      const listedNow = await agentRequest({ type: "list_runs" });
+      requireCondition(listedNow.type === "runs_listed", `list_runs answered ${JSON.stringify(listedNow)}`);
+      const fresh = listedNow.runs.map((run) => run.run_id).filter((id) => !before.has(id));
+      requireCondition(fresh.length === 1, `Enter started ${fresh.length} new runs: ${JSON.stringify(fresh)}`);
+      const runId = fresh[0];
+      // Tasks ↗ opens the Tasks page on it, where its state, report,
+      // headline and buttons are read instead of `#task-run-area .run-card`.
+      await onPanel((page) => page.click("#task-open"));
+      const detail = await taskDetailIn(runId, ["Done", "Failed", "Canceled"]);
+      requireCondition(detail.state.includes("Done"), `The Tasks page's state for ${runId}: ${detail.state}`);
+      requireCondition(detail.report === TASK_REPORT, `The Tasks page's report: ${JSON.stringify(detail.report)}`);
+      requireCondition(detail.headline === instruction, `The Tasks page's headline: ${detail.headline}`);
+      // Copy appears only on a failed task; a succeeded one offers Copy report.
+      requireCondition(detail.buttons.includes("Copy report") && !detail.buttons.includes("Copy"),
+        `The Tasks page offers ${JSON.stringify(detail.buttons)}`);
       requireCondition(!(await runCards()).some((summary) => summary.id === runId), "The task also shows as a summary card");
       await waitFor(() => onPanel(async (page) => {
         const said = await page.text("#task-announce");
         requireCondition(said?.startsWith("Task done: "), `The task announcement: ${said}`);
       }), { timeout: 10_000 });
+      // Back to Tasks ↗ once nothing is running.
+      await waitFor(() => onPanel(async (page) => {
+        const label = await page.text("#task-open");
+        requireCondition(label === "Tasks ↗", `The Tasks button: ${label}`);
+      }), { timeout: 20_000 });
 
       const { run } = await getRun(runId);
       requireCondition(run?.kind === "task" && run.harness === harness && run.state === "succeeded" &&
@@ -2144,6 +2210,9 @@ async function run() {
       const filesAfter = await contentFiles();
       const added = filesAfter.filter((file) => !filesBefore.includes(file));
       requireCondition(added.length === 0, `The task wrote ${JSON.stringify(added)}`);
+      // Tasks ↗ activated its own tab; later steps assume the article tab
+      // (and the panel following it) is still the active one.
+      await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
       return runId;
     }
     const anyArgvHasArticle = (runs) => runs.some((run) => run.argv.some((arg) => arg.includes(articleText(caseId))));
@@ -2447,15 +2516,14 @@ async function run() {
         }, { timeout: 20_000, signal: abort.signal });
         requireCondition(card.state.startsWith("Summarized") && /Importance: high/.test(card.answer),
           `The restored Codex card: ${JSON.stringify(card)}`);
-        // Task cards come back in the task bar's area, with their reports.
-        await waitFor(async () => {
-          const shown = await taskCards();
-          for (const id of Object.values(taskRunIds)) {
-            const task = shown.find((candidate) => candidate.id === id);
-            requireCondition(task?.state.startsWith("Done") && task.report === TASK_REPORT,
-              `The restored task card ${id}: ${JSON.stringify(task ?? null)}`);
-          }
-        }, { timeout: 20_000, signal: abort.signal });
+        // Finished tasks keep their state and report on the Tasks page,
+        // which lists every run from the service directly rather than
+        // restoring cards into the panel's task bar.
+        for (const id of Object.values(taskRunIds)) {
+          await selectTaskRow(id);
+          const task = await taskDetailIn(id, ["Done"], 20_000);
+          requireCondition(task.report === TASK_REPORT, `The Tasks page's report for ${id}: ${JSON.stringify(task)}`);
+        }
       });
 
       await step("list_runs shows every run", async () => {

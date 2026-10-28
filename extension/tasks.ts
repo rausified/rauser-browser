@@ -326,6 +326,21 @@ function selectFromHash(): void {
   else clearDetail();
 }
 
+/** Keeps the selection in step with the hash after a list refresh: picks
+ * one when nothing is selected yet, and also follows the hash on to a
+ * run it now shows that it did not before (`#task-open` sending the page
+ * to a run started after its last list, while it was already open on an
+ * earlier one — the `hashchange` listener below tries this once too, but
+ * a same-document navigation does not reliably fire that event). */
+function syncSelectionToHash(): void {
+  if (selectedId === null) {
+    selectFromHash();
+    return;
+  }
+  const wanted = parseRunHash(location.hash);
+  if (wanted !== null && wanted !== selectedId && runs.some((run) => run.run_id === wanted)) select(wanted);
+}
+
 function taskChanged(run: RunView): void {
   runs = mergeRuns(runs, [run]);
   // Finishing moves a row out of Running (and maybe out of the filter);
@@ -368,7 +383,7 @@ async function refresh(): Promise<void> {
     runs = mergeRuns(runs, tasksOnly(page.runs));
     if (!statusBox.hidden && statusBox.className === "setup-warning") showStatus(null);
     renderList();
-    if (selectedId === null) selectFromHash();
+    syncSelectionToHash();
   } catch (error) {
     if (!closed) showListError(error);
   } finally {
