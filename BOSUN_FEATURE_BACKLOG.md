@@ -352,28 +352,16 @@ shipped (see Shipped).
   reloads after a failed load (note-editor.ts ~127), so the editor keeps the
   old record key and the next autosave gets `key_changed`. Reload the note
   when the config revision changed.
-- [ ] `brwr-gob` **The pending-pause Why hint names a disabled button.**
-  `whyPausedReason` (extension/panel.ts ~294) says "Use Pause capture" while
-  `updateControls` (~406) disables it because the host is unreachable.
-- [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
-  the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
-  rejects format 0 or more than 64 adapters, which the host returns with
-  `adapter_issue` set, so the repair prompt is unreachable.
 - [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
-  host/src/service/supervisor.rs ~116/~119; use `server::NOT_CONFIGURED`.
-- [ ] `brwr-ufa` **Why still saves on a site whose removal is pending.**
-  `whyPausedReason`/`whySaveBlocked` (extension/panel.ts ~289-310) ignore
-  `pending_removals`, which the panel's own warning (~448) calls off.
+  Original report: host/src/service/supervisor.rs ~116/~119; use
+  `server::NOT_CONFIGURED`. **2026-10-28 triage:** the named type and wording
+  have been removed; SummaryFinisher already names settings and Retry save,
+  covered by its missing-folder test. Bead stays open to reconcile criteria.
 - [ ] `brwr-t8m` **Capture Site promises a save that retired adapter history
   will refuse.** `planCaptureSite` (extension/capture-site.ts ~35) cannot see
   `[[adapter_id_history]]`, so the host's frozen-ID check (host/src/config.rs
   `validate_adapter_transition_with_history` ~2105) fails at commit. Re-check
   against #85's retired-contract recording first.
-- [ ] `brwr-rft` **Coalesced activity keeps the old title's refs.**
-  `coalesceActivity` (extension/worker.ts ~285/~295) unions refs while taking
-  the newer title, so the host rejects it with `activity_refs_mismatch`; keep
-  the winning title's refs as activity.ts (~177) does.
-
 ### Cookie's own proposals (only after the plan work above)
 
 - [ ] `brwr-kws` **Review recovered note copies individually.** Let a person
@@ -456,6 +444,11 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Keep adapter repair available for preserved invalid configs (2026-10-28).** Completed assigned `brwr-5nq`. The response guard accepts format 0 and more than 64 artifact objects so the host's policy issue and revision reach settings. Repair reset remains available; malformed artifact entries are refused and the adapter engine still rejects these documents as new policy. **Metrics:** Three shared host-reply cases, two failing-first cases; 884 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files green.
+- **Category:** User Experience. **Explain pending pauses when the host cannot answer (2026-10-28).** Completed assigned `brwr-gob`. The Why hint names Pause capture only when it is usable, explains a host outage and asks to reopen the panel, and restores the normal hint when the host returns. The reload status avoids retaining a pointer to a control that can later be disabled. **Metrics:** One failing-first panel regression covers outage and recovery; full required gate green, plus 10,696 inert Markdown renderings.
+- **Category:** Bug Fix. **Keep Why context off sites awaiting removal (2026-10-28).** Completed assigned `brwr-ufa`. Both Save and its handler refuse Why entries for this page's pending-removal origin and point to settings, preserving the typed draft. Pending removal of a different origin leaves Save available. **Metrics:** One failing-first panel regression and one other-origin control; all 15 extension test files pass, full Rust gate green.
+- **Category:** Bug Fix. **Keep coalesced activity refs with their title evidence (2026-10-28).** Completed assigned `brwr-rft`. Under queue pressure, a new title replaces the previous title's refs rather than accumulating evidence the host would reject. A missing new title retains the older title and refs, and retained refs stay deduplicated and bounded. **Metrics:** One failing-first worker case and three controls; 884 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files green.
 
 - **Category:** Bug Fix. **Describe capture and unreadable tabs accurately (2026-10-28).** Completed assigned `brwr-09c`. The enabled status reuses the settings wording about sites with adapters, including with no adapters configured. Chrome pages and tabs hidden by withdrawn access clear the artifact verdict and old card; readable unrecognized pages still say Not an artifact. **Metrics:** Four failing-first panel regressions pass; full local gate green, 883 exercised Rust tests and 43 explicit IPC skips, all 15 extension and two script files passing.
 - **Category:** Bug Fix. **Refresh artifact totals when the host reconnects (2026-10-28).** Completed assigned `brwr-b50`. A successful note autosave after an outage now refreshes the current artifact and clears the disconnected status while retaining an unsaved context draft. Ordinary subsequent saves send no extra artifact lookup. **Metrics:** One failing-first composed panel regression passes; full local gate green and all nine new panel cases pass.
@@ -890,3 +883,38 @@ stop product work, and no history reset or production IPC change is called for.
 - The single commit attempt was refused at `git add` because `.git/index.lock`
   is on the read-only Git mount. The complete green diff and excluded
   `.bosun_commit_msg` remain for the driver; no retry or remote action occurred.
+
+
+### Cycle observations (2026-10-28 — assigned repair and capture-state batch)
+
+- Clean opening health on `20b512161dad`, no quarantine report or unfinished
+  diff. Completed `brwr-5nq`, `brwr-gob`, `brwr-ufa` and `brwr-rft` after
+  reproducing each with a failing test. No human gate or assignment label was
+  changed. The next assigned implementation work remains `brwr-jdi` and
+  `brwr-t8m`; keep using `bd ready --label assigned`.
+- `brwr-iqx` remains open with triage evidence: `VaultCheckFinisher` and its
+  obsolete confirmation wording no longer exist. `SummaryFinisher` already
+  says to choose a notes folder in settings and Retry save, covered by
+  `a_config_that_needs_repair_or_has_no_folder_names_the_fix`. Reconcile its
+  original criteria against this replacement before claiming another fix.
+- Final gate: 927 reported Rust outcomes (884 exercised, 43 explicit sandbox
+  IPC skips), all 15 extension and two script files, plus 10,696 inert
+  Markdown renderings. Added ten extension cases and one Rust fixture check.
+  Detailed failing-first, final and review evidence is in
+  `target/cookie-assigned-20261028/`; headless smoke refuses Linux.
+- Read the complete code/test diff and fixtures manually. The one additional
+  review repair avoids a disabled Pause capture pointer while the panel is
+  busy or needs config repair. No real harness or external Codex review was
+  invoked under the no-live-API rule; the driver's independent reviewer
+  remains required. Shared host wire fixtures preserve the distinction
+  between reading an inert document and validating policy to enable.
+- Product direction after assigned work: the existing `brwr-ppn` curated
+  worklog remains more useful than another status view. Let someone select
+  cross-tool work and add purpose before copying a standup update, retaining
+  the measured history. Existing `brwr-vny` can explain an unrecognized page
+  using the actual policy reason and lead directly into Capture Site.
+
+- Commit handoff: the single git add/commit attempt could not create
+  `.git/index.lock` on the read-only mount. The reviewed green diff and
+  excluded `.bosun_commit_msg` are ready for the driver; no retry or remote
+  action was attempted.

@@ -344,6 +344,9 @@ function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
     merged.focused_seconds + event.focused_seconds);
   merged.background_seconds = Math.min(7_200,
     merged.background_seconds + event.background_seconds);
+  // Refs must come from the title we keep: the host re-evaluates that
+  // evidence, so refs from an older title would reject the entire hour.
+  const refs = event.title !== null ? event.refs : merged.refs;
   merged.title = event.title ?? merged.title;
   merged.url = event.url;
   merged.modes = [...merged.modes, ...event.modes]
@@ -354,7 +357,7 @@ function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
       other.transition === trail.transition &&
       other.from_artifact_id === trail.from_artifact_id && other.from_url === trail.from_url) === index)
     .slice(0, 10);
-  merged.refs = [...merged.refs, ...event.refs]
+  merged.refs = refs
     .filter((ref, index, all) => all.findIndex((other) =>
       other.artifact_type === ref.artifact_type && other.value === ref.value) === index).slice(0, 20);
   const before = existing.event;

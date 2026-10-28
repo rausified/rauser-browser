@@ -3285,3 +3285,57 @@ for (const action of [null, "dismiss-notices", "pause-capture", "discard-pending
     assert.equal(page.sent("get_artifact").length, before + 1, "unchanged delivery generation does not refresh");
   });
 }
+
+test("pending-pause hints never point at Pause capture while the host is unavailable", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING,
+    workerStatus: { pause_pending: true }, intercept: withStoredWhy,
+  });
+  await noteLoaded(page);
+  await settle();
+  assert.equal(page.el("pause-capture").disabled, false);
+  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture/);
+  page.hostExits();
+  page.state.hostDead = true;
+  page.titleChanged("A (1)");
+  await settle();
+  page.titleChanged("A (2)");
+  await until(() => page.el("pause-capture").disabled, "the host outage");
+  for (const id of ["why-paused-hint", "status"]) {
+    assert.doesNotMatch(page.el(id).textContent, /Use Pause capture/);
+  }
+  assert.match(page.el("why-paused-hint").textContent, /host.*unavailable/i);
+  typeWhy(page, "keep this draft");
+  page.el("save-why").dispatch("click");
+  await settle();
+  assert.equal(page.sent("record_why").length, 0);
+  assert.doesNotMatch(page.el("status").textContent, /Use Pause capture/);
+  page.state.hostDead = false;
+  page.followLink("https://docs.example/a?view=1", "A");
+  await until(() => page.el("pause-capture").disabled === false, "the host to answer again");
+  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture/);
+});
+
+for (const pendingOrigin of ["https://docs.example", "https://other.example"]) {
+  test(`Why saves respect this page's pending removal: ${pendingOrigin}`, async () => {
+    const page = await install({
+      tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING,
+      workerStatus: { pending_removals: [pendingOrigin] }, intercept: withStoredWhy,
+    });
+    await noteLoaded(page);
+    await settle();
+    typeWhy(page, "my context draft");
+    const blocked = pendingOrigin === "https://docs.example";
+    assert.equal(page.el("save-why").disabled, blocked);
+    if (blocked) {
+      assert.equal(page.el("why-paused-hint").hidden, false);
+      assert.match(page.el("why-paused-hint").textContent, /settings/i);
+      assert.match(page.el("why-paused-hint").textContent, /remov/i);
+    }
+    // Exercise the handler guard as well as disabled-button presentation.
+    page.el("save-why").dispatch("click");
+    await settle();
+    assert.equal(page.sent("record_why").length, blocked ? 0 : 1);
+    if (blocked) assert.equal(page.el("artifact-why").value, "my context draft");
+  });
+}
