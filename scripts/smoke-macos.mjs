@@ -2297,7 +2297,7 @@ async function run() {
           review.rules[1].text.includes("/kb/print/") &&
           review.rules[1].text.includes("suggested by AI: no page you visited or linked here matches it"),
         `The AI review's rules: ${JSON.stringify(review.rules)}`);
-        requireCondition(review.dropped.length === 1 && review.dropped[0].startsWith(`A drafted ${FAKE_SITE_DRAFT_TYPE} rule: `),
+        requireCondition(review.dropped.length === 1 && review.dropped[0].startsWith("A drafted rule: "),
           `The AI review's "won't capture" list: ${JSON.stringify(review.dropped)}`);
         requireCondition(review.basic, "Use basic draft is not offered");
 

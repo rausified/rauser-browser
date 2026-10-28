@@ -3739,7 +3739,7 @@ test("a succeeded run re-renders the review from draft_site with run_id and mark
   assert.equal(page.el("capture-site-drafter").textContent, "Improved with AI (Codex), checked by Brauser");
   assert.match(draftText(page), /Pages like \/docs\/<number>/);
   assert.doesNotMatch(draftText(page), /wiki\.space/, "the agent draft replaced the basic one");
-  assert.match(page.el("capture-site-dropped").textContent, /A drafted wiki\.pages rule: /);
+  assert.match(page.el("capture-site-dropped").textContent, /A drafted rule: /);
   assert.equal(page.el("capture-site-basic").hidden, false);
   assert.equal(page.el("capture-site-improve").hidden, true);
   assert.equal(page.el("capture-site-agent-run").children.length, 0, "the finished progress goes");
@@ -3752,6 +3752,22 @@ test("a succeeded run re-renders the review from draft_site with run_id and mark
   claude.el("capture-site-improve").click();
   await improved(claude);
   assert.equal(claude.el("capture-site-drafter").textContent, "Improved with AI (Claude Code), checked by Brauser");
+});
+
+test("an agent drop row never names a kind by its answer index", async () => {
+  // The agent's table 0 (/search/{n}) was refused whole and table 1 kept:
+  // the host's adapters hold only table 1, and the drop names table 0.
+  const page = await agentReview(WIKI_URL, {
+    judge: () => ({
+      ...agentDraft(),
+      dropped: [{ shape: null, adapter: 0, rule: null, reason: "draft_search_capture" }],
+    }),
+  });
+  page.el("capture-site-improve").click();
+  await improved(page);
+  const dropped = page.el("capture-site-dropped").textContent;
+  assert.doesNotMatch(dropped, /wiki\.pages/, "the surviving kind is not blamed");
+  assert.match(dropped, /A drafted rule: /);
 });
 
 test("the review renders only the host's site_drafted, never the run's raw answer", async () => {

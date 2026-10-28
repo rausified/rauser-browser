@@ -527,7 +527,11 @@ export class CaptureSitePanel {
       child(this.dropped, "p", "Brauser won't capture:");
       const list = child(this.dropped, "ul", "", "plain-list");
       for (const row of draft.dropped) {
-        const type = row.adapter === null ? undefined : draft.adapters[row.adapter]?.adapter.type;
+        // An agent drop's `adapter` indexes the agent's answer, not
+        // `adapters`, so only a structural row may name its kind.
+        const type = row.adapter === null || draft.drafter === "agent"
+          ? undefined
+          : draft.adapters[row.adapter]?.adapter.type;
         const subject = row.shape ?? (typeof type === "string" ? `A drafted ${type} rule` : "A drafted rule");
         child(list, "li", `${subject}: ${DROP_REASONS[row.reason]}`);
       }
