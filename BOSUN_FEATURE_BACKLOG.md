@@ -489,6 +489,8 @@ were folded into `brwr-q7e` above rather than given their own item.
   Capture Site must keep working with no agent configured.
 
 - In progress in the Columbus session, not Cookie. Cookie must not claim these:
+- [ ] `brwr-smr` **Make the smoke's Summarize & log run-card step deterministic under load (P1).**
+  Not covered by #130: "timed out waiting for a new run card" under load.
 
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
