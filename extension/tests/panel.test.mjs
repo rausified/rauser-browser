@@ -1264,6 +1264,47 @@ test("the advanced handoff stores only the drafted adapters and shapes for 30 mi
   assert.deepEqual(sentAfter(page, page.from), ["draft_site"]);
 });
 
+test("the advanced handoff with no valid plan keeps only checked rules", async () => {
+  const { canonicalJson } = await import("../dist/capture-site-handoff.js");
+  // Pending scope left unchosen, so the review has no plan; one rule is
+  // link-only and one adapter is token-only, both unchecked by the host.
+  const linear = linearDraft();
+  linear.adapters[0].adapter.match.push({ path: "/{workspace:name|lower}/project/{key:jira_key}" });
+  linear.adapters[0].rules.push(draftRule(1, "https://linear.app/example/project/ABC-123",
+    { checked: false, unchecked_reason: "link_only", visited: 0, links: 3 }));
+  linear.adapters.push({
+    adapter: { type: "linear.doc", origin: "https://linear.app", match: [{ path: "/{workspace:name|lower}/document/{id:token}" }], id: "linear.doc:{host}/{workspace}/{id}" },
+    scope: "pending", tenant: { segment: 0, capture: "workspace" },
+    rules: [draftRule(0, "https://linear.app/example/document/a1b2", { checked: false, unchecked_reason: "token_only" })],
+  });
+  const page = await draftReview(LINEAR_URL, { draft: () => linear,
+    script: async () => ({ current: "/{slug}/issue/{key}", links: [] }) });
+  await drafted(page);
+  assert.equal(page.el("capture-site-save").disabled, true, "scope is still pending");
+  page.el("capture-site-advanced").click();
+  await until(() => page.state.created.length === 1, "advanced settings to open");
+  const [key] = [...page.state.session.keys()].filter((name) => name.startsWith("captureSiteDraft:"));
+  const entry = page.state.session.get(key);
+  const issue = { ...linear.adapters[0].adapter, match: [linear.adapters[0].adapter.match[0]] };
+  assert.deepEqual(entry.adapters, [issue]);
+  assert.deepEqual(entry.baseline_rules, [issue.match.map(canonicalJson)]);
+  assert.doesNotMatch(JSON.stringify(entry), /project|document/);
+});
+
+test("with every rule unchecked the advanced handoff holds no drafted rule", async () => {
+  const page = await draftReview();
+  await drafted(page);
+  ruleBox(page, 0, 0).checked = false;
+  ruleBox(page, 0, 0).dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
+  page.el("capture-site-advanced").click();
+  await until(() => page.state.created.length === 1, "advanced settings to open");
+  const [key] = [...page.state.session.keys()].filter((name) => name.startsWith("captureSiteDraft:"));
+  const entry = page.state.session.get(key);
+  assert.deepEqual(entry.adapters, []);
+  assert.deepEqual(entry.baseline_rules, []);
+});
+
 test("the tab title is shown only in the review and never sent to the drafter", async () => {
   const title = "Secret Launch Plan · Acme Wiki";
   const page = await draftReview(WIKI_URL, { title });

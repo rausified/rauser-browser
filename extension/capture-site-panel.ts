@@ -470,9 +470,11 @@ export class CaptureSitePanel {
   /**
    * Hand the draft to the settings page's adapter editor. The entry holds
    * the reviewed selection's checked tables with its chosen scope (or, when
-   * the review is not yet complete, the drafted tables as they came), and
-   * the private shapes. It never holds a raw URL, a link href, the tab title
-   * or the title ending typed from it. The review then closes.
+   * the review is not yet complete, the drafted tables with only their
+   * checked rules, so a link-only or loose rule the user never checked is
+   * never handed off as drafted), and the private shapes. It never holds a
+   * raw URL, a link href, the tab title or the title ending typed from it.
+   * The review then closes.
    */
   private async openAdvanced(): Promise<void> {
     const target = this.target;
@@ -489,7 +491,7 @@ export class CaptureSitePanel {
         delete table.title;
         return table;
       })
-      : draft.adapters.map((view) => view.adapter);
+      : this.checkedDraftTables(draft);
     const entry = draftHandoff(crypto.randomUUID(), target.origin, adapters, input.visited, input.links, Date.now());
     try {
       await storeDraftHandoff(chrome.storage.session, entry);
@@ -499,6 +501,20 @@ export class CaptureSitePanel {
       await chrome.storage.session.remove?.(handoffKey(entry.id)).catch(() => undefined);
       this.actions.show(`Could not open advanced settings: ${describe(error)}`, true);
     }
+  }
+
+  /** The drafted tables as they came, with only the rules whose boxes are
+   * checked, and no adapter whose rules are all unchecked. */
+  private checkedDraftTables(draft: SiteDrafted): Record<string, unknown>[] {
+    const checked = this.draftViews.map((view) => view.rules.map((box) => box.checked));
+    const tables: Record<string, unknown>[] = [];
+    for (const [a, view] of draft.adapters.entries()) {
+      const match = Array.isArray(view.adapter.match) ? view.adapter.match as unknown[] : [];
+      const kept = view.rules.filter((entry, r) => checked[a]?.[r] === true && entry.rule < match.length);
+      if (!kept.length) continue;
+      tables.push({ ...structuredClone(view.adapter), match: kept.map((entry) => structuredClone(match[entry.rule])) });
+    }
+    return tables;
   }
 
   private selection(): DraftSelection {
