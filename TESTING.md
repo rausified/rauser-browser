@@ -61,6 +61,22 @@ the completed intent without touching the old log, and capture continues in
 the new folder. The interruption seam is compiled only into unit tests. All
 use disposable local directories; no browser or network is used.
 
+## Single-event recovery across renderer upgrades
+
+`cargo test --locked -p brauser capture::tests` includes independently prepared
+historical prose with unchanged machine markers in real v2 journals. A restart
+recovers a tail torn inside a multibyte character through both single and batch
+delivery, preserving unrelated rows and deduplicating completed markers. Changes
+past the title display limit, a different selected root, and edited tails are
+refused without writes. Why and summary fixtures cover the same prepared-byte
+path, including summary path changes before and after marker completion.
+Missing fields, bad hashes, unknown versions, corrupt bytes and oversized
+journals/entries leave logs intact. An activity at all field bounds, with
+JSON-escaped control characters, verifies the 512 KiB entry and 1 MiB journal
+budgets. Existing pre-sanitizer and normalized-URL fixtures explicitly retain
+v1 hash-only journals, so new fixtures cannot silently replace legacy coverage.
+All use disposable directories and no browser, network or user configuration.
+
 ## Standalone overflow delivery
 
 `extension/tests/worker.test.mjs` fills the byte-capped queue with one final

@@ -286,11 +286,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
   dated as-built and probe records to `docs/history.md`, and make AGENTS.md
   "Current state" a short table.
-- [ ] `brwr-3cc` **Preserve single-event recovery across presentation changes.**
-  Legacy intents retain a rendered-entry hash rather than prepared bytes.
-  Independent review added exact-hash compatibility for this sanitizer
-  upgrade; future rendering changes still need recovery independent of the
-  renderer, with the same integrity checks. Compact batches retain their bytes.
 
 - [ ] `brwr-3rt` **Isolate scripted host lifecycle tests on Windows.** Add a
   debug-only disposable config-path seam before running host-kill tests on
@@ -303,7 +298,8 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   Moving them to `markdown::inline` needs a second frozen renderer generation
   so intent-journal recovery (`pre_sanitizer_entry`) still matches lines
   journaled byte-exact in the old form. DESIGN.md §5.2 and spec §7.1 record
-  the gap. From Lane E / PR 4; related to `brwr-3cc`.
+  the gap. From Lane E / PR 4. New v2 intents now retain prepared bytes;
+  the second frozen generation is still needed for older hash-only intents.
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
@@ -427,6 +423,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Reliability. **Recover interrupted log entries across renderer upgrades (2026-10-28).** Completed assigned `brwr-3cc`. New single-event journals retain bounded prepared bytes plus a hash of unrendered normalized event fields, so visits, activity, Why and summaries resume the original append after presentation changes. Single and batch retries preserve edited tails, unrelated rows, changed-folder refusals and complete-marker deduplication; v1 frozen-renderer recovery remains covered explicitly. **Metrics:** Four new Rust regressions; 52 capture tests and 923 workspace Rust outcomes (43 explicit IPC sandbox skips), all 15 extension and two script files, full required/README gate and 10,696 inert Markdown renderings green.
 
 - **Category:** New Capability. **Show recorded incoming navigation on artifact cards (2026-10-28).** Completed assigned `brwr-1g2`. The card lists up to five host-derived source/transition pairs with explicit HTTP(S) links, measured navigation wording and the latest recorded day. Repeated observations stay one row; unresolved, self, back/forward and unknown historical sources never invent provenance. Protocol v8 carries the required list without changing logs or cache formats. **Metrics:** 4 new Rust and 2 composed-panel regressions; 944 Rust outcomes (901 exercised, 43 explicit IPC sandbox skips), 1,680 extension tests, the complete required/README gate and 10,696 inert Markdown renderings green.
 
@@ -1131,3 +1129,31 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` on the read-only mount. The complete green changes,
   exported queue, cycle log and excluded `.bosun_commit_msg` are ready for
   the driver. No commit retry or remote operation was attempted.
+
+
+### Cycle observations (2026-10-28 — single-event prepared recovery)
+
+- Health started clean at `ba8ee6b3`, with no quarantine and a clean working
+  tree; all required baseline checks passed. Completed first ready assigned
+  `brwr-3cc`, with the new-format regression failing first against version 1.
+- Prepared bytes are bounded per journal (512 KiB entry, 1 MiB JSON), not a
+  global retention policy. Journals remain the event-ID authority as before;
+  future cleanup must not forget duplicate IDs. The raw payload hash includes
+  text past display truncation and shares one fixed tuple across delivery paths.
+- Old v1 intents have no prepared bytes to recover from: only exact known
+  renderings may complete them. `brwr-2za` still needs the second frozen
+  generation when daily-log escaping changes; this task does not close it.
+- Full diff reviewed locally, including the version-specific legacy fixtures.
+  Full required and README gates passed: 923 Rust outcomes, including 43
+  explicit IPC sandbox skips, all 15 extension files, two script files, and
+  10,696 inert Markdown renderings. No remote Codex review was invoked under
+  the no-live-API constraint; the driver supplies independent review. macOS
+  headless smoke remains unavailable on this Linux VM; no browser/UI changes.
+- Continue `bd ready --label assigned`; `brwr-r88` is next. Read-only viewing
+  of ambiguous preserved notes and explaining skipped capture (`brwr-vny`)
+  remain useful visible improvements already queued; no duplicate proposal
+  or new robustness task is needed while assigned work remains.
+- The single commit attempt failed at `git add` because `.git/index.lock`
+  cannot be created on this read-only mount. No retry or remote operation:
+  the completed green diff, closed/exported bead and excluded
+  `.bosun_commit_msg` are ready for the driver.

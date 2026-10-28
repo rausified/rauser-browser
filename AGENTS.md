@@ -271,6 +271,14 @@ contents on a container's card. Downgrading after adding repositories is
 unsupported: older hosts reject `within` in the adapter config and in adapter
 history.
 
+Single-event recovery (`brwr-3cc`, 2026-10-28): new per-event intents use
+format 2 with prepared bytes (512 KiB cap), their hash and a renderer-independent
+payload hash; the full JSON journal is capped at 1 MiB. Single and batch
+retries check that identity and exact torn bytes before resuming. V1 hash-only
+intents retain frozen pre-sanitizer recovery; never remove that compatibility
+when changing presentation. Complete visit markers still deduplicate by ID;
+summary retries require the same payload and selected folder too.
+
 Incoming navigation (`brwr-1g2`, 2026-10-28): protocol version 8 adds required
 `ArtifactView.incoming_trails`, up to five host-derived source/transition pairs
 ordered by latest recorded local day, then source ID and transition. The panel

@@ -376,3 +376,25 @@ A ticket's artifact card can now show which recorded pull request, document or o
 The host derives the list from existing trail edges and known source artifacts. Missing sources, self links, back/forward and unknown historical transitions produce no explanation, and mentions, containment and co-focus cannot become navigation evidence. An empty list says that no known incoming source was recorded. Source titles render only as text, links accept HTTP(S) only and use noopener/noreferrer, and following another page clears the old list. Protocol v8 adds a required incoming_trails field, so rebuild the host and extension together; logs, cache formats and collection behavior stay the same.
 
 Completes assigned brwr-1g2. Four new Rust regressions and two composed-panel cases cover native validation, the list cap and ordering, reindex, unknown legacy transitions, hostile titles, unsafe schemes and activating a local source fixture. All 1,680 extension cases pass individually, and the full required and README gate passes with 944 Rust outcomes (901 exercised and 43 explicit sandbox IPC skips), both script files and 10,696 inert Markdown renderings. The first feature gate found old protocol-version fixtures; those were corrected and the entire gate rerun successfully. The fake panel DOM simulates source-tab activation; actual Chrome anchor opening remains unverified on this Linux VM.
+
+
+## 2026-10-28 — Recover interrupted log entries across presentation upgrades
+
+Brauser can now finish a partially written single-event log entry after a new
+version changes how titles or context are displayed. Previously those journals
+kept only a hash of the rendered line, so recovery depended on reconstructing
+exactly the older renderer. New version-2 journals retain the host's prepared
+append, its hash and a separate identity hash of the normalized event fields.
+After a restart, the same event can finish those original bytes through either
+the older single-event delivery or the current worker's batch delivery. The
+shared path covers visits, activity, explicit Why context and summary events.
+
+Recovery checks the payload and exact torn tail before appending and preserves
+unrelated log rows. A different selected folder, changed payload, edited tail,
+corrupt journal or exceeded size limit refuses the write. Completed visit
+markers still deduplicate; summaries also keep their exact path/key and folder
+checks. Prepared entries are capped at 512 KiB and their serialized journals
+at 1 MiB, with a maximum-field activity fixture checking those budgets. Older
+v1 journals retain the frozen-renderer compatibility, and unknown historical
+renderings still need manual repair rather than a guessed append. Four new
+regressions pass alongside the full local gate. No live service was touched.
