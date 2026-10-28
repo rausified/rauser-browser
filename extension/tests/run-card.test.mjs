@@ -4,8 +4,8 @@ import test, { mock } from "node:test";
 // Run after build:extension. The run card gets a fake DOM, a scripted host,
 // and mocked timers, so each poll happens when a test ticks the clock.
 const {
-  MAX_RESTORED_FINISHED, POLL_MS, RESTORE_FINISHED_WITHIN_MS, RunCards, answerLine, elapsedText,
-  markRunsMayExist, restorable, restoreRunCards, resumeCommand, runsMayExist, stateText,
+  MAX_RESTORED_FINISHED, POLL_MS, RESTORE_FINISHED_WITHIN_MS, RunCards, answerLine, dismissedIds, elapsedText,
+  markRunsMayExist, rememberDismissed, restorable, restoreRunCards, resumeCommand, runsMayExist, stateText,
 } = await import("../dist/run-card.js");
 const { HostError } = await import("../dist/native.js");
 const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
@@ -407,18 +407,29 @@ test("restore shows in-flight runs and at most 5 recent finished, skipping dismi
   await settle();
   assert.equal(cards(page.container).length, 7);
 
-  // Dismiss removes a finished card and remembers it, keeping the newest 200.
-  storage.entries.set(DISMISSED_KEY, Array.from({ length: 200 }, (_, n) => id(1000 + n)));
+  // Dismiss removes a finished card and remembers it, keeping the newest 1000.
+  storage.entries.set(DISMISSED_KEY, Array.from({ length: 1000 }, (_, n) => id(1000 + n)));
   const card = cards(page.container).find((candidate) => candidate.textContent.includes("Summarized"));
   assert.ok(!buttonTexts(cards(page.container)[0]).includes("Dismiss"), "an in-flight card has no Dismiss");
   button(card, "Dismiss").click();
   await settle();
   assert.equal(cards(page.container).length, 6);
   const stored = storage.entries.get(DISMISSED_KEY);
-  assert.equal(stored.length, 200);
+  assert.equal(stored.length, 1000);
   assert.equal(stored.at(-1), id(3));
   assert.ok(!stored.includes(id(1000)));
   page.runCards.dispose();
+});
+
+test("rememberDismissed keeps the newest 1000", async () => {
+  const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const storage = storageArea(new Map([[DISMISSED_KEY, Array.from({ length: 1000 }, (_, n) => id(n))]]));
+  await rememberDismissed(storage, id(1000));
+  const stored = storage.entries.get(DISMISSED_KEY);
+  assert.equal(stored.length, 1000);
+  assert.equal(stored.at(-1), id(1000));
+  assert.ok(!stored.includes(id(0)));
+  assert.deepEqual(await dismissedIds(storage), stored);
 });
 
 test("dismissing two cards at once remembers both", async () => {

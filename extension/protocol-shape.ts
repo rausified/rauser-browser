@@ -506,7 +506,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return isRunView(value.run) && typeof value.stream_text === "string" &&
         isUnsignedInteger(value.next_offset) && typeof value.more === "boolean";
     case "runs_listed":
-      return Array.isArray(value.runs) && value.runs.length <= 20 && value.runs.every(isRunView);
+      return Array.isArray(value.runs) && value.runs.length <= 20 && value.runs.every(isRunView) &&
+        (value.more === undefined || typeof value.more === "boolean");
     case "run_updated":
       return isRunView(value.run);
     case "path_opened":

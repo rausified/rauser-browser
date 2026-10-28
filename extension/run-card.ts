@@ -13,7 +13,7 @@ export const POLL_MS = 1000;
 export const RESTORE_FINISHED_WITHIN_MS = 24 * 60 * 60 * 1000;
 export const MAX_RESTORED_FINISHED = 5;
 const DISMISSED_RUNS_KEY = storageKey("dismissed_runs_v1");
-const MAX_DISMISSED_RUNS = 200;
+const MAX_DISMISSED_RUNS = 1000;
 // When a run was last started or shown, kept until a list_runs finds nothing
 // to restore. list_runs starts the on-demand service, so a panel with no
 // harness asks only while this says the service may still hold a run.
@@ -51,7 +51,7 @@ export interface RunCardDeps extends RunProgressDeps {
   summarySaved?(run: RunView): void;
 }
 
-function isTerminal(run: RunView): boolean {
+export function isTerminal(run: RunView): boolean {
   return run.state === "succeeded" || run.state === "failed" || run.state === "canceled";
 }
 
@@ -710,7 +710,7 @@ export class RunProgress extends RunWatcher {
  * summary and a task, say) both stay remembered. */
 let dismissWrites: Promise<void> = Promise.resolve();
 
-async function dismissedIds(storage: Pick<ChromeStorageArea, "get">): Promise<string[]> {
+export async function dismissedIds(storage: Pick<ChromeStorageArea, "get">): Promise<string[]> {
   try {
     const stored = (await storage.get(DISMISSED_RUNS_KEY))[DISMISSED_RUNS_KEY];
     return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [];
@@ -719,7 +719,7 @@ async function dismissedIds(storage: Pick<ChromeStorageArea, "get">): Promise<st
   }
 }
 
-function rememberDismissed(storage: ChromeStorageArea, runId: string): Promise<void> {
+export function rememberDismissed(storage: ChromeStorageArea, runId: string): Promise<void> {
   const write = dismissWrites.then(async () => {
     const ids = (await dismissedIds(storage)).filter((id) => id !== runId);
     ids.push(runId);
