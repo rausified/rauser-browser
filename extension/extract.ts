@@ -156,7 +156,17 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   let readable = false;
   try {
     if (rendered && typeof Readability === "function") {
-      const article = new Readability(document.cloneNode(true), { serializer: (el) => el }).parse();
+      const clone = document.cloneNode(true) as Document;
+      // Readability re-parses the clone's HTML when it retries, and Chrome
+      // checks every inline handler attribute it parses against the page's
+      // CSP: a strict page logs a violation per handler, charged to this
+      // extension. Handlers carry no text, so the clone drops them first.
+      for (const node of Array.from(clone.querySelectorAll("*"))) {
+        for (const name of node.getAttributeNames()) {
+          if (/^on/i.test(name)) node.removeAttribute(name);
+        }
+      }
+      const article = new Readability(clone, { serializer: (el) => el }).parse();
       if (article !== null) {
         title = article.title ?? "";
         if (typeof article.content === "object" && article.content !== null) walk(article.content as Node);
