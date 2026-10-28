@@ -483,6 +483,53 @@ for (const phase of ["before hello", "during policy install", "after startup", "
   });
 }
 
+test("Recent opened before hello loads once configuration arrives, while policy installation is still pending", async () => {
+  let releaseHello;
+  const hello = new Promise((resolve) => { releaseHello = resolve; });
+  let releasePolicy;
+  const policy = new Promise((resolve) => { releasePolicy = resolve; });
+  globalThis.Option = class extends FakeElement {
+    constructor(text, value) {
+      super("option");
+      this.textContent = text;
+      this.value = value;
+    }
+  };
+  const page = await install({
+    tab: { id: 1, url: "https://new.example/a", title: "A" },
+    intercept(request) {
+      if (request.type === "hello") return hello;
+      if (request.type === "list_artifacts") return {
+        type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+        items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
+          url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+          background_seconds: 20, opens: 1, why: null }],
+      };
+      if (request.type === "worklog") return {
+        type: "worklog_result", text: "Reviewed the release", artifact_count: 1,
+        start_date: request.start_date, end_date: request.end_date,
+      };
+      return null;
+    },
+    workerReply(request) {
+      if (request.kind === "install_policy") return policy;
+    },
+  });
+  page.el("tab-recent").click();
+  assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+  releaseHello(hostReply({ type: "hello" }));
+  try {
+    await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy"), "policy installation");
+    await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog before policy install finishes");
+    await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent before policy install finishes");
+  } finally {
+    releasePolicy({ ok: true, value: statusFor() });
+  }
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+  assert.equal(page.sent("list_artifacts").length, 1);
+  assert.equal(page.sent("worklog").length, 1);
+});
+
 test("Recent replaces its startup wait with setup guidance when no home folder is chosen", async () => {
   let releaseHello;
   const hello = new Promise((resolve) => { releaseHello = resolve; });

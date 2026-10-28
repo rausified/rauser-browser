@@ -490,6 +490,16 @@ function render(): void {
   renderSetupWarning();
   if (session.status) renderQueue(session.status);
   updateControls();
+  retryWaitingHistory();
+}
+
+// History needs only the host configuration, not the worker policy, so
+// Recent opened before the host answered loads as soon as the session
+// connects, even while policy installation is still pending or later fails.
+function retryWaitingHistory(): void {
+  if (!session.connected || recentView.hidden) return;
+  if (recentWaitingForHost) void loadRecent();
+  if (worklogWaitingForHost) void loadWorklog();
 }
 
 function openSettings(): void {
@@ -1149,10 +1159,7 @@ void (async () => {
     updateControls();
     // A worker-policy failure can follow a successful host config read.
     // History can still load once connected, even if capture setup failed.
-    if (session.connected && !recentView.hidden) {
-      if (recentWaitingForHost) void loadRecent();
-      if (worklogWaitingForHost) void loadWorklog();
-    }
+    retryWaitingHistory();
   }
   await refreshActiveTab();
   // list_runs makes the host start the registered service, which runs on
