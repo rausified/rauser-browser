@@ -2119,6 +2119,46 @@ fn safe_markdown_line(value: Option<&str>, limit: usize) -> String {
     crate::presentation::markdown_line(value.unwrap_or("Untitled"), limit)
 }
 
+/// Recent, stable event timestamps shared by capture and native tests. Only
+/// fixture generation uses this clock; delivery still checks the real clock.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use std::cell::Cell;
+    use time::OffsetDateTime;
+
+    std::thread_local! {
+        static EVENT_TIME: Cell<OffsetDateTime> = Cell::new(event_time_for(OffsetDateTime::now_utc()));
+    }
+
+    fn event_time_for(now: OffsetDateTime) -> OffsetDateTime {
+        // Yesterday's UTC noon is always in the past, within the 30-day
+        // window, and leaves room for fixture offsets on either side. Freeze
+        // it per test thread so independent helpers cannot change log days.
+        now.to_offset(time::UtcOffset::UTC)
+            .date()
+            .previous_day()
+            .unwrap()
+            .with_hms(12, 0, 0)
+            .unwrap()
+            .assume_utc()
+    }
+
+    pub(crate) fn event_time() -> OffsetDateTime {
+        EVENT_TIME.with(Cell::get)
+    }
+
+    pub(super) fn with_now(now: OffsetDateTime, test: impl FnOnce()) {
+        struct Restore(OffsetDateTime);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                EVENT_TIME.set(self.0);
+            }
+        }
+        let _restore = Restore(EVENT_TIME.replace(event_time_for(now)));
+        test();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2160,7 +2200,7 @@ mod tests {
             event_id: Uuid::new_v4().to_string(),
             url: "https://example.com/article?keep=1&secret=2".into(),
             title: Some("Article".into()),
-            occurred_at: OffsetDateTime::now_utc()
+            occurred_at: fixtures::event_time()
                 .replace_nanosecond(0)
                 .unwrap()
                 .format(&Rfc3339)
@@ -2206,7 +2246,7 @@ mod tests {
             artifact_type: "web.page".into(),
             url: "https://example.com/article?keep=1".into(),
             title: Some("Article".into()),
-            occurred_at: OffsetDateTime::now_utc()
+            occurred_at: fixtures::event_time()
                 .replace_minute(0)
                 .unwrap()
                 .replace_second(0)
@@ -2404,6 +2444,36 @@ mod tests {
             CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")));
         assert_eq!(fs::read(&log).unwrap(), original);
         assert!(!store.batch_intent_path().exists());
+    }
+
+    #[test]
+    fn daily_log_fixtures_work_at_midnight() {
+        let before_midnight = OffsetDateTime::now_utc()
+            .date()
+            .previous_day()
+            .unwrap()
+            .with_hms(23, 59, 59)
+            .unwrap()
+            .assume_utc();
+        for now in [
+            before_midnight,
+            before_midnight + time::Duration::seconds(1),
+        ] {
+            for hours in [-12, 0, 14] {
+                let local = now.replace_offset(time::UtcOffset::from_hms(hours, 0, 0).unwrap());
+                fixtures::with_now(local, || {
+                    let at = fixtures::event_time();
+                    assert_eq!(at.time(), time::Time::from_hms(12, 0, 0).unwrap());
+                    assert_eq!(at.offset(), time::UtcOffset::UTC);
+                    assert!(
+                        (time::Duration::hours(12)..time::Duration::hours(36))
+                            .contains(&(local - at))
+                    );
+                    batch_appends_visits_and_overflow_once_with_a_compact_intent();
+                    oversized_daily_log_is_rejected_not_retried();
+                });
+            }
+        }
     }
 
     #[test]
@@ -2990,7 +3060,7 @@ mod tests {
             event_id: Uuid::new_v4().to_string(),
             artifact_id: "web:example/article".into(),
             url: "https://example.com/article".into(),
-            occurred_at: OffsetDateTime::now_utc()
+            occurred_at: fixtures::event_time()
                 .replace_nanosecond(0)
                 .unwrap()
                 .format(&Rfc3339)
@@ -3023,7 +3093,7 @@ mod tests {
             event_id: Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A good discussion".into(),
-            occurred_at: OffsetDateTime::now_utc()
+            occurred_at: fixtures::event_time()
                 .replace_nanosecond(0)
                 .unwrap()
                 .format(&Rfc3339)
@@ -3453,7 +3523,7 @@ mod tests {
             CaptureOutcome::Persisted { .. }
         ));
         let mut shifted = visit.clone();
-        shifted.occurred_at = (OffsetDateTime::now_utc() - time::Duration::days(1))
+        shifted.occurred_at = (fixtures::event_time() - time::Duration::days(1))
             .replace_nanosecond(0)
             .unwrap()
             .format(&Rfc3339)
@@ -3705,7 +3775,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let store =
             CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
-        let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+        let now = fixtures::event_time().replace_nanosecond(0).unwrap();
         let mut dates = Vec::new();
         // These offsets are 26 hours apart, so their local dates always differ.
         for hours in [14, -12] {

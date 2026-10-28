@@ -19,6 +19,31 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Capture fixture clocks
+
+Capture and native unit-test event helpers share `capture::fixtures::event_time`:
+one frozen UTC noon on the preceding day per test thread. It stays inside the
+host's real 30-day delivery window, leaves room for nearby fixture offsets,
+and prevents separate helper calls from choosing different daily logs.
+Production clock validation is unchanged. `daily_log_fixtures_work_at_midnight`
+reruns the compact-batch/recovery and full-log rejection tests with fixture
+clocks at 23:59:59 and the following midnight in UTC, UTC-12 and UTC+14.
+The midnight batch regression failed before the safe-noon fixture was applied.
+
+## Summary title extraction
+
+`extension/tests/extract.test.mjs` serializes the real extractor into a fresh
+VM context. A list-to-item SPA fixture changes its URL and body while keeping
+tab, document and Readability titles stale, then runs the real `summarizeTab`
+entry point through mocked Chrome injection and host transport. It checks the
+item heading reaches `start_run` and the returned run, and that a caller still
+holding the list URL is refused without starting another run. Separate cases
+cover Readability/body fallback, missing/hidden/ambiguous headings, equal
+duplicate headings, and title limits with surrogate replacement. The stale
+title cases failed before the extractor preferred a unique main-page H1.
+These are local mocks; actual GitHub navigation and Chrome rendering remain
+macOS browser acceptance work.
+
 ## Older-note migration coverage
 
 The panel tests load an artifact with and without its shared note and check

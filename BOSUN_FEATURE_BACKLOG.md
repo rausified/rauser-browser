@@ -263,12 +263,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
-- [ ] `brwr-mdn` **Pin the clock in capture tests that cross a calendar-day boundary (P2).**
-  Two `capture.rs` tests failed on Windows CI at exactly 00:00 UTC (#126, `f586628`)
-  because they build timestamps from the current clock.
-- [ ] `brwr-sti` **Use the item page's title in summaries after in-app navigation (P2).**
-  The first real summary of a GitHub PR took the PR list page's title; the URL and
-  artifact ID were right. Likely a stale `document.title` after client-side navigation.
 - [ ] `brwr-u8r` **Replay existing v1 capture intents before the normalized-URL
   bound rejects their event (P2).** From #139's review: a partial v1 intent left
   by an older host for an event whose normalized URL exceeds 8192 bytes is now
@@ -312,12 +306,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - [ ] `brwr-3rt` **Isolate scripted host lifecycle tests on Windows.** Add a
   debug-only disposable config-path seam before running host-kill tests on
   Windows, whose Known Folders lookup ignores the Unix HOME fixture.
-- [ ] `brwr-mdt` **Make capture.rs tests independent of the calendar day (P2).**
-  `batch_appends_visits_and_overflow_once_with_a_compact_intent` and
-  `oversized_daily_log_is_rejected_not_retried` failed on Windows CI at
-  exactly 2026-10-28T00:00Z (PR #126): their timestamps come from the wall
-  clock, so a run across midnight sees two days. Pin the clock or date, or
-  build timestamps away from midnight.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
@@ -479,6 +467,9 @@ shipped (see Shipped).
 
 ## Shipped
 
+- **Category:** Bug Fix. **Name summaries for the current item after in-app navigation (2026-10-28).** Completed assigned `brwr-sti`. Extraction prefers a unique current main-page H1 over stale tab, document and Readability metadata, with existing fallbacks when headings are absent or ambiguous. A list-to-item SPA regression runs the real summarize entry point, verifies the item title reaches the run, and keeps URL-change refusal intact. **Metrics:** Full local gate green; four new extension regressions, all 15 extension and two script files passing, 883 exercised Rust tests plus 43 explicit IPC skips, and 10,696 inert Markdown renderings.
+- **Category:** Testing & Verification. **Keep capture fixtures stable across midnight (2026-10-28).** Completed assigned `brwr-mdn` and its duplicate `brwr-mdt`. Capture and native unit tests share one recent UTC noon per test thread, keeping independent events on the same log day without altering production clocks or delivery windows. A failing-first regression reruns the batch/recovery and full-log rejection scenarios at 23:59:59 and midnight in UTC-12, UTC and UTC+14. **Metrics:** Full required gate green; one new Rust regression, 883 exercised Rust tests (+1) plus 43 explicit IPC skips, all 15 extension and two script files passing.
+
 - **Category:** Bug Fix. **Offer older-note migration only while the shared note is absent (2026-10-28).** Completed assigned `brwr-v5t`. Older URL notes keep read-only View; Use as artifact note appears only when the host reports no artifact note. Confirmed saves and stale-save responses update availability without reloading or disturbing copy-out recovery. **Metrics:** 882 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files green; five new extension regressions across this batch, including both rendered action sets and read-only viewing.
 - **Category:** Bug Fix. **Preserve the original URL when migrating an older note (2026-10-28).** Completed assigned `brwr-w4k`. The migration renders the shared artifact note with the verified source note's creation URL, retaining identity evidence even when the action was clicked from another route. The host regression checks the stored URL, source removal and a later save from the destination route; existing ownership and no-clobber checks remain in force. **Metrics:** Full required local gate green; 882 exercised Rust tests plus 43 explicit IPC skips, all 15 extension and two script files, and 10,696 inert Markdown corpus renderings.
 
@@ -542,6 +533,16 @@ shipped (see Shipped).
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-10-28 assigned P2 follow-up.** `brwr-mdn` and `brwr-mdt` were
+  duplicate reports of the same midnight failures and are now closed together.
+  Summary title freshness must come from the extracted current page, because
+  Readability can reuse the same stale metadata as Chrome. Ambiguous/missing
+  headings still use the documented title fallbacks; live GitHub navigation
+  remains a macOS browser check. Ten assigned P3 items remain; continue those
+  before self-directed work. Once the assigned queue and ordered plan clear,
+  existing `brwr-ppn` (curating worklogs before copying) remains a useful next
+  product improvement for sharing a day's work without unrelated rows.
 
 - **2026-10-27 queue restore.** Cookie's cycle-1 queue update (PR #77,
   `aa200d3`) exported a stale local beads database over `.beads/issues.jsonl`
