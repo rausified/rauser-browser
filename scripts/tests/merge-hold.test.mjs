@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { HELD_PREFIXES, STATUS_CONTEXT, decideStatuses } from "../merge-hold.mjs";
+import { STATUS_CONTEXT, decideStatuses } from "../merge-hold.mjs";
 
 function pr(number, head, labels = [], sha = `sha${number}`) {
   return { number, head: { ref: head, sha }, labels: labels.map((name) => ({ name })) };
@@ -20,9 +20,9 @@ test("a final-stretch PR holds Cookie's PRs as pending and names itself", () => 
   assert.match(cookie.description, /#5/);
 });
 
-test("the final-stretch PR itself and other sessions' PRs are never held", () => {
+test("every other session's PR is held too, and the labeled PR passes", () => {
   const statuses = decideStatuses([pr(5, "feat/big", ["final-stretch"]), pr(7, "fix/other")]);
-  assert.deepEqual(statuses.map((s) => [s.sha, s.state]), [["sha5", "success"], ["sha7", "success"]]);
+  assert.deepEqual(statuses.map((s) => [s.sha, s.state]), [["sha5", "success"], ["sha7", "pending"]]);
 });
 
 test("a Cookie PR that is itself in its final stretch is not held by its own label", () => {
@@ -30,17 +30,13 @@ test("a Cookie PR that is itself in its final stretch is not held by its own lab
   assert.equal(statuses[0].state, "success");
 });
 
-test("several final-stretch PRs are all named, and a Cookie PR is held until all are done", () => {
+test("several final-stretch PRs all pass, so two final stretches never hold each other", () => {
   const statuses = decideStatuses([
     pr(5, "feat/a", ["final-stretch"]), pr(9, "feat/b", ["final-stretch"]), pr(6, "cookie/cycle-1"),
   ]);
-  const cookie = statuses.find((s) => s.sha === "sha6");
-  assert.equal(cookie.state, "pending");
-  assert.match(cookie.description, /#5/);
-  assert.match(cookie.description, /#9/);
-  assert.ok(cookie.description.length <= 140, "GitHub caps status descriptions at 140 characters");
-});
-
-test("Cookie's branches are the held prefix", () => {
-  assert.deepEqual(HELD_PREFIXES, ["cookie/"]);
+  assert.deepEqual(statuses.map((s) => [s.sha, s.state]), [["sha5", "success"], ["sha9", "success"], ["sha6", "pending"]]);
+  const held = statuses.find((s) => s.sha === "sha6");
+  assert.match(held.description, /#5/);
+  assert.match(held.description, /#9/);
+  assert.ok(held.description.length <= 140, "GitHub caps status descriptions at 140 characters");
 });

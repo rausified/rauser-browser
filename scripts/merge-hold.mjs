@@ -1,17 +1,16 @@
 // Merge hold (AGENTS.md "Review and merge cadence"): while any open PR carries
-// the `final-stretch` label, PRs from held branches (Cookie's) get a pending
-// `merge-hold` status, so their auto-merge waits instead of landing under a
-// big PR's last merge. Every other PR, and the labeled PRs themselves, get
-// success, so the required check never deadlocks. Pending, not failure: the
-// PR simply waits, and the overnight driver, which only enables auto-merge,
-// never sees a failed check.
+// the `final-stretch` label, every other open PR (Cookie's and every
+// session's) gets a pending `merge-hold` status, a required check, so neither
+// auto-merge nor a manual merge lands under a big PR's last merge. Every
+// labeled PR gets success, so the check never deadlocks, even with two final
+// stretches at once. Pending, not failure: the PR simply waits, and the
+// overnight driver, which only enables auto-merge, never sees a failed check.
 //
 // Run by .github/workflows/merge-hold.yml with GITHUB_TOKEN and
 // GITHUB_REPOSITORY set; `decideStatuses` is the pure part the tests pin.
 
 export const STATUS_CONTEXT = "merge-hold";
 export const HOLD_LABEL = "final-stretch";
-export const HELD_PREFIXES = ["cookie/"];
 
 const MAX_DESCRIPTION = 140;
 
@@ -23,8 +22,7 @@ function labeled(pr) {
 export function decideStatuses(openPrs) {
   const stretching = openPrs.filter(labeled).map((pr) => `#${pr.number}`);
   return openPrs.map((pr) => {
-    const held = stretching.length > 0 && !labeled(pr) &&
-      HELD_PREFIXES.some((prefix) => pr.head.ref.startsWith(prefix));
+    const held = stretching.length > 0 && !labeled(pr);
     const description = held
       ? `Held while ${stretching.join(", ")} ${stretching.length === 1 ? "is" : "are"} in the final stretch`
       : "No merge hold";

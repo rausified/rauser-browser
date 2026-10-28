@@ -1,7 +1,7 @@
 name: Merge hold
 
-# A PR labeled `final-stretch` holds Cookie's PRs (pending `merge-hold`
-# status) until it merges or loses the label; see scripts/merge-hold.mjs and
+# A PR labeled `final-stretch` holds every other open PR (pending
+# `merge-hold` status) until it merges or loses the label; see scripts/merge-hold.mjs and
 # AGENTS.md "Review and merge cadence". Every PR event that can change the
 # hold re-evaluates all open PRs.
 on:
