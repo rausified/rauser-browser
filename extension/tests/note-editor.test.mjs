@@ -45,7 +45,10 @@ function harness(debounceMs = 60_000, recovery) {
     },
     showUnsaved(entries) { this.unsaved = entries.map((entry) => ({ ...entry })); },
     setRecoveryWarning(message) { this.recoveryWarning = message; },
-    showOlderNotes(entries) { this.older = entries.map((entry) => ({ ...entry })); },
+    showOlderNotes(entries, canUse) {
+      this.older = entries.map((entry) => ({ ...entry }));
+      this.canUseOlderNote = canUse;
+    },
   };
   const calls = [];
   const host = {
@@ -218,7 +221,7 @@ test("a conflict keeps edits typed during the save and does not save the server 
   void h.editor.flush();
   const save = await h.next("save");
   h.type("mine and more");
-  save.resolve({ type: "note_conflict", revision: "theirs-rev", body: "theirs" });
+  save.resolve({ type: "note_conflict", exists: true, revision: "theirs-rev", body: "theirs" });
   await h.editor.idle();
   await new Promise((resolve) => setTimeout(resolve, 5));
   await settle();
@@ -229,6 +232,7 @@ test("a conflict keeps edits typed during the save and does not save the server 
 
 const keyChanged = {
   type: "note_conflict",
+  exists: false,
   revision: "missing",
   body: "",
   key: { kind: "artifact", value: "work:p.test/7" },
@@ -247,6 +251,29 @@ const artifactLoad = {
   key: { kind: "artifact", value: "work:p.test/7" },
   older_notes: [olderUrlNote],
 };
+
+for (const outcome of ["saved", "conflict", "deleted"]) {
+  test(`older-note migration follows artifact existence after save outcome: ${outcome}`, async () => {
+    const h = harness();
+    const opening = h.editor.showPage(page("https://p.test/7"));
+    (await h.next("load")).resolve(outcome === "deleted"
+      ? { ...artifactLoad, exists: true, revision: "existing", body: "shared text" }
+      : artifactLoad);
+    await opening;
+    assert.equal(h.view.canUseOlderNote, outcome !== "deleted");
+    h.type("new shared text");
+    const pending = h.editor.flush();
+    const save = await h.next("save");
+    save.resolve(outcome === "saved"
+      ? { type: "note_saved", revision: "saved", key: artifactLoad.key }
+      : { type: "note_conflict", exists: outcome !== "deleted", revision: outcome === "deleted" ? "missing" : "newer",
+        key: artifactLoad.key, body: outcome === "deleted" ? "" : "other writer", reason: "stale_revision" });
+    await pending;
+    assert.deepEqual(h.view.older, [olderUrlNote], "View keeps the older note available");
+    assert.equal(h.view.canUseOlderNote, outcome === "deleted");
+    if (outcome !== "saved") assert.equal(h.view.unsaved[0].text, "new shared text");
+  });
+}
 
 test("a key change refuses the save and keeps the text for copy-out", async () => {
   const h = harness();
@@ -478,7 +505,7 @@ test("a conflicted copy survives reopening and later successful edits until expl
   await open(h, "https://p.test/", "saved");
   h.type("mine");
   const saving = h.editor.flush();
-  (await h.next("save")).resolve({ type: "note_conflict", revision: "other-rev", body: "theirs" });
+  (await h.next("save")).resolve({ type: "note_conflict", exists: true, revision: "other-rev", body: "theirs" });
   await saving;
   h.type("theirs plus a fresh edit");
   const next = h.editor.flush();
@@ -572,7 +599,7 @@ test("a partial recovery update keeps the newest conflict copy after retiring an
   h.type("newest draft");
   assert.match(h.view.recoveryWarning, /remove blocked/);
   const saving = h.editor.flush();
-  (await h.next("save")).resolve({ type: "note_conflict", revision: "other-r2", body: "theirs" });
+  (await h.next("save")).resolve({ type: "note_conflict", exists: true, revision: "other-r2", body: "theirs" });
   await saving;
   assert.equal(h.view.unsaved[0].text, "newest draft");
   const reopened = harness(60_000, recovery);
@@ -587,7 +614,7 @@ test("a recovered identity-conflict draft cannot autosave into the newly derived
   h.type("edit under the old key");
   const saving = h.editor.flush();
   (await h.next("save")).resolve({
-    type: "note_conflict", revision: "other-r2", body: "", reason: "key_changed",
+    type: "note_conflict", exists: false, revision: "other-r2", body: "", reason: "key_changed",
     key: { kind: "artifact", value: "doc:new" },
   });
   const load = await h.next("load");

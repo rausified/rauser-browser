@@ -431,6 +431,39 @@ async function until(condition, what) {
 // The panel has settled once its first tab refresh rendered the page area.
 const shownTitle = (page) => page.el("page-title").textContent;
 
+for (const exists of [true, false]) {
+  test(`older notes offer View${exists ? " only" : " and Use"} when the artifact note ${exists ? "exists" : "is absent"}`, async () => {
+    const sourceUrl = "https://example.com/board?selected=7";
+    const page = await install({
+      tab: { id: 1, url: "https://example.com/items/7", title: "Issue 7" },
+      intercept(request) {
+        if (request.type === "load_note") return {
+          type: "note_loaded", exists, revision: exists ? "shared" : "missing",
+          title: "Issue 7", body: exists ? "shared text" : "",
+          key: { kind: "artifact", value: "work:example.com/7" },
+          older_notes: [{ canonical_url: sourceUrl, revision: "old", title: "Older note",
+            key: { kind: "url", value: "older-url-key" } }],
+        };
+        if (request.type === "view_older_note") return {
+          type: "note_loaded", exists: true, revision: "old", title: "Older note", body: "older text",
+          key: { kind: "url", value: "older-url-key" }, older_notes: [],
+        };
+        return null;
+      },
+    });
+    await until(() => page.el("older-note-list").children.length > 0 && !page.el("note-body").disabled, "artifact note to load");
+    const buttons = page.el("older-note-list").children[0].children.filter((child) => child.tagName === "BUTTON");
+    assert.deepEqual(buttons.map((button) => button.dataset.olderAction), exists ? ["view"] : ["view", "use"]);
+    for (const listener of page.el("older-note-list").listeners.get("click")) listener({ target: buttons[0] });
+    await until(() => !page.el("older-note-view").hidden, "older note to open read-only");
+    assert.equal(page.el("older-note-view-body").value, "older text");
+    assert.equal(page.el("note-body").value, exists ? "shared text" : "");
+    assert.equal(page.sent("view_older_note")[0].source_url, sourceUrl);
+    assert.equal(page.sent("use_artifact_note").length, 0);
+    assert.equal(page.sent("save_note").length, 0);
+  });
+}
+
 for (const phase of ["before hello", "during policy install", "after startup", "before policy failure"]) {
   test(`Recent loads once when opened ${phase}`, async () => {
     const waitForHello = phase.startsWith("before");

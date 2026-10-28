@@ -568,9 +568,11 @@ pub fn use_as_artifact_note(
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| NoteRequestError::Internal(error.into()))?;
+    // Re-keying keeps the source's creation URL, just as later artifact
+    // saves do: it remains durable evidence after recognition rules change.
     let markdown = render_note(
         artifact_key,
-        destination_url,
+        &parsed.canonical_url,
         &parsed.title,
         &parsed.body,
         &parsed.created,
@@ -987,9 +989,38 @@ mod tests {
             .unwrap();
         assert!(artifact_markdown.contains(&format!(
             "  canonical_url: {}",
-            serde_json::to_string(current_url).unwrap()
+            serde_json::to_string(source_url).unwrap()
         )));
+        assert_eq!(
+            artifact_keyed_note_url(&artifact_markdown, &artifact_key).as_deref(),
+            Some(source_url)
+        );
         assert!(!load_note(&vault, source_url).unwrap().exists);
+        // Editing from the route where migration was clicked keeps the
+        // older note's creation URL as durable identity evidence too.
+        save_keyed_note(
+            &vault,
+            current_url,
+            &artifact_key,
+            "New title",
+            "edited shared text",
+            &migrated.revision,
+        )
+        .unwrap();
+        let saved = vault
+            .read_note(&artifact_key, current_url)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            artifact_keyed_note_url(&saved, &artifact_key).as_deref(),
+            Some(source_url)
+        );
+        assert_eq!(
+            load_keyed_note(&vault, current_url, &artifact_key, &[])
+                .unwrap()
+                .body,
+            "edited shared text"
+        );
     }
 
     #[test]

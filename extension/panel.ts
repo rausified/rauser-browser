@@ -437,7 +437,7 @@ function whySaveBlocked(): string | null {
   return null;
 }
 
-function renderOlderNotes(entries: readonly OlderNote[]): void {
+function renderOlderNotes(entries: readonly OlderNote[], canUseAsArtifactNote: boolean): void {
   olderNoteEntries = entries.map((entry) => ({ ...entry, key: { ...entry.key } }));
   olderNoteList.replaceChildren();
   olderNotes.hidden = entries.length === 0;
@@ -452,13 +452,16 @@ function renderOlderNotes(entries: readonly OlderNote[]): void {
     viewButton.dataset.olderIndex = String(index);
     viewButton.dataset.olderAction = "view";
     viewButton.textContent = "View";
-    const useButton = document.createElement("button");
-    useButton.type = "button";
-    useButton.className = "secondary compact";
-    useButton.dataset.olderIndex = String(index);
-    useButton.dataset.olderAction = "use";
-    useButton.textContent = "Use as artifact note";
-    item.append(label, viewButton, useButton);
+    item.append(label, viewButton);
+    if (canUseAsArtifactNote) {
+      const useButton = document.createElement("button");
+      useButton.type = "button";
+      useButton.className = "secondary compact";
+      useButton.dataset.olderIndex = String(index);
+      useButton.dataset.olderAction = "use";
+      useButton.textContent = "Use as artifact note";
+      item.append(useButton);
+    }
     olderNoteList.append(item);
   }
 }
