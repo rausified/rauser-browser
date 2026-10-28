@@ -359,7 +359,8 @@ pub fn check_draft(
 /// The scope state of a draft on `origin` (step 2 of [`check_draft_rules`]).
 /// A shared origin whose catalog entry has no tenant position offers only
 /// unscoped, whatever its existing adapters are scoped by: no drafted rule
-/// binds a tenant there.
+/// binds a tenant there. Agreeing adapters' scope is copied only when it
+/// restricts the tenant capture alone; otherwise the scope is pending.
 pub fn scope_state(existing: &Document, origin: Option<&str>, policy: &DraftPolicy) -> ScopeState {
     let Some(origin) = origin.filter(|o| SHARED_ORIGINS.contains(o)) else {
         return ScopeState::NotShared;
@@ -367,9 +368,12 @@ pub fn scope_state(existing: &Document, origin: Option<&str>, policy: &DraftPoli
     let Some((_, capture)) = policy.shared_origin(origin).and_then(|s| s.tenant.as_ref()) else {
         return ScopeState::UnscopedOnly;
     };
+    // A copied scope must restrict only the tenant capture drafted rules
+    // bind; one keyed otherwise (`scope.org` where rules bind `{owner}`)
+    // would leave every rule `scope_capture_not_bound`.
     match scope_source(existing, origin) {
-        Ok(scope) => ScopeState::Copied(scope),
-        Err(_) => ScopeState::Pending {
+        Ok(scope) if scope.iter().all(|(key, _)| key == capture) => ScopeState::Copied(scope),
+        _ => ScopeState::Pending {
             capture: capture.clone(),
         },
     }
@@ -809,6 +813,29 @@ mod tests {
         let existing = doc(json!({"format": 1, "artifacts": [
             github_scoped("acme-corp"), github_scoped("acme-labs")
         ]}));
+        let r = check(&existing, github_project(), &[D]);
+        assert_eq!(
+            r.scope,
+            ScopeState::Pending {
+                capture: "owner".into()
+            }
+        );
+        assert_eq!(r.rules, vec![Kept]);
+    }
+
+    #[test]
+    fn draft_rules_leave_scope_pending_when_agreeing_scope_cannot_bind_the_tenant() {
+        // Adapters agree on `scope.org`, but drafted rules bind the
+        // catalog's `{owner}`: copying `org` would leave every rule
+        // `scope_capture_not_bound`, so the choice is the review's.
+        let org_scoped = json!({
+            "type": "github.issue",
+            "origin": "https://github.com",
+            "scope": {"org": ["acme-corp"]},
+            "match": [{"path": "/{org:name|lower}/{repo:name|lower}/issues/{number:int}"}],
+            "id": "github.issue:{host}/{org}/{repo}/{number}"
+        });
+        let existing = doc(json!({"format": 1, "artifacts": [org_scoped]}));
         let r = check(&existing, github_project(), &[D]);
         assert_eq!(
             r.scope,
