@@ -33,12 +33,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use brauser_protocol::{
-    ErrorCode, HarnessId, RecordKey, RunErrorKind, RunKind, RunState, RunView, SummaryVocabulary,
+    ErrorCode, HarnessId, RecordKey, RecordKeyKind, RunErrorKind, RunKind, RunState, RunView,
+    SummaryVocabulary,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+use super::finisher::save_reason_code;
 use super::harness_api::{
     HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
@@ -52,7 +54,9 @@ use super::record::{
 use crate::answer::parse_answer;
 use crate::capture_site::catalog;
 use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
+use crate::diag;
 use crate::open::Opener;
+use tracing::Span;
 
 /// How long a run may take before its process group is killed.
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -258,6 +262,8 @@ struct Launch {
 
 /// The in-memory side of one queued or running run.
 struct RunControl {
+    /// The run's `run` span, entered on its worker and watchdog threads.
+    span: Span,
     slot: ProcessSlot,
     /// How long the run may take once it is running.
     timeout: Duration,
@@ -268,8 +274,9 @@ struct RunControl {
 }
 
 impl RunControl {
-    fn new(launch: Launch, timeout: Duration) -> Self {
+    fn new(launch: Launch, timeout: Duration, span: Span) -> Self {
         Self {
+            span,
             slot: ProcessSlot::default(),
             timeout,
             stop: Mutex::new(StopState::default()),
@@ -369,6 +376,10 @@ struct Inner {
     last_activity: Mutex<Instant>,
     /// Serializes [`maintenance::prune`] between worker threads.
     prune_lock: Mutex<()>,
+    /// The span current when the supervisor was built (the service's
+    /// `process` span), the parent of every `run` span: a run outlives the
+    /// request that queued it, so it must not hold that request's span open.
+    parent: Span,
     #[cfg(test)]
     spawn_fault: std::sync::OnceLock<SpawnFault>,
     #[cfg(test)]
@@ -458,6 +469,7 @@ impl Supervisor {
                 options,
                 last_activity: Mutex::new(Instant::now()),
                 prune_lock: Mutex::new(()),
+                parent: Span::current(),
                 #[cfg(test)]
                 spawn_fault: std::sync::OnceLock::new(),
                 #[cfg(test)]
@@ -505,10 +517,13 @@ impl Supervisor {
                         cwd,
                         vocabulary,
                     };
-                    let control = RunControl::new(launch, timeout);
+                    let span = inner.run_span(id, status.harness, status.kind, &status.url);
+                    span.in_scope(|| tracing::info!("run resumed"));
+                    let control = RunControl::new(launch, timeout, span);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
                 Some((Submit::Existing(_), _)) | None => {
+                    tracing::warn!(run_id = %id, "run cannot be resumed after a restart");
                     // Its key stays taken until this end state is recorded.
                     lock(&inner.scheduler).hold(status.kind, &status.start_key, id);
                     inner.finish(id, |status| {
@@ -552,6 +567,7 @@ impl Supervisor {
             inner.settle_locked(&mut scheduler);
             if let Submit::Existing(owner) = scheduler.submit(req.kind, &req.record_key, id) {
                 drop(scheduler);
+                tracing::info!(run_id = %owner, "run already queued");
                 return inner.view(owner).map(|view| (view, true));
             }
             let now = now_timestamp();
@@ -596,7 +612,7 @@ impl Supervisor {
             };
             if let Err(error) = inner.store.create(&status, &page) {
                 scheduler.finished(id);
-                eprintln!("brauser service: could not create run {id}: {error:#}");
+                tracing::error!(run_id = %id, error = format!("{error:#}"), "could not create run");
                 return Err((
                     ErrorCode::Internal,
                     "The run could not be recorded.".to_string(),
@@ -608,7 +624,18 @@ impl Supervisor {
                 cwd,
                 vocabulary: req.vocabulary,
             };
-            let control = RunControl::new(launch, timeout);
+            // In the request's span, so its `request_id` meets the `run_id`.
+            tracing::info!(
+                run_id = %id,
+                harness = harness_name(runner.harness()),
+                kind = kind_name(req.kind),
+                origin = diag::url_origin(&req.url),
+                waiting = scheduler.waiting_len(),
+                running = scheduler.running_len(),
+                "run queued"
+            );
+            let span = inner.run_span(id, runner.harness(), req.kind, &req.url);
+            let control = RunControl::new(launch, timeout, span);
             lock(&inner.runs).insert(id, Arc::new(control));
         }
         Inner::pump(inner);
@@ -633,7 +660,7 @@ impl Supervisor {
                     (ErrorCode::InvalidRequest, error.to_string())
                 }
                 StreamError::Io(_) => {
-                    eprintln!("brauser service: reading run {id} stream: {error}");
+                    tracing::warn!(run_id = %id, error = %error, "reading run stream");
                     (
                         ErrorCode::Internal,
                         "The run's output could not be read.".to_string(),
@@ -709,7 +736,11 @@ impl Supervisor {
                 status.finished_at = Some(finished);
             }) {
                 drop(scheduler);
-                eprintln!("brauser service: recording cancel of run {id}: {error:#}");
+                tracing::error!(
+                    run_id = %id,
+                    error = format!("{error:#}"),
+                    "recording cancel of run"
+                );
                 return Err((
                     ErrorCode::Internal,
                     "The run could not be canceled.".to_string(),
@@ -717,6 +748,7 @@ impl Supervisor {
             }
             scheduler.dequeue(id);
             drop(scheduler);
+            tracing::info!(run_id = %id, state = "queued", "run cancelled");
             lock(&inner.runs).remove(&id);
             if let Some(control) = control {
                 control.mark_done();
@@ -725,6 +757,7 @@ impl Supervisor {
             Inner::pump(inner);
         } else if let Some(control) = control {
             drop(scheduler);
+            tracing::info!(run_id = %id, "run cancel requested");
             control.request_stop(Stop::Cancel);
             control.wait_done(CANCEL_WAIT);
         }
@@ -768,21 +801,30 @@ impl Supervisor {
                     previous.filter(|at| OffsetDateTime::parse(at, &Rfc3339).is_ok());
             }
             inner.store.write_status(&status).map_err(|error| {
-                eprintln!("brauser service: stamping run {id} answer: {error:#}");
+                tracing::error!(
+                    run_id = %id,
+                    error = format!("{error:#}"),
+                    "stamping run answer"
+                );
                 (
                     ErrorCode::Internal,
                     "The run could not be updated.".to_string(),
                 )
             })?;
         }
-        match inner.finisher.save(&status, &result) {
+        tracing::info!(run_id = %id, "retrying save");
+        match log_save(id, inner.finisher.save(&status, &result)) {
             Ok(saved) => Finish::Succeeded(saved),
             Err(failure) => Finish::SaveFailed(failure),
         }
         .apply(&mut status);
         status.finished_at = Some(now_timestamp());
         inner.write_status(&status).map_err(|error| {
-            eprintln!("brauser service: recording retry save of run {id}: {error:#}");
+            tracing::error!(
+                run_id = %id,
+                error = format!("{error:#}"),
+                "recording retry save of run"
+            );
             (
                 ErrorCode::Internal,
                 "The run could not be updated.".to_string(),
@@ -834,7 +876,7 @@ impl Inner {
             return Err(no_such_run());
         }
         self.read_status(id).map_err(|error| {
-            eprintln!("brauser service: reading run {id}: {error:#}");
+            tracing::error!(run_id = %id, error = format!("{error:#}"), "reading run");
             (
                 ErrorCode::Internal,
                 "The run's record could not be read.".to_string(),
@@ -922,9 +964,18 @@ impl Inner {
             let mut freed = false;
             for id in ready {
                 let worker = this.clone();
-                let spawned = this.spawn(format!("run-{id}"), move || Inner::run(&worker, id));
+                let span = lock(&this.runs)
+                    .get(&id)
+                    .map_or_else(Span::none, |control| control.span.clone());
+                let spawned = this.spawn(format!("run-{id}"), span, move || {
+                    Inner::run(&worker, id);
+                });
                 if let Err(error) = spawned {
-                    eprintln!("brauser service: could not start a worker for run {id}: {error}");
+                    tracing::error!(
+                        run_id = %id,
+                        error = %error,
+                        "could not start a worker for run"
+                    );
                     this.finish(id, |status| {
                         status.state = RunState::Failed;
                         status.error_kind = Some(RunErrorKind::HarnessFailed);
@@ -945,17 +996,22 @@ impl Inner {
             this.finish(id, |_| {});
             return;
         };
+        // The worker already runs in the span; the watchdog gets it too.
+        let span = control.span.clone();
+        let begun = Instant::now();
         let launch = lock(&control.launch).take();
         // agent.env as it is now, not as it was when the run was queued.
         let env = match (this.options.run_env)() {
             Ok(env) => env,
             Err(reason) => {
+                tracing::warn!(error = reason.as_str(), "run environment unavailable");
                 control.end_turn();
-                this.finish_with(&control, id, |status| {
-                    status.state = RunState::Failed;
-                    status.error_kind = Some(RunErrorKind::HarnessFailed);
-                    status.error = Some(reason);
-                });
+                this.end(
+                    &control,
+                    id,
+                    begun,
+                    Finish::fail(RunErrorKind::HarnessFailed, Some(reason)),
+                );
                 return;
             }
         };
@@ -967,12 +1023,14 @@ impl Inner {
             .filter(|launch| launch.kind == RunKind::Summary)
             .map(|launch| (this.options.run_cwd)(&launch.cwd))
         {
+            tracing::warn!(error = reason.as_str(), "knowledge base check failed");
             control.end_turn();
-            this.finish_with(&control, id, |status| {
-                status.state = RunState::Failed;
-                status.error_kind = Some(RunErrorKind::HarnessFailed);
-                status.error = Some(reason);
-            });
+            this.end(
+                &control,
+                id,
+                begun,
+                Finish::fail(RunErrorKind::HarnessFailed, Some(reason)),
+            );
             return;
         }
         let started = now_timestamp();
@@ -986,22 +1044,18 @@ impl Inner {
             (Ok(status), Some(launch)) => (status, launch),
             (status, _) => {
                 if let Err(error) = status {
-                    eprintln!("brauser service: recording start of run {id}: {error:#}");
+                    tracing::error!(error = format!("{error:#}"), "recording start of run");
                 }
                 control.end_turn();
-                this.finish_with(&control, id, |status| {
-                    status.state = RunState::Failed;
-                    status.error_kind = Some(RunErrorKind::HarnessFailed);
-                    status.error = Some("The run could not be started.".to_string());
-                });
+                this.end(&control, id, begun, could_not_start());
                 return;
             }
         };
-
+        tracing::info!(timeout_secs = control.timeout.as_secs(), "run started");
         let watchdog = {
             let worker = this.clone();
             let control = control.clone();
-            this.spawn(format!("run-{id}-watchdog"), move || {
+            this.spawn(format!("run-{id}-watchdog"), span, move || {
                 worker.watch(id, &control);
             })
         };
@@ -1010,18 +1064,14 @@ impl Inner {
         let watchdog = match watchdog {
             Ok(watchdog) => watchdog,
             Err(error) => {
-                eprintln!("brauser service: no watchdog for run {id}: {error}");
+                tracing::error!(error = %error, "no watchdog for run");
                 control.end_turn();
-                this.finish_with(&control, id, |status| {
-                    status.state = RunState::Failed;
-                    status.error_kind = Some(RunErrorKind::HarnessFailed);
-                    status.error = Some("The run could not be started.".to_string());
-                });
+                this.end(&control, id, begun, could_not_start());
                 return;
             }
         };
 
-        let outcome = this.drive(id, &control, &status, launch, env);
+        let outcome = this.drive(id, &control, &status, launch, env, begun);
         let stopped = control.end_turn();
         let finished = match (stopped, outcome) {
             (Some(Stop::Cancel), _) => Finish::fail(RunErrorKind::Canceled, None),
@@ -1037,8 +1087,14 @@ impl Inner {
             }
             (None, Driven::Accepted(result)) => this.conclude(id, &result),
         };
-        this.finish_with(&control, id, |status| finished.apply(status));
+        this.end(&control, id, begun, finished);
         let _ = watchdog.join();
+    }
+
+    /// Log how the run ended, then record it ([`Inner::finish_with`]).
+    fn end(self: &Arc<Self>, control: &RunControl, id: Uuid, begun: Instant, finished: Finish) {
+        finished.log(begun);
+        self.finish_with(control, id, move |status| finished.apply(status));
     }
 
     /// Start the harness session and run its turn, streaming events into the
@@ -1051,6 +1107,7 @@ impl Inner {
         status: &RunStatusFile,
         launch: Launch,
         env: Vec<(OsString, OsString)>,
+        begun: Instant,
     ) -> Driven {
         let Some(runner) = self.registry.get(Some(status.harness)) else {
             return Driven::Failed("The AI harness is no longer set up.".to_string());
@@ -1090,33 +1147,44 @@ impl Inner {
         })));
         let mut session = match runner.start(&spec, &control.slot) {
             Ok(session) => session,
-            Err(error) => return Driven::Failed(format!("starting the harness: {error:#}")),
+            Err(error) => {
+                tracing::warn!(error = format!("{error:#}"), "harness did not start");
+                return Driven::Failed(format!("starting the harness: {error:#}"));
+            }
         };
         let mut truncated = false;
+        let mut first_output = true;
         let mut sink = |event| match event {
-            HarnessEvent::Text(text) => match self.store.append_stream(id, &text) {
-                Ok(true) => {}
-                Ok(false) if !truncated => {
-                    truncated = true;
-                    self.note(id, |status| status.stream_truncated = true);
+            HarnessEvent::Text(text) => {
+                if std::mem::take(&mut first_output) {
+                    tracing::info!(elapsed_ms = diag::elapsed_ms(begun), "first output");
                 }
-                Ok(false) => {}
-                Err(error) => eprintln!("brauser service: run {id} stream: {error:#}"),
-            },
+                match self.store.append_stream(id, &text) {
+                    Ok(true) => {}
+                    Ok(false) if !truncated => {
+                        truncated = true;
+                        tracing::info!("run stream truncated");
+                        self.note(id, |status| status.stream_truncated = true);
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(error = format!("{error:#}"), "writing run stream");
+                    }
+                }
+            }
             HarnessEvent::Diagnostic(bytes) => {
                 if let Err(error) = self.store.append_log(id, &bytes) {
-                    eprintln!("brauser service: run {id} log: {error:#}");
+                    tracing::warn!(error = format!("{error:#}"), "writing run log");
                 }
             }
             HarnessEvent::Session(reference) => {
                 let (SessionRef::CodexThread(handle) | SessionRef::ClaudeSession(handle)) =
                     &reference;
                 if !fit_session_id(handle) {
-                    eprintln!(
-                        "brauser service: run {id} ignored an over-long or unprintable session id"
-                    );
+                    tracing::warn!("ignored an over-long or unprintable session id");
                     return;
                 }
+                tracing::debug!("session reported");
                 match reference {
                     SessionRef::CodexThread(thread) => {
                         self.note(id, |status| status.thread_id = Some(thread));
@@ -1127,26 +1195,48 @@ impl Inner {
                 }
             }
         };
-        let driven = match session.turn(&spec.prompt, &mut sink) {
+        let mut turn = |prompt: &str, index: u32, sink: &mut dyn FnMut(HarnessEvent)| {
+            let started = Instant::now();
+            let outcome = session.turn(prompt, sink);
+            tracing::info!(
+                turn = index,
+                repair = index > 1,
+                outcome = match outcome {
+                    TurnOutcome::Answered { .. } => "answered",
+                    TurnOutcome::Failed { .. } => "failed",
+                },
+                elapsed_ms = diag::elapsed_ms(started),
+                "turn completed"
+            );
+            outcome
+        };
+        let accept = |final_text: &str, index: u32| {
+            let accepted = self.finisher.accept(status, final_text);
+            match &accepted {
+                Ok(_) => tracing::info!(turn = index, "answer validated"),
+                Err(_) => {
+                    tracing::info!(turn = index, reason = "invalid_output", "answer rejected")
+                }
+            }
+            accepted
+        };
+        let driven = match turn(&spec.prompt, 1, &mut sink) {
             TurnOutcome::Failed { reason } => Driven::Failed(reason),
-            TurnOutcome::Answered { final_text } => match self.finisher.accept(status, &final_text)
-            {
+            TurnOutcome::Answered { final_text } => match accept(&final_text, 1) {
                 Ok(result) => Driven::Accepted(result),
                 // A cancel or timeout between the turns starts no repair
                 // turn; the stop decides how the run ends.
                 Err(_) if control.stop_requested() => {
                     Driven::Failed("The run was stopped.".to_string())
                 }
-                Err(problem) => match session.turn(&repair_prompt(&problem), &mut sink) {
+                Err(problem) => match turn(&repair_prompt(&problem), 2, &mut sink) {
                     TurnOutcome::Failed { reason } => Driven::Failed(reason),
-                    TurnOutcome::Answered { final_text } => {
-                        match self.finisher.accept(status, &final_text) {
-                            Ok(result) => Driven::Accepted(result),
-                            Err(problem) => Driven::Invalid(format!(
-                                "The agent's answer was not valid after one correction: {problem}"
-                            )),
-                        }
-                    }
+                    TurnOutcome::Answered { final_text } => match accept(&final_text, 2) {
+                        Ok(result) => Driven::Accepted(result),
+                        Err(problem) => Driven::Invalid(format!(
+                            "The agent's answer was not valid after one correction: {problem}"
+                        )),
+                    },
                 },
             },
         };
@@ -1168,7 +1258,7 @@ impl Inner {
     fn conclude(&self, id: Uuid, result: &serde_json::Value) -> Finish {
         const NOT_KEPT: &str = "The answer could not be kept for saving.";
         if let Err(error) = self.store.write_result(id, result) {
-            eprintln!("brauser service: keeping run {id} result: {error:#}");
+            tracing::error!(error = format!("{error:#}"), "keeping run result");
             return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
         }
         let answered = now_timestamp();
@@ -1177,11 +1267,11 @@ impl Inner {
         }) {
             Ok(status) => status,
             Err(error) => {
-                eprintln!("brauser service: stamping run {id} answer: {error:#}");
+                tracing::error!(error = format!("{error:#}"), "stamping run answer");
                 return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
             }
         };
-        match self.finisher.save(&status, result) {
+        match log_save(id, self.finisher.save(&status, result)) {
             Ok(saved) => Finish::Succeeded(saved),
             Err(failure) => Finish::SaveFailed(failure),
         }
@@ -1196,6 +1286,7 @@ impl Inner {
             let now = Instant::now();
             if !timed_out && now >= deadline {
                 timed_out = true;
+                tracing::warn!(timeout_secs = control.timeout.as_secs(), "run timed out");
                 control.request_stop(Stop::Timeout);
             }
             if now >= next_beat {
@@ -1219,22 +1310,38 @@ impl Inner {
 
     /// Start a named thread. Tests can make this fail through
     /// [`Supervisor::with_spawn_fault`].
+    /// The thread runs in `span`, under this thread's subscriber.
     fn spawn(
         &self,
         name: String,
+        span: Span,
         body: impl FnOnce() + Send + 'static,
     ) -> io::Result<JoinHandle<()>> {
         #[cfg(test)]
         if self.spawn_fault.get().is_some_and(|fault| fault(&name)) {
             return Err(io::Error::other("thread creation failed (test)"));
         }
-        thread::Builder::new().name(name).spawn(body)
+        thread::Builder::new()
+            .name(name)
+            .spawn(super::traced(span, body))
+    }
+
+    /// A run's `run` span, a child of the supervisor's own span.
+    fn run_span(&self, id: Uuid, harness: HarnessId, kind: RunKind, url: &str) -> Span {
+        tracing::info_span!(
+            parent: &self.parent,
+            "run",
+            run_id = %id,
+            harness = harness_name(harness),
+            kind = kind_name(kind),
+            origin = diag::url_origin(url),
+        )
     }
 
     /// A best-effort status change during a run.
     fn note(&self, id: Uuid, change: impl FnOnce(&mut RunStatusFile)) {
         if let Err(error) = self.update(id, change) {
-            eprintln!("brauser service: updating run {id}: {error:#}");
+            tracing::warn!(run_id = %id, error = format!("{error:#}"), "updating run");
         }
     }
 
@@ -1271,9 +1378,10 @@ impl Inner {
                 Settle::Failed(left, error) => {
                     tries += 1;
                     if tries as usize >= TERMINAL_WRITE_ATTEMPTS {
-                        eprintln!(
-                            "brauser service: recording the end of run {id} \
-                             (kept in memory, its key stays taken): {error:#}"
+                        tracing::error!(
+                            run_id = %id,
+                            error = format!("{error:#}"),
+                            "recording the end of run (kept in memory, its key stays taken)"
                         );
                         break Some(left);
                     }
@@ -1413,6 +1521,33 @@ impl Finish {
         Self::Failed { kind, error }
     }
 
+    /// `run cancelled` or `run failed` (with its reason code, never its
+    /// text, which can quote the harness's stderr), then `run finished`,
+    /// in the run's span. A save failure was logged as `save failed`.
+    fn log(&self, begun: Instant) {
+        let (state, error_kind) = match self {
+            Self::Succeeded(_) => (RunState::Succeeded, None),
+            Self::SaveFailed(_) => (RunState::Failed, Some(RunErrorKind::SaveFailed)),
+            Self::Failed {
+                kind: RunErrorKind::Canceled,
+                ..
+            } => {
+                tracing::info!(state = "running", "run cancelled");
+                (RunState::Canceled, Some(RunErrorKind::Canceled))
+            }
+            Self::Failed { kind, .. } => {
+                tracing::error!(reason = error_kind_name(*kind), "run failed");
+                (RunState::Failed, Some(*kind))
+            }
+        };
+        tracing::info!(
+            state = state_name(state),
+            error_kind = error_kind.map(error_kind_name),
+            elapsed_ms = diag::elapsed_ms(begun),
+            "run finished"
+        );
+    }
+
     fn apply(self, status: &mut RunStatusFile) {
         match self {
             Self::Succeeded(saved) => {
@@ -1443,6 +1578,85 @@ impl Finish {
                 status.error = error;
             }
         }
+    }
+}
+
+/// A run that could not get as far as its harness.
+fn could_not_start() -> Finish {
+    Finish::fail(
+        RunErrorKind::HarnessFailed,
+        Some("The run could not be started.".to_string()),
+    )
+}
+
+/// Log a save's outcome: `run saved` with the summary file's home-relative
+/// folder and the written record key's kind, or `save failed` with a reason
+/// code. A summary's file name is made from its page URL, which diagnostics
+/// record only as an origin, so only the folder is logged; the run's
+/// `status.json` names the file.
+fn log_save(id: Uuid, saved: Result<SavedRun, SaveFailure>) -> Result<SavedRun, SaveFailure> {
+    match &saved {
+        Ok(saved) => tracing::info!(
+            run_id = %id,
+            summary_dir = saved
+                .summary_path
+                .as_deref()
+                .and_then(|path| path.rsplit_once('/'))
+                .map(|(folder, _)| folder),
+            summary_written = saved.summary_path.is_some(),
+            written_key = record_key_kind_name(saved.written_key.kind),
+            "run saved"
+        ),
+        Err(failure) => tracing::warn!(
+            run_id = %id,
+            reason = save_reason_code(&failure.reason),
+            can_retry = failure.retryable,
+            "save failed"
+        ),
+    }
+    saved
+}
+
+/// Wire names for log fields.
+pub(crate) fn harness_name(harness: HarnessId) -> &'static str {
+    match harness {
+        HarnessId::Codex => "codex",
+        HarnessId::Claude => "claude",
+    }
+}
+
+pub(crate) fn kind_name(kind: RunKind) -> &'static str {
+    match kind {
+        RunKind::Summary => "summary",
+        RunKind::SiteDraft => "site_draft",
+    }
+}
+
+fn state_name(state: RunState) -> &'static str {
+    match state {
+        RunState::Queued => "queued",
+        RunState::Running => "running",
+        RunState::Succeeded => "succeeded",
+        RunState::Failed => "failed",
+        RunState::Canceled => "canceled",
+    }
+}
+
+fn error_kind_name(kind: RunErrorKind) -> &'static str {
+    match kind {
+        RunErrorKind::HarnessFailed => "harness_failed",
+        RunErrorKind::TimedOut => "timed_out",
+        RunErrorKind::Canceled => "canceled",
+        RunErrorKind::ServiceRestarted => "service_restarted",
+        RunErrorKind::InvalidOutput => "invalid_output",
+        RunErrorKind::SaveFailed => "save_failed",
+    }
+}
+
+fn record_key_kind_name(kind: RecordKeyKind) -> &'static str {
+    match kind {
+        RecordKeyKind::Url => "url",
+        RecordKeyKind::Artifact => "artifact",
     }
 }
 

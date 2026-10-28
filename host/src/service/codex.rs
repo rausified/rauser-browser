@@ -264,6 +264,7 @@ impl CodexSession {
         let id = self.next_id;
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let child = self.child.as_mut().ok_or(EXITED)?;
+        tracing::debug!(method, id, "rpc request");
         match child.write_line(&request.to_string()) {
             Ok(()) => Ok(id),
             Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
@@ -282,13 +283,20 @@ impl CodexSession {
         sink: &mut dyn FnMut(HarnessEvent),
     ) -> Result<Value, String> {
         let id = self.send(method, params)?;
-        let deadline = Instant::now() + RPC_TIMEOUT;
+        let sent = Instant::now();
+        let deadline = sent + RPC_TIMEOUT;
         loop {
             match self.receive(Some(deadline), sink) {
                 Some(Incoming::Response {
                     id: answered,
                     result,
                 }) if answered == id => {
+                    tracing::debug!(
+                        method,
+                        ok = result.is_ok(),
+                        elapsed_ms = crate::diag::elapsed_ms(sent),
+                        "rpc response"
+                    );
                     return result.map_err(|error| format!("{method}: {error}"));
                 }
                 Some(Incoming::Response { .. } | Incoming::Notice(_)) => {}
@@ -357,6 +365,7 @@ impl CodexSession {
 
     /// Answer a request from the app-server with "method not found".
     fn refuse(&mut self, id: Value, method: &str) {
+        tracing::debug!(method, "server request refused");
         let reply = json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -432,6 +441,12 @@ impl HarnessSession for CodexSession {
                 }
                 Some(Incoming::Notice(message)) => message,
             };
+            // Method names only; deltas are too many to be worth a line.
+            if let Some(method) = message["method"].as_str()
+                && method != "item/agentMessage/delta"
+            {
+                tracing::debug!(method, "notification");
+            }
             match parse_notice(&message) {
                 Notice::Delta { item, text } => {
                     if !text.is_empty() {

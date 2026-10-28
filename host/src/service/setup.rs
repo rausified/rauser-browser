@@ -82,6 +82,31 @@ fn shown(detected: &Detected) -> (Option<String>, Option<String>) {
 /// Send [`PROBE_PROMPT`] through `runner` as a run would, and require the
 /// answer OK (see [`answer_is_ok`]). The run is killed at `timeout`.
 pub fn probe(runner: &dyn HarnessRunner, spec: &RunSpec, timeout: Duration) -> Result<(), String> {
+    let span = tracing::info_span!(
+        "probe",
+        harness = super::supervisor::harness_name(runner.harness()),
+    );
+    let _entered = span.enter();
+    let started = std::time::Instant::now();
+    let result = probe_inner(runner, spec, timeout);
+    // The reason can quote the harness's stderr, so only how it ended.
+    tracing::info!(
+        outcome = match &result {
+            Ok(()) => "ok",
+            Err(reason) if reason.starts_with("timed out after") => "timed_out",
+            Err(_) => "failed",
+        },
+        elapsed_ms = crate::diag::elapsed_ms(started),
+        "harness probe finished"
+    );
+    result
+}
+
+fn probe_inner(
+    runner: &dyn HarnessRunner,
+    spec: &RunSpec,
+    timeout: Duration,
+) -> Result<(), String> {
     let slot = ProcessSlot::default();
     let (finished, deadline) = mpsc::channel::<()>();
     let timer = {
@@ -271,7 +296,10 @@ pub fn set_up(
         None,
         Some(commit),
     ) {
-        Ok(Some(revision)) => Ok((config.snapshot().clone(), revision)),
+        Ok(Some(revision)) => {
+            tracing::info!(harness = name, timeout_secs, "harness set up");
+            Ok((config.snapshot().clone(), revision))
+        }
         Ok(None) => Err(refuse(ErrorCode::Conflict, CHANGED)),
         Err(error) => Err((
             ErrorCode::Internal,
