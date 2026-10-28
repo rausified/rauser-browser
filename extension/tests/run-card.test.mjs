@@ -761,3 +761,11 @@ test("cards show only for the followed page", async () => {
   assert.deepEqual(shown(), []);
   page.runCards.dispose();
 });
+
+test("panel.css hides a hidden run card despite its display rule", async () => {
+  // `.run-card { display: grid }` outranks Chrome's [hidden] style, so the
+  // card itself needs its own rule or follow() hides nothing on screen.
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.run-card\[hidden\][^{]*\{\s*display:\s*none;/);
+});
