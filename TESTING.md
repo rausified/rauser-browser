@@ -165,7 +165,7 @@ copy. An unchanged host revision leaves the editor and debounce alone; the
 existing editor tests still check retrying failed loads.
 
 Run the focused cases after `npm run build:extension` with
-`node --test --test-isolation=none --test-name-pattern='external.*revision|policy refresh with the same' extension/tests/panel.test.mjs`.
+`node --test --test-isolation=none --test-name-pattern='external.*revision|policy refresh with the same' extension/tests/panel/note-editor.test.mjs`.
 The clean-note and in-flight rebinding cases failed before the fix. These use
 mocked host/Chrome transport and in-memory browser storage; they do not prove
 real Chrome timing or native host integration. Run the normal full extension
@@ -195,12 +195,12 @@ stripped addresses, unavailable index/adopted history, rechecked ownership,
 duplicate ownership fields, unrelated file kinds and bounded response metadata.
 The primary key, stale-key save refusal and capture config stay unchanged.
 Protocol wire tests round-trip both additive requests and the list response
-and check the 24-item schema bound. `extension/tests/panel.test.mjs` checks
+and check the 24-item schema bound. `extension/tests/panel/preserved-notes.test.mjs` checks
 explicit discovery, text-only titles and bodies, Copy, the original autosave
 key/revision, errors and empty lists, and stale list/view replies after
 navigation, collapse, close or another selection. Run after building the
 extension; `node --test --test-isolation=none --test-name-pattern=preserved
-extension/tests/panel.test.mjs` exposes all eight focused cases individually.
+extension/tests/panel/preserved-notes.test.mjs` exposes all eight focused cases individually.
 The fake DOM does not initialize `disabled` from HTML: waits must observe a
 sent `load_note` as well as an enabled editor before interacting with it.
 Actual Chrome disclosure styling and keyboard interaction still need the
@@ -249,7 +249,7 @@ storage, partial write/cleanup failures, malformed/unrelated entries and
 artifact-key changes. Reopened editors load the current host note and never
 replay recovery text automatically.
 
-`extension/tests/panel.test.mjs` runs the built panel module and shipped HTML
+`extension/tests/panel/note-editor.test.mjs` runs the built panel module and shipped HTML
 with the real native client and mocked DOM/Chrome/storage. Its close/reopen
 tests exercise debounce and in-flight-save teardown, a late host completion,
 separate current and recovered text, Copy/Discard, persistent conflicts
@@ -269,7 +269,7 @@ checks. `extension/tests/capture-site.test.mjs` exercises the existing starter
 catalog through the new plan builder: real Jira, SharePoint/OneDrive and GitHub
 URL forms, independent PR/issue scopes, current-page misses, all 27 fixed
 probes, invalid inputs, full-document limits and preservation of other sites.
-`extension/tests/panel.test.mjs` loads the shipped panel markup and JavaScript
+`extension/tests/panel/capture-site.test.mjs` loads the shipped panel markup and JavaScript
 with a scripted native client, worker and Chrome APIs. It covers review/save,
 policy publication, cancel, tab/SPA changes, revision conflicts, pauses and
 removals, missing folders, note edits and copy-out across identity changes,
@@ -324,7 +324,8 @@ directories, the outbound cap at the request limits, and `check_site_draft`'s
 overlap, user-written warnings, stale-revision conflict, scope choices and
 the forbidden-key refusal of a table that carries an overlay. Extension tests
 cover the plan (`capture-site.test.mjs`), the composed review, save,
-recurring-pages hint and older-host fallback (`panel.test.mjs`), the
+recurring-pages hint and older-host fallback (`panel/capture-site-draft.test.mjs`,
+`panel/capture-site-draft-save.test.mjs`, `panel/capture-site-recurring.test.mjs`), the
 advanced-editor handoff and per-rule provenance (`options.test.mjs`) and the
 worker's handoff expiry and that link shapes are never sampled, buffered or
 saved (`worker.test.mjs`). They assert that no request carries a raw URL,
@@ -374,7 +375,7 @@ layers:
   extension, and `agent_preview_lists_every_non_artifact_shape_a_borderline_draft_matches`.
 
 Extension tests cover the client and plan (`capture-site.test.mjs`), the run
-progress (`run-card.test.mjs`) and the review (`panel.test.mjs`): the button
+progress (`run-card.test.mjs`) and the review (`panel/capture-site-agent.test.mjs`): the button
 disabled with Summarize's setup hint, the held shapes sent with nothing new
 read from the page, only the host's `site_drafted` rendered, `unseen` rules
 unchecked with their label, Use basic draft, failed or rejected drafts keeping
@@ -697,6 +698,13 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-28: The built-panel suite was split by feature from one
+  `extension/tests/panel.test.mjs` into `extension/tests/panel/*.test.mjs`,
+  with the fake DOM, Chrome, host, `install()` and shared fixtures in
+  `extension/tests/panel/harness.mjs`, so parallel branches stop appending
+  tests at the end of the same file. The split kept every test name and
+  body; the pass count stayed 201 panel tests (1780 in `test:extension`).
+  Each file runs alone with `node --test <file>` after `build:extension`.
 - 2026-10-28 (`brwr-2iz`): Size history fixtures with pretty TOML, rather than
   JSON, because repeated table headers contribute to the persisted cap.
   Check both the store error and native reply: an otherwise helpful size
@@ -887,7 +895,7 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-27: Branch `feat/summary-outputs-pr4`. A summary takes the user's offset from the extension, as captured events do: the panel's `requested_at` (the click's local time with its `±HH:MM` offset, `localTimestamp`) decides which day's log it lands in, and `summarized_at` is the answer's `answered_at` instant rewritten in that offset (`summarized_at_uses_the_click_offset` in host/src/service/finisher.rs), and an unparseable value falls back to UTC. Using the clock at save time instead made every Retry save a different event; stamping `answered_at` once, and re-stamping only when the daily log's 30-day window would refuse it, keeps retries idempotent.
 - 2026-10-27: Branch `fix/forget-for-full-record`. Settings decides whether to offer Forget from `adopted_state.full`, not from warning text, so the tests assert both the flag and the wording: a full record's warning mentions Forget recorded adapters, and write-failure and lock-failure warnings must not mention Forget at all.
 - 2026-10-27: Branch `fix/smoke-macos-flakes` (`brwr-smk`). Since #98, main's required macOS smoke had stopped three ways, each passing on rerun. The fixes are in "Waiting for state, not time". (1) `Extensions.loadUnpacked timed out` on the `macos-15-intel` fallback: the first CDP request had 15 s to cover Chrome's whole cold start. Reproduced locally with the old runner under 3x CPU load. On the arm64 CI runners, loading plus the profile check already took 12.9 s, and Chrome writes `Preferences` about ten seconds late, so the old 12 s profile wait was nearly as tight. (2) `Expected exactly two claude runs; got []`: a reopened panel enables **Summarize & log** before `restore()` adds earlier cards, so the earlier, already-summarized Codex card was taken for the new run, and the check ran before Claude Code started. Reproduced 2 of 5 under full load, where the fake's log showed both Claude turns starting after the check. (3) `Expected one open of the allowed page in the hourly totals; found []`: never reproduced locally (0 of 8 before the fix, including 4 old runs at 3x load). The step went on once settings looked connected, not once the worker held the new lease. The lease the worker held before matches only `/items/{id:int}`, which gives exactly an empty total. Probes found settings enables its controls only after its lease install, and showed no stale document after `Page.reload`, so this cause is inferred, not shown. The new waits record the worker's lease in the timeout message, so a recurrence will tell a late lease from a product fault. A fourth stop appeared under load: `openPanel()` gave up when one `chrome.sidePanel.open` evaluate timed out. Results: before the fix, 3 of 3 idle and 3 of 5 under full load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load). No product race was found.
-- 2026-10-27: Cookie's `brwr-d3m`/`brwr-p9r` cycle. Duration presentation tests should inspect both the worklog and a regenerated artifact file, including numeric frontmatter, rather than only the shared formatter. Panel startup tests now hold hello or `install_policy` to cover opening Recent before connection, during policy installation, and after startup. The connected policy-install window already permits requests; retry only views that actually waited. The fake DOM supplies `Option` and select `add` for real Recent rendering. For focused test diagnostics in a runner whose child test output is opaque, `node --test --test-isolation=none --test-name-pattern='Recent loads once' extension/tests/panel.test.mjs` prints the individual cases; still run the normal complete extension suite for the gate.
+- 2026-10-27: Cookie's `brwr-d3m`/`brwr-p9r` cycle. Duration presentation tests should inspect both the worklog and a regenerated artifact file, including numeric frontmatter, rather than only the shared formatter. Panel startup tests now hold hello or `install_policy` to cover opening Recent before connection, during policy installation, and after startup. The connected policy-install window already permits requests; retry only views that actually waited. The fake DOM supplies `Option` and select `add` for real Recent rendering. For focused test diagnostics in a runner whose child test output is opaque, `node --test --test-isolation=none --test-name-pattern='Recent loads once' extension/tests/panel/recent-worklog.test.mjs` prints the individual cases; still run the normal complete extension suite for the gate.
 - 2026-10-27: Independent review of the brief-activity/startup-Recent cycle reproduced two additional startup failures before fixing them: no home folder left both areas saying "Waiting for the host…" after connection, and a worker policy-install error prevented history loads despite a usable host configuration. Composed-panel regressions now cover setup guidance with Copy disabled and exactly one history/worklog request after that worker failure.
 - 2026-10-27: Branch `salvage/cookie-cycles-2-3` (`brwr-p9r` follow-up). A startup Recent test that releases the policy install together with `hello` cannot tell "loads on connect" from "loads after startup finishes"; hold `install_policy` pending and assert the history results arrive first.
 - 2026-10-27: Branch `feat/summary-outputs-pr4` (`brwr-t53`). The headless smoke now covers summary outputs end to end ("Summary outputs (headless smoke)" above). The new steps run after `agent.env`, not straight after the first Codex summary, because a panel restores only the newest five finished runs (`MAX_RESTORED_FINISHED`), and Restore expects exactly the five earlier runs; three more runs before it would push the Codex card out. A summary on an unrecognized page has no measured activity, so its artifact's Timeline has no rollup; the rollup order is checked on the recognized page's artifact, which does. As built, `markdown::inline` also escapes `=`, so the `<img>` entity is written `\<img src\=…\>`. Every new wait uses `waitUntil`, and every navigation calls `workerHoldsHostPolicy()` first. Three consecutive runs passed.
@@ -909,7 +917,8 @@ This standard is meant to improve with use. When you change it:
 
 Capture Site starter history is covered by
 `native::tests::capture_site_preflight_checks_removed_contracts_before_save`
-and the built-panel cases in `extension/tests/panel.test.mjs`. The native
+and the built-panel cases in `extension/tests/panel/capture-site.test.mjs` and
+`capture-site-restore.test.mjs`. The native
 fixture removes a custom Jira contract through settings and by hand, checks
 the starter before save, permits restoration, and checks an independent fresh
 support directory. Adopted contracts belong to the support directory, not a
@@ -953,7 +962,7 @@ empty edits, exact whitespace and hostile text, stale controls, newer snapshots
 from another panel, live typing, clipboard refusal/retry and blocked local
 discard/retry. They assert review never sends a save or fills the editor.
 Run `npm run build:extension` first, then `node extension/tests/note-editor.test.mjs`
-and `node extension/tests/panel.test.mjs` separately for detailed case counts.
+and `node extension/tests/panel/note-editor.test.mjs` separately for detailed case counts.
 The macOS smoke's refused-save check reads the first recovery-card textarea;
 its steps and expected dialog count are unchanged.
 Actual Chrome layout and clipboard behavior still need macOS verification.
@@ -971,7 +980,7 @@ the anchor. Old-format migration cases keep event checkpoints while testing the
 one-time bounded gap rescan and partial-pass recovery. Source logs stay unchanged;
 system notices never create artifacts or measures.
 
-`extension/tests/panel.test.mjs` loads the built panel against mocked transport
+`extension/tests/panel/recent-worklog.test.mjs` loads the built panel against mocked transport
 and DOM, with a private clipboard stub. It checks visible notices, exact preview
 Copy with inclusion on/off, preserving that choice across period changes,
 truncation, response validation, failed/mismatched periods and late replies.
@@ -986,11 +995,12 @@ settings and hand removals of a custom Jira identity, browse/modal note keys,
 byte-for-byte unchanged notes, explicit saves, preserved global pauses, stale
 read/save revisions, exact-origin validation, fixed GitHub scope, deduplication,
 damaged config/adopted history and ambiguous container contracts. It uses only
-disposable local config/vault fixtures. `extension/tests/panel.test.mjs` loads
+disposable local config/vault fixtures. `extension/tests/panel/capture-site-restore.test.mjs` loads
 the built panel and covers plain-language page kinds, fixed and every-account
 scope, no page-pattern extraction, explicit saves, unchanged notes, stale and
 canceled reads, changed records, pending pauses/removals and malformed replies.
-Ordinary starter/drafter flows remain covered by the same full panel suite.
+Ordinary starter/drafter flows remain covered by the rest of the panel suite
+in `extension/tests/panel/`.
 Actual Chrome acceptance remains the existing macOS smoke/human gate.
 
 Windows exclusions have fixture-specific reasons beside each Unix-only test:
