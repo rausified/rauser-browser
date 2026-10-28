@@ -124,3 +124,5 @@
   Four new Rust and two panel regressions pass with the full gate and 1,680
   individually exercised extension tests (`brwr-1g2`). Actual Chrome anchor
   opening still needs macOS verification.
+
+- **Brauser — interrupted log recovery survives presentation changes:** New single-event journals retain bounded prepared append bytes and a separate normalized-payload identity, allowing visits, activity, Why context and summaries to finish after renderer upgrades through single or batch delivery. Edited log tails, changed home folders and mismatched payloads remain refused; complete markers deduplicate and existing v1 frozen-renderer recovery remains supported. Four new regressions and the complete local gate pass; no live service or external API was used.
