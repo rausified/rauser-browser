@@ -1108,6 +1108,17 @@ format. A v3 retry with changed removed names refuses without touching the
 log. Downgrading with a pending v3 intent is unsupported; older hosts cannot
 recover it.
 
+Historical activity and Why markers with uppercase or unhyphenated UUID
+payload IDs (before `brwr-q7e`) are read using their canonical UUID for both
+marker-hash validation and cache identity (`brwr-smu`, 2026-10-28). A different
+UUID still fails the marker hash; authoritative logs are never rewritten.
+For a pending v1 intent, the original queued UUID spelling is also tried in
+the marker payload across all three pre-provenance presentation generations.
+Only the stored whole-entry hash and exact existing tail can select those
+bytes, through single delivery or activity batch delivery. The original queued
+spelling must be retained; recovery does not guess arbitrary UUID spellings.
+V2/V3 prepared-byte and payload-hash checks remain unchanged.
+
 - **Keys are checked at write.** `load_note` returns the key it resolved, and `save_note` sends it back. If the host's current config maps the URL to a different key (an adapter or alias changed in between), the host refuses the save as `note_conflict` with reason `key_changed`, and the panel reloads and keeps the unsaved text in the copy-out box. A summary's key is recomputed under the config lock before writing; since PR 4 a changed key is followed, not refused, and the run records the key it wrote (§5.2 step 7).
 
 ### 6.3 Profiles

@@ -533,3 +533,25 @@ exact original bytes. Ten new regression tests cover these paths, including
 a later-adapter collision and a review-discovered error-classification bug.
 The full required and README gates pass; real macOS browser checks remain
 outside this Linux run. Completes assigned `brwr-srp`.
+
+
+### Recover historical activity and context (2026-10-28)
+
+Brauser can now rebuild older work history that used uppercase or
+unhyphenated UUIDs without silently losing measured activity or Why context.
+Those older log entries stored the original UUID spelling in their payload
+but hashed its canonical form in the marker. The reader now validates and
+caches the canonical UUID, keeping retries from double-counting the same
+work. It leaves the daily log exactly as it was written, and a payload naming
+a different UUID still fails validation.
+
+An interrupted append from that older build can also finish after an upgrade.
+For v1 hash-only intents, recovery reconstructs the original queued UUID
+spelling alongside all three frozen historical text renderings. It selects
+bytes only when the complete intent hash and existing torn tail both match;
+changed payloads, mismatched IDs and edited logs stay untouched. Prepared-byte
+v2/v3 recovery continues unchanged. Two failing-first regression matrices
+exercise 33 cases through reindex, restart, single delivery and activity batch
+delivery, including duplicate retries and refusal paths. The full required
+and README gates pass; macOS browser acceptance remains outside this Linux
+run. Completes assigned `brwr-smu`.

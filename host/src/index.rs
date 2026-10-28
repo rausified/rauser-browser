@@ -2612,9 +2612,11 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             if bytes.len() > 256 * 1024 {
                 return None;
             }
-            let event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
+            let mut event: ActivityEvent = serde_json::from_slice(&bytes).ok()?;
+            // Older payloads kept the queued spelling; the marker always
+            // hashed the canonical UUID. Normalize before validating or caching.
+            event.event_id = Uuid::parse_str(&event.event_id).ok()?.to_string();
             if !logged_activity_is_bounded(&event)
-                || Uuid::parse_str(&event.event_id).is_err()
                 || event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
                 || event.artifact_type.is_empty()
@@ -2639,11 +2641,11 @@ fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEvent> {
             if bytes.len() > 256 * 1024 {
                 return None;
             }
-            let event: WhyEvent = serde_json::from_slice(&bytes).ok()?;
+            let mut event: WhyEvent = serde_json::from_slice(&bytes).ok()?;
+            event.event_id = Uuid::parse_str(&event.event_id).ok()?.to_string();
             if event.artifact_id.is_empty()
                 || event.artifact_id.len() > 512
                 || event.text.chars().count() > 500
-                || Uuid::parse_str(&event.event_id).is_err()
                 || !safe_page_url(&event.url)
                 || sha256_hex(event.event_id.as_bytes()) != id_hash
                 || sha256_hex(event.url.as_bytes()) != url_hash
@@ -3821,6 +3823,111 @@ mod tests {
                 index.artifact(&event.artifact_id).unwrap().unwrap(),
                 rebuilt
             );
+        }
+    }
+
+    #[test]
+    fn historical_noncanonical_uuid_markers_survive_reindex() {
+        let canonical = "abcdef01-2345-4678-9abc-def012345678";
+        for raw in [
+            canonical.to_uppercase(),
+            canonical.replace('-', ""),
+            canonical.to_uppercase().replace('-', ""),
+        ] {
+            for why in [false, true] {
+                let root = TempDir::new().unwrap();
+                let cache = TempDir::new().unwrap();
+                let event = activity(
+                    &raw,
+                    "ABC",
+                    "Historical work",
+                    &crate::capture::fixtures::event_time()
+                        .replace_minute(0)
+                        .unwrap()
+                        .replace_second(0)
+                        .unwrap()
+                        .format(&Rfc3339)
+                        .unwrap(),
+                );
+                let context = WhyEvent {
+                    event_id: raw.clone(),
+                    artifact_id: event.artifact_id.clone(),
+                    url: event.url.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    incognito: false,
+                    text: "Prepare the release".into(),
+                };
+                let payload = if why {
+                    serde_json::to_value(&context).unwrap()
+                } else {
+                    serde_json::to_value(&event).unwrap()
+                };
+                let kind = if why { "why" } else { "activity" };
+                let marker = |payload: &serde_json::Value, id: &str, kind: &str| {
+                    format!(
+                        "{MARKER_PREFIX}{} url={} at={} kind={kind} data={} -->",
+                        sha256_hex(id.as_bytes()),
+                        sha256_hex(event.url.as_bytes()),
+                        event.occurred_at,
+                        hex::encode(serde_json::to_vec(payload).unwrap())
+                    )
+                };
+                let historical = marker(&payload, canonical, kind);
+                let parsed = parse_marker_event(&historical, "").expect("historical UUID marker");
+                match &parsed.data {
+                    EventData::Activity(event) => assert_eq!(event.event_id, canonical),
+                    EventData::Why(event) => assert_eq!(event.event_id, canonical),
+                    _ => panic!("unexpected historical event"),
+                }
+                let mut forged = payload.clone();
+                forged["event_id"] = Uuid::new_v4().to_string().into();
+                assert!(parse_marker_event(&marker(&forged, canonical, kind), "").is_none());
+                let seed = ActivityEvent {
+                    event_id: Uuid::new_v4().to_string(),
+                    ..event.clone()
+                };
+                let mut contents = format!("{LOG_HEADER}\n");
+                if why {
+                    contents.push_str(&marker(
+                        &serde_json::to_value(&seed).unwrap(),
+                        &seed.event_id,
+                        "activity",
+                    ));
+                    contents.push('\n');
+                }
+                contents.push_str(&historical);
+                contents.push('\n');
+                let date = OffsetDateTime::parse(&event.occurred_at, &Rfc3339)
+                    .unwrap()
+                    .date();
+                let path = root.path().join(format!(
+                    "log/{}/{:02}/{date}.md",
+                    date.year(),
+                    u8::from(date.month())
+                ));
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, &contents).unwrap();
+                let index = index(&root, &cache);
+                index.reindex().unwrap();
+                let rebuilt = index.artifact(&event.artifact_id).unwrap().unwrap();
+                if why {
+                    assert_eq!(rebuilt.why.as_deref(), Some(context.text.as_str()));
+                    index.record_why(&context, &[]).unwrap();
+                } else {
+                    assert_eq!(rebuilt.focused_seconds, event.focused_seconds);
+                    assert_eq!(rebuilt.opens, event.opens);
+                    index.record_activity(&event, &[]).unwrap();
+                }
+                let state = index.load_current_state().unwrap().0;
+                assert!(state.events.contains_key(canonical));
+                assert_eq!(state.events.len(), if why { 2 } else { 1 });
+                index.reindex().unwrap();
+                assert_eq!(
+                    index.artifact(&event.artifact_id).unwrap().unwrap(),
+                    rebuilt
+                );
+                assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+            }
         }
     }
 
