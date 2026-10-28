@@ -657,7 +657,7 @@ export type DraftScopeState = "not_shared" | "copied" | "pending" | "unscoped_on
 
 export type UncheckedReason = "link_only" | "token_only";
 
-export type DraftDropReason = "root" | "probe" | "search_or_paging" | "blocked_route" | "param_name" | "already_recognized" | "no_route_word" | "no_identifier" | "limit" | "draft_forbidden_key" | "draft_no_scope_source" | "draft_scope_conflict" | "draft_no_leading_literal" | "draft_rest_second" | "draft_id_needs_typed_capture" | "draft_search_capture" | "draft_matches_probe" | "draft_overlap" | "draft_blocked_route" | "draft_paging_capture" | "draft_invalid_rule" | "draft_scope_pending" | "draft_scope_choice";
+export type DraftDropReason = "root" | "probe" | "search_or_paging" | "secret_query" | "blocked_route" | "param_name" | "already_recognized" | "no_route_word" | "no_identifier" | "limit" | "draft_forbidden_key" | "draft_no_scope_source" | "draft_scope_conflict" | "draft_no_leading_literal" | "draft_rest_second" | "draft_id_needs_typed_capture" | "draft_search_capture" | "draft_matches_probe" | "draft_overlap" | "draft_blocked_route" | "draft_paging_capture" | "draft_secret_capture" | "draft_invalid_rule" | "draft_scope_pending" | "draft_scope_choice";
 
 export type PreviewSource = "visited" | "link" | "probe";
 

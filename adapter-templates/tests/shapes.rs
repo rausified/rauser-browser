@@ -69,6 +69,9 @@ fn policy() -> DraftPolicy {
         search_keys: Vec::new(),
         paging_keys: Vec::new(),
         blocked_route_words: Vec::new(),
+        secret_query_keys: Vec::new(),
+        secret_query_key_parts: Vec::new(),
+        secret_query_key_suffixes: Vec::new(),
         mode_words: Vec::new(),
         fill: Fill {
             num: value("num"),

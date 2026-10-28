@@ -220,7 +220,7 @@ The host checks the rules in this order. The first failing check decides each ve
    - otherwise `copied` when every scoped adapter on the origin agrees (SQ-V5, SQ-V17);
    - otherwise `pending`, naming the catalog's tenant capture: there is no scoped adapter, or they disagree.
 3. Each rule is validated as a one-rule adapter with the copied scope. While scope is pending, a stand-in scope of the tenant capture is used, and where only unscoped is possible, `unscoped`. A rule that fails is dropped as `draft_invalid_rule`, whoever wrote it, because it can never be saved. A failure with no rule index refuses the whole draft as `error`.
-4. Per rule: `draft_no_leading_literal`, `draft_rest_second`, `draft_blocked_route` (a path literal or alternative is a catalog `blocked_route_words` entry, compared with ASCII folding), `draft_search_capture` and `draft_paging_capture` (an ID capture bound from a `search_keys` or `paging_keys` key), `draft_matches_probe` (the origin root and each catalog probe path on the draft's origin, matched without scope, SQ-V3), and `draft_overlap` (with `existing`, then with `accepted`). The survivors are then validated together in rule order, and a rule that conflicts with an earlier survivor is dropped as `draft_invalid_rule`.
+4. Per rule: `draft_no_leading_literal`, `draft_rest_second`, `draft_blocked_route` (a path literal or alternative is a catalog `blocked_route_words` entry, compared with ASCII folding, by its `-`/`_`/`.` parts and their join, with a trailing number and a plural `s` folded), `draft_search_capture`, `draft_paging_capture` and `draft_secret_capture` (an ID capture bound from a `search_keys`, `paging_keys` or secret query key: a `secret_query_keys` entry, a key containing a `secret_query_key_parts` fragment or ending in a `secret_query_key_suffixes` entry, compared with case folded and `-`, `_`, `.` removed), `draft_matches_probe` (the origin root and each catalog probe path on the draft's origin, matched without scope, SQ-V3), and `draft_overlap` (with `existing`, then with `accepted`). The survivors are then validated together in rule order, and a rule that conflicts with an earlier survivor is dropped as `draft_invalid_rule`.
 5. `draft_id_needs_typed_capture`, judged on the survivors. It refuses the whole draft when any rule is drafted, and warns every surviving rule otherwise.
 
 `resolved` judges `choice` against the scope state after the checks, and never changes a verdict:
@@ -250,7 +250,7 @@ These are the complete format-1 enum. Every code appears in at least one vector.
 | Alias | `bad_alias`, `alias_capture_not_id`, `alias_capture_not_in_title`, `alias_type_mismatch` |
 | Refs | `too_many_refs`, `bad_ref`, `bad_ref_find` |
 
-The draft codes are `draft_forbidden_key`, `draft_no_scope_source`, `draft_scope_conflict`, `draft_no_leading_literal`, `draft_rest_second`, `draft_id_needs_typed_capture`, `draft_search_capture`, `draft_matches_probe`, and `draft_overlap`. The `draft_rules` kind adds `draft_blocked_route`, `draft_paging_capture`, `draft_invalid_rule`, `draft_scope_pending`, and `draft_scope_choice`.
+The draft codes are `draft_forbidden_key`, `draft_no_scope_source`, `draft_scope_conflict`, `draft_no_leading_literal`, `draft_rest_second`, `draft_id_needs_typed_capture`, `draft_search_capture`, `draft_matches_probe`, and `draft_overlap`. The `draft_rules` kind adds `draft_blocked_route`, `draft_paging_capture`, `draft_secret_capture`, `draft_invalid_rule`, `draft_scope_pending`, and `draft_scope_choice`.
 
 ### Check order
 

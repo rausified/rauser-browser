@@ -223,7 +223,13 @@ hint (an unrecognized sampled shape seen three times) drafts additions only;
 existing adapters are never edited. **Open advanced settings** hands the draft
 to the adapter editor through a 30-minute, read-once `storage.session` entry,
 where an edited rule becomes user-written. Drafted rules never re-map an
-already-recognized artifact (`remapped` is 0 after overlap removal). Known
+already-recognized artifact: a shape the current policy or a recorded
+contract (retired or hand-removed) recognizes is listed as already captured,
+a rule that may overlap one is dropped, and `draft_site` refuses a draft
+whose `remapped` is not 0. Secret and capability query keys (catalog
+`secret_query_keys`) never become IDs, blocked route words are matched by
+their hyphen/underscore parts and plurals and at the shared-origin tenant
+position too, and a link shape never renames or reranks a visited kind. Known
 limits: Notion workspace pages have no route word before their ID and are
 refused (`brwr-gf1`, DESIGN.md §5.1), and on a shared origin a short
 lowercase repository or namespace name stays a literal, so its rule covers

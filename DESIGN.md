@@ -330,15 +330,33 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
     editor, in its expiring handoff entry (below); they never enter the
     worker sample, the delivery buffer, `update_config` or the home folder.
   - **Catalog.** The probe paths, search and paging keys, blocked route words,
-    mode words, fill values, starter types and shared-origin tenant and
-    account-index positions are one host-owned file,
+    secret query keys, mode words, fill values, starter types and
+    shared-origin tenant and account-index positions are one host-owned file,
     `protocol/capture-site/catalog.json`. The host parses it; the extension's
-    probe list, fill values and starter types are pinned to it by tests.
+    probe list, blocked route words, fill values and starter types are pinned
+    to it by tests.
+  - **Secrets and capability routes.** A query pair whose key carries a
+    secret or capability (a catalog `secret_query_keys` entry such as
+    `token`, `code`, `state`, `sig` or `session`, a key containing a
+    `secret_query_key_parts` fragment such as `token` or `signature`, or one
+    ending in `sig`; ASCII case and `-`, `_`, `.` are folded) never becomes
+    an ID: the drafter drops the pair, and the shape as `secret_query` when it
+    has no other identifier, and the per-rule check drops an ID capture from
+    such a key as `draft_secret_capture`. A route literal is a blocked route
+    word when any of its `-`/`_`/`.` parts, or the parts joined, is a listed
+    word once a trailing number and a plural `s` are folded, so `sign-in`,
+    `reset-password`, `accept-invite`, `invitations` and `tokens` are blocked.
+    The check runs on every literal the shaper kept, the shared-origin tenant
+    position included, before that position is marked: `linear.app/auth/…`
+    is a sign-in route, not a workspace named `auth`. Neither the review's
+    prefill nor a chosen scope value may be a blocked route word.
   - **Per-rule checks.** `check_draft_rules` (adapter-templates.md §10.4)
     judges each rule: a failing drafted rule is dropped with its reason and the
     rest of the draft kept, a failing user-written rule only warns, and an
     adapter with no rule left is removed. Overlap is checked against the
-    origin's existing adapters and then the earlier-ranked drafted ones.
+    origin's existing adapters, its recorded note-only contracts (retired
+    `[[adapter_id_history]]` entries and adopted contracts removed by hand),
+    and then the earlier-ranked drafted ones.
   - **Pending scope.** On a shared origin with no scoped adapter, or with
     scoped adapters that disagree, scope is pending rather than refused. The
     review prefills the current tab's tenant from the panel's own URL, and
@@ -374,9 +392,25 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
     differs from its baseline is user-written; an adapter given `alias`,
     `fields` or `path_case` by hand is user-written as a whole, so its
     forbidden key only warns. Unedited drafted failures still block the save.
+    When the review has no valid plan yet (scope still pending, a refused
+    rename, or every rule unchecked), the handoff carries the drafted tables
+    with only their checked rules and omits adapters with none, so a
+    link-only or loose rule the user never checked is never handed off as
+    drafted.
   - **Remap invariant.** A drafted rule never re-maps an artifact the current
-    policy or a recorded contract already names: overlap removal guarantees
-    it, and the host asserts `remapped` is 0.
+    policy or a recorded contract already names. The drafter lists a shape
+    the current policy or a recorded contract recognizes as already captured,
+    and drops a drafted rule that may overlap either as `draft_overlap`, so a
+    site the user removed and captures again gets its old routes listed as
+    already captured rather than re-drafted under a new type that the save's
+    frozen-ID check would refuse. `draft_site` asserts `remapped` is 0 and
+    answers `internal` rather than offer such a draft.
+  - **Untrusted links.** A link shape never changes how visited shapes group,
+    nor the type, ID scheme or rank of a kind with visited support: when only
+    links differ in a kind's varying route word, the kind is named by its
+    visited word, and links only rank adapters that have no visits. A query
+    name a shape repeats with two classes is dropped, since one key cannot
+    hold two conditions.
   - **Limitations.** On a shared origin the shaper keeps a short lowercase
     route-word-like segment literal, so a repository or namespace named like
     `widget` drafts a rule for that one name (`/{owner:name|lower}/widget/pull/{num:int}`)

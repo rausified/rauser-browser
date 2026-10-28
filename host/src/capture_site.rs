@@ -37,6 +37,9 @@ struct CatalogFile {
     search_keys: Vec<String>,
     paging_keys: Vec<String>,
     blocked_route_words: Vec<String>,
+    secret_query_keys: Vec<String>,
+    secret_query_key_parts: Vec<String>,
+    secret_query_key_suffixes: Vec<String>,
     mode_words: BTreeMap<String, String>,
     fill: FillFile,
     starter_types: Vec<String>,
@@ -99,6 +102,9 @@ fn parse(source: &str) -> Result<DraftPolicy, String> {
         search_keys: file.search_keys,
         paging_keys: file.paging_keys,
         blocked_route_words: file.blocked_route_words,
+        secret_query_keys: file.secret_query_keys,
+        secret_query_key_parts: file.secret_query_key_parts,
+        secret_query_key_suffixes: file.secret_query_key_suffixes,
         mode_words: file.mode_words.into_iter().collect(),
         fill: Fill {
             num,
@@ -276,6 +282,7 @@ fn draft_error_reason(code: DraftErrorCode) -> DraftDropReason {
         DraftErrorCode::Overlap => DraftDropReason::DraftOverlap,
         DraftErrorCode::BlockedRoute => DraftDropReason::DraftBlockedRoute,
         DraftErrorCode::PagingCapture => DraftDropReason::DraftPagingCapture,
+        DraftErrorCode::SecretCapture => DraftDropReason::DraftSecretCapture,
         DraftErrorCode::InvalidRule => DraftDropReason::DraftInvalidRule,
         DraftErrorCode::ScopePending => DraftDropReason::DraftScopePending,
         DraftErrorCode::ScopeChoice => DraftDropReason::DraftScopeChoice,
@@ -287,6 +294,7 @@ fn drop_reason(reason: DropReason) -> DraftDropReason {
         DropReason::Root => DraftDropReason::Root,
         DropReason::Probe => DraftDropReason::Probe,
         DropReason::SearchOrPaging => DraftDropReason::SearchOrPaging,
+        DropReason::SecretQuery => DraftDropReason::SecretQuery,
         DropReason::BlockedRoute => DraftDropReason::BlockedRoute,
         DropReason::ParamName => DraftDropReason::ParamName,
         DropReason::AlreadyRecognized => DraftDropReason::AlreadyRecognized,
@@ -442,8 +450,10 @@ fn preview(
 
 /// How many already-recognized artifacts the preview's shapes would move to
 /// a drafted adapter: a filled shape a survivor matches that the current
-/// policy, or a recorded contract's note key, already names. Overlap
-/// removal keeps this 0 for the current policy.
+/// policy, or a recorded contract's note key, already names. The drafter
+/// judges every rule against the current policy and the recorded contracts
+/// (filter and overlap check), so this is 0; `draft_site` refuses a draft
+/// where it is not rather than offer rules the save would refuse.
 fn remapped(config: &ConfigStore, existing: &Document, rows: &[PreviewRowView]) -> u32 {
     let count = rows
         .iter()
@@ -487,7 +497,9 @@ pub fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response
         );
     };
     let taken = taken_types(config, existing);
-    let draft = structural::draft_site(&value.origin, existing, &input, catalog(), &taken);
+    let recorded = config.recorded_contract_documents();
+    let draft =
+        structural::draft_site(&value.origin, existing, recorded, &input, catalog(), &taken);
     let previewed: Vec<Option<PreviewAdapter>> = draft
         .adapters
         .iter()
@@ -495,6 +507,15 @@ pub fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response
         .collect();
     let rows = preview(&value.origin, &input, &previewed);
     let remapped = remapped(config, existing, &rows);
+    // The remap invariant (DESIGN §5.1): a drafted rule never re-keys an
+    // artifact the current policy or a recorded contract already names.
+    if remapped != 0 {
+        return error(
+            id,
+            ErrorCode::Internal,
+            "the draft would move already captured pages to a new kind of page",
+        );
+    }
     Response::SiteDrafted(SiteDrafted {
         protocol_version: PROTOCOL_VERSION,
         request_id: value.request_id,
@@ -653,7 +674,9 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
     };
     let policy = catalog();
     let state = scope_state(existing, Some(&value.origin), policy);
-    let mut accepted: Vec<Document> = Vec::new();
+    // Recorded contracts freeze their routes' IDs, so a rule that may
+    // overlap one is judged as overlapping an accepted adapter.
+    let mut accepted: Vec<Document> = config.recorded_contract_documents().to_vec();
     let mut rules = Vec::with_capacity(tables.len());
     let mut scope = Vec::with_capacity(tables.len());
     let mut previewed = Vec::with_capacity(tables.len());
@@ -681,7 +704,7 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
             .collect();
         previewed.push(preview_adapter(table, keep));
         rules.push(verdicts.into_iter().map(rule_verdict_view).collect());
-        let resolved = resolve_scope_choice(&state, &scope_choice(choice.as_ref()));
+        let resolved = resolve_scope_choice(&state, &scope_choice(choice.as_ref()), policy);
         scope.push(ScopeVerdictView {
             state: scope_state_view(&state),
             resolved: resolved.as_ref().ok().map(|r| match r {
@@ -1131,6 +1154,195 @@ mod handler_tests {
         for starter in &catalog().starter_types {
             assert!(site.taken_types.contains(starter), "{starter}");
         }
+    }
+
+    const TOOLS_ISSUES_HISTORY: &str = "[[adapter_id_history]]\ntype = \"tools.issues\"\norigin = \"https://tools.example.com\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"tools.issues:{host}/{id}\"\n";
+
+    /// Saves every drafted adapter, all rules as drafted, through the
+    /// revision-checked config update the panel's save ends with.
+    fn save_drafted(s: &mut Setup, site: &SiteDrafted) {
+        let mut next = s.config.snapshot().clone();
+        next.adapters
+            .artifacts
+            .extend(site.adapters.iter().map(|a| a.adapter.clone()));
+        let revision = s.config.revision().to_owned();
+        s.config
+            .update(next, &revision)
+            .expect("the drafted adapters save")
+            .expect("no conflict");
+    }
+
+    /// The user removed a site, then captures it again: the retired
+    /// contract still names its artifacts, so its routes are already
+    /// captured instead of re-drafted under a new type the save refuses.
+    #[test]
+    fn draft_site_lists_a_retired_adapters_routes_as_already_captured() {
+        let mut s = setup(TOOLS_ISSUES_HISTORY);
+        let site = drafted(draft_site(
+            request(TOOLS, &["/issues/{num}", "/docs/{num}"], &["/issues/{num}"]),
+            &mut s.config,
+        ));
+        assert_eq!(site.remapped, 0);
+        let types: Vec<&Json> = site.adapters.iter().map(|a| &a.adapter["type"]).collect();
+        assert_eq!(types, [&json!("tools.docs")], "{site:#?}");
+        assert!(
+            site.dropped
+                .iter()
+                .any(|d| d.shape.as_deref() == Some("/issues/{num}")
+                    && d.reason == DraftDropReason::AlreadyRecognized),
+            "{:?}",
+            site.dropped
+        );
+        // The re-check judges a rule over the retired routes as overlapping.
+        let revision = site.revision.clone();
+        let issues = json!({
+            "type": "tools.issues2",
+            "origin": TOOLS,
+            "match": [{"path": "/issues/{num:int}"}, {"path": "/tasks/{num:int}"}],
+            "id": "tools.issues2:{host}/{num}"
+        });
+        let response = checked(check_site_draft(
+            check(
+                TOOLS,
+                &revision,
+                vec![issues.clone()],
+                vec![drafted_rules(&issues)],
+                vec![None],
+            ),
+            &mut s.config,
+        ));
+        assert_eq!(
+            verdicts(&response),
+            [vec![
+                (RuleVerdictKind::Dropped, Some("draft_overlap")),
+                (RuleVerdictKind::Kept, None)
+            ]]
+        );
+        // What the review offers saves.
+        save_drafted(&mut s, &site);
+    }
+
+    /// A contract removed from config.toml by hand is recorded in the
+    /// host's adopted-contract state and counts the same way.
+    #[test]
+    fn draft_site_lists_a_hand_removed_adapters_routes_as_already_captured() {
+        let mut s = setup(&adapters(&[TOOLS_ITEMS]));
+        {
+            let _lock = s.config.lock_current().unwrap();
+            s.config.refresh().unwrap();
+        }
+        let root = s.folder.path().join("notes");
+        fixtures::write(&s.path, &root, "", "", "");
+        {
+            let _lock = s.config.lock_current().unwrap();
+            s.config.refresh().unwrap();
+        }
+        assert!(s.config.snapshot().adapters.artifacts.is_empty());
+        let site = drafted(draft_site(
+            request(TOOLS, &["/items/{num}", "/docs/{num}"], &[]),
+            &mut s.config,
+        ));
+        assert_eq!(site.remapped, 0);
+        let types: Vec<&Json> = site.adapters.iter().map(|a| &a.adapter["type"]).collect();
+        assert_eq!(types, [&json!("tools.docs")], "{site:#?}");
+        assert!(
+            site.dropped
+                .iter()
+                .any(|d| d.shape.as_deref() == Some("/items/{num}")
+                    && d.reason == DraftDropReason::AlreadyRecognized),
+            "{:?}",
+            site.dropped
+        );
+        save_drafted(&mut s, &site);
+    }
+
+    /// Every drafted adapter crosses the wire as JSON and passes the
+    /// re-check unchanged, including a shape that repeats a query name with
+    /// two classes and one that carries a token.
+    #[test]
+    fn every_drafted_adapter_round_trips_through_json_and_the_re_check() {
+        let mut s = setup("");
+        let visited = [
+            "/view?id={id}&id={num}",
+            "/doc/{num}?rev={id}&rev={num}",
+            "/files/{num}?token={id}",
+            "/items/{num}",
+            "/wiki/pages/{uuid}?access_token={hex64}",
+        ];
+        let links = ["/tasks/{num}?sig={hex32}", "/boards/{key}"];
+        let site = drafted(draft_site(request(TOOLS, &visited, &links), &mut s.config));
+        assert!(site.adapters.len() >= 3, "{site:#?}");
+        assert!(
+            site.dropped
+                .iter()
+                .any(|d| d.shape.as_deref() == Some("/view?id={id}&id={num}")),
+            "{:?}",
+            site.dropped
+        );
+        let tables: Vec<Json> = site.adapters.iter().map(|a| a.adapter.clone()).collect();
+        for table in &tables {
+            let text = table.to_string();
+            for secret in ["token=", "access_token", "sig=", "rev="] {
+                assert!(!text.contains(secret), "{text}");
+            }
+        }
+        let provenance = tables.iter().map(drafted_rules).collect();
+        let response = checked(check_site_draft(
+            check(
+                TOOLS,
+                &site.revision,
+                tables.clone(),
+                provenance,
+                vec![None; tables.len()],
+            ),
+            &mut s.config,
+        ));
+        for rules in verdicts(&response) {
+            assert!(
+                rules.iter().all(|(v, _)| *v == RuleVerdictKind::Kept),
+                "{rules:?}"
+            );
+        }
+        save_drafted(&mut s, &site);
+    }
+
+    /// On a shared origin a blocked word at the tenant position is a route,
+    /// and the review cannot scope a draft to one.
+    #[test]
+    fn shared_origin_blocked_words_are_never_tenants() {
+        let mut s = setup("");
+        let site = drafted(draft_site(
+            request(
+                LINEAR,
+                &["/auth/callback/{id}", "/invite/accept/{hex32}"],
+                &["/share/doc/{uuid}"],
+            ),
+            &mut s.config,
+        ));
+        assert!(site.adapters.is_empty(), "{site:#?}");
+        assert!(
+            site.dropped
+                .iter()
+                .all(|d| d.reason == DraftDropReason::BlockedRoute),
+            "{:?}",
+            site.dropped
+        );
+        let (revision, table) = linear_draft(&mut s);
+        let response = checked(check_site_draft(
+            check(
+                LINEAR,
+                &revision,
+                vec![table.clone()],
+                vec![drafted_rules(&table)],
+                vec![values(&["acme", "auth"])],
+            ),
+            &mut s.config,
+        ));
+        assert_eq!(response.scope[0].resolved, None);
+        assert_eq!(
+            response.scope[0].reason.as_deref(),
+            Some("draft_scope_choice")
+        );
     }
 
     #[test]

@@ -734,6 +734,15 @@ impl ConfigStore {
             .collect()
     }
 
+    /// The compiled note-only contracts `note_key_rule` reads: retired
+    /// `[[adapter_id_history]]` entries, contracts removed from config.toml
+    /// by hand, and the current document while it is inert. Each names
+    /// artifacts and freezes its routes' IDs, so Capture Site drafts no rule
+    /// that may overlap one (DESIGN §5.1).
+    pub(crate) fn recorded_contract_documents(&self) -> &[AdapterTemplates] {
+        &self.note_key_rules.documents
+    }
+
     pub fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()

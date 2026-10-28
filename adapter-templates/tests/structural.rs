@@ -49,6 +49,9 @@ fn policy() -> DraftPolicy {
         search_keys: strings(&catalog["search_keys"]),
         paging_keys: strings(&catalog["paging_keys"]),
         blocked_route_words: strings(&catalog["blocked_route_words"]),
+        secret_query_keys: strings(&catalog["secret_query_keys"]),
+        secret_query_key_parts: strings(&catalog["secret_query_key_parts"]),
+        secret_query_key_suffixes: strings(&catalog["secret_query_key_suffixes"]),
         mode_words: catalog["mode_words"]
             .as_object()
             .expect("mode_words")
@@ -123,7 +126,7 @@ fn draft(origin: &str, existing: &Document, visited: &[&str], links: &[&str]) ->
         visited: shapes(visited),
         links: shapes(links),
     };
-    draft_site(origin, existing, &input, &policy(), &[])
+    draft_site(origin, existing, &[], &input, &policy(), &[])
 }
 
 /// The adapter's `type`.
@@ -712,6 +715,37 @@ fn planted_search_page_is_dropped() {
 }
 
 #[test]
+fn planted_secret_query_parameter_id_is_dropped() {
+    // A signed or shared link's token is never an ID: the pair is dropped,
+    // and the shape too when it has no other identifier.
+    let planted = [
+        "/files/{num}?token={id}",
+        "/doc/{num}?access_token={hex64}",
+        "/view?sig={hex32}",
+        "/cb?code={id}",
+    ];
+    let site = draft(TOOLS, &empty(), &["/docs/{num}"], &planted);
+    assert_visited_rule_unchanged(&site, "/docs/{num:int}");
+    for shape in ["/view?sig={hex32}", "/cb?code={id}"] {
+        assert_eq!(
+            reason_of(&site, shape),
+            Some(DropReason::SecretQuery),
+            "{shape}: {:?}",
+            drops(&site)
+        );
+    }
+    for rule in all_rules(&site) {
+        for key in ["token", "access_token", "sig", "code"] {
+            assert!(!rule.contains(&format!("{key}=")), "{rule}");
+        }
+    }
+    for adapter in &site.adapters {
+        let id = adapter.adapter.get("id").and_then(Value::as_str).unwrap();
+        assert!(!id.contains("{hex}") && !id.contains("{token}"), "{id}");
+    }
+}
+
+#[test]
 fn planted_auth_or_capability_route_is_dropped() {
     let planted = [
         "/invite/{hex32}",
@@ -730,6 +764,14 @@ fn planted_auth_or_capability_route_is_dropped() {
         "/unsubscribe/{uuid}",
         "/docs/{num}/share/{id}",
         "/docs/invite/{uuid}",
+        "/invitations/{hex32}",
+        "/accept-invite/{hex32}",
+        "/reset-password/{uuid}",
+        "/sign-in/{id}",
+        "/magic-link/{id}",
+        "/tokens/{num}",
+        "/auth/callback/{id}",
+        "/sso/{id}",
     ];
     let site = draft(TOOLS, &empty(), &["/docs/{num}"], &planted);
     assert_visited_rule_unchanged(&site, "/docs/{num:int}");

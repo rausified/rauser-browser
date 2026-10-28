@@ -126,6 +126,7 @@ codes! {
         Overlap => "draft_overlap",
         BlockedRoute => "draft_blocked_route",
         PagingCapture => "draft_paging_capture",
+        SecretCapture => "draft_secret_capture",
         InvalidRule => "draft_invalid_rule",
         ScopePending => "draft_scope_pending",
         ScopeChoice => "draft_scope_choice",

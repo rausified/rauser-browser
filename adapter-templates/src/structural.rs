@@ -3,10 +3,13 @@
 //!
 //! The steps run in the order DESIGN §5.1 gives them:
 //!
-//! 1. **Filter** drops the root, the probe paths, blocked route words,
-//!    search and paging identifiers, `{param}` names and every shape an
-//!    existing adapter on the origin already recognizes, and marks the
-//!    shared-origin tenant and account-index positions.
+//! 1. **Filter** drops the root, the probe paths, blocked route words
+//!    (checked before the tenant is marked, so the tenant position cannot
+//!    hide one), search, paging and secret identifiers, `{param}` names, a
+//!    query name repeated with different classes, and every shape an
+//!    existing adapter or a recorded contract on the origin already
+//!    recognizes, and marks the shared-origin tenant and account-index
+//!    positions.
 //! 2. **Group** groups what is left into kinds, keyed by the route words and
 //!    placeholder classes up to the last identifier.
 //! 3. **Keep** keeps a kind only when a route word comes before its first
@@ -24,8 +27,9 @@
 //!
 //! Every collection is sorted by shape string before it is grouped, so the
 //! order of the input never changes the output. Link shapes come from the
-//! page and are untrusted: they never change how visited shapes group, and
-//! what only links support always forms a rule of its own.
+//! page and are untrusted: they never change how visited shapes group, nor
+//! the type, ID scheme or rank of a kind with visited support, and what only
+//! links support always forms a rule of its own.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,6 +65,9 @@ pub enum DropReason {
     Probe,
     /// Its only identifiers are search or paging parameters.
     SearchOrPaging,
+    /// Its only identifiers are query parameters that carry a secret or a
+    /// capability, such as `token` or `sig`.
+    SecretQuery,
     /// It uses a blocked route word.
     BlockedRoute,
     /// Its only identifiers are under `{param}` names.
@@ -83,6 +90,7 @@ impl DropReason {
             DropReason::Root => "root",
             DropReason::Probe => "probe",
             DropReason::SearchOrPaging => "search_or_paging",
+            DropReason::SecretQuery => "secret_query",
             DropReason::BlockedRoute => "blocked_route",
             DropReason::ParamName => "param_name",
             DropReason::AlreadyRecognized => "already_recognized",
@@ -213,6 +221,11 @@ struct Kind {
     query: Vec<(String, ShapeClass)>,
     /// The one path position whose route word differs within the kind.
     varying: Option<usize>,
+    /// The route word every visited shape has at the varying position, when
+    /// only links differ there. It names the kind as it would be named
+    /// without those links, so a planted link cannot change the type or ID
+    /// scheme of visited pages.
+    visited_word: Option<String>,
     /// The rules, visited-backed first, then by text.
     rules: Vec<KindRule>,
 }
@@ -273,19 +286,26 @@ fn is_probe(shape: &UrlShape, policy: &DraftPolicy) -> bool {
     })
 }
 
-/// Whether an existing adapter on `origin` recognizes the filled shape,
-/// matching each rule without scope as the draft overlap check does: an
-/// owner-scoped adapter would not recognize the filler owner otherwise.
-fn recognized(shape: &UrlShape, origin: &str, existing: &Document, policy: &DraftPolicy) -> bool {
+/// Whether an existing adapter or a recorded contract on `origin`
+/// recognizes the filled shape, matching each rule without scope as the
+/// draft overlap check does: an owner-scoped adapter would not recognize the
+/// filler owner otherwise.
+fn recognized(
+    shape: &UrlShape,
+    origin: &str,
+    existing: &Document,
+    recorded: &[Document],
+    policy: &DraftPolicy,
+) -> bool {
     let Ok(url) = Prepared::new(&shape.fill(origin, policy)) else {
         return false;
     };
     let Some(segments) = url.segments.as_deref() else {
         return false;
     };
-    existing
-        .adapters
-        .iter()
+    std::iter::once(existing)
+        .chain(recorded)
+        .flat_map(|doc| &doc.adapters)
         .filter(|a| a.origin == origin && a.origin == url.origin)
         .any(|a| {
             a.rules
@@ -299,6 +319,7 @@ fn recognized(shape: &UrlShape, origin: &str, existing: &Document, policy: &Draf
 fn filter(
     origin: &str,
     existing: &Document,
+    recorded: &[Document],
     input: &ShapeInput,
     policy: &DraftPolicy,
 ) -> (Vec<Tagged>, Vec<Dropped>) {
@@ -335,6 +356,16 @@ fn filter(
             dropped.push(drop(DropReason::Probe));
             continue;
         }
+        // Every literal the shaper kept is checked, the tenant position too:
+        // a shared origin's `/auth/callback/{id}` is a sign-in route, not a
+        // workspace named `auth`.
+        let blocked = shape.path.iter().any(
+            |part| matches!(part, ShapePart::Literal(word) if policy.is_blocked_route_word(word)),
+        );
+        if blocked {
+            dropped.push(drop(DropReason::BlockedRoute));
+            continue;
+        }
 
         let mut path: Vec<Part> = shape
             .path
@@ -356,17 +387,8 @@ fn filter(
             path[at] = Part::Tenant;
         }
 
-        // The tenant is a name, not a route word, so it is never blocked.
-        let blocked = path.iter().any(
-            |part| matches!(part, Part::Literal(word) if is_listed(word, &policy.blocked_route_words)),
-        );
-        if blocked {
-            dropped.push(drop(DropReason::BlockedRoute));
-            continue;
-        }
-
         let mut query = Vec::new();
-        let (mut search_or_paging, mut param) = (false, false);
+        let (mut search_or_paging, mut secret, mut param) = (false, false, false);
         for (name, class) in &shape.query {
             match name {
                 QueryName::Param => param = true,
@@ -376,6 +398,9 @@ fn filter(
                 {
                     search_or_paging = true
                 }
+                // A token, signature or one-time code is never an ID, even
+                // where the value has a fixed shape.
+                QueryName::Literal(word) if policy.is_secret_query_key(word) => secret = true,
                 // A slug value is title-like text, never an identifier.
                 QueryName::Literal(_) if *class == ShapeClass::Slug => {}
                 QueryName::Literal(word) => query.push((word.clone(), *class)),
@@ -383,7 +408,19 @@ fn filter(
         }
         query.sort();
         query.dedup();
+        // A name repeated with different classes would be two conditions on
+        // one key, which no adapter table can hold, so the name is dropped.
+        let repeated: BTreeSet<String> = query
+            .windows(2)
+            .filter(|pair| pair[0].0 == pair[1].0)
+            .map(|pair| pair[0].0.clone())
+            .collect();
+        query.retain(|(name, _)| !repeated.contains(name));
         let has_identifier = !query.is_empty() || path.iter().any(Part::is_identifier);
+        if !has_identifier && secret {
+            dropped.push(drop(DropReason::SecretQuery));
+            continue;
+        }
         if !has_identifier && search_or_paging {
             dropped.push(drop(DropReason::SearchOrPaging));
             continue;
@@ -392,8 +429,12 @@ fn filter(
             dropped.push(drop(DropReason::ParamName));
             continue;
         }
+        if !has_identifier && !repeated.is_empty() {
+            dropped.push(drop(DropReason::NoIdentifier));
+            continue;
+        }
 
-        if recognized(shape, origin, existing, policy) {
+        if recognized(shape, origin, existing, recorded, policy) {
             dropped.push(drop(DropReason::AlreadyRecognized));
             continue;
         }
@@ -719,10 +760,20 @@ fn build_kind(builder: Builder<'_>) -> Kind {
     if let Some(at) = varying {
         kind_base[at] = base[at].clone();
     }
+    let visited_words: BTreeSet<Option<String>> = members
+        .iter()
+        .filter(|m| m.tagged.source == Source::Visited)
+        .map(word)
+        .collect();
+    let visited_word = match visited_words.len() {
+        1 => visited_words.into_iter().next().flatten(),
+        _ => None,
+    };
     Kind {
         base: kind_base,
         query: kind_query,
         varying,
+        visited_word,
         rules,
     }
 }
@@ -1065,7 +1116,8 @@ fn map(kind: &Kind, shared: Option<&SharedOrigin>, policy: &DraftPolicy) -> Vec<
 
     // The last route word before the ID's first path identifier, or in the
     // whole path when the ID's identifiers are only in the query. The
-    // varying position holds several words, so it names nothing.
+    // varying position holds several words, so it names nothing, unless
+    // only links vary there: then it names the kind with the visited word.
     let before = (0..kind.base.len())
         .find(|&at| kind.base[at].is_identifier() && names[at].is_some())
         .unwrap_or(kind.base.len());
@@ -1074,7 +1126,8 @@ fn map(kind: &Kind, shared: Option<&SharedOrigin>, policy: &DraftPolicy) -> Vec<
         .enumerate()
         .rev()
         .find_map(|(at, part)| match part {
-            Part::Literal(word) if Some(at) != kind.varying => Some(word.clone()),
+            _ if Some(at) == kind.varying => kind.visited_word.clone(),
+            Part::Literal(word) => Some(word.clone()),
             _ => None,
         })
         .unwrap_or_default();
@@ -1241,8 +1294,11 @@ fn name(
 
 /// Step 6, Rank. Rules backed by a visited shape come first by visit count,
 /// then link-only rules by link count, ties by rule text; at most 16 rules
-/// per adapter. Adapters order by their visit count, then link count, then
-/// first rule; at most 8. What does not fit is dropped as `limit`.
+/// per adapter. Adapters order by their visit count, then, for link-only
+/// adapters only, link count, then first rule; at most 8. Links never
+/// reorder adapters with visits, so they never change which visited kind
+/// gets a type without a numeric suffix. What does not fit is dropped as
+/// `limit`.
 fn rank(mut candidates: Vec<Candidate>) -> (Vec<Candidate>, Vec<Dropped>) {
     let mut dropped = Vec::new();
     for candidate in &mut candidates {
@@ -1257,9 +1313,10 @@ fn rank(mut candidates: Vec<Candidate>) -> (Vec<Candidate>, Vec<Dropped>) {
         }
     }
     candidates.sort_by_cached_key(|c| {
+        let links = if c.visited() == 0 { c.links() } else { 0 };
         (
             Reverse(c.visited()),
-            Reverse(c.links()),
+            Reverse(links),
             c.rules.first().map(MappedRule::text),
         )
     });
@@ -1275,12 +1332,13 @@ fn rank(mut candidates: Vec<Candidate>) -> (Vec<Candidate>, Vec<Dropped>) {
 fn candidates(
     origin: &str,
     existing: &Document,
+    recorded: &[Document],
     input: &ShapeInput,
     policy: &DraftPolicy,
     taken: &[String],
 ) -> (Vec<Candidate>, Vec<Dropped>) {
     let shared = policy.shared_origin(origin);
-    let (tagged, mut dropped) = filter(origin, existing, input, policy);
+    let (tagged, mut dropped) = filter(origin, existing, recorded, input, policy);
     let (kinds, unkept) = keep(group(tagged), shared);
     dropped.extend(unkept);
     let mapped = kinds.iter().flat_map(|k| map(k, shared, policy)).collect();
@@ -1292,16 +1350,18 @@ fn candidates(
 
 /// The structural draft before the draft checks: the seam an agent drafter
 /// (`brwr-f45`) shares, since [`check_draft_rules`] judges any adapter table.
-/// Each adapter carries the origin's scope state.
+/// Each adapter carries the origin's scope state. `recorded` is as for
+/// [`draft_site`].
 pub fn draft_kinds(
     origin: &str,
     existing: &Document,
+    recorded: &[Document],
     input: &ShapeInput,
     policy: &DraftPolicy,
     taken: &[String],
 ) -> SiteDraft {
     let scope = scope_state(existing, Some(origin), policy);
-    let (candidates, dropped) = candidates(origin, existing, input, policy, taken);
+    let (candidates, dropped) = candidates(origin, existing, recorded, input, policy, taken);
     SiteDraft {
         adapters: candidates
             .iter()
@@ -1313,20 +1373,28 @@ pub fn draft_kinds(
 
 /// Drafts the site at `origin` from private URL shapes (DESIGN §5.1).
 ///
+/// `recorded` holds the note-only contracts the host still records (retired
+/// `[[adapter_id_history]]` entries and contracts removed from config.toml
+/// by hand). They name artifacts and freeze their routes' IDs, so a shape
+/// one recognizes is dropped as `already_recognized`, and a drafted rule
+/// that may overlap one is dropped as `draft_overlap`: no drafted rule
+/// re-maps an artifact a recorded contract names.
+///
 /// `taken` holds artifact types the draft may not use, beyond the starters
 /// and `existing`'s types. Each adapter is judged by [`check_draft_rules`]
-/// as drafted, against `existing` and the adapters accepted before it in
-/// rank order. A dropped rule's shapes are reported with the check's code,
-/// and an adapter left with no rule is removed.
+/// as drafted, against `existing`, the recorded contracts and the adapters
+/// accepted before it in rank order. A dropped rule's shapes are reported
+/// with the check's code, and an adapter left with no rule is removed.
 pub fn draft_site(
     origin: &str,
     existing: &Document,
+    recorded: &[Document],
     input: &ShapeInput,
     policy: &DraftPolicy,
     taken: &[String],
 ) -> SiteDraft {
-    let (candidates, mut dropped) = candidates(origin, existing, input, policy, taken);
-    let mut accepted: Vec<Document> = Vec::new();
+    let (candidates, mut dropped) = candidates(origin, existing, recorded, input, policy, taken);
+    let mut accepted: Vec<Document> = recorded.to_vec();
     let mut adapters = Vec::new();
     for mut candidate in candidates {
         let table = candidate.table(origin);
@@ -1398,7 +1466,7 @@ mod tests {
     /// Filter, Group and Keep, with every drop.
     fn run(origin: &str, existing: &Document, input: &ShapeInput) -> (Vec<Kind>, Vec<Dropped>) {
         let policy = test_catalog();
-        let (tagged, mut dropped) = filter(origin, existing, input, &policy);
+        let (tagged, mut dropped) = filter(origin, existing, &[], input, &policy);
         let (kinds, more) = keep(group(tagged), policy.shared_origin(origin));
         dropped.extend(more);
         (kinds, tidy(dropped))
@@ -1608,7 +1676,7 @@ mod tests {
             ],
             &[],
         );
-        let (tagged, _) = filter(TOOLS, &Document::default(), &shapes, &policy);
+        let (tagged, _) = filter(TOOLS, &Document::default(), &[], &shapes, &policy);
         let kinds = group(tagged);
         assert_eq!(
             texts(&kinds),
@@ -1806,11 +1874,17 @@ mod tests {
                 &[],
             ),
         );
-        // Tenants group as one position; a tenant named like a blocked
-        // route word is still a tenant.
+        // Tenants group as one position. A blocked route word at the
+        // tenant position is still a blocked route, never a tenant.
         assert_eq!(texts(&kinds), [["/{tenant}/{slug}/issues/{num}"]]);
-        assert_eq!(kinds[0].rules[0].visited, 3);
-        assert_eq!(drops(&dropped), [("/acme/{num}", DropReason::NoRouteWord)]);
+        assert_eq!(kinds[0].rules[0].visited, 2);
+        assert_eq!(
+            drops(&dropped),
+            [
+                ("/acme/{num}", DropReason::NoRouteWord),
+                ("/share/{slug}/issues/{num}", DropReason::BlockedRoute),
+            ]
+        );
 
         // Off a shared origin the same first segment is a route word.
         let (kinds, _) = run(TOOLS, &Document::default(), &input(&["/acme/{num}"], &[]));
@@ -1846,7 +1920,7 @@ mod tests {
 
     fn site(origin: &str, existing: &Document, input: &ShapeInput, taken: &[&str]) -> SiteDraft {
         let taken: Vec<String> = taken.iter().map(|t| (*t).to_owned()).collect();
-        draft_site(origin, existing, input, &test_catalog(), &taken)
+        draft_site(origin, existing, &[], input, &test_catalog(), &taken)
     }
 
     fn json_of(v: &Value) -> Json {
@@ -2383,7 +2457,9 @@ mod tests {
             ]),
         };
         let draft = site(TOOLS, &Document::default(), &shapes, &[]);
-        assert_eq!(types(&draft), ["tools.wiki", "tools.b", "tools.a"]);
+        // The planted `/wiki/blog/{num}` link does not rename the visited
+        // kind: it is named as it would be without the link.
+        assert_eq!(types(&draft), ["tools.pages", "tools.b", "tools.a"]);
         let wiki = &draft.adapters[0];
         assert_eq!(
             rule_texts(&wiki.adapter),
@@ -2495,15 +2571,15 @@ mod tests {
         assert_eq!(
             flags,
             [
+                // Equal visits: links never reorder visited kinds.
+                ("/doc/{token:token(1,128)}".to_owned(), false, true),
                 ("/wiki/{num:int}".to_owned(), false, false),
                 ("/wiki/{num:int}/history".to_owned(), true, false),
-                ("/doc/{token:token(1,128)}".to_owned(), false, true),
             ]
         );
-        // The example is the illustrative fill, never a visited URL. The
-        // link adds support, so the wiki adapter ranks first.
+        // The example is the illustrative fill, never a visited URL.
         assert_eq!(
-            draft.adapters[1].rules[0].example,
+            draft.adapters[0].rules[0].example,
             format!("{TOOLS}/doc/example123")
         );
     }
@@ -2593,7 +2669,7 @@ mod tests {
 
         // Before the checks every rule is still there: `/wiki/` and `/x/`
         // are one kind split by route word, and `/x/{id}` is its own adapter.
-        let kinds = draft_kinds(TOOLS, &existing, &shapes, &test_catalog(), &[]);
+        let kinds = draft_kinds(TOOLS, &existing, &[], &shapes, &test_catalog(), &[]);
         assert_eq!(kinds.adapters.len(), 3);
         let mut texts = all_rule_texts(&kinds);
         texts.sort();
@@ -2607,5 +2683,269 @@ mod tests {
             ]
         );
         assert!(kinds.dropped.is_empty());
+    }
+
+    /// A contract recorded for the origin (a removed adapter) recognizes a
+    /// shape: it is already captured, never re-drafted under a new type.
+    #[test]
+    fn shapes_a_recorded_contract_recognizes_are_already_recognized() {
+        let recorded = doc(json!([{
+            "type": "tools.issues",
+            "origin": TOOLS,
+            "match": [{"path": "/issues/{n:int}"}],
+            "id": "tools.issues:{host}/{n}"
+        }]));
+        let shapes = input(&["/issues/{num}", "/docs/{num}"], &[]);
+        let taken = ["tools.issues".to_owned()];
+        let draft = draft_site(
+            TOOLS,
+            &Document::default(),
+            std::slice::from_ref(&recorded),
+            &shapes,
+            &test_catalog(),
+            &taken,
+        );
+        assert_eq!(types(&draft), ["tools.docs"]);
+        assert_eq!(
+            drops(&draft.dropped),
+            [("/issues/{num}", DropReason::AlreadyRecognized)]
+        );
+
+        // A drafted rule that may overlap a recorded contract, though the
+        // filler is not one it recognizes, is dropped by the overlap check.
+        let narrow = doc(json!([{
+            "type": "tools.short",
+            "origin": TOOLS,
+            "match": [{"path": "/wiki/{t:token(1,5)}"}],
+            "id": "tools.short:{host}/{t}"
+        }]));
+        let draft = draft_site(
+            TOOLS,
+            &Document::default(),
+            std::slice::from_ref(&narrow),
+            &input(&["/wiki/{num}"], &[]),
+            &test_catalog(),
+            &[],
+        );
+        assert!(draft.adapters.is_empty(), "{draft:?}");
+        assert_eq!(
+            drops(&draft.dropped),
+            [("/wiki/{num}", DropReason::Check(DraftErrorCode::Overlap))]
+        );
+    }
+
+    /// A planted link one route word away from a visited shape never changes
+    /// the visited kind's type or ID scheme.
+    #[test]
+    fn a_link_one_word_away_never_renames_a_visited_kind() {
+        let alone = site(
+            TOOLS,
+            &Document::default(),
+            &input(&["/projects/{num}"], &[]),
+            &[],
+        );
+        let planted = site(
+            TOOLS,
+            &Document::default(),
+            &input(&["/projects/{num}"], &["/zzz/{num}"]),
+            &[],
+        );
+        assert_eq!(types(&alone), ["tools.projects"]);
+        assert_eq!(ids(&alone), ["tools.projects:{host}/{num}"]);
+        assert_eq!(types(&planted)[0], "tools.projects");
+        assert_eq!(ids(&planted)[0], "tools.projects:{host}/{num}");
+        let visited = &planted.adapters[0];
+        assert_eq!(
+            rule_texts(&visited.adapter)[visited.rules.iter().position(|r| !r.link_only).unwrap()],
+            "/projects/{num:int}"
+        );
+        // After a literal the link is a link-only alternative of the kind.
+        let alone = site(
+            TOOLS,
+            &Document::default(),
+            &input(&["/wiki/pages/{num}"], &[]),
+            &[],
+        );
+        let planted = site(
+            TOOLS,
+            &Document::default(),
+            &input(&["/wiki/pages/{num}"], &["/wiki/zzz/{num}"]),
+            &[],
+        );
+        assert_eq!(types(&alone), ["tools.pages"]);
+        assert_eq!(types(&planted), ["tools.pages"]);
+        assert_eq!(ids(&planted), ids(&alone));
+        // Visited shapes that differ there still name nothing by that word.
+        let both = site(
+            TOOLS,
+            &Document::default(),
+            &input(
+                &["/wiki/pages/{num}", "/wiki/blog/{num}"],
+                &["/wiki/zzz/{num}"],
+            ),
+            &[],
+        );
+        assert_eq!(types(&both), ["tools.wiki"]);
+    }
+
+    /// `?id=1&id=abc` shapes to `id={id}&id={num}`: one key cannot hold two
+    /// conditions, so the name is dropped, and the shape with it when it has
+    /// no other identifier.
+    #[test]
+    fn a_query_name_repeated_with_different_classes_is_dropped() {
+        let draft = site(
+            TOOLS,
+            &Document::default(),
+            &input(
+                &["/view?id={id}&id={num}", "/doc/{num}?rev={id}&rev={num}"],
+                &[],
+            ),
+            &[],
+        );
+        assert_eq!(all_rule_texts(&draft), ["/doc/{num:int}"]);
+        assert_eq!(
+            drops(&draft.dropped),
+            [("/view?id={id}&id={num}", DropReason::NoIdentifier)]
+        );
+        for a in &draft.adapters {
+            for rule in a.adapter.get("match").and_then(Value::as_array).unwrap() {
+                let keys: Vec<&str> = rule
+                    .get("query")
+                    .and_then(Value::as_table)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(k, _)| k.as_str())
+                    .collect();
+                let distinct: BTreeSet<&str> = keys.iter().copied().collect();
+                assert_eq!(keys.len(), distinct.len(), "{keys:?}");
+            }
+        }
+    }
+
+    /// Tokens, signatures and one-time codes in the query never become ID
+    /// captures, visited or planted, and a fixed-shape secret never demotes
+    /// the path identifier.
+    #[test]
+    fn secret_query_keys_never_become_identifiers() {
+        for (shape, rule, id) in [
+            (
+                "/files/{num}?token={id}",
+                "/files/{num:int}",
+                "tools.files:{host}/{num}",
+            ),
+            (
+                "/doc/{num}?access_token={hex64}",
+                "/doc/{num:int}",
+                "tools.doc:{host}/{num}",
+            ),
+            (
+                "/doc/{num}?session_id={uuid}",
+                "/doc/{num:int}",
+                "tools.doc:{host}/{num}",
+            ),
+        ] {
+            for (visited, links) in [(&[shape][..], &[][..]), (&[][..], &[shape][..])] {
+                let draft = site(TOOLS, &Document::default(), &input(visited, links), &[]);
+                assert_eq!(all_rule_texts(&draft), [rule], "{shape}");
+                assert_eq!(ids(&draft), [id], "{shape}");
+            }
+        }
+        let draft = site(
+            TOOLS,
+            &Document::default(),
+            &input(
+                &[
+                    "/view?sig={hex32}",
+                    "/s?amz-signature={hex64}",
+                    "/cb?code={id}&state={id}",
+                    "/open?url_sig={id}",
+                    "/share?token={uuid}",
+                ],
+                &[],
+            ),
+            &[],
+        );
+        assert!(draft.adapters.is_empty(), "{draft:?}");
+        assert_eq!(
+            drops(&draft.dropped),
+            [
+                ("/cb?code={id}&state={id}", DropReason::SecretQuery),
+                ("/open?url_sig={id}", DropReason::SecretQuery),
+                ("/s?amz-signature={hex64}", DropReason::SecretQuery),
+                ("/share?token={uuid}", DropReason::BlockedRoute),
+                ("/view?sig={hex32}", DropReason::SecretQuery),
+            ]
+        );
+        assert_eq!(DropReason::SecretQuery.as_str(), "secret_query");
+    }
+
+    /// Hyphenated, underscored and plural forms of blocked route words are
+    /// blocked too, visited or planted.
+    #[test]
+    fn blocked_route_word_variants_are_filtered() {
+        let variants = [
+            "/invitations/{hex32}",
+            "/accept-invite/{hex32}",
+            "/reset-password/{uuid}",
+            "/sign-in/{id}",
+            "/magic-link/{id}",
+            "/tokens/{num}",
+            "/auth_callback/{id}",
+            "/sso/{id}",
+            "/saml/{id}",
+            "/join/{num}",
+            "/sign_up/{id}",
+        ];
+        for (visited, links) in [(&variants[..], &[][..]), (&[][..], &variants[..])] {
+            let (kinds, dropped) = run(TOOLS, &Document::default(), &input(visited, links));
+            assert!(kinds.is_empty(), "{:?}", texts(&kinds));
+            assert!(
+                dropped.iter().all(|d| d.reason == DropReason::BlockedRoute),
+                "{dropped:?}"
+            );
+            assert_eq!(dropped.len(), variants.len(), "{dropped:?}");
+        }
+        // Route words that only contain a blocked word stay route words.
+        let (kinds, _) = run(
+            TOOLS,
+            &Document::default(),
+            &input(&["/shared-drives/{num}", "/homework/{num}"], &[]),
+        );
+        assert_eq!(texts(&kinds), [["/homework/{num}", "/shared-drives/{num}"]]);
+    }
+
+    /// On a shared origin a blocked word at the tenant position is a
+    /// sign-in, invite or sharing route, never a workspace.
+    #[test]
+    fn a_blocked_word_at_the_tenant_position_is_blocked() {
+        const LINEAR: &str = "https://linear.app";
+        let shapes = [
+            "/auth/callback/{id}",
+            "/invite/accept/{hex32}",
+            "/share/doc/{uuid}",
+        ];
+        for (visited, links) in [(&shapes[..], &[][..]), (&[][..], &shapes[..])] {
+            let draft = site(LINEAR, &Document::default(), &input(visited, links), &[]);
+            assert!(draft.adapters.is_empty(), "{draft:?}");
+            assert!(
+                draft
+                    .dropped
+                    .iter()
+                    .all(|d| d.reason == DropReason::BlockedRoute),
+                "{:?}",
+                draft.dropped
+            );
+        }
+        let draft = site(
+            GITHUB,
+            &Document::default(),
+            &input(&["/login/oauth/{id}", "/acme/app/issues/{num}"], &[]),
+            &[],
+        );
+        assert_eq!(
+            drops(&draft.dropped),
+            [("/login/oauth/{id}", DropReason::BlockedRoute)]
+        );
+        assert_eq!(draft.adapters.len(), 1);
     }
 }

@@ -210,7 +210,9 @@ state, the shared-origin tenant, and at most 16 rules, each with whether it
 starts checked and why not), at most 128 `dropped` shapes or rules with their
 reason, a `preview` of at most 128 rows (every visited and link shape filled
 to an illustrative URL, and every probe URL, with the rule that recognizes it
-ignoring scope; never a real URL), the `taken_types`, and `remapped`.
+ignoring scope; never a real URL), the `taken_types`, and `remapped`
+(always 0: the host answers `internal` rather than return a draft that
+would move pages the current policy or a recorded contract already names).
 `check_site_draft` re-checks the review's selection before the save: the
 checked `adapters` (at most 8 tables, before the scope, unscoped, and title
 overlays), one `provenance` list per adapter (`drafted` or `user_written`,

@@ -26022,6 +26022,24 @@
       "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}]}
     },
     {
+      "id": "draft_rules.drop_secret_parameter_ids",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: an ID captured from a token, signature, code or session key is dropped, whatever its case or separators",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/files", "query": {"access_token": "{id:int}"}}, {"path": "/files", "query": {"X-Amz-Signature": "{id:int}"}}, {"path": "/cb", "query": {"code": "{id:int}"}}, {"path": "/doc", "query": {"session_id": "{id:int}"}}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_secret_capture"}, {"dropped": "draft_secret_capture"}, {"dropped": "draft_secret_capture"}, {"dropped": "draft_secret_capture"}]}
+    },
+    {
+      "id": "draft_rules.drop_blocked_route_word_variants",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: blocked route words are matched by their hyphen or underscore parts, joined, and with a trailing number or plural folded",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/sign-in/{id:int}"}, {"path": "/reset-password/{id:int}"}, {"path": "/invitations/{id:int}"}, {"path": "/oauth2/{id:int}"}, {"path": "/x/(view|magic-link)/{id:int}"}, {"path": "/shared-drives/{id:int}"}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, "kept"]}
+    },
+    {
       "id": "draft_rules.drop_root_and_probe_matches",
       "kind": "draft_rules",
       "why": "§10.4: a rule matching a probe URL is dropped; rules are matched without scope",
@@ -26047,7 +26065,7 @@
       "why": "§10.4: a rule that may overlap an existing rule is dropped",
       "impls": ["rust"],
       "existing": {"$fixture": "starters"},
-      "draft": {"type": "jira.filter", "origin": "https://acme.atlassian.net", "match": [{"path": "/jira/filters/{id:int}"}, {"path": "/reports/{id:int}"}], "id": "jf:{host}/{id}"},
+      "draft": {"type": "jira.filter", "origin": "https://acme.atlassian.net", "match": [{"path": "/jira/boards/{id:int}"}, {"path": "/reports/{id:int}"}], "id": "jf:{host}/{id}"},
       "expect": {"scope": "not_shared", "rules": [{"dropped": "draft_overlap"}, "kept"]}
     },
     {
@@ -26155,6 +26173,16 @@
       "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}, {"path": "/orgs/{owner:name|lower}/share/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
       "choice": {"values": ["acme-corp", "acme-labs"]},
       "expect": {"scope": {"pending": "owner"}, "rules": ["kept", {"dropped": "draft_blocked_route"}], "resolved": {"scoped": {"owner": ["acme-corp", "acme-labs"]}}}
+    },
+    {
+      "id": "draft_rules.resolve_pending_refuses_blocked_route_word_tenants",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a tenant value that is a blocked route word (a sign-in, invite or sharing route) is not a workspace",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": {"values": ["acme-corp", "auth"]},
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept"], "resolved": {"scope_error": "draft_scope_choice"}}
     },
     {
       "id": "draft_rules.resolve_pending_with_unscoped",

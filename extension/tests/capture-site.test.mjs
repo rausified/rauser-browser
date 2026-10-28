@@ -246,7 +246,8 @@ test("unchecked rules are omitted and an adapter with none is omitted", () => {
 test("pending scope blocks the plan until scope or unscoped is chosen", () => {
   const draft = linearDraft();
   const url = `${LINEAR}/acme/issue/ABC-12`;
-  for (const scope of [null, { values: "" }, { values: " , " }, { values: "a/b" }, { values: "a b" }]) {
+  for (const scope of [null, { values: "" }, { values: " , " }, { values: "a/b" }, { values: "a b" },
+    { values: "acme, auth" }, { values: "invite" }, { values: "sign-in" }]) {
     const result = drafting(draft, select(draft, { scope: [scope] }), url);
     assert.equal(result.ok, false, JSON.stringify(scope));
     assert.match(result.message, /workspace|account/i);
@@ -286,6 +287,10 @@ test("scope prefill comes from the current tab's tenant position, never from the
   assert.equal(tenantPrefill(`${LINEAR}/acme/issue/ABC-12`, null), "");
   assert.equal(tenantPrefill(`${LINEAR}/a%20b/issue/ABC-12`, tenant), "");
   assert.equal(tenantPrefill("not a URL", tenant), "");
+  // A sign-in, invite or sharing route at the tenant position is no tenant.
+  for (const route of ["auth", "invite", "share", "login", "sign-in", "invitations"]) {
+    assert.equal(tenantPrefill(`${LINEAR}/${route}/callback/abc`, tenant), "", route);
+  }
 });
 
 test("rename must keep types unique and valid", () => {
@@ -474,13 +479,25 @@ test("the real current URL is evaluated locally", () => {
 // --- Recurring-pages hint and additions on configured origins ---------------
 
 const { readFile } = await import("node:fs/promises");
-const { recurringHint, fillShape } = await import("../dist/capture-site.js");
+const { recurringHint, fillShape, isBlockedRouteWord, BLOCKED_ROUTE_WORDS } = await import("../dist/capture-site.js");
 const captureCatalog = JSON.parse(await readFile(new URL("../../protocol/capture-site/catalog.json", import.meta.url)));
 const WIKI_PAGES = { type: "wiki.pages", origin: WIKI, match: [{ path: "/pages/{num:int}" }], id: "wiki.pages:{host}/{num}" };
 const leaseOf = (artifacts, revision = "7") => ({
   revision, expires_at: Date.now() + 60_000, capture_enabled: true, adapters: { format: 1, artifacts },
 });
 const sampled = (shape, count) => ({ shape, count, last_seen: 1 });
+
+test("blocked route words match the host catalog and its folding", () => {
+  assert.deepEqual([...BLOCKED_ROUTE_WORDS].sort(), [...captureCatalog.blocked_route_words].sort());
+  for (const word of ["login", "Login", "sign-in", "sign_in", "Sign_Up", "reset-password", "accept-invite",
+    "invitations", "magic-link", "tokens", "oauth2", "auth_callback", "callback", "sso", "saml", "join",
+    "shares", "log-out"]) {
+    assert.equal(isBlockedRouteWord(word), true, word);
+  }
+  for (const word of ["wiki", "issues", "shared-drives", "homework", "projects", "authors", "designs", "pages", "s"]) {
+    assert.equal(isBlockedRouteWord(word), false, word);
+  }
+});
 
 test("shapes fill with the host catalog's class examples", () => {
   for (const [name, value] of Object.entries(captureCatalog.fill)) {
@@ -511,6 +528,12 @@ test("hint appears only after three unrecognized visits of a candidate shape and
     assert.equal(recurringHint(lease, [sampled("/{num}?view={id}", 9)], url), false);
     for (const word of captureCatalog.blocked_route_words) {
       assert.equal(recurringHint(lease, [sampled(`/${word}/{num}`, 9)], url), false, word);
+    }
+    // So are its hyphenated, plural and joined forms, and a shape with any
+    // blocked word, as the host's filter drops it.
+    for (const shape of ["/sign-in/{id}", "/reset-password/{uuid}", "/accept-invite/{hex32}",
+      "/invitations/{hex32}", "/magic-link/{id}", "/tokens/{num}", "/notes/share/{num}"]) {
+      assert.equal(recurringHint(lease, [sampled(shape, 9)], url), false, shape);
     }
     // A recognized current page gets no hint, nor does a page on another
     // origin, a missing lease, or invalid sample rows.

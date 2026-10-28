@@ -215,9 +215,14 @@ fn id_uses_identifier(a: &Adapter) -> bool {
 
 /// Whether a capture the ID uses is bound from one of `keys`.
 fn id_capture_from<S: AsRef<str>>(a: &Adapter, rule: &Rule, keys: &[S]) -> bool {
+    id_capture_where(a, rule, |key| keys.iter().any(|k| k.as_ref() == key))
+}
+
+/// Whether a capture the ID uses is bound from a query key `listed` accepts.
+fn id_capture_where(a: &Adapter, rule: &Rule, listed: impl Fn(&str) -> bool) -> bool {
     rule.query.iter().any(|(key, cond)| {
         matches!(cond, QueryCond::Capture { name, .. } if a.id.names().any(|n| n == name))
-            && keys.iter().any(|k| k.as_ref() == key)
+            && listed(key)
     })
 }
 
@@ -368,15 +373,12 @@ fn with_rules(draft: &Value, rules: Vec<Value>, scope: &ScopeState) -> Value {
     Value::Table(table)
 }
 
-/// Whether a path literal or alternative is a blocked route word. ASCII
-/// case is folded, so an insensitive adapter cannot slip one through.
+/// Whether a path literal or alternative is a blocked route word, as
+/// [`DraftPolicy::is_blocked_route_word`] judges it: ASCII case is folded,
+/// so an insensitive adapter cannot slip one through, and `sign-in` or
+/// `reset-password` are caught by their parts.
 fn blocked_route(rule: &Rule, policy: &DraftPolicy) -> bool {
-    let blocked = |word: &str| {
-        policy
-            .blocked_route_words
-            .iter()
-            .any(|b| b.eq_ignore_ascii_case(word))
-    };
+    let blocked = |word: &str| policy.is_blocked_route_word(word);
     rule.path.segments.iter().any(|s| match s {
         Segment::Literal(l) => blocked(l),
         Segment::Alternation(alts)
@@ -409,6 +411,9 @@ fn rule_check(
     if id_capture_from(a, rule, &policy.paging_keys) {
         return Some(DraftErrorCode::PagingCapture);
     }
+    if id_capture_where(a, rule, |key| policy.is_secret_query_key(key)) {
+        return Some(DraftErrorCode::SecretCapture);
+    }
     let probes: Vec<String> = policy
         .probe_paths
         .iter()
@@ -429,7 +434,10 @@ fn rule_check(
 /// scope, unscoped and title overlays, which this function never sees.
 /// `provenance` names who wrote each rule; a rule without an entry counts as
 /// drafted. `accepted` holds the earlier-ranked drafted adapters, so a later
-/// rule that may overlap one is dropped.
+/// rule that may overlap one is dropped. A caller also puts the origin's
+/// recorded note-only contracts (retired and hand-removed adapters) there:
+/// they freeze their routes' IDs, so a drafted rule that may overlap one
+/// could never be saved and is dropped as `draft_overlap` too.
 ///
 /// The checks, in order:
 ///
@@ -440,8 +448,9 @@ fn rule_check(
 ///    dropped as `draft_invalid_rule` whoever wrote it, since it can never
 ///    be saved; an adapter-level failure refuses the whole draft.
 /// 4. Per rule: leading literal, rest position, blocked route words, ID
-///    captures from search or paging keys, the root and probe URLs (matched
-///    without scope, SQ-V3), then overlap with `existing` and `accepted`.
+///    captures from search, paging or secret keys, the root and probe URLs
+///    (matched without scope, SQ-V3), then overlap with `existing` and
+///    `accepted`.
 ///    The surviving rules are then validated together in order, and one that
 ///    conflicts with an earlier survivor is dropped as `draft_invalid_rule`.
 /// 5. The ID must use an identifier capture. This refuses the whole draft
@@ -555,12 +564,15 @@ pub fn check_draft_rules(
 
 /// Judges the review's scope choice against the scope state, after
 /// [`check_draft_rules`]; it never changes a rule verdict. Pending scope
-/// needs non-empty, canonical `name|lower` values (at most 64) or unscoped.
-/// Unscoped-only accepts only unscoped, and copied or not-shared scope
-/// accepts no choice: a copied scope is the host's copy.
+/// needs non-empty, canonical `name|lower` values (at most 64) that are not
+/// blocked route words (a workspace named `auth` or `invite` is a sign-in
+/// or capability route), or unscoped. Unscoped-only accepts only unscoped,
+/// and copied or not-shared scope accepts no choice: a copied scope is the
+/// host's copy.
 pub fn resolve_scope_choice(
     state: &ScopeState,
     choice: &ScopeChoice,
+    policy: &DraftPolicy,
 ) -> Result<ResolvedScope, DraftErrorCode> {
     match (state, choice) {
         (ScopeState::NotShared, ScopeChoice::None) => Ok(ResolvedScope::NotShared),
@@ -581,7 +593,9 @@ pub fn resolve_scope_choice(
             };
             let mut distinct: Vec<String> = Vec::new();
             for value in values {
-                if tenant.canonical_whole(value).as_deref() != Some(value.as_str()) {
+                if tenant.canonical_whole(value).as_deref() != Some(value.as_str())
+                    || policy.is_blocked_route_word(value)
+                {
                     return Err(DraftErrorCode::ScopeChoice);
                 }
                 if !distinct.contains(value) {
@@ -850,7 +864,7 @@ mod tests {
         let draft = json!({
             "type": "jira.filter",
             "origin": "https://acme.atlassian.net",
-            "match": [{"path": "/jira/filters/{id:int}"}, {"path": "/reports/{id:int}"}],
+            "match": [{"path": "/jira/boards/{id:int}"}, {"path": "/reports/{id:int}"}],
             "id": "jf:{host}/{id}"
         });
         let r = check(&jira_existing(), draft, &[D, D]);
@@ -968,11 +982,11 @@ mod tests {
     fn resolve_scope_choice_accepts_values_or_unscoped_for_pending_scope() {
         let values = ScopeChoice::Values(vec!["acme-corp".into(), "acme-labs".into()]);
         assert_eq!(
-            resolve_scope_choice(&pending(), &values),
+            resolve_scope_choice(&pending(), &values, &catalog()),
             Ok(ResolvedScope::Scoped(owner(&["acme-corp", "acme-labs"])))
         );
         assert_eq!(
-            resolve_scope_choice(&pending(), &ScopeChoice::Unscoped),
+            resolve_scope_choice(&pending(), &ScopeChoice::Unscoped, &catalog()),
             Ok(ResolvedScope::Unscoped)
         );
     }
@@ -981,21 +995,21 @@ mod tests {
     fn resolve_scope_choice_refuses_missing_or_empty_scope_when_pending() {
         for choice in [ScopeChoice::None, ScopeChoice::Values(vec![])] {
             assert_eq!(
-                resolve_scope_choice(&pending(), &choice),
+                resolve_scope_choice(&pending(), &choice, &catalog()),
                 Err(C::ScopePending)
             );
         }
         for bad in ["Acme", "", "a/b", "a b"] {
             let choice = ScopeChoice::Values(vec![bad.into()]);
             assert_eq!(
-                resolve_scope_choice(&pending(), &choice),
+                resolve_scope_choice(&pending(), &choice, &catalog()),
                 Err(C::ScopeChoice),
                 "{bad:?}"
             );
         }
         let too_many = ScopeChoice::Values((0..65).map(|i| format!("org{i}")).collect());
         assert_eq!(
-            resolve_scope_choice(&pending(), &too_many),
+            resolve_scope_choice(&pending(), &too_many, &catalog()),
             Err(C::ScopeChoice)
         );
     }
@@ -1004,11 +1018,14 @@ mod tests {
     fn resolve_scope_choice_allows_only_unscoped_where_no_tenant_position() {
         let state = ScopeState::UnscopedOnly;
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::Unscoped),
+            resolve_scope_choice(&state, &ScopeChoice::Unscoped, &catalog()),
             Ok(ResolvedScope::Unscoped)
         );
         for choice in [ScopeChoice::None, ScopeChoice::Values(vec!["acme".into()])] {
-            assert_eq!(resolve_scope_choice(&state, &choice), Err(C::ScopeChoice));
+            assert_eq!(
+                resolve_scope_choice(&state, &choice, &catalog()),
+                Err(C::ScopeChoice)
+            );
         }
     }
 
@@ -1016,22 +1033,25 @@ mod tests {
     fn resolve_scope_choice_keeps_copied_scope_fixed() {
         let state = ScopeState::Copied(owner(&["acme-corp"]));
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::None),
+            resolve_scope_choice(&state, &ScopeChoice::None, &catalog()),
             Ok(ResolvedScope::Scoped(owner(&["acme-corp"])))
         );
         for choice in [
             ScopeChoice::Unscoped,
             ScopeChoice::Values(vec!["other".into()]),
         ] {
-            assert_eq!(resolve_scope_choice(&state, &choice), Err(C::ScopeChoice));
+            assert_eq!(
+                resolve_scope_choice(&state, &choice, &catalog()),
+                Err(C::ScopeChoice)
+            );
         }
         let state = ScopeState::NotShared;
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::None),
+            resolve_scope_choice(&state, &ScopeChoice::None, &catalog()),
             Ok(ResolvedScope::NotShared)
         );
         assert_eq!(
-            resolve_scope_choice(&state, &ScopeChoice::Unscoped),
+            resolve_scope_choice(&state, &ScopeChoice::Unscoped, &catalog()),
             Err(C::ScopeChoice)
         );
     }
@@ -1049,7 +1069,7 @@ mod tests {
             ScopeChoice::Values(vec!["acme-corp".into()]),
             ScopeChoice::None,
         ] {
-            let _ = resolve_scope_choice(&first.scope, &choice);
+            let _ = resolve_scope_choice(&first.scope, &choice, &catalog());
             let again = check(&empty(), draft.clone(), &[D, D]);
             assert_eq!(again.rules, first.rules);
             assert_eq!(again.scope, first.scope);

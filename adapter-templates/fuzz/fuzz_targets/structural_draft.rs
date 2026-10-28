@@ -39,6 +39,9 @@ static POLICY: LazyLock<DraftPolicy> = LazyLock::new(|| {
         search_keys: strings(&c["search_keys"]),
         paging_keys: strings(&c["paging_keys"]),
         blocked_route_words: strings(&c["blocked_route_words"]),
+        secret_query_keys: strings(&c["secret_query_keys"]),
+        secret_query_key_parts: strings(&c["secret_query_key_parts"]),
+        secret_query_key_suffixes: strings(&c["secret_query_key_suffixes"]),
         mode_words: c["mode_words"]
             .as_object()
             .expect("mode_words")
@@ -129,7 +132,7 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     for origin in ORIGINS {
-        let site = draft_site(origin, &EMPTY, &input, &POLICY, &[]);
+        let site = draft_site(origin, &EMPTY, &[], &input, &POLICY, &[]);
         let mut accepted: Vec<Document> = Vec::new();
         for adapter in &site.adapters {
             let count = adapter

@@ -106,6 +106,9 @@ fn catalog_policy() -> DraftPolicy {
         search_keys: strings(&c["search_keys"]),
         paging_keys: strings(&c["paging_keys"]),
         blocked_route_words: strings(&c["blocked_route_words"]),
+        secret_query_keys: strings(&c["secret_query_keys"]),
+        secret_query_key_parts: strings(&c["secret_query_key_parts"]),
+        secret_query_key_suffixes: strings(&c["secret_query_key_suffixes"]),
         mode_words: c["mode_words"]
             .as_object()
             .expect("mode_words")
@@ -232,7 +235,7 @@ fn run_draft_rules(case: &Json) -> Result<Json, String> {
             }
             other => return Err(format!("bad choice {other}")),
         };
-        let resolved = match resolve_scope_choice(&report.scope, &choice) {
+        let resolved = match resolve_scope_choice(&report.scope, &choice, &policy) {
             Ok(ResolvedScope::NotShared) => json!("not_shared"),
             Ok(ResolvedScope::Unscoped) => json!("unscoped"),
             Ok(ResolvedScope::Scoped(s)) => json!({"scoped": scope_json(&s)}),

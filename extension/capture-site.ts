@@ -107,6 +107,7 @@ export const DROP_REASONS: Record<DraftDropReason, string> = {
   root: "the site's home page",
   probe: SAFETY_PAGES,
   search_or_paging: "search or paging pages",
+  secret_query: "its ID would come from a sign-in or sharing token",
   blocked_route: "sign-in, sharing or account pages",
   param_name: "its ID would come from a search, paging or tracking setting",
   already_recognized: "already captured by this site's rules",
@@ -124,6 +125,7 @@ export const DROP_REASONS: Record<DraftDropReason, string> = {
   draft_overlap: "already captured by this site's rules",
   draft_blocked_route: "sign-in, sharing or account pages",
   draft_paging_capture: "its ID would come from search or paging",
+  draft_secret_capture: "its ID would come from a sign-in or sharing token",
   draft_invalid_rule: FAILED_CHECKS,
   draft_scope_pending: FAILED_CHECKS,
   draft_scope_choice: FAILED_CHECKS,
@@ -202,7 +204,9 @@ export function tenantPrefill(url: string, tenant: DraftTenantView | null): stri
     return "";
   }
   const value = segments?.[tenant.segment];
-  return value === undefined ? "" : canonicalCapture("name|lower", value) ?? "";
+  const canonical = value === undefined ? null : canonicalCapture("name|lower", value);
+  // A sign-in, invite or sharing route at the tenant position is no tenant.
+  return canonical === null || isBlockedRouteWord(canonical) ? "" : canonical;
 }
 
 /** The review's choices, one entry per drafted adapter (and per rule in
@@ -338,6 +342,10 @@ export function planDraftedSite(
         if (!values || !view.tenant) {
           return fail(`Enter 1–${MAX_TENANT_VALUES} comma-separated workspaces or accounts for ${renamed}, or record every account.`);
         }
+        const route = values.find(isBlockedRouteWord);
+        if (route !== undefined) {
+          return fail(`"${route}" is a sign-in, sharing or account page, not a workspace or account. Enter the workspaces or accounts for ${renamed}.`);
+        }
         sent = { values };
         overlay.scope = { [view.tenant.capture]: values };
         tenantValue = values[0]!;
@@ -430,11 +438,27 @@ const SHAPE_FILL: Readonly<Record<string, string>> = {
   id: "example123",
 };
 
-/** The host catalog's `blocked_route_words`: never a route word to draft from. */
-const BLOCKED_ROUTE_WORDS: ReadonlySet<string> = new Set([
+/** The host catalog's `blocked_route_words`: never a route word to draft
+ * from (a test pins the two). */
+export const BLOCKED_ROUTE_WORDS: ReadonlySet<string> = new Set([
   "search", "query", "filter", "login", "home", "dashboard", "invite", "reset", "password", "verify",
   "confirm", "share", "magic", "token", "oauth", "auth", "signin", "signup", "logout", "unsubscribe",
+  "invitation", "callback", "authorize", "sso", "saml", "join", "activate", "activation", "verification",
 ]);
+
+/** Whether a route literal is a blocked route word, as the host's
+ * `DraftPolicy::is_blocked_route_word` judges it: ASCII case folded, split
+ * on `-`, `_` and `.`, and blocked when any part, or the parts joined, is a
+ * listed word once a trailing number and then a plural `s` are folded. */
+export function isBlockedRouteWord(literal: string): boolean {
+  const parts = literal.replace(/[A-Z]/g, (c) => c.toLowerCase()).split(/[-_.]/).filter((part) => part !== "");
+  const listed = (word: string): boolean => {
+    const bare = word.replace(/[0-9]+$/, "");
+    const singular = bare.endsWith("s") && bare.length >= 4 ? bare.slice(0, -1) : null;
+    return BLOCKED_ROUTE_WORDS.has(bare) || (singular !== null && BLOCKED_ROUTE_WORDS.has(singular));
+  };
+  return parts.some(listed) || listed(parts.join(""));
+}
 
 /** How many sampled visits make a page shape recurring. */
 export const RECURRING_VISITS = 3;
@@ -474,7 +498,7 @@ export function recurringHint(lease: PolicyLease | null, samples: readonly Sampl
     const entry = shapeCount(row?.shape, row?.count, MAX_SHAPE_COUNT);
     if (!entry || entry.count < RECURRING_VISITS) return false;
     const words = entry.shape.split("?")[0]!.split("/").filter((part) => part !== "" && !isPlaceholder(part));
-    if (!words.some((word) => !BLOCKED_ROUTE_WORDS.has(word))) return false;
+    if (!words.length || words.some(isBlockedRouteWord)) return false;
     const example = fillShape(origin, entry.shape);
     return example !== null && !evaluate(compiled.doc, example).match;
   });

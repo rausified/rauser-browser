@@ -18,8 +18,18 @@ pub struct DraftPolicy {
     /// Query keys that carry paging, sorting or view state; never an
     /// identifier.
     pub paging_keys: Vec<String>,
-    /// Route words a drafted rule may not use as a literal.
+    /// Route words a drafted rule may not use as a literal, compared after
+    /// [`DraftPolicy::is_blocked_route_word`]'s normalization.
     pub blocked_route_words: Vec<String>,
+    /// Query keys that carry a secret or a capability (a token, signature,
+    /// one-time code or session), compared after
+    /// [`DraftPolicy::is_secret_query_key`]'s normalization; never an
+    /// identifier.
+    pub secret_query_keys: Vec<String>,
+    /// Fragments that make any query key containing one a secret key.
+    pub secret_query_key_parts: Vec<String>,
+    /// Endings that make any query key ending in one a secret key.
+    pub secret_query_key_suffixes: Vec<String>,
     /// `(route word, mode)` pairs, sorted by route word.
     pub mode_words: Vec<(String, String)>,
     /// Example values for each shape placeholder class.
@@ -63,6 +73,52 @@ impl DraftPolicy {
     pub fn shared_origin(&self, origin: &str) -> Option<&SharedOrigin> {
         self.shared.iter().find(|entry| entry.origin == origin)
     }
+
+    /// Whether a route literal is a blocked route word. ASCII case is
+    /// folded and the literal is split on `-`, `_` and `.`; it is blocked
+    /// when any part, or the parts joined, is a listed word once a trailing
+    /// run of digits and then a plural `s` are folded away. So `sign-in`,
+    /// `reset-password`, `accept-invite`, `Tokens` and `oauth2` are all
+    /// blocked.
+    pub fn is_blocked_route_word(&self, literal: &str) -> bool {
+        let lower = literal.to_ascii_lowercase();
+        let parts: Vec<&str> = lower
+            .split(['-', '_', '.'])
+            .filter(|part| !part.is_empty())
+            .collect();
+        let joined = parts.concat();
+        let listed = |word: &str| {
+            let word = word.trim_end_matches(|c: char| c.is_ascii_digit());
+            let singular = word.strip_suffix('s').filter(|w| w.len() >= 3);
+            self.blocked_route_words.iter().any(|b| {
+                b.eq_ignore_ascii_case(word) || singular.is_some_and(|s| b.eq_ignore_ascii_case(s))
+            })
+        };
+        parts.iter().any(|part| listed(part)) || listed(&joined)
+    }
+
+    /// Whether a query key carries a secret or capability. ASCII case is
+    /// folded and `-`, `_` and `.` are removed; the key is secret when it is
+    /// a listed key, contains a listed fragment, or ends in a listed suffix.
+    /// So `access_token`, `X-Amz-Signature`, `url_sig` and `Code` are all
+    /// secret.
+    pub fn is_secret_query_key(&self, key: &str) -> bool {
+        let folded: String = key
+            .chars()
+            .filter(|c| !matches!(c, '-' | '_' | '.'))
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        let fold = |w: &String| w.to_ascii_lowercase();
+        self.secret_query_keys.iter().any(|k| fold(k) == folded)
+            || self
+                .secret_query_key_parts
+                .iter()
+                .any(|p| folded.contains(&fold(p)))
+            || self
+                .secret_query_key_suffixes
+                .iter()
+                .any(|s| folded.ends_with(&fold(s)))
+    }
 }
 
 /// The host catalog, parsed the way the host parses it, for unit tests.
@@ -85,6 +141,9 @@ pub(crate) fn test_catalog() -> DraftPolicy {
         search_keys: strings(&c["search_keys"]),
         paging_keys: strings(&c["paging_keys"]),
         blocked_route_words: strings(&c["blocked_route_words"]),
+        secret_query_keys: strings(&c["secret_query_keys"]),
+        secret_query_key_parts: strings(&c["secret_query_key_parts"]),
+        secret_query_key_suffixes: strings(&c["secret_query_key_suffixes"]),
         mode_words: c["mode_words"]
             .as_object()
             .unwrap()
@@ -128,5 +187,95 @@ pub(crate) fn test_catalog() -> DraftPolicy {
                     .collect(),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_catalog;
+
+    #[test]
+    fn blocked_route_words_fold_case_separators_digits_and_plurals() {
+        let policy = test_catalog();
+        for word in [
+            "login",
+            "Login",
+            "sign-in",
+            "sign_in",
+            "Sign_Up",
+            "reset-password",
+            "accept-invite",
+            "invitations",
+            "magic-link",
+            "tokens",
+            "oauth2",
+            "auth_callback",
+            "callback",
+            "sso",
+            "saml",
+            "join",
+            "shares",
+            "log-out",
+        ] {
+            assert!(policy.is_blocked_route_word(word), "{word}");
+        }
+        for word in [
+            "wiki",
+            "issues",
+            "shared-drives",
+            "homework",
+            "projects",
+            "authors",
+            "designs",
+            "pages",
+            "s",
+        ] {
+            assert!(!policy.is_blocked_route_word(word), "{word}");
+        }
+    }
+
+    #[test]
+    fn secret_query_keys_fold_case_and_separators() {
+        let policy = test_catalog();
+        for key in [
+            "token",
+            "Token",
+            "access_token",
+            "id_token",
+            "X-Amz-Signature",
+            "sig",
+            "url_sig",
+            "code",
+            "state",
+            "nonce",
+            "key",
+            "api_key",
+            "secret",
+            "client-secret",
+            "session",
+            "session_id",
+            "sid",
+            "otp",
+            "invite",
+            "magic",
+            "reset",
+            "password",
+            "credential",
+        ] {
+            assert!(policy.is_secret_query_key(key), "{key}");
+        }
+        for key in [
+            "id",
+            "pageid",
+            "issue",
+            "rev",
+            "design",
+            "author",
+            "selectedissue",
+            "sourcedoc",
+            "keyword",
+        ] {
+            assert!(!policy.is_secret_query_key(key), "{key}");
+        }
     }
 }
