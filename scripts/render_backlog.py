@@ -487,7 +487,15 @@ def resolve(root: pathlib.Path) -> int:
     backlog_file = root / BACKLOG_PATH
     status = 0
 
-    if QUEUE_PATH in conflicted and hand_resolved(queue_file):
+    # A merge driver that fails outright (a stale interpreter path, a crash)
+    # leaves ours' bytes with no markers; that is not a hand resolution, and
+    # keeping it would silently drop theirs' beads.
+    ours_untouched = (
+        queue_file.is_file()
+        and queue_file.read_text(encoding="utf-8") == stage(root, 2, QUEUE_PATH)
+        and stage(root, 2, QUEUE_PATH) != stage(root, 3, QUEUE_PATH)
+    )
+    if QUEUE_PATH in conflicted and hand_resolved(queue_file) and not ours_untouched:
         load_issues(queue_file)  # a hand resolution must still parse
         git("add", "--", QUEUE_PATH, cwd=root)
         print(f"{QUEUE_PATH}: kept your resolution")
@@ -500,7 +508,7 @@ def resolve(root: pathlib.Path) -> int:
             print(
                 f"{QUEUE_PATH}: {len(conflicts)} bead(s) changed differently on both sides: "
                 f"{', '.join(conflicts)}. Edit those lines (keep one record per bead), "
-                f"then run this command again."
+                f"then run this command again (to keep ours exactly, `git add` the file yourself)."
             )
             return 1
         git("add", "--", QUEUE_PATH, cwd=root)

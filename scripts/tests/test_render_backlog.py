@@ -417,6 +417,25 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_merged()
 
+    def test_resolve_does_not_keep_ours_left_by_a_failed_driver(self) -> None:
+        # A driver that fails outright (a stale interpreter path, a crash)
+        # leaves the queue conflicted with ours' bytes and no markers. That is
+        # not a hand resolution: --resolve must still merge theirs' beads in.
+        git(self.repo, "config", "merge.beads-jsonl.driver", "/nonexistent/python3 %O %A %B")
+        self.branch_pair()
+        git(self.repo, "merge", "side", check=False)
+        unmerged = git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout.split()
+        self.assertIn(".beads/issues.jsonl", unmerged)
+        queue = (self.repo / ".beads" / "issues.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn('"brwr-s1"', queue)
+        self.assertNotIn("<<<<<<<", queue)
+        result = self.run_script("--resolve")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        queue = (self.repo / ".beads" / "issues.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"brwr-s1"', queue)
+        self.assertIn('"brwr-m1"', queue)
+        self.assert_merged()
+
     def test_resolve_keeps_a_real_prose_conflict(self) -> None:
         base = bead("brwr-a1", metadata={"backlog_section": "plan"})
         git(self.repo, "checkout", "-qb", "side")
