@@ -893,6 +893,16 @@ impl ConfigStore {
         &self.note_key_rules.documents
     }
 
+    /// Whether the adopted-contract record cannot say which contracts
+    /// removed by hand from config.toml still name artifacts on `origin`:
+    /// it is unreadable, or holds a damaged entry for that origin. A save
+    /// adding or changing an adapter there is refused until it is repaired
+    /// or forgotten, so Capture Site drafts nothing there either.
+    pub(crate) fn adopted_contracts_unknown_for(&self, origin: &str) -> bool {
+        self.note_key_rules.all_unavailable
+            || self.note_key_rules.damaged_state_origins.contains(origin)
+    }
+
     pub fn adapter_document(&self) -> Result<&AdapterTemplates> {
         self.adapter_document
             .as_ref()

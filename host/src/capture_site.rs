@@ -220,6 +220,20 @@ fn locked_document(config: &mut ConfigStore) -> Result<ConfigLock, (ErrorCode, &
     Ok(lock)
 }
 
+/// The refusal while the adopted-contract record cannot vouch for
+/// `origin` (`ConfigStore::adopted_contracts_unknown_for`): drafting against
+/// an incomplete set of recorded contracts would offer rules the save
+/// refuses.
+fn adopted_record_refusal(config: &ConfigStore, id: &str, origin: &str) -> Option<Response> {
+    config.adopted_contracts_unknown_for(origin).then(|| {
+        error(
+            id,
+            ErrorCode::InvalidConfig,
+            "Brauser's record of the adapters it has used cannot be read for this site, so a draft cannot be checked against adapters removed from config.toml by hand. Choose Forget recorded adapters in Brauser settings, or fix the file, then draft again.",
+        )
+    })
+}
+
 /// The types a drafted adapter may not take: the config's adapter types,
 /// the catalog's starter types and every recorded contract's type. The
 /// config's and the starters' come first, so a bound never hides them.
@@ -489,6 +503,9 @@ pub fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response
         Ok(lock) => lock,
         Err((code, message)) => return error(id, code, message),
     };
+    if let Some(refusal) = adopted_record_refusal(config, id, &value.origin) {
+        return refusal;
+    }
     let Ok(existing) = config.adapter_document() else {
         return error(
             id,
@@ -659,6 +676,9 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
         Ok(lock) => lock,
         Err((code, message)) => return error(id, code, message),
     };
+    if let Some(refusal) = adopted_record_refusal(config, id, &value.origin) {
+        return refusal;
+    }
     if config.revision() != value.expected_revision {
         return error(
             id,
@@ -1143,6 +1163,73 @@ mod handler_tests {
             )),
             ErrorCode::InvalidConfig
         );
+    }
+
+    /// A damaged adopted-contract record cannot say which adapters removed
+    /// by hand still name artifacts, so drafting the affected origin waits
+    /// for its repair rather than offer rules the save would refuse.
+    #[test]
+    fn draft_site_refuses_an_origin_the_adopted_record_cannot_vouch_for() {
+        let mut s = setup("");
+        let state = crate::config::adopted_contracts_path(s.folder.path());
+        let damaged = json!({
+            "type": "tools.other",
+            "origin": TOOLS,
+            "match": [{"path": "/items/{n:nope}"}],
+            "id": "other:{host}/{n}",
+        });
+        fs::write(
+            &state,
+            serde_json::to_vec(&json!({"format": 1, "contracts": [damaged]})).unwrap(),
+        )
+        .unwrap();
+        let table = json!({
+            "type": "tools.items",
+            "origin": TOOLS,
+            "match": [{"path": "/items/{num:int}"}],
+            "id": "tools.items:{host}/{num}"
+        });
+        let refused = |s: &mut Setup| {
+            let response = draft_site(request(TOOLS, &["/items/{num}"], &[]), &mut s.config);
+            let Response::Error(error) = response else {
+                panic!("expected a refusal, got {response:?}")
+            };
+            assert_eq!(error.code, ErrorCode::InvalidConfig);
+            assert!(
+                error.message.contains("Forget recorded adapters"),
+                "{}",
+                error.message
+            );
+            let revision = s.config.revision().to_owned();
+            assert_eq!(
+                code(check_site_draft(
+                    check(
+                        TOOLS,
+                        &revision,
+                        vec![table.clone()],
+                        vec![vec![RuleProvenance::Drafted]],
+                        vec![None]
+                    ),
+                    &mut s.config
+                )),
+                ErrorCode::InvalidConfig
+            );
+        };
+        refused(&mut s);
+        // Other origins still draft.
+        drafted(draft_site(
+            request("https://elsewhere.example", &["/items/{num}"], &[]),
+            &mut s.config,
+        ));
+
+        // An unreadable record vouches for no origin.
+        fs::write(&state, b"{").unwrap();
+        refused(&mut s);
+        let response = draft_site(
+            request("https://elsewhere.example", &["/items/{num}"], &[]),
+            &mut s.config,
+        );
+        assert_eq!(code(response), ErrorCode::InvalidConfig);
     }
 
     #[test]
