@@ -3008,6 +3008,8 @@ id = "work:{host}/{id}"
             let request = Request::ListRuns(brauser_protocol::ListRunsRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "runs-diag".into(),
+                kind: None,
+                before: None,
             });
             #[cfg(not(unix))]
             let request = hello_request("runs-diag");

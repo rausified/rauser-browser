@@ -395,6 +395,9 @@ impl Server {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
                 runs: self.supervisor.list_runs(),
+                // kind, before and more are wired up in Task 2; this task
+                // only adds the wire fields.
+                more: None,
             }),
             Request::CancelRun(value) => {
                 let Some(run_id) = parse_run_id(&value.run_id) else {
@@ -1131,6 +1134,8 @@ mod tests {
         match world.call(&Request::ListRuns(ListRunsRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "list".into(),
+            kind: None,
+            before: None,
         })) {
             Response::RunsListed(listed) => {
                 assert_eq!(listed.runs.len(), 1);

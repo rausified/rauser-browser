@@ -581,3 +581,31 @@ A version 8 host built before these additions answers `invalid_request`
 asks for a host rebuild. An extension built before them rejects a
 `runs_listed` or `run_fetched` that holds a task view, so the extension and
 the host deploy together.
+
+### Task history (added within version 8)
+
+The Tasks page pages back through one kind's runs with `list_runs`. All of it
+is additive: a `list_runs` with none of the new fields answers exactly as
+before.
+
+- `ListRunsRequest` gains two optional fields: `kind` (a `RunKind`) and
+  `before` (a `RunCursor`: `created_at` and `run_id`, the oldest run already
+  shown). `RunsListed` gains optional `more`.
+- `kind` absent: today's behavior exactly, unchanged byte for byte, and no
+  `more` key.
+- `kind` present, no `before`: every queued or running run of that kind, then
+  that kind's finished runs newest first, up to 20 runs total. `more` is
+  `true` when finished runs of that kind remain past this page, else `false`.
+- `kind` and `before` both present: only finished runs of that kind strictly
+  older than the cursor, ordered by `(created_at, run_id)` descending, at
+  most 20, with `more` as above. Queued and running runs never appear on a
+  `before` page; the caller already saw them on the first page of that kind.
+- `before` without `kind` is refused `invalid_request`: a cursor only makes
+  sense within one kind's ordering.
+- `runs` stays capped at 20 entries in every case. A `RunView` with no `kind`
+  is a summary, as elsewhere in this protocol.
+
+A version 8 host built before these additions answers `invalid_request`
+("invalid or unsupported request JSON") for a `list_runs` carrying `kind` or
+`before`, and the page then asks for a host rebuild. The host and the
+extension deploy together.

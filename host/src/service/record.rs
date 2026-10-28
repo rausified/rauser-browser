@@ -796,6 +796,7 @@ mod tests {
             protocol_version: brauser_protocol::PROTOCOL_VERSION,
             request_id: "r".repeat(128),
             runs,
+            more: None,
         });
         let bytes = serde_json::to_vec(&listed).unwrap().len();
         assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
@@ -804,6 +805,7 @@ mod tests {
             protocol_version: brauser_protocol::PROTOCOL_VERSION,
             request_id: "r".repeat(128),
             runs: vec![task_view; crate::service::supervisor::LIST_LIMIT],
+            more: None,
         });
         let bytes = serde_json::to_vec(&listed).unwrap().len();
         assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
