@@ -657,6 +657,35 @@ Checks of this kind in this repo:
 
 - **[human] Neutralized summaries in Obsidian and VS Code preview** (PR 4 of the open-access spec; recorded in DESIGN.md §5.2 step 6). `npm run test:markdown-neutralizer` proves the corpus inert in markdown-it, micromark (GFM) and marked, but not in Obsidian or VS Code, so a person checks: (1) write each neutralized output of `host/tests/fixtures/markdown-neutralize-corpus.json` into a scratch vault (set `BRAUSER_NEUTRALIZE_CORPUS_OUT` to a JSON file path while running `cargo test --locked -p brauser the_corpus_comes_out_inert` to dump each input with its `output`, `frontmatter`, `inline` and `wikilink` forms); (2) open them in Obsidian reading and live-preview modes, with the Dataview plugin enabled (Mermaid and math are built in), and in VS Code's Markdown preview, with the network monitored; (3) confirm no image, embed (`\![[embed]]` included), iframe or other remote resource loads, no code block, Mermaid diagram, Dataview query or math renders, and the text reads as the plain characters. Record the date and result in DESIGN.md §5.2 step 6. *Not yet run.*
 
+## Observing a run's logs
+
+The host, the service, and the CLI log JSON lines (DESIGN.md §15). Test and `scripted-dialogs` builds write no log file unless `BRAUSER_LOG_DIR` is set, so a test never writes to the real `~/Library/Logs/Brauser`. To keep the logs of a run, point `BRAUSER_LOG_DIR` at a temporary directory and read it with the log reader:
+
+```sh
+export BRAUSER_LOG_DIR="$(mktemp -d /tmp/brauser-logs-XXXX)"
+export BRAUSER_LOG=debug                           # optional; the default is info
+# … run the binary, test, or smoke step that inherits them …
+npm run logs -- --dir "$BRAUSER_LOG_DIR"
+```
+
+- **Headless smoke.** The host wrapper starts the host and the service under `env -i` with a fixed list of names, so a `BRAUSER_LOG_DIR` in your shell does not reach them and the run writes no JSON log. Their warnings and errors still go to stderr: the service's to `service.log` in the run directory. *To keep JSON logs from a headless run, add `BRAUSER_LOG_DIR` (and `BRAUSER_LOG` if wanted) to the wrapper's `env -i` list in `scripts/smoke-macos.mjs`; not tried yet.*
+- **Guided and `--auto` smoke.** The normal build writes by default, and Chrome and the host inherit the runner's environment, with `HOME` set to the temporary home. Without `BRAUSER_LOG_DIR` the logs land in `<temporary home>/Library/Logs/Brauser/`, which the run removes; set `BRAUSER_LOG_DIR` before `npm run smoke:macos` to keep them. *Untested.*
+- **Rust integration tests.** `host/tests/service.rs` starts the binary with `env_clear()`, so its children write no JSON log either; to keep them, add `.env("BRAUSER_LOG_DIR", …)` to its `command()` while debugging. Unit tests never call `diag::init`, so they log nowhere unless a test installs its own subscriber.
+
+When diagnosing a failure:
+
+```sh
+npm run logs -- --errors --since 1h            # warnings and errors from every process
+npm run logs -- --request 0f8e7d6c             # one request, extension → host → service (a prefix is enough)
+npm run logs -- --run a1b2c3d4 --level debug   # everything for one service run
+npm run logs -- --proc service --follow        # tail the service while reproducing
+npm run logs -- --extension diagnostics.jsonl  # merge the options page's Copy diagnostics export
+```
+
+Start from the id on the failing line: a `--request` view shows where the request stopped, and the `run_id` in it leads to the run. `--json` prints the raw lines for `jq`. The reader reports how many malformed lines it skipped; a few at a file's end usually mean a process was writing when it was read.
+
+A test that checks logging installs its own subscriber for the code under test (`tracing::subscriber::with_default` with `tracing_subscriber::fmt().json()` and a capturing writer), asserts the span or event carries `request_id` and `outcome`, and asserts that a sentinel page-text string is absent from the captured output. The log reader's own tests are `scripts/tests/brauser-logs.test.mjs` (`npm run test:scripts`).
+
 ## Changing this document
 
 This standard is meant to improve with use. When you change it:
@@ -907,6 +936,14 @@ dialog count; actual Chrome link opening still needs macOS verification.
   Ready activity now drains before standalone retries, while the failed marker
   retains its original ID, snapshot and backoff. The failing-first worker
   regression covers both a false acknowledgement and an older-host error.
+
+- 2026-10-28: Diagnostics logs (DESIGN.md §15). A span's close line from
+  `tracing-subscriber`'s JSON layer, as diag.rs configures it, lists only the
+  closed span's parents, so it cannot say which span closed; the log reader
+  prints it as `close` and names the span only when a line also carries a
+  current `span`. Both the headless smoke wrapper and `host/tests/service.rs`
+  clear the environment, so `BRAUSER_LOG_DIR` must be passed explicitly to
+  keep their children's logs.
 
 Individual recovered-note review (`brwr-kws`) is covered by the built-panel
 `individual recovery` cases and the editor's immutable-ID and memory-only
