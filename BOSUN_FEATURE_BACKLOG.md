@@ -234,11 +234,12 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-wvi` **Journal reviewed re-key operations with crash-safe replay.**
-  Next prerequisite of `brwr-6x2`: persist host-owned reviewed decisions with
-  complete revision checks, stable IDs, exact retry identity and interrupted
-  transaction recovery. Keep config, file/index integration and panel apply
-  disabled until the remaining parent stages are complete.
+- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.**
+  Next prerequisite of `brwr-6x2`, after the completed decision journal:
+  revalidate the review at apply, integrate crash-safe config/content changes,
+  preserve both-side notes/summaries and URL copies, and rebuild the same keys
+  from authoritative history. Ordinary config saves keep the ID freeze.
+  Panel review remains a subsequent parent stage.
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
   Windows CI, record an isolated real-Chrome run with source and OS/browser
   versions, native registration, the folder picker, standing HTTP(S) access,
@@ -331,8 +332,9 @@ strip_params note-identity follow-up has shipped (see Shipped).
 - [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
   Cookie claimed the highest-priority ready item after the coordinator cleared
   the assigned queue. The [four-stage plan](docs/superpowers/plans/2026-10-28-capture-relearning.md)
-  has completed offline alias rehearsal and revision-bound impact planning;
-  next are durable journal/rebuild (`brwr-wvi`) and panel review. The parent remains in
+  has completed offline alias rehearsal, revision-bound impact planning and the
+  durable decision journal; next are vault/index integration (`brwr-dbp`) and
+  panel review. The parent remains in
   progress: no migration is enabled and the ID freeze stays enforced.
 
 
@@ -371,6 +373,8 @@ strip_params note-identity follow-up has shipped (see Shipped).
 Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Reliability. **Persist reviewed capture corrections across crashes (2026-10-28).** `adapters relearn-record` revalidates a complete impact plan and durably records approval or rejection under a stable operation UUID; `adapters relearn-journal` inspects decisions and recovers exact interrupted appends. Conflicting retries and stale reviews refuse; rejected splits, merges and reused keys retain their simultaneous mapping. This completes `brwr-wvi`; receipts say `applied: false`, existing files and ID freezing remain intact, and `brwr-dbp` owns actual migration integration. **Metrics:** 18 new regressions; 1,037 workspace Rust outcomes (43 explicit IPC skips), 899 scripted outcomes (53 IPC skips), 15 extension files, both Clippy builds and the complete required/README gate green.
 
 - **Category:** New Capability. **Review capture re-learning against recorded history (2026-10-28).** `brauser adapters relearn-plan` derives a read-only impact report from owned logs, notes and summaries, including repository roll-ups. Revision hashes bind the inspected inputs; splits, merges, simultaneous swaps, reused keys, missing query provenance and occupied destinations remain explicit. Existing copies stay visible and untouched, and URL notes never become an inferred autosave target. Completes `brwr-hq8`; durable migration and panel Re-learn remain with the parent. **Metrics:** 1,018 workspace Rust outcomes (+21 tests; 43 explicit IPC skips), 880 scripted outcomes (53 IPC skips), 15 extension files, both Clippy builds and the complete required/README gate green.
 
@@ -1486,3 +1490,39 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` because Git metadata is read-only. No retry, push or merge
   ran. The complete green source/tests/docs and exported queue remain ready
   for the driver, with the exact message in excluded `.bosun_commit_msg`.
+
+### Decision-journal handoff (2026-10-28, brwr-wvi)
+
+- Opening health and the final full gate were green. Journal recording/inspection
+  is implemented, reviewed and tested; brwr-wvi is closed. Parent brwr-6x2 stays
+  in progress. Next ready P2 brwr-dbp owns actual config/content/index migration
+  and authoritative rebuild before panel Re-learn can ship.
+- A recorded approval is historical evidence, never an apply token. An exact
+  retry can acknowledge that old decision after config/evidence changes. Future
+  apply must recompute every revision and ownership check under the locks; do
+  not use the receipt to weaken ordinary config's ID freeze or choose an
+  autosave key from a canonical address. Keep local note recovery separate.
+- Rejections retain full simultaneous mappings and issues. There is no alias
+  replay, file move or index integration yet. Preserve format-1 decoding and
+  exact prepared bytes in future updates, along with all frozen capture intents.
+  Recovery refuses a mismatched tail/prefix instead of truncating it.
+- Fresh review fixed retry parent-directory syncing and verified source, tests,
+  docs and semantic queue changes. The final gate passed 1,037 workspace Rust
+  outcomes (43 explicit IPC skips), 899 scripted outcomes (53 IPC skips), all
+  15 extension files, both Clippy builds, two script files and 10,696 inert
+  renderings. Eighteen tests were added. Evidence is in
+  `target/cookie-relearn-journal-final-gate.log`. API-based Codex review is
+  prohibited by the assignment; the driver provides independent review.
+- Windows directory-entry power-loss durability and real Chrome acceptance
+  remain external platform evidence. Unpublished prepare temporaries are
+  deliberately ignored rather than promoted; a full journal retains its
+  history and refuses new entries pending a supported archive procedure.
+- Product guidance: the next useful outcome is completing a reviewed correction
+  that preserves both copies and makes the changed identities understandable in
+  the panel. Avoid expanding the journal's diagnostics while actual apply is
+  missing. Focus sessions and curated worklogs remain existing later proposals;
+  no duplicate proposal was needed to fill an already useful queue.
+- Commit handoff: the single add/commit attempt failed creating
+  `.git/index.lock` because Git metadata is read-only. No retry or remote action
+  ran. The green working tree, exported queue and excluded `.bosun_commit_msg`
+  are ready for the driver to commit and independently review.

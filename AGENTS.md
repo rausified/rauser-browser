@@ -405,9 +405,14 @@ key reuse. It binds config/contracts/evidence/proposal revisions, preserves
 URL notes as separate copies and includes container roll-ups. Only lock files
 are created; the ID freeze and all note/recovery behavior remain unchanged.
 The interface and bounds are in
-`docs/superpowers/plans/2026-10-28-capture-relearning.md`; `brwr-wvi` is the
-next journal stage, and parent `brwr-6x2` still owns durable apply and panel
-Re-learn.
+`docs/superpowers/plans/2026-10-28-capture-relearning.md`. `brwr-wvi` adds
+`adapters relearn-record` and `adapters relearn-journal`: explicit host-only
+recording/inspection of revision-bound decisions in `rekey/decisions.jsonl`
+beside config.toml. Recovery verifies exact prepared append bytes and the prior
+prefix; approved/rejected reports retain the full mapping and never enter alias
+replay. Receipts always say `applied: false`. `brwr-dbp` owns config/file/index
+integration next; parent `brwr-6x2` still owns durable apply and panel Re-learn.
+The ID freeze remains enforced.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on

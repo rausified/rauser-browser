@@ -214,3 +214,14 @@
   workspace Rust outcomes, all 15 extension files, 880 scripted outcomes;
   explicit IPC sandbox skips included). Durable journal/recovery brwr-wvi,
   file/index integration and panel Re-learn remain before parent acceptance.
+
+- **Brauser — retain reviewed capture corrections across crashes:** The host's
+  `adapters relearn-record` command revalidates and durably records a complete
+  correction review; `adapters relearn-journal` inspects decisions and recovers
+  exact interrupted appends. Stable UUIDs make retries idempotent, while stale
+  reviews and conflicting payloads refuse. Rejected splits/merges/key reuse
+  retain their simultaneous mapping. Completes brwr-wvi with 18 regressions
+  and the full local gate green (1,037 workspace Rust outcomes, 899 scripted
+  outcomes, all 15 extension files; explicit IPC skips included). Decisions
+  always report `applied: false`; brwr-dbp still owns actual vault/index/config
+  migration, with panel Re-learn remaining under parent brwr-6x2.

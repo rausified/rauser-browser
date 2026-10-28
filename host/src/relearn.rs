@@ -15,7 +15,9 @@ use crate::{config::ConfigStore, index::ArtifactIndex, url_provenance::StoredUrl
 const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_EVIDENCE: usize = 32_768;
 
-#[derive(Deserialize)]
+pub mod journal;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanRequest {
     pub origin: String,
@@ -123,6 +125,13 @@ fn summary_provenance(bytes: &[u8]) -> Result<Option<Vec<String>>> {
 /// revisions and recheck owned files. This function never writes config,
 /// adopted contracts, cache, log, notes, summaries or browser recovery.
 pub fn plan(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
+    let _config_lock = config.lock_current()?;
+    let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
+    plan_locked(config, request)
+}
+
+/// Caller holds the config and capture locks through publication of a decision.
+pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
     let origin_url = Url::parse(&request.origin).context("invalid origin")?;
     ensure!(
         stored_origin(&StoredUrl {
@@ -136,7 +145,6 @@ pub fn plan(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
             && origin_url.fragment().is_none(),
         "give an exact HTTP(S) origin"
     );
-    let _config_lock = config.lock_current()?;
     // A separate read avoids refresh's deliberate adopted-contract writes.
     let current = config.reopen();
     ensure!(
@@ -152,7 +160,6 @@ pub fn plan(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
         !current.adopted_contracts_unknown_for(&request.origin),
         "recorded adapter state needs repair"
     );
-    let _capture_lock = crate::capture::lock_capture(current.dir()?)?;
     let storage = current
         .snapshot()
         .storage
@@ -505,6 +512,42 @@ pub(crate) fn run(
     });
     let plan = plan(&config, &request)?;
     serde_json::to_writer(&mut output, &plan)?;
+    output.write_all(b"\n")?;
+    Ok(())
+}
+
+pub(crate) fn run_journal(
+    config_path: Option<std::path::PathBuf>,
+    record: bool,
+    input: impl Read,
+    mut output: impl Write,
+) -> Result<()> {
+    // Decode before opening any host state. Inspect takes no request body.
+    let request: Option<journal::RecordRequest> = if record {
+        let mut bytes = Vec::new();
+        input.take(MAX_REQUEST_BYTES + 1).read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() as u64 <= MAX_REQUEST_BYTES,
+            "re-learning request is too large"
+        );
+        Some(serde_json::from_slice(&bytes).context("invalid re-learning decision request")?)
+    } else {
+        None
+    };
+    let config = ConfigStore::load_from(match config_path {
+        Some(path) => path,
+        None => ConfigStore::default_path()?,
+    });
+    if let Some(request) = request {
+        serde_json::to_writer(&mut output, &journal::record(&config, &request)?)?;
+    } else {
+        serde_json::to_writer(
+            &mut output,
+            &serde_json::json!({
+                "applied": false, "entries": journal::inspect(&config)?
+            }),
+        )?;
+    }
     output.write_all(b"\n")?;
     Ok(())
 }

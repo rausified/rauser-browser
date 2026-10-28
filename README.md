@@ -46,6 +46,10 @@ To review the effect of a replacement policy on real recorded evidence, use
 changes and existing notes/summaries with revision hashes, and applies nothing.
 An optional `--config /absolute/path/to/config.toml` selects an isolated config.
 See the [impact-plan interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#host-derived-impact-plan).
+`adapters relearn-record` can durably record a freshly revalidated approval or
+rejection, and `adapters relearn-journal` inspects and recovers those decisions.
+Both accept the same optional `--config` path. See the
+[decision journal interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#durable-decision-journal).
 Re-learn in the panel and applying migrations remain under development.
 
 ### Try the M1 development build

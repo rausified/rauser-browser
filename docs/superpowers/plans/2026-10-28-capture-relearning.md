@@ -20,7 +20,7 @@ commit a replacement policy while preserving activity, notes and summaries.
    URL. Keep both notes visible when the endpoints already have notes; never
    pick an autosave identity from a shared canonical address. Plans must bind
    both the configuration revision and the evidence they inspected.
-3. **Durable migration and rebuild (`brwr-wvi` starts with the journal).** Add host-owned append-only re-key/alias
+3. **Durable migration and rebuild (`brwr-wvi` journal implemented; `brwr-dbp` integration next).** Add host-owned append-only re-key/alias
    operations and recovery before admitting any frozen-ID change. Reuse
    ownership-checked file operations, preserve conflicting notes and summaries,
    and keep browser-local note recovery separate from host migrations. Teach
@@ -150,8 +150,8 @@ presenting a partial plan. Coordination lock files may be created. Config,
 adopted state, cache, logs, notes, summaries and browser-local recovery are
 unchanged. There is no apply flag or native/worker migration message.
 
-Next: `brwr-wvi` implements the durable journal and recovery. File/index
-integration and panel review still follow it; keep `brwr-6x2` in progress and
+Next: the journal below records reviewed decisions; `brwr-dbp` implements file/index
+integration, then panel review follows. Keep `brwr-6x2` in progress and
 the existing ID freeze enforced until all stages satisfy their acceptance.
 
 
@@ -163,3 +163,78 @@ passed 1,018 workspace Rust outcomes (43 explicit IPC skips), all 15 extension
 files, both Clippy builds, two script files and 10,696 inert renderings. The
 scripted-dialog suite passed 880 outcomes (53 IPC skips). This closes brwr-hq8
 only; Windows/macOS evidence and durable migration acceptance stay separate.
+
+## Durable decision journal
+
+`brauser adapters relearn-record [--config /absolute/path/to/config.toml]`
+reads one JSON object. Obtain the `review` and its `plan_revision` from
+`relearn-plan` first. Example (replace both revision placeholders):
+
+```json
+{"operation_id":"00000000-0000-0000-0000-000000000001","decision":"approve","expected_plan_revision":"<plan_revision>","review":{"origin":"https://work.example","expected_revision":"<config revision>","proposed":{"format":1,"artifacts":[{"type":"work.item","origin":"https://work.example","match":[{"path":"/items/{id:int}"}],"id":"corrected:{host}/{id}"}]}}}
+```
+
+The host takes the config lock followed by the capture lock, recomputes the
+complete impact plan and compares its revision before publishing any new
+decision. Config, contracts, log evidence, inspected file bytes and proposal
+are therefore bound to the review. The selected home root and its recorded
+folder identity are retained with the decision. This is a durable record of
+review, not an apply token. The receipt always says `applied: false`.
+
+`decision` is `approve` or `reject`. Approval requires every evidenced row to
+have one artifact target and no issues, splits or merges. Unresolved evidence,
+URL copies, type changes and simultaneous key reuse require a revised proposal
+or rejection. A rejection retains the complete simultaneous mapping and all
+issues; it never becomes sequential alias edges. Both-side files remain in
+the report and untouched; even an approval selects no winning note or summary.
+No decision replaces a prior entry. A new review uses a new canonical lowercase
+UUID. Reusing a UUID with a different decision, proposal or review revision
+refuses. An exact retry returns the original receipt without a second append,
+including after evidence/config changed: it acknowledges the historical
+decision and grants no current write authority.
+
+`brauser adapters relearn-journal [--config /absolute/path/to/config.toml]`
+takes no request body. It completes any prepared append and returns
+`{"applied":false,"entries":[...]}` with full reports and proposals. It can
+recover a decision even if its old home folder is missing or its config is now
+unusable. The config directory must still be accessible; inspection uses the
+same locks. With no journal, only lock files may be created.
+
+Format 1 lives beside config.toml in `rekey/decisions.jsonl`, under a private
+directory (0700 on Unix; files 0600). Existing state must be owned by the user
+and private on Unix. Directory/file symlinks, nonregular files and unsupported
+formats refuse. Entries carry sequence numbers, previous-entry checksums,
+request hashes and full-payload checksums. Before appending, the host writes
+and syncs `pending.json` through a temporary and a no-clobber hard link, then
+syncs the directory. It stores the exact append bytes, their hash, the old
+offset and the complete prefix hash. Recovery verifies the whole resulting
+journal, then appends only missing prepared bytes when the existing tail is
+an exact prefix (including a tear inside UTF-8). A different tail or changed
+prefix refuses without truncation or guessing. The log and directory are
+synced before pending is removed and the directory synced again. A retry after
+any crash point either prepares the as-yet-unpublished decision afresh or
+returns its single durable receipt. Unpublished temporary files are ignored,
+never promoted to decisions; retain them for diagnosis. Windows retains the
+existing shared helper's limitation: directory-entry power-loss durability
+still needs platform validation.
+
+Limits: 4 MiB input and per journal entry, 64 MiB total journal, 4,096 operations,
+and 8 MiB plus 4 KiB for the escaped prepare record. Full/oversized or damaged
+state refuses; there is no automatic pruning or archive procedure yet. Preserve
+format-1 decoding, exact prepared bytes and checksums in later versions.
+
+`brwr-wvi` adds only this host developer path. It adds no native message,
+worker alias authority, config ID-freeze exception, cache replay or content
+migration. Ordinary host/panel startup does not inspect the journal; recovery
+runs on explicit journal inspection/recording. `brwr-dbp` must integrate
+crash-safe config/content changes and authoritative reindex, with fresh input
+and ownership checks at apply, preserving URL copies and both-side notes and
+summaries. Panel Re-learn follows that integration, and the parent remains open.
+
+Journal-stage validation (2026-10-28): 16 library regressions and two real
+binary boundary tests added. The full required/README gate passed with 1,037
+workspace Rust outcomes (43 explicit sandbox IPC skips), 899 scripted-build
+outcomes (53 IPC skips), all 15 extension files, both Clippy builds, two script
+files and 10,696 inert Markdown renderings. Fresh review fixed parent-directory
+syncing when retrying an already-created journal directory. This completes
+brwr-wvi only; brwr-dbp and panel review remain before parent acceptance.

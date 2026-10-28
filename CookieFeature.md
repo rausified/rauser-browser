@@ -676,3 +676,34 @@ outcomes (53 IPC skips) and 10,696 inert Markdown renderings. Windows/macOS
 execution remains separate. The next concrete stage, brwr-wvi, records
 reviewed decisions in a durable journal with recovery before file/index or
 panel integration can enable migrations.
+
+### 2026-10-28 — Keep capture-correction reviews across interrupted writes
+
+Brauser can now keep a durable record of a reviewed capture correction before
+any migration is enabled. The developer command `adapters relearn-record`
+rebuilds the impact plan under the configuration and capture locks, checks that
+all reviewed inputs still match, and records an approval or rejection with its
+full proposal, mappings, file revisions and selected home-folder identity.
+`adapters relearn-journal` shows those records and completes interrupted
+appends. This finishes brwr-wvi, the journal prerequisite of capture re-learning.
+
+Each operation has a stable UUID. An exact retry returns the original receipt;
+a different proposal or decision cannot reuse that ID. The journal saves the
+exact bytes it intends to append before writing them, so recovery can finish a
+torn write without guessing or flattening a simultaneous mapping into alias
+links. Splits, merges and reused keys cannot be approved in this stage; a
+rejection preserves their full impact report. Reviews remain inspectable even
+if the former home folder is unavailable. All receipts say `applied: false`:
+notes, summaries, activity, config and index identities are still untouched,
+and ordinary settings saves still enforce the ID freeze.
+
+Eighteen new regressions cover crash checkpoints, a torn UTF-8 append,
+concurrent writers, exact retries, stale log/note/config/contract evidence,
+conflicting identities, damaged state and separate real CLI processes. The
+complete Linux gate passed with 1,037 workspace Rust outcomes (43 explicit
+sandbox IPC skips), 899 scripted-build outcomes (53 IPC skips), all 15 extension
+files, both Clippy builds, two script files and 10,696 inert Markdown renderings.
+Fresh diff review also fixed parent-directory syncing on retries. Windows
+power-loss durability and real browser acceptance still need platform evidence.
+Next, brwr-dbp integrates actual config/file/index migration and authoritative
+rebuild; panel Re-learn and parent brwr-6x2 acceptance follow that work.
