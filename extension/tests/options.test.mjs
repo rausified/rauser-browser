@@ -952,10 +952,8 @@ test("a pull request or issue rule cannot be moved below its repository rule", a
   const state = install({ adapters: [pr, issue, repo] });
   await openSettings();
   const held = "A pull request or issue rule must stay ahead of its repository rule.";
-  // Each card has Edit, Move up, Move down, Remove. The PR rule predates the
-  // starter's mode-tab rule, so its card also offers an update, skipped here.
-  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button")
-    .filter((button) => button.textContent !== "Update to current rules");
+  // Each card has Edit, Move up, Move down, Remove.
+  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
   assert.equal(buttons()[2].disabled, false, "PR and issue may swap");
   assert.equal(buttons()[6].disabled, true, "the issue cannot move below the repository");
   assert.equal(buttons()[6].title, held);
@@ -1910,7 +1908,12 @@ test("a stale starter adapter offers Update to current rules; an up-to-date one 
   assert.equal(updateButtons().length, 0);
 });
 
-test("Update to current rules reviews the added rules and saves them only on Save", async () => {
+const updatedOneDrive = (saved) => {
+  const [sites, , personal, ...rest] = saved.match;
+  return { ...saved, match: [sites, personal, ...rest, SHARE_RULE] };
+};
+
+test("Update to current rules reviews the replaced rule and saves it only on Save", async () => {
   const saved = { ...staleOneDrive(), title: "{title}.docx" };
   const saves = [];
   const state = install({
@@ -1920,17 +1923,23 @@ test("Update to current rules reviews the added rules and saves them only on Sav
   await openSettings();
   updateButtons()[0].click();
   assert.equal(env.elements.get("adapter-editor").hidden, false);
-  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), { ...saved, match: [...saved.match, SHARE_RULE] });
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), updatedOneDrive(saved));
   const review = env.elements.get("adapter-editor-review");
   assert.equal(review.hidden, false);
-  assert.match(nodeText(review), /Adds 1 rule from the current OneDrive for work documents starter:/);
-  assert.match(nodeText(review), /\/\(:w:\|:x:\|:p:\)\/\(r\|g\)\/\(sites\|personal\)\/\{_\}\/_layouts\/15\/Doc\.aspx/);
+  const text = nodeText(review);
+  assert.match(text, /Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:/);
+  assert.ok(text.includes("Adds /(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
+  assert.ok(text.includes("Removes /:w:/r/sites/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
+  // The preview starts on the new rule, and that example matches it.
+  const example = env.elements.get("adapter-preview-url").value;
+  assert.match(example, /^https:\/\/cisco-my\.sharepoint\.com\/:w:\/r\/sites\/example\/_layouts\/15\/Doc\.aspx\?sourcedoc=/);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /Example: [^ ]+ — Matches sharepoint\.doc rule 3 · sharepoint:cisco-my\.sharepoint\.com\//);
   assert.equal(saves.length, 0, "opening the review saves nothing");
 
   await saveOpenAdapter("the starter update");
   assert.equal(saves.length, 1);
   const [adapter] = saves[0].config.adapters.artifacts;
-  assert.deepEqual(adapter, { ...saved, match: [...saved.match, SHARE_RULE] });
+  assert.deepEqual(adapter, updatedOneDrive(saved));
   assert.deepEqual(state.config.adapters.artifacts, [adapter]);
   assert.equal(env.elements.get("adapter-editor").hidden, true);
   assert.equal(updateButtons().length, 0, "an up-to-date adapter offers no update");
@@ -1938,4 +1947,20 @@ test("Update to current rules reviews the added rules and saves them only on Sav
   // Editing another adapter afterwards shows no stale review line.
   env.elements.get("adapter-list").querySelectorAll("button")[0].click();
   assert.equal(env.elements.get("adapter-editor-review").hidden, true);
+});
+
+test("a starter update the host refuses as a retired-contract change explains itself", async () => {
+  install({
+    adapters: [staleOneDrive()],
+    host: { update_config: () => ({
+      type: "error", code: "invalid_config",
+      message: "the artifact type or id template for adapter \"x\" on \"y\" cannot change until artifact migrations are available: recorded adapter",
+    }) },
+  });
+  await openSettings();
+  updateButtons()[0].click();
+  env.elements.get("save-adapter").click();
+  await until(() => statusText().startsWith("This update") && idle(), "the refused save");
+  assert.equal(statusText(), "This update overlaps an adapter you used before; edit it by hand in the editor.");
+  assert.equal(env.elements.get("adapter-editor").hidden, false, "the editor stays open for a hand edit");
 });

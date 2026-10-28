@@ -444,7 +444,7 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | Kind | Cases | Impls |
 |---|---|---|
 | validate | 607 | rust, ts |
-| evaluate | 398 | rust, ts |
+| evaluate | 399 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
@@ -454,7 +454,7 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
 | overlap_report | 8 | rust |
-| **Total** | **1350** | |
+| **Total** | **1351** | |
 
 ## Maintenance
 

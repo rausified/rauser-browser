@@ -41,7 +41,14 @@ all (such as `https://acme-my.sharepoint.com/:w:/r/personal/x/Documents/a.docx`)
 It also does not recognize the short guest-link form that has no
 `_layouts/15/Doc.aspx` segment and carries no `sourcedoc`, such as
 `https://acme-my.sharepoint.com/:x:/g/personal/jdoe_acme_com/EbCdEfGh`; that
-link only resolves to a document after a redirect Brauser does not follow. It
-uses the whole tab title because the recorded format does not yet justify a
+link only resolves to a document after a redirect Brauser does not follow.
+
+Known limits: sharing links for other kinds of file are not recognized, even
+in the `_layouts/15/Doc.aspx` form, because only Word, Excel and PowerPoint
+are recorded: `/:b:/` (PDF), `/:o:/` (OneNote), `/:v:/` (video), and `/:u:/`
+(other files). Neither is the older `/:w:/s/` sharing form. Each needs its own
+recorded sample before it joins the starter.
+
+It uses the whole tab title because the recorded format does not yet justify a
 stable title template. A tenant that emits a different link shape should use
 the match preview to add only that reviewed route.

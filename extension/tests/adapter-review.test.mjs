@@ -143,3 +143,16 @@ test("strip_params conflicts name each entry an adapter's query or absent keys r
     { entry: "selected*", params: ["selectedIssue"], adapters: ["jira.issue on https://acme.atlassian.net"] },
   ]);
 });
+
+test("a bare path alternation previews as its first literal, so the example matches", async () => {
+  const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
+  const sharing = {
+    type: "sharepoint.doc", origin: "https://acme-my.sharepoint.com", path_case: "insensitive",
+    match: [{ path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } }],
+    id: "sharepoint:{host}/{doc}",
+  };
+  const url = exampleUrl(sharing);
+  assert.equal(url, "https://acme-my.sharepoint.com/:w:/r/sites/example/_layouts/15/Doc.aspx?sourcedoc=123e4567-e89b-12d3-a456-426614174000");
+  const compiled = compileDocument({ format: 1, artifacts: [sharing] });
+  assert.equal(evaluate(compiled.doc, url).match, true);
+});

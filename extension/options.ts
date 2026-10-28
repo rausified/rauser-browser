@@ -114,10 +114,11 @@ let vocabularyEdited = false;
 // Setup instructions while the last service request found no service.
 let serviceProblem: string | null = null;
 type AdapterEdit =
+  // starterUpdate: opened by Update to current rules.
   // linkContainers: the GitHub repositories starter, whose save also links
   // existing pull request and issue rules to it (`withContainerLinks`).
   | { kind: "new"; linkContainers?: boolean }
-  | { kind: "existing"; identity: string; snapshot: string }
+  | { kind: "existing"; identity: string; snapshot: string; starterUpdate?: boolean }
   // Capture Site's drafted adapters, handed off from the side panel. The
   // editor holds them as one JSON array.
   | { kind: "draft"; handoff: DraftHandoff };
@@ -351,10 +352,11 @@ function textValue(value: unknown, fallback = "Not configured"): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
-function ruleDescription(raw: unknown, index: number): string {
+function ruleDescription(raw: unknown, index: number | null): string {
   const rule = objectValue(raw);
-  if (!rule) return `Rule ${index + 1}: invalid rule`;
-  const parts = [`Rule ${index + 1}: ${textValue(rule.path, "missing path")}`];
+  const name = index === null ? "" : `Rule ${index + 1}: `;
+  if (!rule) return `${name}invalid rule`;
+  const parts = [`${name}${textValue(rule.path, "missing path")}`];
   const query = objectValue(rule.query);
   if (query && Object.keys(query).length) {
     parts.push(`query ${Object.entries(query).map(([key, value]) => `${key}=${String(value)}`).join(", ")}`);
@@ -763,14 +765,14 @@ function showEditorReview(review: { line: string; items: string[] } | null): voi
 
 function openAdapterEditor(
   edit: AdapterEdit, adapter: AdapterObject | AdapterObject[], heading: string,
-  review: { line: string; items: string[] } | null = null,
+  review: { line: string; items: string[]; example: AdapterObject } | null = null,
 ): void {
   adapterEdit = edit;
   adapterEditor.hidden = false;
   adapterEditorHeading.textContent = heading;
   showEditorReview(review);
   adapterJson.value = JSON.stringify(adapter, null, 2);
-  adapterPreviewUrl.value = exampleUrl(Array.isArray(adapter) ? adapter[0]! : adapter);
+  adapterPreviewUrl.value = exampleUrl(review?.example ?? (Array.isArray(adapter) ? adapter[0]! : adapter));
   adapterPreviewTitle.value = "";
   refreshAdapterEditor();
 }
@@ -794,22 +796,31 @@ function beginAdapterEdit(index: number | "new"): void {
     : `Edit and review ${adapterLabel(adapter, index)}`);
 }
 
-/** Open a saved starter adapter in the editor with the current starter's
- * missing rules appended. Saving is the usual edit of that adapter. */
+/** Open a saved starter adapter in the editor with its earlier starter
+ * version's retired rules replaced by the current starter's. Saving is the
+ * usual edit of that adapter. */
 function beginStarterUpdate(index: number): void {
   if (!session.config || busy) return;
   const adapter = session.config.adapters.artifacts[index];
   const update = adapter ? starterRuleUpdate(adapter) : null;
   const label = adapter ? matchingStarter(adapter)?.label : undefined;
   if (!adapter || !update || label === undefined) return;
-  const count = update.added.length;
+  const rules = (count: number): string => `${count} rule${count === 1 ? "" : "s"}`;
+  const { added, removed } = update;
   openAdapterEditor(
-    { kind: "existing", identity: adapterIdentity(adapter)!, snapshot: adapterSnapshot(adapter) },
+    { kind: "existing", identity: adapterIdentity(adapter)!, snapshot: adapterSnapshot(adapter), starterUpdate: true },
     update.adapter,
     `Update ${adapterLabel(adapter, index)} to current rules`,
     {
-      line: `Adds ${count} rule${count === 1 ? "" : "s"} from the current ${label} starter:`,
-      items: update.added.map((rule) => textValue(rule.path, "(no path)")),
+      line: removed.length
+        ? `Replaces ${rules(removed.length)} with ${rules(added.length)} from the current ${label} starter:`
+        : `Adds ${rules(added.length)} from the current ${label} starter:`,
+      items: [
+        ...added.map((rule) => `Adds ${ruleDescription(rule, null)}`),
+        ...removed.map((rule) => `Removes ${ruleDescription(rule, null)}`),
+      ],
+      // Preview the first new rule, the one the update is for.
+      example: { ...update.adapter, match: [added[0]] },
     },
   );
 }
@@ -832,6 +843,7 @@ function closeAdapterEditor(): void {
  */
 async function saveAdapterDocument(
   proposed: AdapterDocument, success: string, check?: () => Promise<string | null>,
+  explain?: (error: unknown) => string | null,
 ): Promise<void> {
   if (!session.config || busy) return;
   // Every settings save keeps contained adapters ahead of their container's
@@ -863,7 +875,7 @@ async function saveAdapterDocument(
     if (warning) show(`${success} ${warning}`, true);
     else show(success);
   } catch (error) {
-    show(`Could not save artifact adapters: ${describe(error)}`, true);
+    show(explain?.(error) ?? `Could not save artifact adapters: ${describe(error)}`, true);
     if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
   } finally {
     busy = false;
@@ -917,7 +929,17 @@ async function saveAdapter(): Promise<void> {
     return;
   }
   const action = adapterEdit?.kind === "new" ? "added" : "updated";
-  await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`);
+  const starterUpdate = adapterEdit?.kind === "existing" && adapterEdit.starterUpdate === true;
+  await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`, undefined,
+    starterUpdate ? explainStarterUpdateFailure : undefined);
+}
+
+/** The host refuses an edit that would reuse a retired adapter contract's
+ * routes under another identity until migrations exist. */
+function explainStarterUpdateFailure(error: unknown): string | null {
+  return error instanceof HostError && error.message.includes("cannot change until artifact migrations are available")
+    ? "This update overlaps an adapter you used before; edit it by hand in the editor."
+    : null;
 }
 
 /**

@@ -260,22 +260,62 @@ export function matchingStarter(adapter: AdapterObject): StarterOffer | null {
 
 const MODE_CAPTURE = /\{mode\??:\(([^)}]*)\)\}/g;
 
+const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
+
+/** Earlier shipped versions of each starter's match rules, oldest first,
+ * keyed by type. Only a saved adapter holding every rule of one of these is
+ * offered an update: an adapter matching no known version was written or
+ * narrowed by its user, and the current starter is not a reason to widen it.
+ * Add the outgoing rules here whenever a starter's rules change. */
+const STARTER_HISTORY: Readonly<Record<string, readonly { match: readonly AdapterRule[] }[]>> = {
+  "sharepoint.doc": [{
+    // Until 2026-10-28: Word sharing links from sites only.
+    match: [
+      { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+      { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+      { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+    ],
+  }],
+};
+
+export interface StarterRuleUpdate {
+  adapter: AdapterObject;
+  /** The current starter's rules the adapter gains. */
+  added: AdapterRule[];
+  /** The earlier starter's rules it drops, which the current one replaced. */
+  removed: AdapterRule[];
+}
+
 /**
- * `adapter` brought up to its starter's current rules, when it was saved from
- * a starter whose rules have since grown: the current starter's rules that
- * equal none of its own are appended after them. Everything else stays the
- * user's — their older and hand-added rules, scope, `within`, title and every
- * other key — except that `modes` gains the entries a new rule's `mode`
- * capture needs and the adapter lacks. `null` when nothing is missing, or
- * when the result would pass the 16-rule cap or fail to compile on its own.
+ * `adapter` brought up to its starter's current rules, when it holds every
+ * rule of a known earlier version of that starter (STARTER_HISTORY). The
+ * update drops that version's rules the current starter no longer has and
+ * appends the current rules it lacks. Everything else stays the user's: the
+ * rules they added, scope, `within`, title and every other key, except that
+ * `modes` gains the entries a new rule's `mode` capture needs and the adapter
+ * lacks. `null` for an up-to-date adapter, one matching no earlier version
+ * (hand-written or narrowed by the user), or when the result would pass the
+ * 16-rule cap or fail to compile on its own.
  */
-export function starterRuleUpdate(adapter: AdapterObject): { adapter: AdapterObject; added: AdapterRule[] } | null {
+export function starterRuleUpdate(adapter: AdapterObject): StarterRuleUpdate | null {
   const current = matchingStarter(adapter)?.adapter;
   if (!current || !Array.isArray(adapter.match) || !Array.isArray(current.match)) return null;
-  const saved = new Set((adapter.match as unknown[]).map(canonicalJson));
-  const added = (current.match as AdapterRule[]).filter((rule) => !saved.has(canonicalJson(rule)));
-  if (!added.length || adapter.match.length + added.length > MAX_RULES) return null;
-  const updated: AdapterObject = { ...adapter, match: [...adapter.match, ...added] };
+  const savedRules = adapter.match as unknown[];
+  const saved = new Set(savedRules.map(canonicalJson));
+  const currentRules = current.match as AdapterRule[];
+  const now = new Set(currentRules.map(canonicalJson));
+  const added = currentRules.filter((rule) => !saved.has(canonicalJson(rule)));
+  if (!added.length) return null;
+  const versions = STARTER_HISTORY[String(adapter.type)] ?? [];
+  // The newest earlier version the adapter fully holds.
+  const version = [...versions].reverse().find((earlier) =>
+    earlier.match.every((rule) => saved.has(canonicalJson(rule))));
+  if (!version) return null;
+  const retired = new Set(version.match.map(canonicalJson).filter((key) => !now.has(key)));
+  const kept = savedRules.filter((rule) => !retired.has(canonicalJson(rule)));
+  const removed = savedRules.filter((rule) => retired.has(canonicalJson(rule))) as AdapterRule[];
+  if (kept.length + added.length > MAX_RULES) return null;
+  const updated: AdapterObject = { ...adapter, match: [...kept, ...added] };
   const own = adapter.modes && typeof adapter.modes === "object" && !Array.isArray(adapter.modes)
     ? adapter.modes as Record<string, unknown>
     : {};
@@ -292,7 +332,7 @@ export function starterRuleUpdate(adapter: AdapterObject): { adapter: AdapterObj
     }
   }
   if (Object.keys(missingModes).length) updated.modes = { ...own, ...missingModes };
-  return compileDocument({ format: 1, artifacts: [updated] }).ok ? { adapter: updated, added } : null;
+  return compileDocument({ format: 1, artifacts: [updated] }).ok ? { adapter: updated, added, removed } : null;
 }
 
 export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): boolean {

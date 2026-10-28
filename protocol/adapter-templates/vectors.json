@@ -19888,6 +19888,24 @@
       "url": "https://acme-my.sharepoint.com/:w:/r/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true"
     },
     {
+      "id": "eval.onedrive.share_link_upper_case",
+      "kind": "evaluate",
+      "why": "§11, §4.3 path_case: an upper-case /:W:/R/Personal/ sharing link folds onto the same rule and ID",
+      "impls": ["rust", "ts"],
+      "sq": ["SQ-V2"],
+      "expect": {
+        "match": true,
+        "adapter": 7,
+        "rule": 1,
+        "type": "sharepoint.doc",
+        "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
+        "artifact_id": "sharepoint:acme-my.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "mode": null
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://acme-my.sharepoint.com/:W:/R/Personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D"
+    },
+    {
       "id": "eval.onedrive.share_link_excel",
       "kind": "evaluate",
       "why": "§11: a /:x:/r/personal/ sharing link, the Excel equivalent",
