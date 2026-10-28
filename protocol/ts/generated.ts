@@ -641,6 +641,7 @@ export interface OpenSummaryRequest {
   protocol_version: 6;
   request_id: string;
   url: string;
+  summary_path: string | null;
 }
 
 export interface SummaryOpened {

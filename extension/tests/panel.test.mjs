@@ -1542,6 +1542,7 @@ test("an unrecognized page with a summary shows its line and opens it", async ()
   page.el("page-summary-open").click();
   await until(() => page.sent("open_summary").length === 1, "open_summary");
   assert.equal(page.sent("open_summary")[0].url, ARTICLE_URL);
+  assert.equal(page.sent("open_summary")[0].summary_path, SUMMARY.summary_path);
 
   fail = true;
   page.el("page-summary-open").click();
@@ -1640,6 +1641,8 @@ test("a summarized Recent row says so and renders agent text as text", async () 
   buttonIn(summarized, "Open summary").click();
   await until(() => page.sent("open_summary").length === 1, "open_summary");
   assert.equal(page.sent("open_summary")[0].url, "https://read.example/spec");
+  // The row's own summary file, which the URL alone may no longer resolve to.
+  assert.equal(page.sent("open_summary")[0].summary_path, SUMMARY.summary_path);
 });
 
 test("following a new tab clears the previous page's summary before its lookup returns", async () => {

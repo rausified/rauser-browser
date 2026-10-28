@@ -670,13 +670,17 @@ fn artifact_result_requires_a_nullable_summary() {
 }
 
 #[test]
-fn open_summary_requires_url() {
-    let request = r#"{"type":"open_summary","protocol_version":6,"request_id":"r","url":"https://example.com/a"}"#;
+fn open_summary_requires_url_and_a_nullable_summary_path() {
+    let request = r#"{"type":"open_summary","protocol_version":6,"request_id":"r","url":"https://example.com/a","summary_path":null}"#;
     let parsed: Request = serde_json::from_str(request).unwrap();
     assert_eq!(serde_json::to_string(&parsed).unwrap(), request);
+    let by_path = request.replace("null", r#""summaries/a.summary.md""#);
+    let parsed: Request = serde_json::from_str(&by_path).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), by_path);
     for bad in [
         request.replace(r#","url":"https://example.com/a""#, ""),
         request.replace(r#""url":"https://example.com/a""#, r#""url":null"#),
+        request.replace(r#","summary_path":null"#, ""),
         request.replace('}', r#","path":"summaries/a.summary.md"}"#),
     ] {
         assert!(serde_json::from_str::<Request>(&bad).is_err(), "{bad}");

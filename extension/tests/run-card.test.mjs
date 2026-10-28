@@ -491,7 +491,8 @@ test("a succeeded card shows the saved summary line and opens it", async () => {
 
   button(card, "Open summary").click();
   await settle();
-  assert.deepEqual(page.sent("open_summary").map((r) => r.url), [saved.url]);
+  // By the file the run wrote, not only its URL.
+  assert.deepEqual(page.sent("open_summary").map((r) => [r.url, r.summary_path]), [[saved.url, SAVED.summary_path]]);
   assert.ok(!card.textContent.includes("Could not open"));
 
   // Once per saved file: later updates and polls ask nothing more.
@@ -555,7 +556,8 @@ test("a save failure no retry can fix offers no Retry save but opens the saved f
   assert.equal(page.sent("get_artifact").length, 0);
   button(card, "Open summary").click();
   await settle();
-  assert.deepEqual(page.sent("open_summary").map((r) => r.url), [failed.url]);
+  // By the file the run wrote, not only its URL.
+  assert.deepEqual(page.sent("open_summary").map((r) => [r.url, r.summary_path]), [[failed.url, SAVED.summary_path]]);
   page.runCards.dispose();
 });
 

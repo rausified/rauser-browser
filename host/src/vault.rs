@@ -231,6 +231,58 @@ impl Vault {
         })
     }
 
+    /// The owned summary at home-relative `linked` (`/` separators, as a
+    /// `SummaryView` or run names it), whatever record the page's URL
+    /// resolves to now. The file must be a summary of the record its own
+    /// front matter names, at exactly that record's summary path, so no
+    /// other file is ever found this way: anything else there is
+    /// `Unowned`, and nothing there is `Absent`. `linked` must already pass
+    /// `summary::check_summary_path`.
+    pub(crate) fn find_summary_at(&self, linked: &str) -> Result<FoundSummary> {
+        if self.summaries_dir.is_none() {
+            return Ok(FoundSummary::Absent);
+        }
+        let path: PathBuf = linked.split('/').collect();
+        let (Some(parent), Some(filename)) = (path.parent(), path.file_name()) else {
+            return Ok(FoundSummary::Unowned);
+        };
+        let dir = match self.root.open_dir(parent) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(FoundSummary::Absent);
+            }
+            // Outside the home folder, or not a folder: not a summary.
+            Err(_) => return Ok(FoundSummary::Unowned),
+        };
+        let inspected = match dir.symlink_metadata(filename) {
+            Ok(inspected) => inspected,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(FoundSummary::Absent);
+            }
+            Err(error) => return Err(error).context("checking summary file"),
+        };
+        if inspected.file_type().is_symlink()
+            || !inspected.is_file()
+            || inspected.len() > MAX_OWNED_FILE_BYTES as u64
+        {
+            return Ok(FoundSummary::Unowned);
+        }
+        let Some(bytes) =
+            read_inspected_occupant(&dir, filename, &inspected).context("reading summary file")?
+        else {
+            return Ok(FoundSummary::Unowned);
+        };
+        let Some((key, canonical)) = crate::summary::summary_identity(&bytes) else {
+            return Ok(FoundSummary::Unowned);
+        };
+        let expected = self.summary_relative_path(&key, &canonical).ok();
+        if expected.as_deref().and_then(slash_path).as_deref() != Some(linked) {
+            return Ok(FoundSummary::Unowned);
+        }
+        // Read again by its record, with the ownership check.
+        self.find_summary(&key, &canonical)
+    }
+
     fn summaries_dir(&self) -> Result<&Path> {
         self.summaries_dir
             .as_deref()

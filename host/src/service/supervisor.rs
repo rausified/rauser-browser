@@ -97,6 +97,15 @@ impl SaveFailure {
             written,
         }
     }
+
+    /// A failure Retry save can fix, after `written` was already written.
+    pub fn retry_after_write(reason: impl Into<String>, written: &SavedRun) -> Self {
+        Self {
+            reason: reason.into(),
+            retryable: true,
+            written: Some(written.clone()),
+        }
+    }
 }
 
 /// A plain reason is one Retry save can fix.
@@ -554,6 +563,7 @@ impl Supervisor {
                 run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
                 vocabulary: Some(req.vocabulary.clone()),
                 answered_at: None,
+                first_answered_at: None,
                 save_final: false,
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
@@ -718,8 +728,13 @@ impl Supervisor {
         // A record kept before answers were stamped gets its stamp now,
         // before the save, so later retries reuse it; so does one whose
         // stamp the daily log's window no longer accepts.
+        // The first stamp is kept to order the save (see the finisher).
         if !loggable_stamp(status.answered_at.as_deref(), OffsetDateTime::now_utc()) {
-            status.answered_at = Some(now_timestamp());
+            let previous = status.answered_at.replace(now_timestamp());
+            if status.first_answered_at.is_none() {
+                status.first_answered_at =
+                    previous.filter(|at| OffsetDateTime::parse(at, &Rfc3339).is_ok());
+            }
             inner.store.write_status(&status).map_err(|error| {
                 eprintln!("brauser service: stamping run {id} answer: {error:#}");
                 (
@@ -2522,6 +2537,10 @@ mod tests {
         assert!(fresh >= before.replace_nanosecond(0).unwrap(), "{fresh}");
         let stored = fixture.supervisor.store().status(id).unwrap();
         assert_eq!(stored.answered_at, seen.answered_at);
+        // The first stamp is kept to order the save, and survives later
+        // re-stamps.
+        assert_eq!(seen.first_answered_at.as_deref(), Some(stale.as_str()));
+        assert_eq!(stored.first_answered_at, seen.first_answered_at);
     }
 
     #[test]
@@ -2805,6 +2824,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            first_answered_at: None,
             save_final: false,
         }
     }
@@ -2879,6 +2899,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            first_answered_at: None,
             save_final: false,
         };
         store.create(&status, "# Seeded\n").unwrap();

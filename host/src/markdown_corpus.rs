@@ -280,6 +280,7 @@ fn the_corpus_comes_out_inert() {
                     "frontmatter": case.frontmatter,
                     "inline": case.inline,
                     "wikilink": case.wikilink,
+                    "query_url": case.query_url,
                 });
                 for (index, joined) in case.joined.iter().enumerate() {
                     pair[format!("joined{index}")] = joined.clone().into();

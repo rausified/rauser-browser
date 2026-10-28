@@ -125,6 +125,12 @@ pub enum CaptureOutcome {
 struct EventRendering<'a> {
     body: Option<&'a str>,
     marker_metadata: Option<&'a str>,
+    /// A complete marker found by an intent's replay counts as this event
+    /// only when the intent is for this home folder and this exact entry.
+    /// A summary sets it: its save reports success on a duplicate, so an
+    /// entry logged under an older key, path, or folder must not pass for
+    /// the current one. A visit dedupes by ID alone.
+    exact_replay: bool,
 }
 
 /// Validate new deliveries before replaying adapter matching or writing them.
@@ -896,6 +902,9 @@ impl CaptureStore {
             Ok(value) => value,
             Err(message) => return CaptureOutcome::Retryable { message },
         };
+        let exact_replay = marker_payload
+            .as_ref()
+            .is_some_and(|(kind, _)| *kind == "summary");
         let marker_metadata = match marker_payload {
             Some((kind, mut payload)) => {
                 if let Some(object) = payload.as_object_mut() {
@@ -933,6 +942,7 @@ impl CaptureStore {
             EventRendering {
                 body: custom_body,
                 marker_metadata: marker_metadata.as_deref(),
+                exact_replay,
             },
         ) {
             Ok(outcome) => outcome,
@@ -983,6 +993,7 @@ impl CaptureStore {
                 &event_hash,
                 entry.as_bytes(),
                 legacy_entry.as_deref(),
+                rendering.exact_replay,
             );
         }
 
@@ -1100,7 +1111,16 @@ impl CaptureStore {
         event_hash: &str,
         entry: &[u8],
         legacy_entry: Option<&str>,
+        exact: bool,
     ) -> Result<CaptureOutcome> {
+        if exact {
+            if self.root_identity != intent.root_identity {
+                bail!("visit belongs to a previously selected home folder; do not append there");
+            }
+            if intent.entry_hash != sha256_hex(entry) {
+                bail!("queued visit changed after a partial write; manual repair is required");
+            }
+        }
         if intent.version != 1 || intent.entry_hash.len() != 64 || intent.offset > MAX_LOG_BYTES {
             bail!("visit intent is invalid; manual repair is required");
         }
@@ -1209,6 +1229,7 @@ impl CaptureStore {
                     &entry.event_hash,
                     entry.entry.as_bytes(),
                     entry.legacy_entry.as_deref(),
+                    false,
                 )?);
             }
         }
@@ -3051,6 +3072,50 @@ mod tests {
             }
         );
         assert!(event.is_none());
+    }
+
+    /// Review finding: a summary whose marker is already complete counts as
+    /// logged only when the entry is the one this save builds; a key or
+    /// path that changed since its intent was journaled is not acknowledged.
+    #[test]
+    fn a_duplicate_summary_with_a_changed_entry_is_not_acknowledged() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        assert!(store.record_summary(open_policy(), &summary).1.is_some());
+        let moved = crate::summary::PageSummary {
+            summary_path: "pages/elsewhere.summary.md".into(),
+            ..summary
+        };
+        let (outcome, event) = store.record_summary(open_policy(), &moved);
+        assert!(
+            matches!(&outcome, CaptureOutcome::Retryable { message }
+                if message.contains("manual repair is required")),
+            "{outcome:?}"
+        );
+        assert!(event.is_none());
+    }
+
+    /// The same, for a marker completed in a home folder since replaced.
+    #[test]
+    fn a_duplicate_summary_in_a_previous_home_folder_is_not_acknowledged() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        let store =
+            CaptureStore::open_at(&storage(first.path(), "log"), None, state.path()).unwrap();
+        assert!(store.record_summary(open_policy(), &summary).1.is_some());
+        let store =
+            CaptureStore::open_at(&storage(second.path(), "log"), None, state.path()).unwrap();
+        let (outcome, _) = store.record_summary(open_policy(), &summary);
+        assert!(
+            matches!(&outcome, CaptureOutcome::Retryable { message }
+                if message.contains("previously selected home folder")),
+            "{outcome:?}"
+        );
     }
 
     #[test]

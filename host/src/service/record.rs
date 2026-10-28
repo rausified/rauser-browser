@@ -150,6 +150,13 @@ pub struct RunStatusFile {
     /// none of these has been released.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<String>,
+    /// The first `answered_at`, kept when a retry re-stamps it, so a save
+    /// is still ordered (and its summary file dated) by when the answer was
+    /// kept, and a re-stamped old answer never replaces a newer summary;
+    /// the re-stamp is only the log event's time. Optional, and not forward
+    /// compatible, as the fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_answered_at: Option<String>,
     /// The last save failed in a way no retry can fix (the day's daily log
     /// is full, say), so the run offers no Retry save. Optional, and not
     /// forward compatible, as the fields above.
@@ -573,6 +580,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            first_answered_at: None,
             save_final: false,
         }
     }

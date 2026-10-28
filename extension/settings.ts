@@ -331,15 +331,16 @@ export class ConfigSession {
     }, "path_opened");
   }
 
-  /** Open the page's summary file. The host resolves the record the page's
-   * note uses and opens only that record's own summary; a page without one
-   * rejects with `invalid_request`. */
-  async openSummary(url: string): Promise<void> {
+  /** Open a summary file: the one at `summaryPath` (the summary a line or
+   * row shows) when given, else the page's own. The host opens only a file
+   * that is its record's own summary; none rejects with `invalid_request`. */
+  async openSummary(url: string, summaryPath: string | null): Promise<void> {
     await this.host.call({
       type: "open_summary",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
       url,
+      summary_path: summaryPath,
     }, "summary_opened");
   }
 

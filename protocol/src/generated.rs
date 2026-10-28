@@ -888,6 +888,8 @@ pub struct OpenSummaryRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

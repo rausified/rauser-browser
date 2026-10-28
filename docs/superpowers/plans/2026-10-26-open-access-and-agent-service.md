@@ -2179,7 +2179,7 @@ impl CaptureStore {
 
 ### Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache
 
-> **As built (2026-10-27).** main moved to cache format 5 first, so this task shipped as **format 6** (`STATE_VERSION = 6`): a format-5 cache migrates in place (`migrate_v5_state`, which marks every artifact dirty so files whose rendering changed are rewritten) and a format-4 cache migrates through 5 to 6. The rescan test below became `a_version_5_state_cache_is_migrated`. Summaries with the same whole-second stamp keep their append order, not run-ID order.
+> **As built (2026-10-27).** main moved to cache format 5 first, so this task shipped as **format 6** (`STATE_VERSION = 6`): a format-5 cache migrates in place (`migrate_v5_state`, which marks every artifact dirty so files whose rendering changed are rewritten) and a format-4 cache migrates through 5 to 6. The rescan test below became `a_version_5_state_cache_is_migrated`. Summaries with the same whole-second stamp keep their append order, not run-ID order. `web_summaries_never_redirect_note_keys` shipped as `a_web_summary_url_stays_with_its_own_web_artifact`.
 
 **Files:**
 - Modify `host/src/index.rs`: the Summary arm of `fn derive`, `fn render_artifact`, `STATE_VERSION`, and `fn artifact_candidates_for_url` (tests only).
@@ -2232,7 +2232,7 @@ impl CaptureStore {
 
 ### Task 49: `SummaryFinisher`: write under the configuration current at finish
 
-> **As built (2026-10-27).** The fixed layout replaced the "No summaries folder is set" reason with `LAYOUT_MOVING` ("Your notes folders are moving to the fixed layout. Open Brauser settings to finish the move, then Retry save."), and `a_summaries_dir_changed_mid_run_receives_the_file` became `a_summaries_dir_changed_mid_run_waits_for_the_layout_move`. `save` returns `Result<SavedRun, SaveFailure>`: a reason no retry can fix (full or refusing daily log, an interrupted entry that changed, an invalid stored answer, a newer summary already saved) is final, so the run offers no Retry save, and keeps the written file's `summary_path` when there is one. `summary_artifact` returns `None` when it needs the index and the index cannot answer, and the save then asks for Retry save. Daily-log refusals have their own reasons (step 7), not one "could not be written (<reason>)" sentence.
+> **As built (2026-10-27).** The fixed layout replaced the "No summaries folder is set" reason with `LAYOUT_MOVING` ("Your notes folders are moving to the fixed layout. Open Brauser settings to finish the move, then Retry save."), and `a_summaries_dir_changed_mid_run_receives_the_file` became `a_summaries_dir_changed_mid_run_waits_for_the_layout_move`. `save` returns `Result<SavedRun, SaveFailure>`: a reason no retry can fix (full or refusing daily log, an interrupted entry that changed, an invalid stored answer, a newer summary already saved) is final, so the run offers no Retry save, and keeps the written file's `summary_path` when there is one (as does a retryable failure after the write, since review). A retry that re-stamps an answer outside the daily log's window keeps the first stamp in `first_answered_at`, which dates the file and orders it against a newer summary; a summary's already-logged duplicate counts only for the exact entry in the current home folder. `summary_artifact` returns `None` when it needs the index and the index cannot answer, and the save then asks for Retry save. Daily-log refusals have their own reasons (step 7), not one "could not be written (<reason>)" sentence.
 
 **Files:**
 - Create: `host/src/service/finisher.rs`
@@ -2284,6 +2284,8 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 - [ ] Commit: `git add host/src/service host/src/config.rs && git commit -m "feat(service): write the summary and log event under the config current at finish"`
 
 ### Task 50: `open_summary`: open a page's owned summary file
+
+> **As built (2026-10-27).** The off-macOS answer reuses `open::UNSUPPORTED_MESSAGE`, "Opening is only supported on macOS.", the same wording as `open_path`, not "Opening files is only supported on macOS.". After review, `OpenSummaryRequest` gained a required, nullable `summary_path`: Recent rows, the page's summary line and run cards send the summary they show, and the host opens that file only if it is the summary of the record its own front matter names, at that record's summary path (`Vault::find_summary_at`), so a URL that now resolves to another record still opens the right file. `openSummary(url, summaryPath)` takes it; the wire test is `open_summary_requires_url_and_a_nullable_summary_path`.
 
 **Files:**
 - Modify: `protocol/schema.json` (add `OpenSummaryRequest {type:"open_summary", …, url}` and `SummaryOpened {type:"summary_opened", …, relative_path}`, then regenerate)

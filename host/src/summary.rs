@@ -225,6 +225,50 @@ pub fn owned_summary(bytes: &[u8], key: &RecordKey) -> bool {
     owned_frontmatter(bytes, "summary", &[(id, key.value.as_str())], &[forbidden])
 }
 
+/// The record and canonical URL a summary file's `brauser:` block names
+/// (`kind: summary`, its `canonical_url`, and one `url_id` or
+/// `artifact_id`), or `None` when it names no single record. This only
+/// reads the claim; `owned_summary` and the summary's expected name decide
+/// whether the file is that record's.
+pub(crate) fn summary_identity(bytes: &[u8]) -> Option<(RecordKey, String)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let (frontmatter, _) = text.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let mut in_brauser = false;
+    let (mut canonical, mut key) = (Vec::new(), Vec::new());
+    for line in frontmatter.lines() {
+        if !line.starts_with(' ') {
+            in_brauser = line == "brauser:";
+            continue;
+        }
+        if !in_brauser {
+            continue;
+        }
+        let Some((name, value)) = line
+            .strip_prefix("  ")
+            .and_then(|rest| rest.split_once(": "))
+        else {
+            continue;
+        };
+        let kind = match name {
+            "canonical_url" => {
+                canonical.push(serde_json::from_str::<String>(value).ok()?);
+                continue;
+            }
+            "url_id" => RecordKeyKind::Url,
+            "artifact_id" => RecordKeyKind::Artifact,
+            _ => continue,
+        };
+        key.push(RecordKey {
+            kind,
+            value: serde_json::from_str(value).ok()?,
+        });
+    }
+    match (key.as_slice(), canonical.as_slice()) {
+        ([key], [canonical]) => Some((key.clone(), canonical.clone())),
+        _ => None,
+    }
+}
+
 /// The `summarized_at` time an owned summary file's front matter records,
 /// as `render_summary` writes it (a JSON-quoted top-level line), or `None`
 /// when the line is missing, repeated, or not a JSON string.
@@ -310,8 +354,9 @@ fn yaml_list(items: &[String]) -> String {
 /// entities, as do `%`, `=` and `~` next to the same character (an Obsidian
 /// comment, highlight or strikethrough), so no code span, math, image or
 /// embed syntax reaches Dataview, a math engine or Obsidian's own passes.
-/// CommonMark decodes entities in a destination, so the link target is
-/// unchanged. Controls, whitespace, `<`, `>` and `\\` are percent-encoded to
+/// CommonMark decodes entities in a destination, so every `&` is an entity
+/// too (a query's `&amp;` would otherwise decode to `&`), and the link
+/// target is unchanged. Controls, whitespace, `<`, `>` and `\\` are percent-encoded to
 /// guard the destination's own syntax.
 fn page_destination(url: &str) -> String {
     let chars: Vec<char> = url.chars().collect();
@@ -319,7 +364,7 @@ fn page_destination(url: &str) -> String {
     for (at, &ch) in chars.iter().enumerate() {
         let doubled = |ch: char| (at > 0 && chars[at - 1] == ch) || chars.get(at + 1) == Some(&ch);
         let entity = match ch {
-            '`' | '$' | '!' | '[' | ']' => true,
+            '`' | '$' | '!' | '[' | ']' | '&' => true,
             '%' | '=' | '~' => doubled(ch),
             _ => false,
         };
@@ -560,6 +605,29 @@ mod tests {
     /// The answer and the vocabulary bound labels in characters
     /// (`answer::MAX_LABEL_CHARS`), so the event must too: a 64-character
     /// label of multibyte letters is longer than 64 bytes.
+    #[test]
+    fn summary_identity_reads_one_record_from_the_brauser_block() {
+        let file = "---\nbrauser:\n  kind: summary\n  canonical_url: \"https://e.example/a\"\n  artifact_id: \"jira:PROJ-1\"\ncanonical_url: \"https://other.example/\"\n---\n\n  url_id: \"x\"\n";
+        assert_eq!(
+            summary_identity(file.as_bytes()),
+            Some((
+                RecordKey {
+                    kind: RecordKeyKind::Artifact,
+                    value: "jira:PROJ-1".into()
+                },
+                "https://e.example/a".into()
+            ))
+        );
+        for bad in [
+            "---\nbrauser:\n  kind: summary\n  canonical_url: \"https://e.example/a\"\n---\n",
+            "---\nbrauser:\n  canonical_url: \"https://e.example/a\"\n  url_id: \"a\"\n  artifact_id: \"b\"\n---\n",
+            "---\nbrauser:\n  canonical_url: 1\n  url_id: \"a\"\n---\n",
+            "no front matter",
+        ] {
+            assert_eq!(summary_identity(bad.as_bytes()), None, "{bad}");
+        }
+    }
+
     #[test]
     fn summarized_at_is_read_from_the_front_matter_only() {
         let file = "---\nbrauser:\n  kind: summary\nsummarized_at: \"2026-10-26T14:05:00-07:00\"\n---\n\nsummarized_at: \"2030-01-01T00:00:00Z\"\n";
@@ -1565,6 +1633,7 @@ mod tests {
             assert!(!body.contains('`') && !body.contains('$'), "{body}");
             // CommonMark decodes the entities, so the link target is the URL.
             let destination = url
+                .replace('&', "&#38;")
                 .replace('`', "&#96;")
                 .replace('$', "&#36;")
                 .replace('!', "&#33;")
@@ -1591,8 +1660,18 @@ mod tests {
         );
         assert_eq!(
             page_destination(&url),
-            "https://e.example/p?s=&#33;&#91;&#91;x&#93;&#93;&t=&#37;&#37;c&#37;&#37;\
-             &u=a&#61;&#61;b&v=&#126;&#126;d&w=%20=~"
+            "https://e.example/p?s=&#33;&#91;&#91;x&#93;&#93;&#38;t=&#37;&#37;c&#37;&#37;\
+             &#38;u=a&#61;&#61;b&#38;v=&#126;&#126;d&#38;w=%20=~"
+        );
+        // Review finding: an `&` that starts a named entity is written as
+        // one too, or CommonMark would decode `&amp;` in the destination
+        // and link a different query.
+        let url =
+            crate::capture::canonical_url("https://e.example/a?q=1&amp;r=2&lt;x", &[]).unwrap();
+        assert_eq!(url, "https://e.example/a?q=1&amp;r=2&lt;x");
+        assert_eq!(
+            page_destination(&url),
+            "https://e.example/a?q=1&#38;amp;r=2&#38;lt;x"
         );
         assert_eq!(
             page_destination("https://e.example/a b<>\\"),

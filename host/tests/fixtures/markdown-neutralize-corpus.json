@@ -188,5 +188,6 @@
  "   \f\n- b",
  "\\\u000b    x",
  "[[`$= dv.el(\"img\",\"\",{attr:{src:\"https://e.example/x.png\"}})`]]",
- "[[$\\href{https://e.example}{x}$|`= this.file.name`]]"
+ "[[$\\href{https://e.example}{x}$|`= this.file.name`]]",
+ "1&amp;r=2&lt;x"
 ]

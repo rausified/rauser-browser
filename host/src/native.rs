@@ -1313,6 +1313,25 @@ struct KeyParts {
 /// replaced; callers that map it to their own message match on this.
 pub(crate) const HOME_UNAVAILABLE: &str = "home folder is unavailable";
 
+/// The configured home folder's vault, refused as `resolve_key_parts`
+/// refuses: a config needing repair, no home folder, or one replaced.
+fn open_vault(config: &mut ConfigStore) -> Result<Vault, Refusal> {
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return Err((
+            ErrorCode::InvalidConfig,
+            "configuration is unavailable or needs repair".into(),
+        ));
+    }
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return Err((
+            ErrorCode::NotConfigured,
+            "choose a home folder first".into(),
+        ));
+    };
+    Vault::open_checked(storage, config.root_identity())
+        .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))
+}
+
 fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Refusal> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
@@ -1871,12 +1890,30 @@ fn open_summary(
             "configuration is unavailable",
         );
     };
-    let found = resolve_key_parts(config, &value.url).and_then(|parts| {
-        parts
-            .vault
-            .find_summary(&parts.key, &parts.canonical)
-            .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
-    });
+    // A named path is the summary a row or run shows, opened whatever
+    // record the URL resolves to now; the page's own otherwise.
+    if let Some(path) = &value.summary_path
+        && crate::summary::check_summary_path(path).is_err()
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "summary_path is not a summary path",
+        );
+    }
+    let found = match &value.summary_path {
+        Some(path) => open_vault(config).and_then(|vault| {
+            vault
+                .find_summary_at(path)
+                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
+        }),
+        None => resolve_key_parts(config, &value.url).and_then(|parts| {
+            parts
+                .vault
+                .find_summary(&parts.key, &parts.canonical)
+                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
+        }),
+    };
     let (relative, linked, file_id) = match found {
         Ok(crate::vault::FoundSummary::Owned {
             relative,
@@ -1885,11 +1922,12 @@ fn open_summary(
             ..
         }) => (relative, linked, file_id),
         Ok(crate::vault::FoundSummary::Absent) => {
-            return error(
-                &value.request_id,
-                ErrorCode::InvalidRequest,
-                "This page has no summary yet.",
-            );
+            let message = if value.summary_path.is_some() {
+                "This summary file no longer exists."
+            } else {
+                "This page has no summary yet."
+            };
+            return error(&value.request_id, ErrorCode::InvalidRequest, message);
         }
         Ok(crate::vault::FoundSummary::Unowned) => return not_a_summary(&value.request_id),
         Err((code, message)) => return error(&value.request_id, code, &message),
@@ -5091,11 +5129,21 @@ id = "work:{host}/{id}"
         url: &str,
         open: crate::open::Opener,
     ) -> Response {
+        open_summary_at(config, url, None, open)
+    }
+
+    fn open_summary_at(
+        config: &mut ConfigStore,
+        url: &str,
+        summary_path: Option<&str>,
+        open: crate::open::Opener,
+    ) -> Response {
         dispatch(
             Request::OpenSummary(brauser_protocol::OpenSummaryRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "open-summary".into(),
                 url: url.into(),
+                summary_path: summary_path.map(Into::into),
             }),
             config,
             &mut ConsentAuthority::new(),
@@ -5230,6 +5278,106 @@ id = "work:{host}/{id}"
                 root.join(&relative).to_string_lossy().into_owned()
             ]]
         );
+    }
+
+    /// Review finding: a Recent row or run card opens the summary it shows,
+    /// by that summary's own path, even when the page's URL now resolves to
+    /// another record (an adapter removed, or `strip_params` changed).
+    #[test]
+    fn open_summary_by_path_opens_the_summary_the_row_shows() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://work.example/items/7";
+        let artifact = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        take_opened();
+        // Saved under an adapter's artifact that no longer matches the URL.
+        let relative = place_summary(&config, &artifact, url, &owned_summary_text(&artifact, url));
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert!(take_opened().is_empty());
+
+        match open_summary_at(&mut config, url, Some(&relative), recording_opener) {
+            Response::SummaryOpened(opened) => assert_eq!(opened.relative_path, relative),
+            other => panic!("expected summary_opened, got {other:?}"),
+        }
+        assert_eq!(
+            take_opened(),
+            vec![vec![
+                "--".to_owned(),
+                notes.join(&relative).to_string_lossy().into_owned()
+            ]]
+        );
+    }
+
+    /// A path opens only a summary at the very name its own record's
+    /// summary has, so a request cannot point the opener anywhere else.
+    #[test]
+    fn open_summary_by_path_refuses_any_other_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        let other_url = "https://example.com/other";
+        let other = crate::vault::url_record_key(other_url).unwrap();
+        take_opened();
+
+        // Another record's summary copied to this record's name.
+        let relative = place_summary(&config, &key, url, &owned_summary_text(&other, other_url));
+        let (code, _) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some(&relative),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        // A plain file at a summary name.
+        place_summary(&config, &key, url, "# Mine\n");
+        let (code, _) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some(&relative),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        // An owned summary outside the summaries folder.
+        let elsewhere = notes.join("notes/x.summary.md");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, owned_summary_text(&key, url)).unwrap();
+        let (code, _) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some("notes/x.summary.md"),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        // Not a summary path at all.
+        for bad in ["../x.summary.md", "summaries/a.md", "/etc/x.summary.md"] {
+            let (code, _) = error_of(open_summary_at(
+                &mut config,
+                url,
+                Some(bad),
+                recording_opener,
+            ));
+            assert_eq!(code, ErrorCode::InvalidRequest, "{bad}");
+        }
+        // Gone since the row was drawn.
+        std::fs::remove_file(notes.join(&relative)).unwrap();
+        let (code, message) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some(&relative),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert_eq!(message, "This summary file no longer exists.");
+        assert!(take_opened().is_empty());
     }
 
     #[test]

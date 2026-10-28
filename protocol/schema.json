@@ -1982,13 +1982,14 @@
     "OpenSummaryRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ask the native host to open the summary file of the record the page's note uses. Only a file whose brauser block names that record as a summary is opened.",
-      "required": ["type", "protocol_version", "request_id", "url"],
+      "description": "Ask the native host to open a summary file: the one at summary_path (a SummaryView's or RunView's own path) when it is not null, else the summary of the record the page's note uses. Only a file whose brauser block names its record as a summary, at that record's summary name, is opened.",
+      "required": ["type", "protocol_version", "request_id", "url", "summary_path"],
       "properties": {
         "type": { "const": "open_summary" },
         "protocol_version": { "type": "integer", "const": 6 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "url": { "type": "string", "minLength": 1, "maxLength": 8192 }
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 1024 }, { "type": "null" }] }
       }
     },
     "SummaryOpened": {

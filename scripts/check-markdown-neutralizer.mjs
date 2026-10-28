@@ -22,7 +22,8 @@
 // or `$`. Each input is also rendered as every agent field of a summary file
 // (`summary::render_summary`, both link styles): its body must render with
 // no <code> or <pre> and hold no raw backtick or `$`, and its front matter
-// is checked as front matter.
+// is checked as front matter. Its [Page] link, with the input in the page
+// URL's query, must lead (in markdown-it) to exactly that URL.
 //
 //   npm run test:markdown-neutralizer
 //   node scripts/check-markdown-neutralizer.mjs --outputs pairs.json
@@ -246,7 +247,26 @@ const LIVE_BODY = [
 const ENTITIES = "&#96;x&#96; &#36;y&#36; &#126;&#126;&#126; a&#9;b   &#32;c d\\\\&#9;e";
 const DECODED = "`x` $y$ ~~~ a\tb    c d\\\te";
 
+/** Whether markdown-it's `[Page]` link in summary body `body` leads to
+ * `url`, the canonical URL the file's front matter records: CommonMark
+ * decodes entities in a link destination, so an `&` left raw before
+ * `amp;` would link another query. */
+export function pageLinkProblems(body, url) {
+  const match = /<a href="([^"]*)">Page<\/a>/.exec(markdownIt.render(body));
+  if (!match) return ["no [Page] link"];
+  const href = match[1].replaceAll("&quot;", '"').replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  const expected = markdownIt.normalizeLink(url);
+  return href === expected ? [] : [`[Page] links ${JSON.stringify(href)}, not ${JSON.stringify(expected)}`];
+}
+
 function selfCheck() {
+  const entityQuery = "https://e.example/a?q=1&amp;r";
+  if (pageLinkProblems(`[Page](<${entityQuery}>) · x`, entityQuery).length === 0) {
+    throw new Error("self-check: a [Page] link that decodes &amp; was not flagged");
+  }
+  if (pageLinkProblems(`[Page](<${entityQuery.replaceAll("&", "&#38;")}>) · x`, entityQuery).length !== 0) {
+    throw new Error("self-check: an entity-escaped [Page] link was flagged");
+  }
   for (const [renderer, render] of RENDERERS) {
     const html = render(ENTITIES);
     if (html.trim() !== `<p>${DECODED}</p>`) {
@@ -281,7 +301,18 @@ function main() {
   }
   let failures = 0;
   let checked = 0;
-  for (const { input, ...documents } of pairs) {
+  for (const { input, query_url: queryUrl, ...documents } of pairs) {
+    // The page link of a summary whose URL carries the input in its query
+    // must lead to that URL exactly.
+    for (const kind of ["summaryQuery", "summaryQueryWikilink"]) {
+      if (queryUrl === undefined || documents[kind] === undefined) continue;
+      checked += 1;
+      const found = pageLinkProblems(documents[kind], queryUrl);
+      if (found.length > 0) {
+        failures += 1;
+        console.error(`FAIL page link (${kind})\n  input:    ${JSON.stringify(input)}\n  ${found.join("\n  ")}`);
+      }
+    }
     // `output` is the neutralized body text; `frontmatter` (when present) is
     // the input as a front matter value, rendered as a viewer without front
     // matter support would; `inline` and `wikilink` (when present) are the

@@ -202,8 +202,10 @@ validation, `answer` is a `RunAnswer` (`document_type`, `category`,
 `importance_reason`); before that, or when validation failed, it is null.
 `summary_path` is the home-relative path of the summary file a save
 wrote (`summaries/<note stem>.summary.md`): set when a save succeeds, and
-also when a `save_failed` save wrote the file before the daily log refused
-its event, so the file can still be opened; null otherwise.
+also when a `save_failed` save wrote the file before failing (the daily log
+refused or could not take its event, or the index could not name its
+artifact), whether or not `can_retry_save` is true, so the file can still be
+opened; null otherwise.
 `written_record_key` is the key the save resolved under the configuration
 current at finish. `can_retry_save` is true only for a `save_failed` run
 whose kept answer is on disk and whose failure a retry can fix.
@@ -247,16 +249,24 @@ page's `web.page` identity, or a removed adapter's recorded artifact); a
 failed lookup there leaves `summary` null rather than erroring. A summary is
 never counted as an open, so it adds to no worklog or Recent open count.
 
-`open_summary` names a page `url` and is answered by the native host on every
-platform. The host resolves the record key the page's note uses and opens
-that record's summary file (`summaries/<note stem>.summary.md`) with the
-desktop opener, answering `summary_opened` with its home-folder relative
-`relative_path` (`/` separators). Only a file whose `brauser:` block is that
+`open_summary` names a page `url` and a required, nullable `summary_path`, and
+is answered by the native host on every platform. With `summary_path` null,
+the host resolves the record key the page's note uses and opens that record's
+summary file (`summaries/<note stem>.summary.md`). With a `summary_path` (a
+`SummaryView`'s or `RunView`'s own, home-relative with `/` separators), it
+opens that file whatever record the URL now resolves to, so a Recent row or
+run card opens the summary it shows after an adapter or `strip_params`
+change; the file must be a summary whose `brauser:` block names one record,
+at exactly that record's summary path. Either way the host uses the desktop
+opener and answers `summary_opened` with the file's home-folder relative
+`relative_path` (`/` separators). Only a file whose `brauser:` block is its
 record's `summary` is opened: no file is `invalid_request` "This page has no
-summary yet.", and anything else at the name is `conflict` "The file at the
-summary path is not a Brauser summary." Where there is no opener (off macOS)
+summary yet." (with a `summary_path`, "This summary file no longer exists."),
+a `summary_path` that is not a summary path is `invalid_request`, and
+anything else at the name is `conflict` "The file at the summary path is not
+a Brauser summary." Where there is no opener (off macOS)
 the answer is `invalid_request` "Opening is only supported on macOS.", the
-same wording as `open_path`. These two messages were added within version 6.
+same wording as `open_path`. These messages and `summary_path` were added within version 6.
 
 `SummaryView` has `summarized_at` (RFC 3339 in the offset of the click that
 requested it, at most 32 characters), `document_type` and `category` (1 to 64

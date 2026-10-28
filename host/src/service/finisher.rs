@@ -8,7 +8,8 @@
 //! user-facing reason that ends in what to do: Retry save when a retry can
 //! work; a retry re-reads the kept answer, so the agent never runs again.
 //! A retry is idempotent: the event time is the run's `answered_at` stamp,
-//! not the clock, so every save builds the same entry and file; the run ID
+//! not the clock, so every save builds the same entry and file (the file is
+//! dated by `first_answered_at` when a retry re-stamped the answer); the run ID
 //! is the log event's ID, so its line is written once (and an entry rolled
 //! back after its intent was journaled replays), and the identical summary
 //! file is left unchanged.
@@ -22,14 +23,18 @@
 //! for (`CaptureStore`'s replay). If the home folder or an adapter changed
 //! before the retry, the summary file follows the change but the log event
 //! cannot be completed, and the reason says so (`LOG_ORIGINAL_FOLDER`,
-//! `LOG_INTERRUPTED`) instead of offering a retry that cannot work.
+//! `LOG_INTERRUPTED`) instead of offering a retry that cannot work. That
+//! holds when the interrupted append's entry was complete, too: a summary's
+//! logged duplicate counts only for the entry this save builds.
 //!
 //! Such a reason, and every other one a retry cannot fix (`LOG_FULL`,
 //! `LOG_INVALID`, `INVALID_ANSWER`, `STALE`), is a final `SaveFailure`, so
-//! the run offers no Retry save; one that follows the file write carries the
-//! written path, so the run card can still open it. A save never replaces
-//! a summary file whose `summarized_at` is later than its own stamp
-//! (`STALE`): a retried older run must not overwrite a newer run's summary.
+//! the run offers no Retry save. Any failure, final or not, that follows
+//! the file write carries the written path, so the run card can still open
+//! it. A save never replaces
+//! a summary file whose `summarized_at` is later than its own first stamp
+//! (`STALE`): a retried older run must not overwrite a newer run's summary,
+//! even one re-stamped for the daily log's window.
 
 use std::path::{Path, PathBuf};
 
@@ -155,19 +160,20 @@ impl RunFinisher for SummaryFinisher {
             .note_link(&key, &canonical, style)
             .map_err(|error| unwritable(&error))?;
         // The answer's stamp, so every save of the run builds the same log
-        // entry; the clock only for a record that has none.
-        let now = run
-            .answered_at
-            .as_deref()
-            .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok())
-            .unwrap_or_else(self.now);
+        // entry; the clock only for a record that has none. The file is
+        // dated, and ordered against a newer one, by the first stamp, which
+        // a re-stamp (`retry_save`) keeps: only the log event moves.
+        let parse = |at: Option<&str>| at.and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok());
+        let now = parse(run.answered_at.as_deref()).unwrap_or_else(self.now);
+        let first = parse(run.first_answered_at.as_deref()).unwrap_or(now);
         let occurred_at = summarized_at(now, &run.requested_at);
+        let answered = summarized_at(first, &run.requested_at);
         let title = event_title(&run.title, &canonical);
         let document = SummaryDocument {
             key: &key,
             canonical_url: &canonical,
             title: &title,
-            summarized_at: &occurred_at,
+            summarized_at: &answered,
             harness: run.harness,
             session: session_link(run),
             note_link,
@@ -181,7 +187,7 @@ impl RunFinisher for SummaryFinisher {
             summarized_at: Some(existing),
             ..
         }) = vault.find_summary(&key, &canonical)
-            && is_later(&existing, &occurred_at)
+            && is_later(&existing, &answered)
         {
             return Err(SaveFailure::final_reason(STALE, None));
         }
@@ -209,14 +215,14 @@ impl RunFinisher for SummaryFinisher {
             eprintln!("{NAMESPACE} service: opening the artifact index: {error:#}");
         }
         let index = index.ok();
-        // Written from here on: a failure that no retry can fix still lets
-        // the run card open the file.
+        // Written from here on: every failure still lets the run card open
+        // the file.
         let written = SavedRun {
             written_key: key.clone(),
             summary_path: Some(summary_path.clone()),
         };
         let (event_key, artifact_type) = summary_artifact(&config, &run.url, &key, index.as_ref())
-            .ok_or_else(|| SaveFailure::from(INDEX_UNAVAILABLE))?;
+            .ok_or_else(|| SaveFailure::retry_after_write(INDEX_UNAVAILABLE, &written))?;
         let summary = PageSummary {
             event_id: run.run_id.clone(),
             url: run.url.clone(),
@@ -245,6 +251,10 @@ impl RunFinisher for SummaryFinisher {
             (CaptureOutcome::Persisted { .. }, Some(event)) => {
                 index.as_ref().map(|index| index.record_summary(&event))
             }
+            // Already logged: the store acknowledges a summary's duplicate
+            // only for this exact entry in this home folder, so the event
+            // is the one this save built (an older key, path, or folder is
+            // `LOG_ORIGINAL_FOLDER` or `LOG_INTERRUPTED` instead).
             (CaptureOutcome::Suppressed { reason }, _) if reason == "duplicate_event" => {
                 index.as_ref().map(ArtifactIndex::reconcile_from_logs)
             }
@@ -300,16 +310,18 @@ fn unwritable(error: &anyhow::Error) -> SaveFailure {
 }
 
 /// The daily log's refusal of the event, as a reason in words. Only a
-/// refusal the user can fix offers Retry save; any other is final, with
-/// the summary file already `written`. The raw reason goes to stderr. (A
+/// refusal the user can fix offers Retry save; any other is final. Either
+/// way the summary file is already `written`, and the run keeps its path. The raw reason goes to stderr. (A
 /// summary is an explicit action, so `capture_disabled` and
 /// `site_not_allowed` do not apply to it.)
 fn log_refusal(reason: &str, written: &SavedRun) -> SaveFailure {
     eprintln!("{NAMESPACE} service: the daily log refused a summary event: {reason}");
     match reason {
         // A retry re-stamps an answer outside the window (`retry_save`).
-        "timestamp_too_old" | "timestamp_in_future" => LOG_CLOCK.into(),
-        "daily_log_name_conflict" => LOG_NAME_CONFLICT.into(),
+        "timestamp_too_old" | "timestamp_in_future" => {
+            SaveFailure::retry_after_write(LOG_CLOCK, written)
+        }
+        "daily_log_name_conflict" => SaveFailure::retry_after_write(LOG_NAME_CONFLICT, written),
         "daily_log_full" => SaveFailure::final_reason(LOG_FULL, Some(written.clone())),
         _ => SaveFailure::final_reason(LOG_INVALID, Some(written.clone())),
     }
@@ -324,11 +336,11 @@ fn log_failure(message: &str, written: &SavedRun) -> SaveFailure {
     if message.contains("original home folder changed")
         || message.contains("previously selected home folder")
     {
-        LOG_ORIGINAL_FOLDER.into()
+        SaveFailure::retry_after_write(LOG_ORIGINAL_FOLDER, written)
     } else if message.contains("manual repair is required") || message.contains("is not owned by") {
         SaveFailure::final_reason(LOG_INTERRUPTED, Some(written.clone()))
     } else {
-        LOG_UNWRITABLE.into()
+        SaveFailure::retry_after_write(LOG_UNWRITABLE, written)
     }
 }
 
@@ -583,6 +595,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            first_answered_at: None,
             save_final: false,
         }
     }
@@ -1018,10 +1031,19 @@ mod tests {
             conflict.reason,
             "A file Brauser does not own is where the daily log goes, in logs/. Move it, then Retry save."
         );
-        assert!(conflict.retryable && conflict.written.is_none());
+        // Review finding: a retryable refusal after the file was written
+        // still lets the run card open it.
+        assert!(conflict.retryable);
+        assert_eq!(conflict.written.as_ref(), Some(&written));
         let clock = log_refusal("timestamp_in_future", &written);
         assert_eq!(clock.reason, LOG_CLOCK);
         assert!(clock.retryable);
+        assert_eq!(clock.written.as_ref(), Some(&written));
+        for message in ["original home folder changed", "appending daily log entry"] {
+            let failure = log_failure(message, &written);
+            assert!(failure.retryable, "{message}");
+            assert_eq!(failure.written.as_ref(), Some(&written), "{message}");
+        }
         for reason in ["invalid_summary_key", "title_too_long", "something_new"] {
             assert_eq!(
                 log_refusal(reason, &written).reason,
@@ -1233,6 +1255,54 @@ mod tests {
         // The newer run's own retry is still idempotent.
         world.later_finisher().save(&newer, &newer_answer).unwrap();
         assert_eq!(fs::read(&path).unwrap(), written);
+    }
+
+    /// Review finding: a retry re-stamps an answer the daily log's window no
+    /// longer accepts, but orders it by its first stamp, so a re-stamped old
+    /// answer never replaces a summary saved after it was answered.
+    #[test]
+    fn a_re_stamped_retry_is_ordered_by_its_first_answer_time() {
+        let world = World::new();
+        let mut older = run(&world, PAGE, HarnessId::Codex);
+        older.first_answered_at = Some(timestamp(fixed_now() - time::Duration::days(31)));
+        // The supervisor's re-stamp, later than the newer run's answer.
+        older.answered_at = Some(timestamp(later_now()));
+        let mut newer = run(&world, PAGE, HarnessId::Codex);
+        newer.answered_at = Some(timestamp(fixed_now()));
+        let mut newer_answer = answer();
+        newer_answer["description"] = "The newer summary.".into();
+        world.finisher().save(&newer, &newer_answer).unwrap();
+        let path = world.root.join(world.summary_path(PAGE));
+        let written = fs::read(&path).unwrap();
+
+        let error = world.later_finisher().save(&older, &answer()).unwrap_err();
+
+        assert_eq!(error.reason, STALE);
+        assert!(!error.retryable);
+        assert_eq!(fs::read(&path).unwrap(), written);
+        assert_eq!(world.summary_events().len(), 1);
+    }
+
+    /// With no newer file, a re-stamped retry saves: the file keeps the
+    /// first answer time and the log event takes the new stamp.
+    #[test]
+    fn a_re_stamped_retry_writes_its_first_answer_time_and_logs_the_new_one() {
+        let world = World::new();
+        let first = fixed_now() - time::Duration::days(31);
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        run.first_answered_at = Some(timestamp(first));
+        run.answered_at = Some(answered_stamp());
+
+        world.finisher().save(&run, &answer()).unwrap();
+
+        let file = fs::read_to_string(world.root.join(world.summary_path(PAGE))).unwrap();
+        assert!(
+            file.contains(&format!("summarized_at: \"{}\"", shown(first))),
+            "{file}"
+        );
+        let events = world.summary_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].occurred_at, shown(answered_at()));
     }
 
     #[test]

@@ -152,6 +152,8 @@ let savingWhy = false;
 // The page whose saved summary the summary line shows, or null when hidden.
 // Like the artifact card, a line for another page never stays in place.
 let summaryPageUrl: string | null = null;
+/** That summary's own file, which Open summary names. */
+let summaryPagePath: string | null = null;
 let summarizing = false;
 // The run area's latest line and the tab it is about; another tab's line goes
 // when the panel follows a different tab.
@@ -188,6 +190,7 @@ function duration(seconds: number): string {
  * textContent only. */
 function renderPageSummary(summary: SummaryView | null, pageUrl: string | null): void {
   summaryPageUrl = summary === null ? null : pageUrl;
+  summaryPagePath = summary?.summary_path ?? null;
   pageSummary.hidden = summaryPageUrl === null;
   pageSummaryText.textContent = summary !== null && summaryPageUrl !== null ? summaryLine(summary) : "";
 }
@@ -196,15 +199,15 @@ async function openPageSummary(): Promise<void> {
   const url = summaryPageUrl;
   if (url === null || currentPage?.url !== url) return;
   try {
-    await session.openSummary(url);
+    await session.openSummary(url, summaryPagePath);
   } catch (error) {
     show(`Could not open the summary: ${describe(error)}`, true);
   }
 }
 
-async function openRecentSummary(url: string): Promise<void> {
+async function openRecentSummary(url: string, summaryPath: string): Promise<void> {
   try {
-    await session.openSummary(url);
+    await session.openSummary(url, summaryPath);
   } catch (error) {
     recentStatus.textContent = `Could not open the summary: ${describe(error)}`;
   }
@@ -918,8 +921,11 @@ function recentRow(item: ArtifactListItem): HTMLElement {
     open.setAttribute("aria-label", `Open summary: ${item.title}`);
     open.disabled = !session.connected;
     recentOpenButtons.push(open);
+    // The row's own summary, by its path: the URL alone may now resolve
+    // to another record (strip_params, or an adapter added or removed).
     const url = item.url;
-    open.addEventListener("click", () => void openRecentSummary(url));
+    const path = item.summary.summary_path;
+    open.addEventListener("click", () => void openRecentSummary(url, path));
     row.append(open);
   }
   return row;

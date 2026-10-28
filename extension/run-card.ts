@@ -379,7 +379,8 @@ class RunCard {
     void this.act(async () => {
       await this.deps.host.call({
         type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-        url: this.view.url,
+        // The file this run wrote, whatever record its URL resolves to now.
+        url: this.view.url, summary_path: this.view.summary_path,
       }, "summary_opened");
     }, "Could not open the summary");
   }

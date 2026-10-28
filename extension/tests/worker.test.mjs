@@ -1660,13 +1660,14 @@ test("openSummary asks the host to open the page's summary", async () => {
   ports.length = 0;
   const session = new ConfigSession(() => undefined);
   try {
-    const opening = session.openSummary("https://example.com/spec");
+    const opening = session.openSummary("https://example.com/spec", "summaries/spec.summary.md");
     const port = ports[0];
     const request = await sentOn(port, 1);
-    assert.deepEqual(Object.keys(request).sort(), ["protocol_version", "request_id", "type", "url"]);
+    assert.deepEqual(Object.keys(request).sort(), ["protocol_version", "request_id", "summary_path", "type", "url"]);
     assert.equal(request.type, "open_summary");
     assert.equal(request.protocol_version, PROTOCOL_VERSION);
     assert.equal(request.url, "https://example.com/spec");
+    assert.equal(request.summary_path, "summaries/spec.summary.md");
     port.reply({
       type: "summary_opened", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
       relative_path: "summaries/spec.summary.md",
