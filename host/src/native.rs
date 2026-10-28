@@ -402,6 +402,7 @@ type RunFields<'a> = (Option<&'a str>, Option<brauser_protocol::HarnessId>);
 fn request_run_fields(request: &Request) -> RunFields<'_> {
     match request {
         Request::StartRun(value) => (None, value.harness),
+        Request::StartTask(value) => (None, value.harness),
         Request::SetUpHarness(value) => (None, Some(value.harness)),
         Request::GetRun(value) => (Some(&value.run_id), None),
         Request::CancelRun(value) => (Some(&value.run_id), None),
@@ -771,9 +772,8 @@ fn dispatch(
         Request::OpenSummary(value) => open_summary(value, config, context.open),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
-        // Placeholder until the host builds and forwards a task's start_run.
         #[cfg(unix)]
-        Request::StartTask(value) => error(&value.request_id, ErrorCode::InvalidRequest, "not yet"),
+        Request::StartTask(value) => start_task(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
         // agent.env and run threads live in the service's directory.
@@ -819,8 +819,8 @@ fn start_run(
     config: &mut ConfigStore,
     service: Option<&ServiceLink>,
 ) -> Response {
-    // Only the host makes a site-draft run (start_site_draft), from input it
-    // builds itself.
+    // Only the host makes a site-draft run (start_site_draft) or a task run
+    // (start_task), from input it builds or checks itself.
     if value
         .kind
         .is_some_and(|kind| kind != brauser_protocol::RunKind::Summary)
@@ -831,6 +831,13 @@ fn start_run(
             "kind is chosen by the host",
         );
     }
+    if value.instruction.is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "instruction is sent with start_task",
+        );
+    }
     if value.record_key.is_some() {
         return error(
             &value.request_id,
@@ -838,39 +845,96 @@ fn start_run(
             "record_key is chosen by the host",
         );
     }
-    if let Err(message) = crate::service::record::check_start_run(
-        &value.url,
-        &value.title,
-        &value.content,
-        value.selection.as_deref(),
-    ) {
-        return error(&value.request_id, ErrorCode::InvalidRequest, message);
-    }
-    if crate::capture::parse_event_time(&value.requested_at)
-        .and_then(crate::capture::check_event_window)
-        .is_err()
-    {
-        return error(
-            &value.request_id,
-            ErrorCode::InvalidRequest,
-            "requested_at must be a current RFC 3339 timestamp",
-        );
-    }
-    // Resolve under the same lock as note loading so a config update cannot
-    // interleave; release it before forwarding, since the service takes it
-    // too when it reads the run's working directory.
-    let resolved = match config.lock_current() {
-        Ok(_config_lock) => resolve_record_key(config, &value.url),
-        Err(lock_error) => {
-            warn_cause(&lock_error, "config lock failed");
-            Err((ErrorCode::Internal, "configuration is unavailable".into()))
-        }
+    let page = RunPage {
+        url: &value.url,
+        title: &value.title,
+        content: &value.content,
+        selection: value.selection.as_deref(),
+        requested_at: &value.requested_at,
     };
-    match resolved {
+    match page_record_key(page, config) {
         Ok(key) => value.record_key = Some(key),
         Err((code, message)) => return error(&value.request_id, code, &message),
     }
     forward(&Request::StartRun(value), service)
+}
+
+/// Build a task-bar run: the user's instruction, bounded as the service
+/// bounds it, with the page as untrusted context. The kind and the record
+/// key are the host's; every refusal happens before connecting, and none
+/// quotes the instruction or the page.
+#[cfg(unix)]
+fn start_task(
+    value: brauser_protocol::StartTaskRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    if let Err(message) = crate::service::record::check_task_instruction(&value.instruction) {
+        return error(&value.request_id, ErrorCode::InvalidRequest, message);
+    }
+    let page = RunPage {
+        url: &value.url,
+        title: &value.title,
+        content: &value.content,
+        selection: value.selection.as_deref(),
+        requested_at: &value.requested_at,
+    };
+    let key = match page_record_key(page, config) {
+        Ok(key) => key,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    let request = brauser_protocol::StartRunRequest {
+        protocol_version: value.protocol_version,
+        request_id: value.request_id,
+        url: value.url,
+        title: value.title,
+        content: value.content,
+        selection: value.selection,
+        harness: value.harness,
+        record_key: Some(key),
+        requested_at: value.requested_at,
+        kind: Some(brauser_protocol::RunKind::Task),
+        instruction: Some(value.instruction),
+    };
+    forward(&Request::StartRun(request), service)
+}
+
+/// The page fields a summary or a task run starts from.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct RunPage<'a> {
+    url: &'a str,
+    title: &'a str,
+    content: &'a str,
+    selection: Option<&'a str>,
+    requested_at: &'a str,
+}
+
+/// Check a run's page against the schema's bounds and its `requested_at`
+/// against the event window, then resolve the page's record key.
+#[cfg(unix)]
+fn page_record_key(page: RunPage<'_>, config: &mut ConfigStore) -> Result<RecordKey, Refusal> {
+    crate::service::record::check_start_run(page.url, page.title, page.content, page.selection)
+        .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
+    if crate::capture::parse_event_time(page.requested_at)
+        .and_then(crate::capture::check_event_window)
+        .is_err()
+    {
+        return Err((
+            ErrorCode::InvalidRequest,
+            "requested_at must be a current RFC 3339 timestamp".into(),
+        ));
+    }
+    // Resolve under the same lock as note loading so a config update cannot
+    // interleave; release it before forwarding, since the service takes it
+    // too when it reads the run's working directory.
+    match config.lock_current() {
+        Ok(_config_lock) => resolve_record_key(config, page.url),
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            Err((ErrorCode::Internal, "configuration is unavailable".into()))
+        }
+    }
 }
 
 /// Send a run message to the service and return its answer as is.
@@ -890,6 +954,9 @@ pub(crate) fn forward(request: &Request, service: Option<&ServiceLink>) -> Respo
     // the service), rather than failing the write as a protocol error.
     if !crate::frame::request_fits(request) {
         let message = match request {
+            Request::StartRun(value) if value.instruction.is_some() => {
+                "This page is too large to send with a task."
+            }
             Request::StartRun(_) => "This page is too large to send to the Brauser service.",
             _ => "This request is too large to send to the Brauser service.",
         };
@@ -9055,7 +9122,7 @@ title = "{title} - Jira"
         use crate::service::client::{Launch, NOT_INSTALLED, ServiceLink};
         use brauser_protocol::{
             CancelRunRequest, GetRunRequest, LoadNoteRequest, RunStarted, ServiceHelloRequest,
-            StartRunRequest,
+            StartRunRequest, StartTaskRequest,
         };
         use std::sync::Arc;
         use std::time::Duration;
@@ -9598,6 +9665,418 @@ title = "{title} - Jira"
                 start_run("https://example.com/", None, &now()),
             );
             assert_eq!(refused(&response).0, ErrorCode::NotConfigured);
+        }
+
+        const TASK_INSTRUCTION: &str = "List the open questions on this page.";
+
+        fn start_task_request(
+            url: &str,
+            instruction: &str,
+            requested_at: &str,
+        ) -> StartTaskRequest {
+            StartTaskRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "task-1".into(),
+                url: url.into(),
+                title: "A page".into(),
+                content: "Some text".into(),
+                selection: Some("a selection".into()),
+                instruction: instruction.into(),
+                harness: Some(brauser_protocol::HarnessId::Claude),
+                requested_at: requested_at.into(),
+            }
+        }
+
+        fn start_task(url: &str, instruction: &str, requested_at: &str) -> Request {
+            Request::StartTask(start_task_request(url, instruction, requested_at))
+        }
+
+        /// The host chooses the kind and the record key; the instruction and
+        /// the page travel unchanged in the forwarded start_run.
+        #[test]
+        fn start_task_forwards_kind_task_with_the_host_key_and_instruction() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a?b=1";
+            let expected = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let requested_at = now();
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                start_task(url, TASK_INSTRUCTION, &requested_at),
+            );
+            match response {
+                Response::RunStarted(started) => {
+                    assert_eq!(started.request_id, "task-1");
+                    assert_eq!(started.run.record_key, expected);
+                }
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert_eq!(requests.len(), 2, "{requests:?}");
+            assert!(matches!(requests[0], Request::ServiceHello(_)));
+            assert_eq!(
+                requests[1],
+                Request::StartRun(StartRunRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "task-1".into(),
+                    url: url.into(),
+                    title: "A page".into(),
+                    content: "Some text".into(),
+                    selection: Some("a selection".into()),
+                    harness: Some(brauser_protocol::HarnessId::Claude),
+                    record_key: Some(expected),
+                    requested_at,
+                    kind: Some(brauser_protocol::RunKind::Task),
+                    instruction: Some(TASK_INSTRUCTION.into()),
+                })
+            );
+        }
+
+        /// As for start_run, the key is resolved under the config lock.
+        #[test]
+        fn start_task_resolves_the_key_under_the_config_lock() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a";
+            let expected = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let held = config.lock_current().unwrap();
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    call(
+                        &mut config,
+                        &link(socket.clone(), never),
+                        start_task(url, TASK_INSTRUCTION, &now()),
+                    )
+                });
+                std::thread::sleep(Duration::from_millis(300));
+                assert!(!worker.is_finished(), "start_task ran without the lock");
+                assert!(service.requests().is_empty());
+                drop(held);
+                match worker.join().unwrap() {
+                    Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                    other => panic!("expected run_started, got {other:?}"),
+                }
+            });
+        }
+
+        /// The instructions the host refuses, with check_task_instruction's
+        /// fixed texts (which never quote the instruction).
+        fn bad_instructions() -> Vec<(String, &'static str)> {
+            vec![
+                (String::new(), "instruction is empty"),
+                (" \n\t  ".into(), "instruction is empty"),
+                (
+                    "i".repeat(crate::service::record::MAX_TASK_INSTRUCTION_CHARS + 1),
+                    "instruction is longer than 4096 characters",
+                ),
+                (
+                    "first line\rsecond line".into(),
+                    "instruction contains a control character",
+                ),
+                (
+                    "colour \u{1b}[31m me".into(),
+                    "instruction contains a control character",
+                ),
+            ]
+        }
+
+        #[test]
+        fn start_task_refuses_bad_instructions_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            for (instruction, message) in bad_instructions() {
+                let response = call(
+                    &mut config,
+                    &link,
+                    start_task("https://example.com/", &instruction, &now()),
+                );
+                assert_eq!(
+                    refused(&response),
+                    (ErrorCode::InvalidRequest, message),
+                    "{instruction:?}"
+                );
+                assert_eq!(response.request_id(), "task-1");
+            }
+        }
+
+        #[test]
+        fn start_task_refuses_a_stale_requested_at_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            for requested_at in ["yesterday", "2026-10-26 00:00:00Z", "2001-01-01T00:00:00Z"] {
+                let response = call(
+                    &mut config,
+                    &link,
+                    start_task("https://example.com/", TASK_INSTRUCTION, requested_at),
+                );
+                assert_eq!(
+                    refused(&response),
+                    (
+                        ErrorCode::InvalidRequest,
+                        "requested_at must be a current RFC 3339 timestamp"
+                    ),
+                    "{requested_at}"
+                );
+            }
+        }
+
+        #[test]
+        fn start_task_over_the_schema_bounds_is_refused_without_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let oversized = |change: &dyn Fn(&mut StartTaskRequest)| {
+                let mut value =
+                    start_task_request("https://example.com/", TASK_INSTRUCTION, &now());
+                change(&mut value);
+                Request::StartTask(value)
+            };
+            for request in [
+                oversized(&|value| value.title = "t".repeat(2049)),
+                oversized(&|value| {
+                    value.url = format!("https://example.com/{}", "a".repeat(8192));
+                }),
+                oversized(&|value| value.url = "https://example.com/\u{7}".into()),
+                oversized(&|value| value.content = "c".repeat(1024 * 1024 + 1)),
+                oversized(&|value| value.selection = Some("s".repeat(64 * 1024 + 1))),
+            ] {
+                let response = call(&mut config, &link, request);
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{response:?}"
+                );
+            }
+        }
+
+        /// A start_task whose forwarded start_run (kind task, instruction
+        /// and `key` set) serializes to `target` bytes.
+        fn start_task_sized(url: &str, key: RecordKey, target: usize) -> StartTaskRequest {
+            let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
+            value.content = String::new();
+            let forwarded = StartRunRequest {
+                protocol_version: value.protocol_version,
+                request_id: value.request_id.clone(),
+                url: value.url.clone(),
+                title: value.title.clone(),
+                content: String::new(),
+                selection: value.selection.clone(),
+                harness: value.harness,
+                record_key: Some(key),
+                requested_at: value.requested_at.clone(),
+                kind: Some(brauser_protocol::RunKind::Task),
+                instruction: Some(value.instruction.clone()),
+            };
+            let base = serde_json::to_vec(&Request::StartRun(forwarded))
+                .unwrap()
+                .len();
+            let bytes = target - base;
+            value.content = format!("{}{}", "😀".repeat(bytes / 4), "x".repeat(bytes % 4));
+            assert!(
+                value.content.chars().count() <= crate::service::record::MAX_CONTENT_CHARS,
+                "the content must pass check_start_run"
+            );
+            value
+        }
+
+        /// A task that fits the extension's frame but not the service's once
+        /// the host builds the start_run is refused with the task's own text
+        /// before the service is contacted.
+        #[test]
+        fn start_task_too_large_once_keyed_is_refused_with_the_task_message() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            use crate::frame::MAX_INBOUND_BYTES;
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = "https://example.com/a";
+            let key = note_load(&mut config, url).key;
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+
+            let one_over = start_task_sized(url, key.clone(), MAX_INBOUND_BYTES + 1);
+            assert!(
+                serde_json::to_vec(&Request::StartTask(one_over.clone()))
+                    .unwrap()
+                    .len()
+                    <= MAX_INBOUND_BYTES,
+                "the inbound start_task must fit the extension's frame"
+            );
+            let response = call(&mut config, &link, Request::StartTask(one_over));
+            assert_eq!(
+                refused(&response),
+                (
+                    ErrorCode::MessageTooLarge,
+                    "This page is too large to send with a task."
+                )
+            );
+            assert_eq!(response.request_id(), "task-1");
+            assert!(service.requests().is_empty());
+
+            // Exactly at the cap once built, it is forwarded.
+            let at_cap = start_task_sized(url, key.clone(), MAX_INBOUND_BYTES);
+            match call(&mut config, &link, Request::StartTask(at_cap)) {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, key),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            assert!(matches!(
+                &service.requests()[1],
+                Request::StartRun(value) if value.kind == Some(brauser_protocol::RunKind::Task)
+            ));
+        }
+
+        #[test]
+        fn start_task_key_errors_are_reported_without_connecting() {
+            let empty = tempfile::tempdir().unwrap();
+            let mut config = ConfigStore::for_test(empty.path().join("config.toml"));
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &link(fake::socket_in(&dir), never),
+                start_task("https://example.com/", TASK_INSTRUCTION, &now()),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::NotConfigured);
+            assert_eq!(response.request_id(), "task-1");
+        }
+
+        /// Agent input reaches the service only through start_task, which
+        /// the host builds; a start_run carrying one is refused.
+        #[test]
+        fn start_run_from_the_extension_refuses_an_instruction() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            for kind in [None, Some(brauser_protocol::RunKind::Summary)] {
+                let Request::StartRun(mut value) = start_run("https://example.com/", None, &now())
+                else {
+                    unreachable!()
+                };
+                value.kind = kind;
+                value.instruction = Some(TASK_INSTRUCTION.into());
+                let response = call(&mut config, &link, Request::StartRun(value));
+                assert_eq!(
+                    refused(&response),
+                    (
+                        ErrorCode::InvalidRequest,
+                        "instruction is sent with start_task"
+                    )
+                );
+            }
+            // kind task is refused as a kind, as site_draft is.
+            let Request::StartRun(mut value) = start_run("https://example.com/", None, &now())
+            else {
+                unreachable!()
+            };
+            value.kind = Some(brauser_protocol::RunKind::Task);
+            let response = call(&mut config, &link, Request::StartRun(value));
+            assert_eq!(
+                refused(&response),
+                (ErrorCode::InvalidRequest, "kind is chosen by the host")
+            );
+        }
+
+        /// Decision 28: a task's request span names its id, kind and
+        /// harness; no log line holds its instruction or its page.
+        #[test]
+        fn start_task_logs_neither_its_instruction_nor_its_page() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            use crate::diag::test_capture::{capture, events, span};
+            const INSTRUCTION: &str = "sentinel-task-instruction-5b9d";
+            const TITLE: &str = "sentinel-task-title-0c47";
+            const CONTENT: &str = "sentinel-task-content-e2a1";
+            const PATH: &str = "sentinel-task-path-91fe";
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let url = format!("https://example.com/{PATH}?q={PATH}");
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+            let context = SetupContext {
+                service: Some(&link),
+                ..SetupContext::new()
+            };
+            let request = |id: &str, instruction: String| {
+                let mut value = start_task_request(&url, &instruction, &now());
+                value.request_id = id.into();
+                value.title = format!("Title {TITLE}");
+                value.content = format!("Content {CONTENT}");
+                value.selection = Some(format!("Selected {CONTENT}"));
+                serde_json::to_vec(&Request::StartTask(value)).unwrap()
+            };
+            let mut bodies = vec![(
+                "task-ok".to_owned(),
+                request("task-ok", format!("Do {INSTRUCTION}")),
+            )];
+            for (index, (instruction, _)) in bad_instructions().into_iter().enumerate() {
+                // Every refused instruction still holds the sentinel, except
+                // where the case needs it blank.
+                let instruction = if instruction.trim().is_empty() {
+                    instruction
+                } else {
+                    format!("{INSTRUCTION} {instruction}")
+                };
+                let id = format!("task-bad-{index}");
+                bodies.push((id.clone(), request(&id, instruction)));
+            }
+            let (responses, lines, text) = capture(|| {
+                bodies
+                    .iter()
+                    .map(|(_, body)| {
+                        dispatch_json(body, &mut config, &mut ConsentAuthority::new(), &context)
+                    })
+                    .collect::<Vec<_>>()
+            });
+            assert!(
+                matches!(responses[0], Response::RunStarted(_)),
+                "{responses:?}"
+            );
+            for response in &responses[1..] {
+                assert_eq!(refused(response).0, ErrorCode::InvalidRequest);
+            }
+            assert_eq!(
+                service.requests().len(),
+                2,
+                "only the good task is forwarded"
+            );
+            let done = events(&lines, "request done");
+            assert_eq!(done.len(), bodies.len(), "{text}");
+            for ((id, _), line) in bodies.iter().zip(&done) {
+                let request = span(line, "request").expect("request span");
+                assert_eq!(request["kind"], "start_task", "{text}");
+                assert_eq!(request["request_id"], id.as_str(), "{text}");
+                // A refusal names the requested harness; a started run, the
+                // run's own (the fake service's view says codex).
+                let harness = if id == "task-ok" { "codex" } else { "claude" };
+                assert_eq!(request["harness"], harness, "{text}");
+            }
+            for sentinel in [INSTRUCTION, TITLE, CONTENT, PATH] {
+                assert!(!text.contains(sentinel), "{sentinel} was logged: {text}");
+            }
         }
 
         #[test]
