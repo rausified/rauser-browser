@@ -488,10 +488,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
 
-- In progress in the Columbus session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-smr` **Make the smoke's Summarize & log run-card step deterministic under load (P1).**
-  Not covered by #130: "timed out waiting for a new run card" under load.
-
 - In progress in the Lane E session (PR 4 on `feat/summary-outputs-pr4`), not Cookie. Cookie must not claim these:
 - [ ] `brwr-t43` Task 43: Shared Markdown safety helpers, the remote-resource neutralizer, and encoded summary links (after `brwr-t42`).
 - [ ] `brwr-t44` Task 44: Lift the owned-file writer out of index.rs (after `brwr-t43`).
@@ -561,6 +557,8 @@ were folded into `brwr-q7e` above rather than given their own item.
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`) is built on `feat/agent-runners-pr3` with its real-harness checks left as **[human]** work; the next plan item is open access PR 4 (`brwr-so4`), starting with its first queue item `brwr-t43`. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- [x] `brwr-smr` **The smoke detects an extension rebuilt underneath it (2026-10-27).** PR #135's `timed out waiting for a new run card` and `Panel shows: null` stops came from `extension/dist` being rebuilt during the run by a codex review in the same worktree, not from CPU load or a product race. One build at the click reproduced the timeout exactly, with the panel saying it could not read the page, because `vendor/readability.js` was gone. One build at panel reopen reproduced the missing panel page. The smoke now refuses to start while `extension/.build` exists, and fails or annotates a run whose `dist` files changed. The run-card wait stops at once with the panel's own failure line. TESTING.md documents the rule. **Metrics:** before, 11 of 11 passed under load without a rebuild (6 at full load, 5 at 3x); after, 10 consecutive passes (5 idle, 5 under full load).
 
 - [x] `brwr-fgb` **Offer Forget recorded adapters for a full adopted record (2026-10-27).** `adopted_state.full` (additive v6) marks the 1,024-contract / 1 MiB warning, and settings shows Forget recorded adapters with the same in-page confirmation for it; write and lock failures, which forgetting cannot fix, show no button and no Forget wording.
 - [x] `brwr-smk` **The macOS headless smoke waits for state, not time (2026-10-27).** Since #98, main's required smoke had stopped three ways, each passing on rerun. `Extensions.loadUnpacked` had 15 s to cover Chrome's whole cold start. A reopened panel's restored Codex card was taken for the new Claude Code run. The capture step navigated before the worker was shown to hold the new lease. A fourth stop showed up under load: one timed-out `chrome.sidePanel.open` ended the run. `scripts/smoke-macos.mjs` now has one helper, `waitUntil(what, observe, accept)`, whose timeout reports the last state observed. It is used to wait for Chrome before loading the extension, for the worker's lease (`workerHoldsHostPolicy`, `reloadSettings`), for a new run card that the service did not already list (`summarizeFromPanel(harness)`), and to retry opening the panel safely. TESTING.md "Waiting for state, not time" documents it for later smoke steps. No product race was found, and no step asserts less. **Metrics:** before, 3 of 3 idle and 3 of 5 under full CPU load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load).

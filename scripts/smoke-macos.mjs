@@ -741,6 +741,27 @@ async function extensionIdsInProfile(profile, dist) {
   return [...ids];
 }
 
+// Chrome reads an unpacked extension's files from disk whenever it needs
+// them (a page, an injected script), so a rebuild during a run leaves it
+// with missing files: build.mjs deletes extension/dist and writes it again
+// through extension/.build. A rebuild of the same commit writes the same
+// bytes, so this records each file's inode, size, and modification time.
+async function distSnapshot(directory) {
+  const entries = [];
+  async function visit(current) {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const filename = path.join(current, entry.name);
+      if (entry.isDirectory()) await visit(filename);
+      else {
+        const stats = await lstat(filename);
+        entries.push(`${path.relative(directory, filename)} ${stats.ino} ${stats.size} ${stats.mtimeMs}`);
+      }
+    }
+  }
+  await visit(directory).catch((error) => entries.push(`unreadable: ${error.code ?? error.message}`));
+  return entries.sort().join("\n");
+}
+
 async function markdownFiles(directory) {
   const found = [];
   async function visit(current) {
@@ -839,8 +860,22 @@ async function run() {
   await access(path.join(DIST, "manifest.json"), constants.R_OK).catch(() => {
     throw new Error(`Build the extension first: npm run build:extension (${DIST} is unavailable)`);
   });
+  const building = () => maybeLstat(path.join(REPO, "extension", ".build"));
+  requireCondition(!(await building()),
+    "An extension build is running or was interrupted (extension/.build exists); let it finish or rerun npm run build:extension, then rerun");
+  const distAtStart = await distSnapshot(DIST);
+  const distRebuilt = async () => await distSnapshot(DIST) !== distAtStart;
+  const DIST_REBUILT = "extension/dist was rebuilt during the run, so Chrome lost the extension's files; " +
+    "rerun without building in this worktree";
   // The built module, since agent.ts imports other modules by their .js names.
-  const { SETUP_WARNING } = await import(pathToFileURL(path.join(DIST, "agent.js")).href);
+  // build.mjs deletes dist before it creates .build, so a build can start
+  // after the check above; look again once the import is done or has failed.
+  let SETUP_WARNING;
+  try {
+    ({ SETUP_WARNING } = await import(pathToFileURL(path.join(DIST, "agent.js")).href));
+  } finally {
+    if (await building() || await distRebuilt()) throw new Error(DIST_REBUILT);
+  }
 
   const runDir = await mkdtemp(path.join(os.tmpdir(), `${BINARY_NAME}-smoke-macos-`));
   // The service socket lives under HOME, and a Unix socket path must fit in
@@ -1803,8 +1838,18 @@ async function run() {
       requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
       const before = new Set([...listed.runs.map((run) => run.run_id), ...(await runCards()).map((card) => card.id)]);
       await onPanel((page) => page.click("#summarize"));
-      const cards = await waitUntil("a new run card after Summarize & log", runCards,
-        (shown) => shown.some((card) => !before.has(card.id)), { timeout: 30_000, signal: abort.signal });
+      // Until the card appears, the panel shows a run line: "Reading this
+      // page…", or why the run could not start, which no wait can change.
+      const { cards } = await waitUntil("a new run card after Summarize & log", async () => {
+        const [cards, line] = await Promise.all([runCards(), onPanel((page) => page.evaluate(`(() => {
+          const line = document.querySelector("#run-area .run-line");
+          return line ? { text: line.textContent, warning: line.classList.contains("warning") } : null;
+        })()`))]);
+        if (line?.warning) {
+          throw Object.assign(new Error(`Summarize & log did not start a run; the panel says: ${line.text}`), { fatal: true });
+        }
+        return { cards, line: line?.text ?? null };
+      }, ({ cards: shown }) => shown.some((card) => !before.has(card.id)), { timeout: 30_000, signal: abort.signal });
       const fresh = cards.filter((card) => !before.has(card.id));
       requireCondition(fresh.length === 1, `Summarize & log showed ${fresh.length} new run cards: ${JSON.stringify(fresh)}`);
       const { run } = await getRun(fresh[0].id);
@@ -2158,10 +2203,13 @@ async function run() {
       requireCondition(cursor.toLowerCase() === "no", "A busy cursor persisted after a native dialog");
     }
 
+    requireCondition(!(await distRebuilt()), DIST_REBUILT);
     console.log(`\nPASS: ${options.headless ? "headless" : "guided"} macOS Chrome M2 step 1 smoke run completed.`);
   } catch (error) {
     failed = true;
     console.error(`\nSmoke run stopped: ${error.message}`);
+    // A stop caused by a rebuild looks like a product failure; say so.
+    if (error.message !== DIST_REBUILT && await distRebuilt().catch(() => false)) console.error(`  Also: ${DIST_REBUILT}.`);
   } finally {
     prompt.close();
     process.off("SIGINT", interrupt);
