@@ -1432,36 +1432,29 @@ stop product work, and no history reset or production IPC change is called for.
   Establish the runner's exact wait before changing it; no engine was touched.
 
 
-### Platform evidence handoff (2026-10-28, baseline c2b13e0c)
+### Platform evidence handoff (2026-10-28, rechecked at b3d92ccf)
 
-- Health began clean: no quarantine notice or working-tree changes. Required
-  local checks passed, using cached/offline npm installation: 997 workspace
-  Rust outcomes (43 explicit IPC-denial skips), 860 scripted-dialog outcomes
-  (53 explicit IPC skips, one ignored doctest), all 15 extension files and
-  both Clippy configurations. README extras passed: two script files, 10,696
-  inert Markdown renderings, current-state and queue consistency checks.
-  Evidence is in `target/cookie-platform-health.log` and
-  `target/cookie-platform-extra-checks.log` (local, untracked build output).
+- Health began clean: no quarantine notice or working-tree changes. All
+  required local commands passed: protocol generation check, workspace build,
+  fmt, both Clippy configurations, npm installation, typecheck, lint,
+  extension build, all 15 extension test files and workspace Rust tests
+  (including 830 host unit outcomes). Guarded IPC tests reported sandbox
+  skips; these are not platform execution evidence. Extras passed:
+  current-state/queue checks, both script test files and 10,696 inert
+  Markdown renderings. The scripted-dialog test suite was not rerun this
+  cycle; its Clippy build passed.
 - Both assigned beads remain blocked. `brwr-bzx` needs current Windows/macOS
-  CI results; `brwr-9xg` needs actual isolated macOS Chrome execution. The
-  smoke command refused Linux before setup and no Chrome/Chromium executable
-  was found on PATH. No browser, platform CI or dialog-count acceptance was
-  inferred from unit tests. The backlog now removes obsolete implementation
-  instructions and states the exact remaining evidence; existing bead notes
-  were preserved and the queue exported. No assigned label or status changed.
-- No source change or feature shipped. Fresh review covered the entire
-  documentation/queue diff and checked that only these two beads' notes and
-  timestamps changed. No API-based Codex review ran under the no-live-API
-  rule; independent review remains with the driver. No human gate, deployment,
-  service, credential or git remote was touched.
-- Scheduling observation: the driver should obtain platform evidence or
-  supply runnable assigned work before repeating this Linux-only cycle.
-  Rebuilding completed smoke/CI machinery cannot resolve an absent macOS or
-  Windows result. Existing focus sessions (`brwr-ued`) and curated worklogs
-  (`brwr-ppn`) remain useful later product directions; no duplicate proposal
-  was added and neither was started ahead of the assigned queue.
-- The single commit attempt stopped at `git add -A`: Git could not create
-  `.git/index.lock` on its read-only mount. No retry or remote operation ran.
-  The reviewed documentation/queue diff and excluded `.bosun_commit_msg`
-  remain ready for the driver's commit; the cycle summary is appended to
-  the local `overnight-run.log`.
+  CI results against a named commit. `brwr-9xg` needs actual isolated macOS
+  Chrome execution: `npm run smoke:macos:headless` again refused Linux before
+  setup, and no Chrome/Chromium executable was found on PATH. The expected
+  dialog count stays 14. The operator/driver must supply these results;
+  implementation and skip-reason audit are already complete.
+- No feature or source change shipped. Existing bead notes were preserved,
+  current results appended and the queue exported. No assigned label, status
+  or human gate changed. Review covers the complete documentation/queue diff;
+  an API-based Codex review is prohibited by this run's no-live-API rule.
+- Scheduling observation: another identical Linux-only assignment cannot
+  remove either blocker. Obtain platform results or assign runnable work
+  before launching it again. Existing focus sessions (`brwr-ued`) and curated
+  worklogs (`brwr-ppn`) remain useful later product work; no duplicate
+  proposal or unrelated implementation was added ahead of this queue.
