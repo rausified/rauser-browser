@@ -19,7 +19,8 @@ use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
-    IncomingTrailView, OverflowMarker, StorageConfig, SummaryView, WhyEvent,
+    IncomingTrailView, OverflowMarker, RecordKey, RecordKeyKind, StorageConfig, SummaryView,
+    WhyEvent,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -1493,6 +1494,38 @@ impl ArtifactIndex {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect())
+    }
+
+    /// Fresh authoritative evidence for impact review. No cache is trusted,
+    /// published or resumed. Oversized/inconsistent history refuses the plan.
+    /// Caller holds the config and capture locks, in that order.
+    pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
+        let mut state = self.empty_state();
+        let pass = self.catch_up_logs(&mut state, true)?;
+        anyhow::ensure!(
+            pass.complete,
+            "re-learning review exceeds the log scan limit"
+        );
+        anyhow::ensure!(
+            state.conflicts.is_empty(),
+            "conflicting recorded event IDs prevent re-learning review"
+        );
+        let revision = sha256_hex(&serde_json::to_vec(&state.events)?);
+        let evidence = state
+            .events
+            .values()
+            .flat_map(|event| {
+                let key = match &event.data {
+                    EventData::Summary(summary) => summary.record_key.clone(),
+                    _ => RecordKey {
+                        kind: RecordKeyKind::Artifact,
+                        value: event.artifact_id().to_owned(),
+                    },
+                };
+                event.urls().map(move |url| (key.clone(), url))
+            })
+            .collect();
+        Ok((revision, evidence))
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of

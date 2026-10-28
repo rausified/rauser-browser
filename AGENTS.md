@@ -396,6 +396,19 @@ lowercase repository or namespace name stays a literal, so its rule covers
 that one name. Starter live-tool certification remains human work; agent
 drafting (`brwr-f45`) and re-learning (`brwr-6x2`) are not built.
 
+Capture re-learning impact review (`brwr-hq8`, 2026-10-28) is available as
+`brauser adapters relearn-plan` (`host/src/relearn.rs`), with an optional
+absolute `--config` path for isolated review. The host rescans authoritative
+logs without using or writing the cache, inventories owned-path notes and
+summaries, and reports splits, merges, unresolved evidence and simultaneous
+key reuse. It binds config/contracts/evidence/proposal revisions, preserves
+URL notes as separate copies and includes container roll-ups. Only lock files
+are created; the ID freeze and all note/recovery behavior remain unchanged.
+The interface and bounds are in
+`docs/superpowers/plans/2026-10-28-capture-relearning.md`; `brwr-wvi` is the
+next journal stage, and parent `brwr-6x2` still owns durable apply and panel
+Re-learn.
+
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
 opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the

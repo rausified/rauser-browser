@@ -917,3 +917,20 @@ existing child-pipe IPC probe returned EPERM. The long run was interrupted
 and is not validation evidence. Follow-up `brwr-wg5` will identify the exact
 wait and bound the diagnostic; the required gate and engine vectors passed,
 and neither adapter engine changed here.
+
+## Read-only capture re-learning review
+
+`cargo test --locked -p brauser relearn::tests --lib` exercises impact plans
+against temporary confirmed home folders, real capture markers, owned notes
+and summaries. It covers simultaneous swaps and reused keys, splits/merges,
+repository roll-ups without a direct open, hand-removed/retired contracts,
+query and absence provenance, files already present on both sides, stale
+revisions and strict scan refusal. Assertions preserve exact file/config
+bytes and verify no cache or adopted-contract file is created.
+`cargo test --locked -p brauser --test relearn_plan` also runs the real CLI
+against malformed/oversized requests and an apply flag. An injected absolute
+`--config` path keeps these child processes away from real user state on every
+platform. The library request/JSON output path is tested with that same seam.
+These tests use no browser or harness and do not establish panel Re-learn or
+migration acceptance. POSIX symlink fixtures state their Windows exclusion;
+all other planning tests are portable.
