@@ -15,6 +15,10 @@ A worktree is a removal candidate when either
 
 A candidate is kept, with the reason printed, when it
   * has uncommitted or untracked changes,
+  * has ignored files other than regenerable build output (target/,
+    node_modules/, dist/, __pycache__/, .DS_Store): `git worktree remove`
+    deletes ignored files such as *.db, .env or .beads-credential-key even
+    without --force, so they block removal unless --discard-ignored is given,
   * has commits that are on no remote branch (and not in its closed PR's head),
   * has any process with its cwd or an open file inside it (lsof),
   * is named by the Chrome native-messaging manifest or the Brauser
@@ -32,7 +36,7 @@ running in, or naming, the repository or any of its worktrees.
 
 Usage:
   scripts/dev/worktree-hygiene [--repo PATH] [--base REF] [--no-gh]
-                               [--clear-locks] [--apply]
+                               [--clear-locks] [--discard-ignored] [--apply]
 """
 
 from __future__ import annotations
@@ -394,8 +398,31 @@ def classify(repo: Path, tree: Worktree, base: str, pr_lookup: Optional[PrLookup
     return v
 
 
+# Ignored build output that a removal may delete: any path under a directory
+# with one of these names, or one of these file names.
+REGENERABLE_DIRS = frozenset({"target", "node_modules", "dist", "__pycache__"})
+REGENERABLE_FILES = frozenset({".DS_Store"})
+
+
+def regenerable(entry: str) -> bool:
+    parts = entry.rstrip("/").split("/")
+    dirs = parts if entry.endswith("/") else parts[:-1]
+    return parts[-1] in REGENERABLE_FILES or any(d in REGENERABLE_DIRS for d in dirs)
+
+
+def ignored_state(tree: Path) -> Optional[list[str]]:
+    """Ignored paths that are not regenerable build output; None if git failed."""
+    res = git(tree, "status", "--porcelain", "-z", "--ignored=matching", "--untracked-files=normal",
+              check=False)
+    if res.returncode != 0:
+        return None
+    entries = [e[3:] for e in res.stdout.split("\0") if e.startswith("!! ")]
+    return [e for e in entries if not regenerable(e)]
+
+
 def safety_checks(repo: Path, v: Verdict, open_files: Optional[list[OpenFile]],
-                  references: Optional[list[tuple[Path, str]]], probe_errors: list[str]) -> None:
+                  references: Optional[list[tuple[Path, str]]], probe_errors: list[str],
+                  discard_ignored: bool = False) -> None:
     tree = v.tree
     if tree.locked:
         v.keep.append("worktree is locked")
@@ -405,6 +432,14 @@ def safety_checks(repo: Path, v: Verdict, open_files: Optional[list[OpenFile]],
     elif status.stdout.strip():
         n = len(status.stdout.strip().splitlines())
         v.keep.append(f"{n} uncommitted or untracked change(s)")
+    if not discard_ignored:
+        ignored = ignored_state(tree.path)
+        if ignored is None:
+            v.keep.append("git status --ignored failed")
+        elif ignored:
+            shown = ", ".join(ignored[:3]) + (" ..." if len(ignored) > 3 else "")
+            v.keep.append(f"{len(ignored)} ignored path(s) removal would delete ({shown}; "
+                          "--discard-ignored to remove anyway)")
     rev_args = ["rev-list", "--count", "HEAD"]
     if v.pr_head:
         rev_args.append(f"^{v.pr_head}")
@@ -425,7 +460,8 @@ def safety_checks(repo: Path, v: Verdict, open_files: Optional[list[OpenFile]],
             v.keep.append("referenced by " + ", ".join(refs))
 
 
-def plan(repo: Path, base: str, pr_lookup: Optional[PrLookup], probe, manifests, plists) -> list[Verdict]:
+def plan(repo: Path, base: str, pr_lookup: Optional[PrLookup], probe, manifests, plists,
+         discard_ignored: bool = False) -> list[Verdict]:
     trees = list_worktrees(repo)
     verdicts = [classify(repo, t, base, pr_lookup) for t in trees]
     candidates = [v for v in verdicts if v.candidate]
@@ -442,7 +478,7 @@ def plan(repo: Path, base: str, pr_lookup: Optional[PrLookup], probe, manifests,
     except ProbeError as exc:
         probe_errors.append(f"cannot check the live install ({exc})")
     for v in candidates:
-        safety_checks(repo, v, open_files, references, probe_errors)
+        safety_checks(repo, v, open_files, references, probe_errors, discard_ignored)
     return verdicts
 
 
@@ -520,6 +556,8 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
                         help="native-messaging manifest to honour (repeatable)")
     parser.add_argument("--launch-agent-plist", action="append", type=Path,
                         help="LaunchAgent plist to honour (repeatable)")
+    parser.add_argument("--discard-ignored", action="store_true",
+                        help="let removal delete ignored files that are not build output")
     parser.add_argument("--apply", action="store_true", help="act; without it nothing changes")
     args = parser.parse_args(argv)
 
@@ -536,7 +574,7 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
     mode = "apply" if args.apply else "dry run (pass --apply to act)"
     print(f"worktree hygiene: {repo} against {args.base} {base_sha.stdout.strip()[:10]}, {mode}", file=out)
     failed = False
-    for v in plan(repo, args.base, lookup, probe, manifests, plists):
+    for v in plan(repo, args.base, lookup, probe, manifests, plists, args.discard_ignored):
         label = v.tree.branch or ("detached " + (v.tree.head or "?")[:10])
         if not v.candidate:
             print(f"  skip    {v.tree.path} [{label}]: {v.why}", file=out)

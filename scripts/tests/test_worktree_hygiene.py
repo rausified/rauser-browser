@@ -225,6 +225,47 @@ class Refusals(Fixture):
         (path / "notes.txt").write_text("new")
         self.assert_kept(path, "uncommitted or untracked")
 
+    def ignoring_worktree(self):
+        """A merged worktree whose repo ignores local state and build output."""
+        self.commit(self.repo, ".gitignore", "*.db\n.env\ntarget/\nnode_modules/\n")
+        run(self.repo, "push", "-q", "origin", "main")
+        return self.merged_worktree()
+
+    def test_ignored_local_state_is_kept(self):
+        # `git worktree remove` deletes ignored files without --force, and
+        # `git status --untracked-files=all` does not list them.
+        path = self.ignoring_worktree()
+        (path / "beads.db").write_text("state")
+        (path / ".env").write_text("SECRET=1")
+        self.assert_kept(path, "2 ignored path(s)")
+        self.assertTrue((path / "beads.db").exists())
+
+    def test_ignored_build_output_does_not_block(self):
+        path = self.ignoring_worktree()
+        (path / "target" / "debug").mkdir(parents=True)
+        (path / "target" / "debug" / "app").write_text("bin")
+        (path / "host" / "target").mkdir(parents=True)
+        (path / "host" / "target" / "x").write_text("bin")
+        (path / "node_modules").mkdir()
+        (path / "node_modules" / "m.js").write_text("js")
+        code, out = self.hygiene("--apply")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.line_for(out, path)[0], "removed", out)
+        self.assertFalse(path.exists())
+
+    def test_ignored_state_inside_build_output_dir_name_elsewhere_is_kept(self):
+        path = self.ignoring_worktree()
+        (path / "data").mkdir()
+        (path / "data" / "target.db").write_text("state")
+        self.assert_kept(path, "1 ignored path(s)")
+
+    def test_discard_ignored_removes_anyway(self):
+        path = self.ignoring_worktree()
+        (path / "beads.db").write_text("state")
+        _, out = self.hygiene("--apply", "--discard-ignored")
+        self.assertEqual(self.line_for(out, path)[0], "removed", out)
+        self.assertFalse(path.exists())
+
     def test_unpushed_commits(self):
         path = self.merged_worktree()
         local = self.commit(path, "local.txt", "local")
