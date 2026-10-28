@@ -1,4 +1,4 @@
-import type { ActivityEvent, ActivityTrail, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import type { ActivityEvent, ActivityTrail, OverflowMarker, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
 import {
   MAX_QUEUE_BYTES,
   MAX_QUEUED_VISITS,
@@ -275,6 +275,17 @@ async function readPolicyState(): Promise<{
   };
 }
 
+function isOverflowDelivery(value: unknown): value is NonNullable<QueueState["overflow_delivery"]> {
+  if (typeof value !== "object" || value === null) return false;
+  const delivery = value as Record<string, unknown>;
+  const marker = delivery.overflow as Record<string, unknown> | null;
+  return typeof delivery.batch_id === "string" && delivery.batch_id.length <= 64 &&
+    typeof delivery.retry_after === "number" && Number.isFinite(delivery.retry_after) &&
+    typeof marker === "object" && marker !== null &&
+    Number.isInteger(marker.count) && Number(marker.count) > 0 && Number(marker.count) <= 0xffff_ffff &&
+    typeof marker.first_occurred_at === "string" && typeof marker.last_occurred_at === "string";
+}
+
 async function readQueue(): Promise<QueueState> {
   const stored = await chrome.storage.local.get(QUEUE_KEY);
   const value = stored[QUEUE_KEY];
@@ -287,6 +298,7 @@ async function readQueue(): Promise<QueueState> {
     state.version !== 1 ||
     !Array.isArray(state.items) ||
     !state.items.every(isQueuedVisit) ||
+    !(state.overflow_delivery === undefined || isOverflowDelivery(state.overflow_delivery)) ||
     typeof state.overflow_count !== "number" ||
     !(state.overflow_first_at === undefined || state.overflow_first_at === null ||
       typeof state.overflow_first_at === "string") ||
@@ -792,12 +804,15 @@ async function currentStatus(
     settleActivity(activity, Date.now(), () => crypto.randomUUID());
     await writeActivity(activity);
   }
-  const nextRetryAt = captureActive
+  let nextRetryAt = captureActive
     ? visits.items
       .filter((item) => matchingArtifact(policy, item.event.url) !== null)
       .reduce<number | null>((earliest, item) =>
         earliest === null ? item.retry_after : Math.min(earliest, item.retry_after), null)
     : null;
+  if (captureActive && visits.overflow_delivery) {
+    nextRetryAt = Math.min(nextRetryAt ?? Infinity, visits.overflow_delivery.retry_after);
+  }
   return {
     queued: visits.items.length,
     live_activity: activity.totals.length,
@@ -807,9 +822,10 @@ async function currentStatus(
     overflow_last_at: visits.overflow_last_at,
     rejected_count: visits.rejected_count,
     last_error: visits.last_error,
-    // A retry notice describes a visit still waiting to retry. Once rejection,
-    // discard, removal, pause, or a purge leaves none, it has nothing to say.
-    retry_error: visits.items.some((item) => item.attempts > 0) ? visits.retry_error : null,
+    // Retry notices stay visible while an event or standalone loss marker
+    // is still waiting for acknowledgement.
+    retry_error: visits.overflow_delivery || visits.items.some((item) => item.attempts > 0)
+      ? visits.retry_error : null,
     policy_expires_at: policy?.expires_at ?? null,
     pause_pending: paused,
     pause_token: await readPauseToken(),
@@ -822,7 +838,7 @@ async function currentStatus(
 interface ReadyBatch {
   batch_id: string;
   items: QueuedVisit[];
-  overflow: { count: number; first_occurred_at: string; last_occurred_at: string } | null;
+  overflow: OverflowMarker | null;
 }
 
 /** Take one stable bounded batch. Items retain their batch ID across retry, so
@@ -831,20 +847,7 @@ async function takeReady(): Promise<ReadyBatch | null> {
   const lease = await activeLease();
   if (!lease || lease.expires_at <= Date.now() || !lease.capture_enabled) return null;
   const queue = await readQueue();
-  const ready = queue.items.filter(
-    (item) =>
-      item.retry_after <= Date.now() && matchingArtifact(lease, item.event.url) !== null,
-  );
-  const first = ready[0];
-  if (!first) return null;
-  const batchId = first.batch_id ?? crypto.randomUUID();
-  const localDay = first.event.occurred_at.slice(0, 10);
-  const batch = ready.filter((item) =>
-    first.batch_id ? item.batch_id === batchId :
-      item.batch_id === undefined && item.event.occurred_at.startsWith(localDay)).slice(0, 64);
-  const carrier = batch[0];
-  if (!carrier) return null;
-  const currentOverflow = queue.overflow_count > 0 &&
+  const currentOverflow = !queue.overflow_delivery && queue.overflow_count > 0 &&
       queue.overflow_first_at && queue.overflow_last_at
     ? {
       count: queue.overflow_count,
@@ -852,6 +855,31 @@ async function takeReady(): Promise<ReadyBatch | null> {
       last_occurred_at: queue.overflow_last_at,
     }
     : null;
+  const ready = queue.items.filter(
+    (item) =>
+      item.retry_after <= Date.now() && matchingArtifact(lease, item.event.url) !== null,
+  );
+  const first = ready[0];
+  if (!first) {
+    // Deliver ready activity before retrying standalone evidence: a marker
+    // refused by an older host or an unavailable log must not block capture.
+    if (queue.overflow_delivery && queue.overflow_delivery.retry_after <= Date.now()) {
+      return { ...queue.overflow_delivery, items: [] };
+    }
+    if (queue.items.length > 0 || !currentOverflow) return null;
+    queue.overflow_delivery = {
+      batch_id: crypto.randomUUID(), overflow: currentOverflow, retry_after: 0,
+    };
+    await writeQueue(queue);
+    return { ...queue.overflow_delivery, items: [] };
+  }
+  const batchId = first.batch_id ?? crypto.randomUUID();
+  const localDay = first.event.occurred_at.slice(0, 10);
+  const batch = ready.filter((item) =>
+    first.batch_id ? item.batch_id === batchId :
+      item.batch_id === undefined && item.event.occurred_at.startsWith(localDay)).slice(0, 64);
+  const carrier = batch[0];
+  if (!carrier) return null;
   const storedOverflow = batch.find((item) => item.batch_overflow !== undefined);
   // A batch created by an older extension has no recoverable overflow
   // snapshot. Replaying it without a marker is conservative: existing
@@ -937,7 +965,16 @@ async function ackBatch(
       queue.overflow_first_at = batch.overflow.last_occurred_at;
     }
   }
-  if (!queue.items.some((entry) => entry.attempts > 0)) queue.retry_error = null;
+  if (batch.items.length === 0 && queue.overflow_delivery?.batch_id === batch.batch_id) {
+    if (overflowRecorded) delete queue.overflow_delivery;
+    else {
+      queue.overflow_delivery.retry_after = Date.now() + 5_000;
+      queue.retry_error = "The host could not save capture overflow evidence yet";
+    }
+  }
+  if (!queue.overflow_delivery && !queue.items.some((entry) => entry.attempts > 0)) {
+    queue.retry_error = null;
+  }
   await writeQueue(queue);
   return currentStatus(null, queue);
 }
@@ -1000,7 +1037,9 @@ async function syncNeeds(): Promise<SyncNeeds> {
   const now = Date.now();
   const renew = lease.expires_at - now <= LEASE_RENEW_WINDOW_MS;
   const queue = await readQueue();
-  const deliver = queue.items.some((item) => item.retry_after <= now);
+  const deliver = queue.items.some((item) => item.retry_after <= now) ||
+    (queue.overflow_delivery ? queue.overflow_delivery.retry_after <= now :
+      queue.items.length === 0 && queue.overflow_count > 0);
   return { renew, deliver };
 }
 
@@ -1044,7 +1083,8 @@ async function renewPolicy(host: HostClient): Promise<void> {
 
 /** Send due visits; returns why the host could not be reached, if it could not. */
 async function deliverPending(host: HostClient): Promise<string | null> {
-  for (let processed = 0; processed < MAX_QUEUED_VISITS; processed += 64) {
+  // One extra send covers overflow that arrives during the final full batch.
+  for (let processed = 0; processed <= MAX_QUEUED_VISITS; processed += 64) {
     // Re-read eligibility before each send so a site removal or pause
     // cannot keep draining a stale pending snapshot.
     const batch = await serialize(takeReady);
@@ -1066,7 +1106,8 @@ async function deliverPending(host: HostClient): Promise<string | null> {
         await ackBatch(batch, response.results, response.overflow_recorded);
         await chrome.storage.local.set({ [DELIVERED_KEY]: await readDeliveredBatches() + 1 });
       });
-      if (response.results.some((result) => result.outcome === "retryable")) return null;
+      if (response.results.some((result) => result.outcome === "retryable") ||
+          (batch.items.length === 0 && !response.overflow_recorded)) return null;
     } catch (error) {
       failure = describe(error);
       await serialize(() => ackBatch(batch, batch.items.map((item) => ({

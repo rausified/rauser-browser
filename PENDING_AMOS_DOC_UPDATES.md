@@ -95,3 +95,12 @@
   new oversized events remain rejected, and valid batch neighbors still save.
   Two failing-first regressions and the full local gate pass (`brwr-u8r`);
   real macOS smoke remains unverified on this Linux VM.
+
+
+- **Brauser — Deliver capture-loss evidence after the last batch (2026-10-28).**
+  Overflow that arrives during the final native delivery now gets its own
+  durable count/range marker without waiting for another captured page. Frozen
+  IDs and snapshots make lost replies retryable without duplication; Pause,
+  folder identity and owned-log checks still apply, and the extension supplies
+  no URL or path. Three worker cases and four Rust regressions pass with the
+  full local gate (`brwr-m64`); macOS Chrome smoke remains human/CI work.

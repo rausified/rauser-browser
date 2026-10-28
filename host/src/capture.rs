@@ -614,6 +614,17 @@ impl CaptureStore {
             }
         }
 
+        // Overflow has no page identity. With no event anchor, its validated
+        // last timestamp alone chooses a day inside the selected home folder.
+        // Retain anchored rendering above for exact retries of older batches.
+        if events.is_empty()
+            && policy.enabled
+            && let Some(overflow) = overflow
+            && let Ok(entry) = self.prepare_standalone_overflow(batch_id, overflow)
+        {
+            prepared.push(entry);
+        }
+
         if prepared.is_empty() {
             return CaptureBatchOutcome {
                 events: results,
@@ -655,6 +666,40 @@ impl CaptureStore {
                 }
             }
         }
+    }
+
+    fn prepare_standalone_overflow(
+        &self,
+        batch_id: &str,
+        overflow: &OverflowMarker,
+    ) -> std::result::Result<BatchEntry, String> {
+        let id = parse_event_id(batch_id)?;
+        let first = parse_event_time(&overflow.first_occurred_at)?;
+        let timestamp = parse_event_time(&overflow.last_occurred_at)?;
+        if overflow.count == 0 || first > timestamp {
+            return Err("invalid_overflow_marker".into());
+        }
+        check_event_window(timestamp)?;
+        let event_hash = sha256_hex(id.as_bytes());
+        let url_hash = sha256_hex(b"");
+        let data = hex::encode(serde_json::to_vec(overflow).map_err(|e| e.to_string())?);
+        let entry = format!(
+            "\n- {} — Capture overflow: {} completed activity hour(s) were dropped between {} and {}\n{MARKER_PREFIX}{event_hash} url={url_hash} at={} kind=overflow data={data} -->\n",
+            overflow.last_occurred_at,
+            overflow.count,
+            overflow.first_occurred_at,
+            overflow.last_occurred_at,
+            overflow.last_occurred_at,
+        );
+        Ok(BatchEntry {
+            event_id: batch_id.to_owned(),
+            event_hash,
+            timestamp,
+            entry,
+            legacy_entry: None,
+            urls_within_bound: true,
+            overflow: true,
+        })
     }
 
     fn prepare_batch_entry(
@@ -2487,6 +2532,159 @@ mod tests {
             CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")));
         assert_eq!(fs::read(&log).unwrap(), original);
         assert!(!store.batch_intent_path().exists());
+    }
+
+    #[test]
+    fn standalone_overflow_recovers_a_partial_append_and_deduplicates_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let storage = storage(root.path(), "logs");
+        let store = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+        let timestamp = fixtures::event_time()
+            .to_offset(time::UtcOffset::from_hms(-7, 0, 0).unwrap())
+            .replace_nanosecond(0)
+            .unwrap();
+        let overflow = OverflowMarker {
+            count: 2,
+            first_occurred_at: (timestamp - time::Duration::hours(1))
+                .format(&Rfc3339)
+                .unwrap(),
+            last_occurred_at: timestamp.format(&Rfc3339).unwrap(),
+        };
+        let batch_id = Uuid::new_v4().to_string();
+        // No origin or URL is needed to record a system-level loss notice.
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        assert!(
+            store
+                .record_batch(policy, &batch_id, &[], Some(&overflow))
+                .overflow_recorded
+        );
+        let (dir, filename) = store.log_parts(timestamp);
+        let relative_log = dir.join(filename);
+        let log = root.path().join(&relative_log);
+        let original = fs::read(&log).unwrap();
+        let markdown = String::from_utf8(original.clone()).unwrap();
+        assert_eq!(markdown.matches("kind=overflow").count(), 1);
+        assert!(markdown.contains("2 completed activity hour(s)"));
+        assert!(markdown.contains(&overflow.first_occurred_at));
+        assert!(markdown.contains(&overflow.last_occurred_at));
+        assert!(!markdown.contains("https://"));
+        let encoded = markdown
+            .split("data=")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&hex::decode(encoded).unwrap()).unwrap(),
+            serde_json::to_value(&overflow).unwrap()
+        );
+
+        let offset = format!("{LOG_HEADER}\n").len();
+        let entry = String::from_utf8(original[offset..].to_vec()).unwrap();
+        let intent = BatchIntent {
+            version: 2,
+            batch_id: batch_id.clone(),
+            root_path: store.root_path.to_string_lossy().into_owned(),
+            root_identity: store.root_identity.clone(),
+            relative_log: relative_log.to_string_lossy().into_owned(),
+            event_hashes: vec![sha256_hex(batch_id.as_bytes())],
+            entry: entry.clone(),
+            offset: offset as u64,
+        };
+        publish_batch_intent(&store.batch_intent_path(), &intent).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len((offset + entry.len() / 2) as u64)
+            .unwrap();
+        drop(store);
+        let reopened = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+        for _ in 0..2 {
+            let outcome = reopened.record_batch(policy, &batch_id, &[], Some(&overflow));
+            assert!(outcome.overflow_recorded);
+            assert!(outcome.events.is_empty());
+            assert_eq!(fs::read(&log).unwrap(), original);
+        }
+        assert!(!reopened.batch_intent_path().exists());
+    }
+
+    #[test]
+    fn standalone_overflow_rejects_invalid_ranges_and_preserves_unowned_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "logs"), None, state.path()).unwrap();
+        let now = fixtures::event_time().replace_nanosecond(0).unwrap();
+        let stamp = now.format(&Rfc3339).unwrap();
+        let valid = OverflowMarker {
+            count: 1,
+            first_occurred_at: stamp.clone(),
+            last_occurred_at: stamp,
+        };
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &[],
+            strip_params: &[],
+        };
+        for invalid in [
+            OverflowMarker {
+                count: 0,
+                ..valid.clone()
+            },
+            OverflowMarker {
+                first_occurred_at: "../../outside".into(),
+                ..valid.clone()
+            },
+            OverflowMarker {
+                last_occurred_at: "2026-10-28T12:00:00Z\n- forged".into(),
+                ..valid.clone()
+            },
+            OverflowMarker {
+                first_occurred_at: (now + time::Duration::hours(1)).format(&Rfc3339).unwrap(),
+                ..valid.clone()
+            },
+            OverflowMarker {
+                last_occurred_at: "9999-12-31T00:00:00Z".into(),
+                ..valid.clone()
+            },
+        ] {
+            assert!(
+                !store
+                    .record_batch(policy, &Uuid::new_v4().to_string(), &[], Some(&invalid))
+                    .overflow_recorded
+            );
+        }
+        assert!(!root.path().join("logs").exists());
+        assert!(
+            !store
+                .record_batch(
+                    CapturePolicy {
+                        enabled: false,
+                        ..policy
+                    },
+                    &Uuid::new_v4().to_string(),
+                    &[],
+                    Some(&valid)
+                )
+                .overflow_recorded
+        );
+        let (dir, filename) = store.log_parts(now);
+        fs::create_dir_all(root.path().join(&dir)).unwrap();
+        let log = root.path().join(dir).join(filename);
+        fs::write(&log, "My own daily journal\n").unwrap();
+        assert!(
+            !store
+                .record_batch(policy, &Uuid::new_v4().to_string(), &[], Some(&valid))
+                .overflow_recorded
+        );
+        assert_eq!(fs::read_to_string(log).unwrap(), "My own daily journal\n");
     }
 
     #[test]

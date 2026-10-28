@@ -83,6 +83,8 @@ export interface QueuedVisit {
 export interface QueueState {
   version: 1;
   items: QueuedVisit[];
+  // A standalone marker survives worker restarts and lost host replies.
+  overflow_delivery?: { batch_id: string; overflow: OverflowMarker; retry_after: number };
   overflow_count: number;
   overflow_first_at: string | null;
   overflow_last_at: string | null;

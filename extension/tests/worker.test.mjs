@@ -2221,6 +2221,62 @@ test("one native batch drains multiple records and durably acknowledges overflow
   assert.equal(status.overflow_last_at, null);
 });
 
+test("overflow racing the final batch drains without any later capture", async () => {
+  const origin = "https://overflow-final.example";
+  resetSync(origin, 2 * HOUR_MS);
+  const items = [];
+  for (let index = 0; ; index += 1) {
+    const page = `${origin}/items/item-${index}`;
+    const item = activityVisit(`final-${index}`, page, {
+      artifact_id: `test:overflow-final.example/item-${index}`, title: "x".repeat(2_000),
+      modes: ["view", "edit", "review"].map((mode) => ({ mode, url: `${page}?p=${"x".repeat(1_900)}` })),
+    });
+    if (new TextEncoder().encode(JSON.stringify([...items, item])).length > MAX_QUEUE_BYTES) break;
+    items.push(item);
+  }
+  assert.ok(items.length <= 64, "all queued events fit in the final batch");
+  queueWith(...items);
+  const answered = send({ kind: "sync_now" });
+  const port = await until(() => ports[0], "the final event batch");
+  const final = await sentOn(port, 1);
+  assert.equal(final.overflow, null);
+  assert.equal(final.events.length, items.length);
+  // Two hours finish while the final, byte-full batch awaits the host. Both
+  // pass through the real freeze/pressure path, with no later navigation.
+  const page = `${origin}/items/dropped?padding=${"y".repeat(1_900)}`;
+  values.set(storageKey("activity_totals_v1"), {
+    version: 1,
+    totals: [12, 13].map((hour) => ({
+      event_id: `dropped-${hour}`, artifact_id: `test:overflow-final.example/dropped-${hour}`,
+      artifact_type: "test.item", hour_start: `2026-10-16T${hour}:00:00+00:00`,
+      url: page, title: null, opens: 1, focused_ms: 0, background_ms: 0,
+      modes: ["view", "edit", "review"].map((mode) => ({ mode, url: page })),
+      trails: Array.from({ length: 10 }, (_, index) => ({
+        from_artifact_id: `test:overflow-final.example/source-${index}`,
+        from_url: `${origin}/items/source-${index}?p=${"z".repeat(1_900)}`, transition: "link",
+      })), refs: [],
+    })),
+  });
+  const dropped = await send({ kind: "get_status" });
+  assert.equal(dropped.overflow_count, 2);
+  assert.equal(dropped.queued, items.length);
+  port.reply(batchRecorded(final));
+  const evidence = await sentOn(port, 2);
+  assert.equal(evidence.type, "record_batch");
+  assert.deepEqual(evidence.events, []);
+  assert.deepEqual(evidence.overflow, {
+    count: 2,
+    first_occurred_at: dropped.overflow_first_at,
+    last_occurred_at: dropped.overflow_last_at,
+  });
+  assert.notEqual(evidence.batch_id, final.batch_id);
+  port.reply(batchRecorded(evidence, "persisted", null, true));
+  const status = await answered;
+  assert.equal(status.queued, 0);
+  assert.equal(status.overflow_count, 0);
+  assert.equal(port.sent.length, 2);
+});
+
 test("a lost acknowledgement replays the exact overflow snapshot", async () => {
   const origin = "https://overflow-retry.example";
   resetSync(origin, 2 * HOUR_MS);
@@ -2240,6 +2296,8 @@ test("a lost acknowledgement replays the exact overflow snapshot", async () => {
   values.set(storageKey("queue_v1"), whileWriting);
   firstPort.drop();
   await firstAnswer;
+  await send({ kind: "sync_now" });
+  assert.equal(ports.length, 1, "a delayed event batch still owns its attached overflow snapshot");
 
   const retryable = values.get(storageKey("queue_v1"));
   retryable.items[0].retry_after = 0;
@@ -2252,11 +2310,16 @@ test("a lost acknowledgement replays the exact overflow snapshot", async () => {
     "new drops must not change an idempotent batch replay");
   secondPort.reply(batchRecorded(replay, "persisted", null, true));
 
+  const remaining = await sentOn(secondPort, 2);
+  assert.deepEqual(remaining.events, []);
+  assert.deepEqual(remaining.overflow, {
+    count: 2, first_occurred_at: "2026-10-16T11:00:00+00:00",
+    last_occurred_at: "2026-10-16T13:00:00+00:00",
+  });
+  secondPort.reply(batchRecorded(remaining, "persisted", null, true));
   const status = await secondAnswer;
   assert.equal(status.queued, 0);
-  assert.equal(status.overflow_count, 2);
-  assert.equal(status.overflow_first_at, "2026-10-16T11:00:00+00:00");
-  assert.equal(status.overflow_last_at, "2026-10-16T13:00:00+00:00");
+  assert.equal(status.overflow_count, 0);
 });
 
 test("dismissing an in-flight overflow cannot erase later drops", async () => {
@@ -2281,10 +2344,126 @@ test("dismissing an in-flight overflow cannot erase later drops", async () => {
   values.set(storageKey("queue_v1"), afterDismiss);
   port.reply(batchRecorded(request, "persisted", null, true));
 
+  const remaining = await sentOn(port, 2);
+  assert.deepEqual(remaining.events, []);
+  assert.deepEqual(remaining.overflow, {
+    count: 2, first_occurred_at: "2026-10-16T12:00:00+00:00",
+    last_occurred_at: "2026-10-16T13:00:00+00:00",
+  });
+  port.reply(batchRecorded(remaining, "persisted", null, true));
   const status = await answered;
-  assert.equal(status.overflow_count, 2);
-  assert.equal(status.overflow_first_at, "2026-10-16T12:00:00+00:00");
-  assert.equal(status.overflow_last_at, "2026-10-16T13:00:00+00:00");
+  assert.equal(status.overflow_count, 0);
+});
+
+test("standalone overflow retries a frozen snapshot after a lost reply", async () => {
+  const origin = "https://overflow-only.example";
+  resetSync(origin, 2 * HOUR_MS);
+  queueWith();
+  const queue = values.get(storageKey("queue_v1"));
+  Object.assign(queue, { overflow_count: 2,
+    overflow_first_at: "2026-10-16T12:00:00+00:00",
+    overflow_last_at: "2026-10-16T13:00:00+00:00" });
+  values.set(storageKey("queue_v1"), queue);
+  const answered = send({ kind: "sync_now" });
+  const port = await until(() => ports[0], "the standalone marker");
+  const request = await sentOn(port, 1);
+  assert.deepEqual(request.events, []);
+  const frozen = values.get(storageKey("queue_v1"));
+  assert.equal(frozen.overflow_delivery.batch_id, request.batch_id);
+  frozen.overflow_count = 3;
+  frozen.overflow_last_at = "2026-10-16T14:00:00+00:00";
+  values.set(storageKey("queue_v1"), frozen);
+  port.drop();
+  const failed = await answered;
+  assert.equal(failed.overflow_count, 3);
+  assert.match(failed.retry_error, /overflow evidence/);
+  assert.ok(failed.next_retry_at > Date.now());
+  await send({ kind: "sync_now" });
+  assert.equal(ports.length, 1, "backoff avoids opening a host before the retry is due");
+
+  // A fresh read of durable storage, as after a worker restart, carries the
+  // exact same ID and snapshot while later drops remain separately counted.
+  const retry = values.get(storageKey("queue_v1"));
+  retry.overflow_delivery.retry_after = 0;
+  values.set(storageKey("queue_v1"), retry);
+  const retried = send({ kind: "sync_now" });
+  const secondPort = await until(() => ports[1], "the standalone retry");
+  const replay = await sentOn(secondPort, 1);
+  assert.equal(replay.batch_id, request.batch_id);
+  assert.deepEqual(replay.overflow, request.overflow);
+  secondPort.reply(batchRecorded(replay, "persisted", null, true));
+  const newer = await sentOn(secondPort, 2);
+  assert.notEqual(newer.batch_id, request.batch_id);
+  assert.equal(newer.overflow.count, 1);
+  assert.equal(newer.overflow.last_occurred_at, "2026-10-16T14:00:00+00:00");
+  secondPort.reply(batchRecorded(newer, "persisted", null, true));
+  assert.equal((await retried).overflow_count, 0);
+  assert.equal(values.get(storageKey("queue_v1")).overflow_delivery, undefined);
+});
+
+test("an unrecorded standalone marker waits for retry and respects Pause", async () => {
+  const origin = "https://overflow-failure.example";
+  resetSync(origin, 2 * HOUR_MS);
+  queueWith();
+  const queue = values.get(storageKey("queue_v1"));
+  Object.assign(queue, { overflow_count: 1,
+    overflow_first_at: "2026-10-16T12:00:00+00:00",
+    overflow_last_at: "2026-10-16T13:00:00+00:00" });
+  values.set(storageKey("queue_v1"), queue);
+  const answered = send({ kind: "sync_now" });
+  const port = await until(() => ports[0], "the refused marker");
+  port.reply(batchRecorded(await sentOn(port, 1)));
+  assert.equal((await answered).overflow_count, 1);
+  assert.equal(port.sent.length, 1, "a false acknowledgement cannot spin");
+  await send({ kind: "pause_capture" });
+  const retry = values.get(storageKey("queue_v1"));
+  retry.overflow_delivery.retry_after = 0;
+  values.set(storageKey("queue_v1"), retry);
+  await send({ kind: "sync_now" });
+  assert.equal(ports.length, 1);
+  assert.equal(values.get(storageKey("queue_v1")).overflow_count, 1);
+});
+
+test("a refused standalone retry cannot block newer capture batches", async () => {
+  for (const refusal of ["unrecorded", "older_host"]) {
+    const origin = "https://overflow-blocked.example";
+    resetSync(origin, 2 * HOUR_MS);
+    queueWith(activityVisit("new-hour", `${origin}/items/new-hour`));
+    const queue = values.get(storageKey("queue_v1"));
+    const overflow = { count: 1,
+      first_occurred_at: "2026-09-01T12:00:00+00:00",
+      last_occurred_at: "2026-09-01T12:00:00+00:00" };
+    Object.assign(queue, { overflow_count: 1,
+      overflow_first_at: overflow.first_occurred_at,
+      overflow_last_at: overflow.last_occurred_at,
+      overflow_delivery: { batch_id: crypto.randomUUID(), overflow, retry_after: 0 } });
+    values.set(storageKey("queue_v1"), queue);
+
+    const answered = send({ kind: "sync_now" });
+    const port = await until(() => ports[0], "capture with refused overflow pending");
+    let deliveredEvents = 0;
+    for (let index = 1; ; index += 1) {
+      const request = await sentOn(port, index);
+      if (request.events.length) {
+        deliveredEvents += request.events.length;
+        assert.equal(request.overflow, null, "the standalone retry owns its frozen evidence");
+        port.reply(batchRecorded(request));
+      } else {
+        assert.equal(request.batch_id, queue.overflow_delivery.batch_id);
+        if (refusal === "older_host") {
+          port.reply({ type: "error", protocol_version: PROTOCOL_VERSION,
+            request_id: request.request_id, code: "invalid_request",
+            message: "a capture batch must contain 1 to 64 events" });
+        } else port.reply(batchRecorded(request));
+        break;
+      }
+    }
+    const status = await answered;
+    assert.equal(deliveredEvents, 1, refusal);
+    assert.equal(status.queued, 0, refusal);
+    assert.equal(status.overflow_count, 1, "refused evidence stays pending");
+    assert.deepEqual(values.get(storageKey("queue_v1")).overflow_delivery.overflow, overflow);
+  }
 });
 
 test("queue pressure turns on the toolbar badge at eighty percent", async () => {

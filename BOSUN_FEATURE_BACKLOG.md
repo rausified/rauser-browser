@@ -275,11 +275,9 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   panel already has; do not rewrite shipped views solely to create an
   abstraction. Close it as not needed if no second consumer appears by PR 3.
 
-- [ ] `brwr-m64` **Deliver overflow evidence after the final batch drains.** A
-  drop that races the last in-flight batch stays counted and visible, but its
-  marker currently waits for another authorized event to provide a safe log
-  anchor. Make that evidence independently deliverable without accepting an
-  unvalidated URL or vault path.
+- [ ] `brwr-9r7` **Show capture gaps beside copied worklogs.** Surface durable
+  overflow ranges where people review a day or week, and let them include a
+  clear gap note in copied text. Missing hours must never become activity.
 - [ ] `brwr-o1l` **Share one authorize-and-open path across delivery entry
   points.** `record_visit`, `record_activity`, and `record_batch` repeat the
   lock, refresh, policy, and store setup, and `capture.rs` has twin
@@ -438,6 +436,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Reliability. **Deliver capture-loss evidence when the last batch drains (2026-10-28).** Completed assigned `brwr-m64`. Overflow arriving during the final native delivery now follows it as a standalone batch without waiting for another capture. A stored ID and frozen count/range survive lost replies, later drops and worker restarts; retries back off, Pause still gates delivery, and the host chooses the owned log only from validated timestamps and the checked home folder. Existing anchored batches keep their recovery bytes. **Metrics:** 3 new worker cases and 4 new Rust regressions; 936 Rust outcomes including existing IPC sandbox skips, all 15 extension and 2 script files, the full required gate and 10,696 inert Markdown renderings green.
 
 - **Category:** Bug Fix. **Complete interrupted captures before applying the new URL limit (2026-10-28).** Completed assigned `brwr-u8r`. A retry now reaches its existing v1 intent before an oversized normalized page, mode or trail URL can reject the event. Recovery retains the exact old bytes and all hash, prefix, ownership and folder checks; changed payloads stay retryable, while new oversized writes remain rejected. Rejected events cannot choose the log day for valid batch neighbors. **Metrics:** 2 new failing-first Rust regressions covering 8 recovery variants and both mixed-batch orders; 931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips), all 15 extension and 2 script files, full required gate and 10,696 inert Markdown renderings green.
 
@@ -627,11 +627,10 @@ shipped (see Shipped).
   coverage for the composed panel. The Rust boundary tests, note-state test,
   and settings fake DOM do not prove the full card/filter/worklog click path;
   extend the existing headless smoke fixture rather than add another harness.
-- An overflow that appears while the final queued batch is in flight is now
-  preserved rather than over-acknowledged, but it needs a later artifact event
-  before it has a validated log anchor. `brwr-m64` records the follow-up for an
-  independently deliverable marker; do not solve it by letting the extension
-  choose a file or smuggle an unchecked URL into the host.
+- Overflow that races the final queued batch is now independently delivered
+  (`brwr-m64`, 2026-10-28). The extension supplies no URL or path; the host
+  derives the log day from its validated last timestamp inside the checked
+  home folder. `brwr-9r7` follows up on showing gaps in worklog review.
 - Step 6.6 can use the batch boundary as the natural dirty-index transaction:
   derive affected artifact IDs from the same canonical payloads after the log
   sync, but keep the Markdown markers as the rebuild authority so index loss
@@ -1027,3 +1026,40 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` on the read-only mount. The green diff, exported queue
   and excluded `.bosun_commit_msg` remain for the driver. No retry or remote
   operation was attempted.
+
+### Cycle observations (2026-10-28 — standalone overflow evidence)
+
+- Opening health on `f4f12f7c` was clean; no quarantine report or incomplete
+  tree. Completed the first ready assignment, `brwr-m64`. The next ready
+  assignment is `brwr-2iz`; twelve assigned items remain, two blocked.
+- The worker regression failed before implementation. Its final fixture
+  freezes two actual completed hours while one byte-full native batch is in
+  flight, drops both through the real pressure path, then sends their marker
+  without a later navigation. A first fixture used URLs beyond the adapter
+  engine's 2,048-character match bound; it was corrected to use valid URLs
+  and bounded mode/title evidence to fill the queue instead.
+- Full code, test and documentation diff reviewed manually. Snapshot ownership
+  remains with a delayed event batch, so a separate marker cannot duplicate
+  its attached evidence. Standalone replies that report false retain the
+  marker and stop the send loop; older v7 hosts safely leave evidence pending.
+  Rust tests cover partial-write recovery, duplicate retries and all selected
+  folder/policy gates. Regenerating protocol types produces no changes: only
+  the schema array minimum was widened.
+- Full required gate passes: 936 Rust outcomes (including existing sandbox
+  IPC skips), 15 extension files and 2 script files; 191 Markdown corpus
+  inputs produce 10,696 inert renderings. macOS headless smoke was not run on
+  Linux; its dialog flow and `dialogsShown === logged` check are unchanged.
+  External Codex review was not invoked because this run forbids live APIs;
+  the driver's independent review remains the publication gate.
+- New proposal `brwr-9r7` makes existing gap evidence visible during worklog
+  review and optional in copied text. It is deliberately unassigned; finish
+  assigned work first. Durable evidence is useful only if the person sharing
+  their work can notice an incomplete day without opening raw Markdown logs.
+  Existing named focus sessions (`brwr-ued`) remain the larger product swing
+  after assigned work and ordered plan work are complete.
+
+- Commit handoff: the single staging/commit attempt could not create
+  `.git/index.lock` on the read-only mount. The green diff, exported queue
+  and excluded `.bosun_commit_msg` are ready for the driver; no retry or
+  remote operation was attempted. Local validation logs are under
+  `target/cookie-m64-*`; the worker file contains 87 passing cases.
