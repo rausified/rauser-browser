@@ -507,3 +507,29 @@ regressions cover the interaction; the existing teardown, conflict and
 acknowledgement tests now exercise the individual controls. The smoke check
 uses the new card selector, with the same three expected folder-picker
 responses; a real Chrome/macOS pass remains separate verification.
+
+
+## 2026-10-28 — Remember what was removed from a saved page address
+
+Brauser now records which query parameter names it removed when saving an
+address, without keeping their values or a second copy of the original URL.
+This helps distinguish a clean address from one that became ambiguous after
+tracking or identity parameters disappeared. If a later capture rule would
+interpret a stripped parameter differently — including treating its absence
+as meaningful — Brauser refuses to offer that older note for migration into
+another artifact. Its text stays on disk, and explicit preserved-note viewing
+remains a read-only way to inspect copies. Ordinary tracking names do not
+prevent discovery when no recorded rule reads them; primary autosave identity
+continues to come from the existing host contracts.
+
+The evidence travels with daily-log page, mode and trail URLs, the rebuilt
+index and its queryable SQLite table, and note and summary front matter.
+Notes preserve their creation address and evidence through later edits and
+explicit re-keying. Older records remain readable with unknown evidence;
+upgrading or saving them never invents proof that nothing was stripped.
+New interrupted-write intents bind the names as well as the normalized
+content, while the old v1 renderers and v2 hashes still recover only their
+exact original bytes. Ten new regression tests cover these paths, including
+a later-adapter collision and a review-discovered error-classification bug.
+The full required and README gates pass; real macOS browser checks remain
+outside this Linux run. Completes assigned `brwr-srp`.

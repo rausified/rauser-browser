@@ -263,9 +263,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
-- [ ] `brwr-srp` **Record which query parameters were stripped beside stored
-  canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
-  artifacts apart in history; changes the log and index formats.
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
@@ -397,6 +394,9 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Keep stripped query names beside saved page addresses (2026-10-28).** Host-derived, names-only evidence now accompanies daily-log URLs (including activity modes and trail sources), cache format 7, a queryable SQLite provenance table, and note/summary creation addresses. Older-note discovery and migration refuse candidates that lost a query or absence key read by a current or recorded contract, while tracking-only removal stays usable. Legacy evidence remains unknown; note re-keying and later saves preserve it, and frozen v1/v2 recovery completes only original bytes while new v3 intents bind the names. Completes assigned `brwr-srp`. **Metrics:** 10 new regression tests; 968 workspace Rust outcomes (43 IPC skips), 831 scripted-dialog outcomes (53 IPC skips, one ignored doctest), 15 extension files, two script files, 10,696 Markdown renderings; full required/README gate green.
+
 
 - **Category:** User Experience. **Review recovered notes one copy at a time (2026-10-28).** Completed assigned `brwr-kws`. Each recovered copy now shows its page address, reason and read-only text with individual Copy and Discard controls; empty edits are explicitly labelled. Copy preserves exact text, and Discard selects an immutable snapshot ID, leaving live typing, other copies and newer snapshots from another panel intact. Clipboard and storage failures remain visible and retryable, and review never fills or saves the editor automatically. **Metrics:** Six new regressions; 34 editor and 163 built-panel cases, all 15 extension files, 915 exercised Rust tests plus 43 explicit IPC skips, two script files, both Clippy configurations and 10,696 Markdown renderings pass.
 
@@ -1267,3 +1267,40 @@ stop product work, and no history reset or production IPC change is called for.
   driver; no commit retry or remote operation was attempted. Queue consistency
   passes. The required and README gates passed before documentation-only
   closure updates; the macOS smoke explicitly refused this Linux platform.
+
+### Stripped-parameter provenance handoff (2026-10-28)
+
+- Completed assigned `brwr-srp` after a clean health gate. Continue with
+  `bd ready --label assigned`; `brwr-smu` is the remaining ready historical
+  UUID recovery task. Preserve all pre-provenance v1 presentation candidates
+  and the frozen v2 payload hash while adding that compatibility. Concurrent
+  index work (`brwr-7vf`) still depends on real SQLite (`brwr-b2e`), and
+  `brwr-iqx` remains blocked for operator reconciliation.
+- Source/test/doc review found an implementation regression where early URL
+  evidence parsing changed malformed activity URLs from terminal rejection to
+  retryable. A failing-first regression covers page, mode and trail URLs in
+  single/batch delivery. Capture now gathers evidence during its original
+  authorized normalization, keeping the previous error semantics and avoiding
+  duplicate URL parsing. The complete diff was read, including the final fix.
+- Names cannot recover a removed value or distinguish values of the same
+  parameter. They are negative identity evidence: refuse a collision, never
+  recover an autosave target from a stripped address. Missing legacy evidence
+  must not become an empty list on cache migration or the next note save.
+  Future real-SQLite work must retain the v7 event evidence and SQL NULL
+  distinction; preserve trail-source separation from note candidates.
+- Existing focus sessions (`brwr-ued`), curated worklog sharing (`brwr-ppn`)
+  and deliberate restoration of recorded capture rules (`brwr-cua`) remain
+  stronger product opportunities after assigned work than another internal
+  diagnostics panel. Reuse those beads rather than filing duplicates. Explicit
+  preserved-note viewing remains the copy-only route for ambiguous records.
+- Required and README gates pass, including scripted-dialog tests and both
+  Clippy builds. IPC guards explicitly skip 43 ordinary and 53 scripted cases
+  in this sandbox. The macOS smoke runner refuses Linux; no browser acceptance
+  is claimed. No live external API, remote Codex review, credential, deployment,
+  service, systemd or git remote was touched; independent review belongs to the
+  external driver under the unattended-run instructions.
+
+- The single commit attempt refused `.git/index.lock` on the read-only Git
+  mount. The complete green diff, closed/exported queue and excluded
+  `.bosun_commit_msg` remain for the driver; no retry or remote operation was
+  attempted. Final queue/current-state consistency and whitespace checks pass.

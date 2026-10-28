@@ -150,3 +150,13 @@
   copies and newer snapshots from another panel stay intact; recovery never
   automatically fills or saves a note, and clipboard/storage failures remain
   visible and retryable. Completes assigned `brwr-kws`.
+
+- **Brauser — names-only URL provenance:** Saved canonical addresses now carry
+  the actual removed query names, never their values, through daily logs,
+  cache format 7, a queryable SQLite table, notes and summaries. Older-note
+  discovery and migration refuse evidence that lost a key read by current or
+  recorded capture rules; primary autosave identity stays contract-derived.
+  Legacy records remain readable with unknown evidence, note edits/re-keying
+  preserve creation evidence, and frozen v1/v2 interrupted-write recovery is
+  retained alongside new v3 intents. Ten new regression tests and the complete
+  required/README gate pass (`brwr-srp`); macOS acceptance remains separate.
