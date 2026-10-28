@@ -39,11 +39,16 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   id_reserved_scheme: "The web ID scheme is reserved by Brauser.",
   id_unknown_capture: "The ID uses a capture that is not present in every rule.",
   extra_capture: "A rule captures a value that is not used by the ID, mode, or scope.",
-  no_literal_segment: "Each rule needs a fixed route segment or fixed-shape identifier.",
+  no_literal_segment: "Each rule needs a fixed route segment, a fixed-shape identifier, or a scoped tenant.",
   bad_unscoped: "unscoped must be acknowledged, and only when the origin requires it.",
   shared_origin_unscoped: "This shared origin needs a tenant scope or an explicit unscoped acknowledgment.",
   scope_capture_not_bound: "Every rule must bind each capture used for scope.",
   title_syntax: "A title template has invalid syntax.",
+  within_bad_type: "The within type must be a valid adapter type other than web.page.",
+  within_self: "An adapter cannot sit within its own type or its own ID.",
+  within_id_syntax: "The within ID template has invalid syntax.",
+  within_id_reserved_scheme: "The web ID scheme is reserved by Brauser, including in within.",
+  within_unknown_capture: "The within ID may use only captures from the adapter's ID or scope, and never mode.",
 };
 
 function isObject(value: unknown): value is AdapterObject {

@@ -51,7 +51,8 @@
           "modes": {"files": "review", "commits": "view", "checks": "view"},
           "id": "github.pr:{host}/{owner}/{repo}/{number}",
           "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
-          "refs": [{"type": "jira.issue", "find": "jira_key"}]
+          "refs": [{"type": "jira.issue", "find": "jira_key"}],
+          "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}
         },
         {
           "type": "github.issue",
@@ -60,7 +61,15 @@
           "scope": {"owner": ["acme-corp"]},
           "id": "github.issue:{host}/{owner}/{repo}/{number}",
           "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
-          "refs": [{"type": "jira.issue", "find": "jira_key"}]
+          "refs": [{"type": "jira.issue", "find": "jira_key"}],
+          "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}
+        },
+        {
+          "type": "github.repo",
+          "origin": "https://github.com",
+          "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+          "scope": {"owner": ["acme-corp"]},
+          "id": "github.repo:{host}/{owner}/{repo}"
         },
         {
           "type": "sharepoint.doc",
@@ -83,6 +92,28 @@
             {"path": "/personal/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}}
           ],
           "id": "sharepoint:{host}/{doc}"
+        }
+      ]
+    },
+    "github_without_repo": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "github.pr",
+          "origin": "https://github.com",
+          "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}],
+          "scope": {"owner": ["acme-corp"]},
+          "modes": {"files": "review", "commits": "view", "checks": "view"},
+          "id": "github.pr:{host}/{owner}/{repo}/{number}",
+          "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}
+        },
+        {
+          "type": "github.issue",
+          "origin": "https://github.com",
+          "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}],
+          "scope": {"owner": ["acme-corp"]},
+          "id": "github.issue:{host}/{owner}/{repo}/{number}",
+          "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}
         }
       ]
     },
@@ -9125,6 +9156,82 @@
             "origin": "https://tools.example.com",
             "match": [{"path": "/{*}", "query": {"id": "{id:int}"}}],
             "id": "acme:{host}/{id}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.scoped_tenant_accepted",
+      "kind": "validate",
+      "why": "§4.1: a required path capture whose name is a scope key anchors the template",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.anchor.unscoped_tenant_rejected",
+      "kind": "validate",
+      "why": "§4.1: an unscoped adapter gets no scope anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "unscoped": "acknowledged"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.scoped_optional_rejected",
+      "kind": "validate",
+      "why": "§4.1/§6: an optional scoped capture is not bound, and step 4.7.6 reports that before the anchor check",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner?:name|lower}"}],
+            "id": "github.repo:{host}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"error": {"code": "scope_capture_not_bound", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.scope_from_query_rejected",
+      "kind": "validate",
+      "why": "§4.1: a scoped capture bound from a query value is not a path anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{repo:name}", "query": {"o": "{owner:name|lower}"}}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
           }
         ]
       },
@@ -18786,7 +18893,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/42"
@@ -18803,7 +18911,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42", "mode": "files"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": "review"
+        "mode": "review",
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/42/files"
@@ -18820,7 +18929,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42", "mode": "commits"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": "view"
+        "mode": "view",
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/42/commits"
@@ -18837,7 +18947,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42", "mode": "files"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": "review"
+        "mode": "review",
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/42/files/abc123"
@@ -18854,7 +18965,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/42/changes"
@@ -18871,7 +18983,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/Acme-Corp/Widgets/pull/42"
@@ -18888,7 +19001,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/ACME-CORP/widgets/pull/42"
@@ -18903,6 +19017,46 @@
       "url": "https://github.com/other-org/widgets/pull/42"
     },
     {
+      "id": "eval.anchor.scoped_tenant_home",
+      "kind": "evaluate",
+      "why": "§4.1/§6: a template anchored only by its scoped owner matches the repository home",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "github.repo", "captures": {"owner": "acme-corp", "repo": "widgets"}, "artifact_id": "github.repo:github.com/acme-corp/widgets", "mode": null},
+      "url": "https://github.com/acme-corp/widgets"
+    },
+    {
+      "id": "eval.anchor.scoped_tenant_out_of_scope",
+      "kind": "evaluate",
+      "why": "§4.1/§6: an owner outside the scope is not an artifact",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"match": false, "reason": "out_of_scope"},
+      "url": "https://github.com/other/widgets"
+    },
+    {
       "id": "eval.github.pr_files_case",
       "kind": "evaluate",
       "why": "§5.1: FILES is not the literal files, so it goes to the rest",
@@ -18914,7 +19068,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/42/FILES"
@@ -18922,27 +19077,51 @@
     {
       "id": "eval.github.pr_bad_number",
       "kind": "evaluate",
-      "why": "§7.1: the PR number is an int",
+      "why": "§7.1: the PR number is an int, so the page counts toward its repository",
       "impls": ["rust", "ts"],
-      "expect": {"match": false, "reason": "no_rule"},
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/abc"
     },
     {
       "id": "eval.github.pr_leading_zero",
       "kind": "evaluate",
-      "why": "§7.1: 042 is not an int",
+      "why": "§7.1: 042 is not an int, so the page counts toward its repository",
       "impls": ["rust", "ts"],
-      "expect": {"match": false, "reason": "no_rule"},
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pull/042"
     },
     {
       "id": "eval.github.pulls_list",
       "kind": "evaluate",
-      "why": "§4.3: the PR list is not a PR",
+      "why": "§4.3: the PR list is not a PR; it counts toward its repository",
       "impls": ["rust", "ts"],
-      "expect": {"match": false, "reason": "no_rule"},
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/pulls"
     },
@@ -18958,7 +19137,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": ".github", "number": "3"},
         "artifact_id": "github.pr:github.com/acme-corp/.github/3",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/.github"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/.github/pull/3"
@@ -18975,7 +19155,8 @@
         "type": "github.issue",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7"},
         "artifact_id": "github.issue:github.com/acme-corp/widgets/7",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/issues/7"
@@ -18983,9 +19164,17 @@
     {
       "id": "eval.github.issue_new",
       "kind": "evaluate",
-      "why": "§7.1: /issues/new is not an issue number",
+      "why": "§7.1: /issues/new is not an issue number; it counts toward its repository",
       "impls": ["rust", "ts"],
-      "expect": {"match": false, "reason": "no_rule"},
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets/issues/new"
     },
@@ -19001,9 +19190,17 @@
     {
       "id": "eval.github.repo_root",
       "kind": "evaluate",
-      "why": "§4.3: a repository root is not an artifact",
+      "why": "§4.3: a repository root is the repository artifact",
       "impls": ["rust", "ts"],
-      "expect": {"match": false, "reason": "no_rule"},
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/acme-corp/widgets"
     },
@@ -19020,6 +19217,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Fix login",
         "title_entry": 0,
         "alias_id": null,
@@ -19042,6 +19240,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Sort by date",
         "title_entry": 0,
         "alias_id": null,
@@ -19064,6 +19263,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Fix",
         "title_entry": 0,
         "alias_id": null,
@@ -19086,6 +19286,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Fix by bob · Pull Request #43 · acme-corp/widgets · GitHub",
         "title_entry": null,
         "alias_id": null,
@@ -19108,6 +19309,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Fix by bob · Pull Request #42 · acme-corp/gadgets · GitHub",
         "title_entry": null,
         "alias_id": null,
@@ -19130,6 +19332,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Fix by bob . Pull Request #42 . acme-corp/widgets . GitHub",
         "title_entry": null,
         "alias_id": null,
@@ -19152,6 +19355,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "OPS-12: Fix login",
         "title_entry": 0,
         "alias_id": null,
@@ -19174,6 +19378,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7"},
         "artifact_id": "github.issue:github.com/acme-corp/widgets/7",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Crash on start",
         "title_entry": 0,
         "alias_id": null,
@@ -19196,6 +19401,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42", "mode": "files"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": "review",
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Fix login",
         "title_entry": 0,
         "alias_id": null,
@@ -19218,6 +19424,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "Use a · b",
         "title_entry": 0,
         "alias_id": null,
@@ -19240,6 +19447,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7"},
         "artifact_id": "github.issue:github.com/acme-corp/widgets/7",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": "A · B",
         "title_entry": 0,
         "alias_id": null,
@@ -19250,13 +19458,144 @@
       "title": "A · B · Issue #7 · acme-corp/widgets · GitHub"
     },
     {
+      "id": "eval.github.repo_home",
+      "kind": "evaluate",
+      "why": "§4.3: a repository home page is the repository artifact",
+      "impls": ["rust", "ts"],
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/"
+    },
+    {
+      "id": "eval.github.repo_blob",
+      "kind": "evaluate",
+      "why": "§4.3: a file page counts toward its repository; files are not artifacts",
+      "impls": ["rust", "ts"],
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/blob/feature/x/README.md"
+    },
+    {
+      "id": "eval.github.repo_tree_sha",
+      "kind": "evaluate",
+      "why": "§4.3: a tree at a commit counts toward its repository",
+      "impls": ["rust", "ts"],
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/tree/0123456789abcdef0123456789abcdef01234567"
+    },
+    {
+      "id": "eval.github.repo_pulls",
+      "kind": "evaluate",
+      "why": "§3: the PR list falls through the PR rule to the repository",
+      "impls": ["rust", "ts"],
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "github.repo",
+        "captures": {"owner": "acme-corp", "repo": "widgets"},
+        "artifact_id": "github.repo:github.com/acme-corp/widgets",
+        "mode": null
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/pulls"
+    },
+    {
+      "id": "eval.github.repo_pr_within",
+      "kind": "evaluate",
+      "why": "§3, §8.3: the PR adapter precedes the repository and names it as its container",
+      "impls": ["rust", "ts"],
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "github.pr",
+        "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7", "mode": "files"},
+        "artifact_id": "github.pr:github.com/acme-corp/widgets/7",
+        "mode": "review",
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/pull/7/files"
+    },
+    {
+      "id": "eval.github.repo_issue_within",
+      "kind": "evaluate",
+      "why": "§3, §8.3: the issue adapter precedes the repository and names it as its container",
+      "impls": ["rust", "ts"],
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "github.issue",
+        "captures": {"owner": "acme-corp", "repo": "widgets", "number": "3"},
+        "artifact_id": "github.issue:github.com/acme-corp/widgets/3",
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
+      },
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/issues/3"
+    },
+    {
+      "id": "eval.github.repo_owner_only",
+      "kind": "evaluate",
+      "why": "§4.3: an organization page has no repository segment",
+      "impls": ["rust", "ts"],
+      "expect": {"match": false, "reason": "no_rule"},
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp"
+    },
+    {
+      "id": "eval.github.repo_out_of_scope",
+      "kind": "evaluate",
+      "why": "§6: a repository outside the scope is not an artifact",
+      "impls": ["rust", "ts"],
+      "expect": {"match": false, "reason": "out_of_scope"},
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/other/x"
+    },
+    {
+      "id": "eval.github.repo_settings",
+      "kind": "evaluate",
+      "why": "§6: a GitHub route shaped like owner/repo is outside the scope",
+      "impls": ["rust", "ts"],
+      "expect": {"match": false, "reason": "out_of_scope"},
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/settings/profile"
+    },
+    {
       "id": "eval.sharepoint.doc",
       "kind": "evaluate",
       "why": "§11: an encoded braced GUID is canonicalized",
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 0,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19273,7 +19612,7 @@
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 1,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19290,7 +19629,7 @@
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 0,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19307,7 +19646,7 @@
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 0,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19324,7 +19663,7 @@
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 0,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19360,7 +19699,7 @@
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 0,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19414,7 +19753,7 @@
       "sq": ["SQ-V2"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 2,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19432,7 +19771,7 @@
       "sq": ["SQ-V2"],
       "expect": {
         "match": true,
-        "adapter": 6,
+        "adapter": 7,
         "rule": 2,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19450,7 +19789,7 @@
       "sq": ["SQ-V2"],
       "expect": {
         "match": true,
-        "adapter": 6,
+        "adapter": 7,
         "rule": 2,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19487,7 +19826,7 @@
       "sq": ["SQ-V2"],
       "expect": {
         "match": true,
-        "adapter": 6,
+        "adapter": 7,
         "rule": 2,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -19505,7 +19844,7 @@
       "sq": ["SQ25"],
       "expect": {
         "match": true,
-        "adapter": 5,
+        "adapter": 6,
         "rule": 0,
         "type": "sharepoint.doc",
         "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"},
@@ -22218,7 +22557,8 @@
         "type": "github.pr",
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "1"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
-        "mode": null
+        "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}
       },
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/Acme-Corp/widgets/pull/1"
@@ -23052,6 +23392,7 @@
         "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"},
         "artifact_id": "github.pr:github.com/acme-corp/widgets/42",
         "mode": null,
+        "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"},
         "title": {"$build": [{"repeat": "x", "times": 459}]},
         "title_entry": 0,
         "alias_id": null,
@@ -24109,10 +24450,42 @@
     {
       "id": "overlap_report.starters",
       "kind": "overlap_report",
-      "why": "§10.3: the starter adapters do not overlap each other",
+      "why": "§10.3, §8.3: the starters do not overlap, except the PR and issue rules falling through to the repository catch-all they declare within, which is not reported",
       "impls": ["rust"],
       "doc": {"$fixture": "starters"},
       "expect": {"pairs": []}
+    },
+    {
+      "id": "overlap_report.container_misordered",
+      "kind": "overlap_report",
+      "why": "§10.3, §8.3: a container catch-all ahead of the adapter declared within it still wins its pages, so the overlap is reported",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}, {"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
+    },
+    {
+      "id": "overlap_report.container_id_mismatch",
+      "kind": "overlap_report",
+      "why": "§10.3, §8.3: a within declaration whose ID template differs from the container adapter's is not its catch-all, so the overlap is reported",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{repo}/{owner}"}}, {"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}]},
+      "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
+    },
+    {
+      "id": "overlap_report.container_same_id_template",
+      "kind": "overlap_report",
+      "why": "§10.3, §8.3: the container adapter's ID template matches the within declaration part by part, so the fall-through is intended and not reported",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}, {"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}]},
+      "expect": {"pairs": []}
+    },
+    {
+      "id": "overlap_report.container_undeclared",
+      "kind": "overlap_report",
+      "why": "§10.3: without a within declaration, a PR rule ahead of a repository catch-all is an ordinary overlap",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}"}, {"type": "github.repo", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}"}]},
+      "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
     },
     {
       "id": "overlap_report.basic",
@@ -24198,7 +24571,7 @@
       "kind": "draft",
       "why": "§10.4: a shared-origin draft gets the existing adapters' scope",
       "impls": ["rust"],
-      "existing": {"$fixture": "starters"},
+      "existing": {"$fixture": "github_without_repo"},
       "draft": {
         "type": "github.project",
         "origin": "https://github.com",
@@ -24291,7 +24664,7 @@
       "kind": "draft",
       "why": "§10.4: `name` captures are not identifiers, so `discussions` is the leading literal before the first identifier capture `{number}`",
       "impls": ["rust"],
-      "existing": {"$fixture": "starters"},
+      "existing": {"$fixture": "github_without_repo"},
       "draft": {
         "type": "github.discussion",
         "origin": "https://github.com",
@@ -24301,6 +24674,22 @@
       "probes": [],
       "search_keys": ["q", "query", "search", "jql", "filter"],
       "expect": {"ok": true, "scope": {"owner": ["acme-corp"]}}
+    },
+    {
+      "id": "draft.github_inside_repo_overlaps",
+      "kind": "draft",
+      "why": "§10.4: with the repository catch-all configured, a repository-shaped draft overlaps it and is dropped",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {
+        "type": "github.discussion",
+        "origin": "https://github.com",
+        "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/discussions/{number:int}"}],
+        "id": "github.discussion:{host}/{owner}/{repo}/{number}"
+      },
+      "probes": [],
+      "search_keys": ["q", "query", "search", "jql", "filter"],
+      "expect": {"draft_error": "draft_overlap"}
     },
     {
       "id": "draft.name_only_id",
@@ -25936,6 +26325,263 @@
       "expect": {"match": false, "reason": "id_too_long"},
       "doc": {"$fixture": "long_once"},
       "url": "https://l.example.com/i/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    },
+    {
+      "id": "validate.within.accepted",
+      "kind": "validate",
+      "why": "§8.3: a PR within its repository",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.within.scope_capture",
+      "kind": "validate",
+      "why": "§8.3: a container ID may use a scoped capture the adapter ID does not",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/t/{team:name}/items/{n:int}"}, {"path": "/items/{n:int}", "query": {"team": "{team:name}"}}], "id": "acme.item:{host}/{n}", "within": {"type": "acme.team", "id": "acme.team:{host}/{team}"}, "scope": {"team": ["core"]}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.within.no_parts",
+      "kind": "validate",
+      "why": "§8.3: a container ID may have no parts after {host}, like an adapter ID (SQ22)",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.site", "id": "github.site:{host}"}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.within.wrong_type.string",
+      "kind": "validate",
+      "why": "§3: within is a table",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": "github.repo"}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.wrong_type.list",
+      "kind": "validate",
+      "why": "§3: within is a table",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": [{"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}]}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.wrong_type.missing_id",
+      "kind": "validate",
+      "why": "§3: within has exactly the keys type and id",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo"}}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.wrong_type.extra_key",
+      "kind": "validate",
+      "why": "§3: within has exactly the keys type and id",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}", "mode": "view"}}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.wrong_type.non_string_id",
+      "kind": "validate",
+      "why": "§3: within.id is a string",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": 7}}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.wrong_type.before_type",
+      "kind": "validate",
+      "why": "§3: a mistyped within is reported in step 4.1, ahead of bad_adapter_type",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "GitHub.PR", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": "x"}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.bad_type",
+      "kind": "validate",
+      "why": "§8.3: within.type follows the adapter-type grammar",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "GitHub.Repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_bad_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.bad_type.empty",
+      "kind": "validate",
+      "why": "§8.3: within.type follows the adapter-type grammar",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_bad_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.reserved_type",
+      "kind": "validate",
+      "why": "§8.3: web.page is never a container",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "web.page", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_bad_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.self",
+      "kind": "validate",
+      "why": "§8.3: an adapter's artifacts cannot sit within their own type",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.pr", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_self", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.self_id",
+      "kind": "validate",
+      "why": "§8.3: a container ID template equal to the adapter's own would give the artifact and its container one record key, so it is refused like its own type",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.tree", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/tree/{*}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.repo:{host}/{owner}/{repo}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_self", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.id_syntax",
+      "kind": "validate",
+      "why": "§8.3: the container ID follows the §8.1 grammar",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_id_syntax", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.id_syntax.scheme",
+      "kind": "validate",
+      "why": "§8.3: the container ID follows the §8.1 grammar",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "GitHub:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_id_syntax", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.reserved_scheme",
+      "kind": "validate",
+      "why": "§8.3: the web scheme is reserved for container IDs too",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "web:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "within_id_reserved_scheme", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.unknown_capture",
+      "kind": "validate",
+      "why": "§8.3: a container ID uses only captures of the adapter ID or scope",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{branch}"}}]},
+      "expect": {"error": {"code": "within_unknown_capture", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.within.unknown_capture.mode",
+      "kind": "validate",
+      "why": "§8.3: mode never appears in a container ID",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{mode}"}}]},
+      "expect": {"error": {"code": "within_unknown_capture", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.within.unknown_capture.host",
+      "kind": "validate",
+      "why": "§8.3: a second {host} parses as a capture no rule binds (SQ-V19)",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{host}"}}]},
+      "expect": {"error": {"code": "within_unknown_capture", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.within.extra_capture",
+      "kind": "validate",
+      "why": "§8.3: a capture only the container ID uses is still an extra_capture (step 4.6)",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/t/{team:name}/items/{n:int}"}, {"path": "/items/{n:int}", "query": {"team": "{team:name}"}}], "id": "acme.item:{host}/{n}", "within": {"type": "acme.team", "id": "acme.team:{host}/{team}"}}]},
+      "expect": {"error": {"code": "extra_capture", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.within.after_fields",
+      "kind": "validate",
+      "why": "§8.3: within is checked in step 4.12, after fields",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "fields": {"x": 1}, "within": {"type": "web.page", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.within.after_title",
+      "kind": "validate",
+      "why": "§8.3: within is checked in step 4.12, after title",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "title": [], "within": {"type": "github.pr", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "expect": {"error": {"code": "empty_title_list", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "eval.within.pr",
+      "kind": "evaluate",
+      "why": "§8.3: a PR match names its repository container",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "github.pr", "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7", "mode": "files"}, "artifact_id": "github.pr:github.com/acme-corp/widgets/7", "mode": "review", "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}},
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "url": "https://github.com/acme-corp/widgets/pull/7/files"
+    },
+    {
+      "id": "eval.within.pr_lowercased",
+      "kind": "evaluate",
+      "why": "§8.3: the container ID uses the canonical capture values",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "github.pr", "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7"}, "artifact_id": "github.pr:github.com/acme-corp/widgets/7", "mode": null, "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}},
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "url": "https://github.com/Acme-Corp/Widgets/pull/7"
+    },
+    {
+      "id": "eval.within.absent_without_key",
+      "kind": "evaluate",
+      "why": "§8.3: an adapter without within has no within in its match",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "github.pr", "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7", "mode": "files"}, "artifact_id": "github.pr:github.com/acme-corp/widgets/7", "mode": "review"},
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}"}]},
+      "url": "https://github.com/acme-corp/widgets/pull/7/files"
+    },
+    {
+      "id": "eval.within.out_of_scope",
+      "kind": "evaluate",
+      "why": "§8.3: scope still decides first; no container without a match",
+      "impls": ["rust", "ts"],
+      "expect": {"match": false, "reason": "out_of_scope"},
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "url": "https://github.com/other-org/widgets/pull/7"
+    },
+    {
+      "id": "eval.within.title",
+      "kind": "evaluate",
+      "why": "§8.3: within sits alongside the title fields",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "github.pr", "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7", "mode": "files"}, "artifact_id": "github.pr:github.com/acme-corp/widgets/7", "mode": "review", "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}, "title": "Fix it", "title_entry": 0, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "github.pr", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"}], "scope": {"owner": ["acme-corp"]}, "modes": {"files": "review", "commits": "view", "checks": "view"}, "id": "github.pr:{host}/{owner}/{repo}/{number}", "title": "{title} · Pull Request #{number:int} · GitHub", "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}}]},
+      "url": "https://github.com/acme-corp/widgets/pull/7/files",
+      "title": "Fix it · Pull Request #7 · GitHub"
+    },
+    {
+      "id": "eval.within.scope_capture",
+      "kind": "evaluate",
+      "why": "§8.3: a container ID built from a query-bound scoped capture",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 1, "type": "acme.item", "captures": {"n": "9", "team": "core"}, "artifact_id": "acme.item:acme.example.com/9", "mode": null, "within": {"type": "acme.team", "artifact_id": "acme.team:acme.example.com/core"}},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/t/{team:name}/items/{n:int}"}, {"path": "/items/{n:int}", "query": {"team": "{team:name}"}}], "id": "acme.item:{host}/{n}", "within": {"type": "acme.team", "id": "acme.team:{host}/{team}"}, "scope": {"team": ["core"]}}]},
+      "url": "https://acme.example.com/items/9?team=core"
+    },
+    {
+      "id": "eval.within.exactly_512",
+      "kind": "evaluate",
+      "why": "§8.3: a 512-byte container ID is kept",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "long.once", "captures": {"a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "artifact_id": "long:l.example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mode": null, "within": {"type": "long.group", "artifact_id": "gr:l.example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+      "doc": {"format": 1, "artifacts": [{"type": "long.once", "origin": "https://l.example.com", "match": [{"path": "/i/{a:token}"}], "id": "long:{host}/{a}", "within": {"type": "long.group", "id": "gr:{host}/{a}/{a}/{a}/{a}"}}]},
+      "url": "https://l.example.com/i/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "eval.within.too_long",
+      "kind": "evaluate",
+      "why": "§8.3: a container ID over 512 bytes drops within but keeps the match",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "long.once", "captures": {"a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "artifact_id": "long:l.example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mode": null},
+      "doc": {"format": 1, "artifacts": [{"type": "long.once", "origin": "https://l.example.com", "match": [{"path": "/i/{a:token}"}], "id": "long:{host}/{a}", "within": {"type": "long.group", "id": "gr:{host}/{a}/{a}/{a}/{a}"}}]},
+      "url": "https://l.example.com/i/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   ]
 }

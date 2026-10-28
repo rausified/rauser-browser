@@ -26,7 +26,7 @@ changes (`unknown` when built outside a Git checkout). The
 panel and settings page show that commit beside the extension's own and flag a
 different commit; nothing else depends on its format.
 
-Protocol version 6 covers host discovery, configuration, native folder
+Protocol version 7 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
 queries, the AI-harness readiness gate, and format-versioned artifact-adapter
 configuration. `get_config` returns a
@@ -92,6 +92,29 @@ version 5, adapter additions or changes required a native confirmation through
 every-account-in-this-Chrome-profile warning to it; version 6 removes that
 confirmation, and an unscoped adapter still needs its `unscoped` acknowledgment.
 
+Version 7 is the current protocol. The host refuses version 6 and earlier
+requests with `unsupported_protocol_version`.
+
+Version 7: artifact containers. `ArtifactView` gains two required fields, so
+the artifact card can name what holds an artifact and what it holds:
+
+- `within`: `null`, or an `ArtifactRefView` (`artifact_id`, `artifact_type`,
+  `title`, `url`) for the container an adapter's `within` places this
+  artifact in, such as the GitHub repository of a pull request. A container
+  is titled from its ID (`owner/repo`), never from a sub-page title, while
+  some adapter declares `within` its type.
+- `contained`: at most 20 `ContainedArtifactView` entries (the same four
+  fields plus `focused_seconds`), the artifacts recorded within this one,
+  most focused first, ties broken by `artifact_id`. It is empty for an
+  artifact that is not a container.
+
+Totals are unchanged in meaning: a contained artifact's seconds count in its
+own view and once in its container's, and recent and worklog totals still
+count each second once. No message is added or removed.
+
+Downgrading after adding repositories is unsupported: older hosts reject
+`within` in the adapter config and in adapter history.
+
 `config_result.adopted_state` (added to version 6, 2026-10-27; the extension
 and host ship together) reports the host's record of adopted adapter
 contracts, `adopted-contracts.json` beside config.toml (DESIGN.md §6.2).
@@ -108,8 +131,7 @@ carries that revision as `expected_revision`: a changed record is a
 `adopted-contracts.json.<UTC timestamp>.bak`, records the current contracts
 afresh, and answers with `config_result`.
 
-Version 6 is the current protocol. The host refuses version 5 and earlier
-requests with `unsupported_protocol_version`. It goes with standing HTTP(S)
+Version 6 goes with standing HTTP(S)
 access: the extension requests `http://*/*` and `https://*/*` at install, so
 nothing in the protocol depends on a per-site Chrome grant.
 

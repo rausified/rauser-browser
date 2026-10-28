@@ -2600,6 +2600,13 @@ fn validate_adapter_transition_with_history(
         individually_valid_adapter_contracts(current)
     };
     let next_contracts = adapter_contracts(next);
+    validate_within_transition(
+        current_contracts
+            .iter()
+            .chain(retired)
+            .chain(&by_hand.contracts),
+        &next_contracts,
+    )?;
     // Every contract this save adds or reshapes. The delta pairs a
     // recognition edit that keeps its identity with the contract it replaces,
     // so it is in neither list, yet widening its match can claim a retired
@@ -2607,6 +2614,11 @@ fn validate_adapter_transition_with_history(
     let changed: Vec<_> = next_contracts
         .iter()
         .filter(|contract| !current_contracts.contains(contract))
+        .cloned()
+        .collect();
+    let unchanged: Vec<_> = next_contracts
+        .iter()
+        .filter(|contract| current_contracts.contains(contract))
         .cloned()
         .collect();
     let (removed, _added) = adapter_contract_delta_between(current_contracts, next_contracts);
@@ -2630,25 +2642,115 @@ fn validate_adapter_transition_with_history(
                 ),
             }
         }
-        let Some((origin, id)) = adapter_contract_identity(candidate) else {
+        let earlier: Vec<&serde_json::Value> = retired
+            .iter()
+            .chain(&removed)
+            .chain(&by_hand.contracts)
+            .collect();
+        refuse_rekeyed_routes(candidate, next, &earlier)?;
+    }
+    // Removing a contract also exposes its routes to the unchanged contracts
+    // after it: a rule ahead of a catch-all hands its pages to the catch-all
+    // even though the catch-all itself did not change. That is the same
+    // re-key as adding the catch-all after the rule's removal, so the
+    // unchanged contracts are checked against the contracts this save
+    // removes (earlier retirements were checked when each was added).
+    let removed_here: Vec<&serde_json::Value> = removed.iter().collect();
+    if !removed_here.is_empty() {
+        for candidate in &unchanged {
+            refuse_rekeyed_routes(candidate, next, &removed_here)?;
+        }
+    }
+    Ok(())
+}
+
+/// Refuse `candidate` when it overlaps a contract in `earlier` on its origin
+/// under another type or ID, unless that contract declared `candidate` as its
+/// container: the routes the earlier contract keyed would change record key.
+fn refuse_rekeyed_routes(
+    candidate: &serde_json::Value,
+    next: &ConfigSnapshot,
+    earlier: &[&serde_json::Value],
+) -> Result<()> {
+    let Some((origin, id)) = adapter_contract_identity(candidate) else {
+        return Ok(());
+    };
+    let Some(artifact_type) = adapter_contract_type(candidate) else {
+        return Ok(());
+    };
+    for previous in earlier.iter().copied() {
+        let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
             continue;
         };
-        let Some(artifact_type) = adapter_contract_type(candidate) else {
+        let Some(previous_type) = adapter_contract_type(previous) else {
             continue;
         };
-        for previous in retired.iter().chain(&removed).chain(&by_hand.contracts) {
-            let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
-                continue;
-            };
-            let Some(previous_type) = adapter_contract_type(previous) else {
-                continue;
-            };
-            if origin == previous_origin
-                && (id != previous_id || artifact_type != previous_type)
-                && adapter_contracts_overlap(previous, candidate)?
+        if origin == previous_origin
+            && (id != previous_id || artifact_type != previous_type)
+            && adapter_contracts_overlap(previous, candidate)?
+            && !declares_container(previous, next, earlier, (artifact_type, id))
+        {
+            bail!(
+                "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// An established `within` is frozen like an ID (DESIGN §6.2): the index
+/// re-derives container roll-ups from the current adapters, so changing or
+/// dropping the container an adapter's history already rolls up into would
+/// silently move or remove that history. `established` is every contract
+/// already adopted: live, retired into `[[adapter_id_history]]`, or removed
+/// from config.toml by hand. Adding `within` to an adapter that never had one
+/// stays allowed, so existing setups can link their rules to a container.
+fn validate_within_transition<'a>(
+    established: impl Iterator<Item = &'a serde_json::Value> + Clone,
+    next: &[serde_json::Value],
+) -> Result<()> {
+    // Same-identity siblings build the same artifacts, so they must agree on
+    // their container; otherwise each would look like it drops the other's.
+    for (at, candidate) in next.iter().enumerate() {
+        let (Some(identity), Some(artifact_type)) = (
+            adapter_contract_identity(candidate),
+            adapter_contract_type(candidate),
+        ) else {
+            continue;
+        };
+        let disagrees = next[at + 1..].iter().any(|sibling| {
+            adapter_contract_identity(sibling) == Some(identity)
+                && adapter_contract_type(sibling) == Some(artifact_type)
+                && declared_container(sibling) != declared_container(candidate)
+        });
+        if disagrees {
+            let origin = identity.0;
+            bail!(
+                "adapters of type {artifact_type:?} on {origin:?} with the same origin, type, and ID must declare the same within; give each of them the same within, or none"
+            );
+        }
+    }
+    for candidate in next {
+        let (Some(identity), Some(artifact_type)) = (
+            adapter_contract_identity(candidate),
+            adapter_contract_type(candidate),
+        ) else {
+            continue;
+        };
+        let declared = declared_container(candidate);
+        for previous in established.clone() {
+            if adapter_contract_identity(previous) != Some(identity)
+                || adapter_contract_type(previous) != Some(artifact_type)
             {
+                continue;
+            }
+            let Some((container_type, container_id)) = declared_container(previous) else {
+                continue;
+            };
+            if declared != Some((container_type, container_id)) {
+                let origin = identity.0;
                 bail!(
-                    "the artifact type or id template for adapter {artifact_type:?} on {origin:?} cannot change until artifact migrations are available"
+                    "adapter {artifact_type:?} on {origin:?} already rolls its history up into {container_type:?} {container_id:?}, so its within cannot change until artifact migrations are available; keep within = {{ type = {container_type:?}, id = {container_id:?} }} on this adapter"
                 );
             }
         }
@@ -2690,6 +2792,7 @@ fn adapter_contract(value: &serde_json::Value) -> Option<serde_json::Value> {
         "scope",
         "unscoped",
         "path_case",
+        "within",
     ];
     let source = value.as_object()?;
     let mut contract = serde_json::Map::new();
@@ -2719,6 +2822,44 @@ fn adapter_contract_identity(value: &serde_json::Value) -> Option<(&str, &str)> 
 
 fn adapter_contract_type(value: &serde_json::Value) -> Option<&str> {
     value.get("type")?.as_str()
+}
+
+/// The container a contract's `within` declares, if any: `(type, id)`, the
+/// latter an exact ID template string.
+fn declared_container(value: &serde_json::Value) -> Option<(&str, &str)> {
+    let within = value.get("within")?;
+    Some((within.get("type")?.as_str()?, within.get("id")?.as_str()?))
+}
+
+/// Ruling 2: `previous` counts as declaring container `target` (the
+/// candidate's own `(type, id)`) either because `previous` itself declares
+/// `within` that container, or because a sibling sharing `previous`'s
+/// `(origin, type, id)` identity declares it. The sibling may be a live
+/// adapter in `next` or another retired or removed contract in `earlier`.
+/// This lets a contract that predates `within` release its routes once its
+/// own adapter grew the declaration, even if that adapter was later removed
+/// too, without reaching for a migration tool that does not exist yet.
+fn declares_container(
+    previous: &serde_json::Value,
+    next: &ConfigSnapshot,
+    earlier: &[&serde_json::Value],
+    target: (&str, &str),
+) -> bool {
+    if declared_container(previous) == Some(target) {
+        return true;
+    }
+    let Some(identity) = adapter_contract_identity(previous) else {
+        return false;
+    };
+    let Some(previous_type) = adapter_contract_type(previous) else {
+        return false;
+    };
+    let live = adapter_contracts(next);
+    live.iter().chain(earlier.iter().copied()).any(|sibling| {
+        adapter_contract_identity(sibling) == Some(identity)
+            && adapter_contract_type(sibling) == Some(previous_type)
+            && declared_container(sibling) == Some(target)
+    })
 }
 
 /// Pair unchanged contracts first, then pair recognition edits that retain the
@@ -2806,7 +2947,9 @@ fn adapter_contracts_overlap(
         },
         ..empty_config()
     };
-    Ok(!compile_adapters(&config)?.overlap_report().is_empty())
+    // Every shared URL counts here, declared container fall-throughs included:
+    // the history guard has its own, narrower container allowance.
+    Ok(!compile_adapters(&config)?.overlapping_rules().is_empty())
 }
 
 fn updated_adapter_history(
@@ -4759,6 +4902,443 @@ mod tests {
         assert!(
             error.contains("cannot change until artifact migrations"),
             "{error}"
+        );
+    }
+
+    const GITHUB_REPO_CONTAINER_ID: &str = "github.repo:{host}/{owner}/{repo}";
+
+    fn github_pr_adapter(owners: &[&str]) -> serde_json::Value {
+        let mut pr = adapter(
+            "https://github.com",
+            "github.pr",
+            "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}",
+            "github.pr:{host}/{owner}/{repo}/{number}",
+        );
+        pr["scope"] = json!({"owner": owners});
+        pr
+    }
+
+    fn github_repo_adapter(owners: &[&str]) -> serde_json::Value {
+        let mut repo = adapter(
+            "https://github.com",
+            "github.repo",
+            "/{owner:name|lower}/{repo:name|lower}/{*}",
+            GITHUB_REPO_CONTAINER_ID,
+        );
+        repo["scope"] = json!({"owner": owners});
+        repo
+    }
+
+    fn within_github_repo(mut adapter: serde_json::Value) -> serde_json::Value {
+        adapter["within"] = json!({"type": "github.repo", "id": GITHUB_REPO_CONTAINER_ID});
+        adapter
+    }
+
+    #[test]
+    fn a_declared_container_may_overlap_retired_contained_routes() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let revision = store
+            .update(adapter_config(vec![pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let repo = github_repo_adapter(&["a"]);
+        store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn an_undeclared_overlap_still_cannot_return_under_a_new_type() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = github_pr_adapter(&["a"]);
+        let revision = store
+            .update(adapter_config(vec![pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let repo = github_repo_adapter(&["a"]);
+        let error = store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn removing_an_unlinked_rule_ahead_of_a_catch_all_is_refused() {
+        // A pull request rule that never declared the repository container
+        // sits ahead of the repository catch-all. Removing it leaves the
+        // catch-all unchanged, yet its pull request routes would fall through
+        // to repository IDs: the same re-key as adding the catch-all after
+        // the rule was removed, so it is refused the same way.
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = github_pr_adapter(&["a"]);
+        let repo = github_repo_adapter(&["a"]);
+        let revision = store
+            .update(adapter_config(vec![pr, repo.clone()]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let error = store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn removing_a_linked_rule_ahead_of_its_container_is_allowed() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let repo = github_repo_adapter(&["a"]);
+        let revision = store
+            .update(adapter_config(vec![pr, repo.clone()]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_container_with_another_id_still_cannot_claim_retired_contained_routes() {
+        // The overlap warnings skip a declared fall-through, but the history
+        // guard must still see it: only the exact declared container passes.
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let revision = store
+            .update(adapter_config(vec![pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let mut repo = github_repo_adapter(&["a"]);
+        repo["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        let error = store
+            .update(adapter_config(vec![repo]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_declared_container_fall_through_is_not_an_overlap_warning() {
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let repo = github_repo_adapter(&["a"]);
+        let ordered = adapter_config(vec![pr.clone(), repo.clone()]);
+        assert!(validate_adapters(&ordered).unwrap().is_empty());
+
+        // The container first would claim the PR pages: still reported.
+        let misordered = adapter_config(vec![repo.clone(), pr]);
+        let warnings = validate_adapters(&misordered).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            (warnings[0].first_adapter, warnings[0].second_adapter),
+            (0, 1)
+        );
+
+        // Without the declaration it is an ordinary overlap.
+        let undeclared = adapter_config(vec![github_pr_adapter(&["a"]), repo]);
+        assert_eq!(validate_adapters(&undeclared).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn adding_within_to_an_existing_adapter_is_a_same_identity_edit() {
+        let current = adapter_config(vec![github_pr_adapter(&["a"])]);
+        let next = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_repo_adapter(&["a"]),
+        ]);
+        validate_adapter_transition(&current, &next).unwrap();
+    }
+
+    fn assert_within_bail(error: anyhow::Error) {
+        let error = error.to_string();
+        assert!(
+            error.contains("within") && error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    /// An established `within` is part of the recognition contract (DESIGN
+    /// §6.2): the index re-derives roll-ups from the current adapter, so
+    /// dropping or changing it would silently move recorded history.
+    #[test]
+    fn removing_an_established_within_is_refused() {
+        let current = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_repo_adapter(&["a"]),
+        ]);
+        let next = adapter_config(vec![github_pr_adapter(&["a"]), github_repo_adapter(&["a"])]);
+        assert_within_bail(validate_adapter_transition(&current, &next).unwrap_err());
+    }
+
+    #[test]
+    fn changing_an_established_within_is_refused() {
+        let current = adapter_config(vec![within_github_repo(github_pr_adapter(&["a"]))]);
+        let mut changed = within_github_repo(github_pr_adapter(&["a"]));
+        changed["within"]["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        assert_within_bail(
+            validate_adapter_transition(&current, &adapter_config(vec![changed])).unwrap_err(),
+        );
+        // A scope edit that keeps the declaration is an ordinary edit.
+        let widened = adapter_config(vec![within_github_repo(github_pr_adapter(&["a", "b"]))]);
+        validate_adapter_transition(&current, &widened).unwrap();
+    }
+
+    /// Removing the adapter retires its `within`; it cannot come back
+    /// without it, or the retired history would leave its container.
+    #[test]
+    fn re_adding_an_adapter_without_its_retired_within_is_refused() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let revision = store
+            .update(
+                adapter_config(vec![within_github_repo(github_pr_adapter(&["a"]))]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+        assert_within_bail(
+            store
+                .update(adapter_config(vec![github_pr_adapter(&["a"])]), &revision)
+                .unwrap_err(),
+        );
+        store
+            .update(
+                adapter_config(vec![within_github_repo(github_pr_adapter(&["a"]))]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+    }
+
+    /// A `within` removed from config.toml by hand is remembered in the
+    /// adopted-contracts record, so the next adapter save names it rather
+    /// than silently accepting the rewritten roll-ups.
+    #[test]
+    fn a_within_removed_by_hand_is_named_at_the_next_adapter_save() {
+        let by_hand = RetiredByHand {
+            contracts: vec![
+                adapter_contract(&within_github_repo(github_pr_adapter(&["a"]))).unwrap(),
+            ],
+            ..RetiredByHand::default()
+        };
+        let current = adapter_config(vec![github_pr_adapter(&["a"])]);
+        let next = adapter_config(vec![github_pr_adapter(&["a", "b"])]);
+        assert_within_bail(
+            validate_adapter_transition_with_history(&current, &next, &[], &by_hand, None)
+                .unwrap_err(),
+        );
+    }
+
+    /// Adapters sharing an origin, type, and ID build the same artifacts, so
+    /// they must agree on `within`; a mixed pair would be accepted once and
+    /// then make every later save look like it drops the container.
+    #[test]
+    fn same_identity_siblings_must_declare_the_same_within() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let mixed = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_pr_adapter(&["b"]),
+        ]);
+        let error = store.update(mixed, MISSING_REVISION).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("within") && message.contains("same origin, type, and ID"),
+            "{message}"
+        );
+        // Agreeing siblings save, and a later edit to either still does.
+        let revision = store
+            .update(
+                adapter_config(vec![
+                    within_github_repo(github_pr_adapter(&["a"])),
+                    within_github_repo(github_pr_adapter(&["b"])),
+                ]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .update(
+                adapter_config(vec![
+                    within_github_repo(github_pr_adapter(&["a", "c"])),
+                    within_github_repo(github_pr_adapter(&["b"])),
+                ]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+    }
+
+    /// Ruling 2: `previous` also counts as declaring container C when the
+    /// *next* config has an adapter sharing `previous`'s (origin, type, id)
+    /// that itself declares `within` C. A retired PR contract that predates
+    /// `within` still releases its routes once the live adapter grows the
+    /// declaration, so long-lived users are not stuck re-migrating.
+    #[test]
+    fn declaring_within_on_the_live_adapter_releases_a_predating_retired_contract() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let retired_pr = github_pr_adapter(&["b"]);
+        let revision = store
+            .update(adapter_config(vec![retired_pr]), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+
+        let next = adapter_config(vec![
+            within_github_repo(github_pr_adapter(&["a"])),
+            github_repo_adapter(&["a"]),
+        ]);
+        store.update(next, &revision).unwrap().unwrap();
+    }
+
+    /// The settings link save retires the within-less PR; removing the PR
+    /// rule later retires PR+within. A sibling in history with the same
+    /// (origin, type, id) that declares the exact container still releases
+    /// the within-less contract once no live PR adapter is left.
+    #[test]
+    fn a_retired_sibling_declaring_within_releases_a_predating_retired_contract() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path);
+        let revision = store
+            .update(
+                adapter_config(vec![github_pr_adapter(&["a"])]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        // Link: the PR grows `within` and a repository rule is added.
+        let revision = store
+            .update(
+                adapter_config(vec![
+                    within_github_repo(github_pr_adapter(&["a"])),
+                    github_repo_adapter(&["a"]),
+                ]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+        // Remove the PR rule.
+        let revision = store
+            .update(adapter_config(vec![github_repo_adapter(&["a"])]), &revision)
+            .unwrap()
+            .unwrap();
+        // Widen the repository rule's scope.
+        let revision = store
+            .update(
+                adapter_config(vec![github_repo_adapter(&["a", "b"])]),
+                &revision,
+            )
+            .unwrap()
+            .unwrap();
+        // Remove and re-add it.
+        let revision = store
+            .update(adapter_config(Vec::new()), &revision)
+            .unwrap()
+            .unwrap();
+        store
+            .update(adapter_config(vec![github_repo_adapter(&["a"])]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    fn assert_migration_bail(next: &ConfigSnapshot, retired: &[serde_json::Value]) {
+        let error = validate_adapter_transition_with_history(
+            &adapter_config(Vec::new()),
+            next,
+            retired,
+            &RetiredByHand::default(),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("cannot change until artifact migrations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_retired_sibling_declaring_another_container_id_does_not_release() {
+        let mut other = within_github_repo(github_pr_adapter(&["a"]));
+        other["within"]["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        let retired = vec![github_pr_adapter(&["a"]), other];
+        assert_migration_bail(&adapter_config(vec![github_repo_adapter(&["a"])]), &retired);
+    }
+
+    #[test]
+    fn a_live_sibling_declaring_another_container_does_not_release() {
+        let mut other = within_github_repo(github_pr_adapter(&["a"]));
+        other["within"]["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        let retired = vec![github_pr_adapter(&["a"])];
+        assert_migration_bail(
+            &adapter_config(vec![other, github_repo_adapter(&["a"])]),
+            &retired,
+        );
+    }
+
+    #[test]
+    fn a_sibling_of_another_type_declaring_the_container_does_not_release() {
+        let mut issue = within_github_repo(adapter(
+            "https://github.com",
+            "github.issue",
+            "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}",
+            "github.pr:{host}/{owner}/{repo}/{number}",
+        ));
+        issue["scope"] = json!({"owner": ["a"]});
+        let retired = vec![github_pr_adapter(&["a"]), issue.clone()];
+        assert_migration_bail(&adapter_config(vec![github_repo_adapter(&["a"])]), &retired);
+        // Nor does a live one.
+        assert_migration_bail(
+            &adapter_config(vec![issue, github_repo_adapter(&["a"])]),
+            &[github_pr_adapter(&["a"])],
         );
     }
 

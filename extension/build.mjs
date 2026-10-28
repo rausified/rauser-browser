@@ -47,7 +47,7 @@ await writeFile(join(outputDir, "vendor", "readability.js"), readability);
 await copyFile(join(readabilityDir, "LICENSE.md"), join(outputDir, "vendor", "readability.LICENSE.md"));
 for (const name of [
   "capture-site.js", "capture-site-panel.js", "activity.js", "adapter-review.js", "adopted-state-settings.js", "artifact-refresh.js", "adapter-templates.js", "agent.js", "brand.js", "build-info.js", "coordination.js", "extract.js",
-  "model.js", "native.js", "note-editor.js", "options.js", "panel.js", "protocol-shape.js",
+  "model.js", "native.js", "note-editor.js", "note-recovery.js", "options.js", "panel.js", "protocol-shape.js",
   "run-card.js", "settings.js", "site-patterns.js", "site-pattern-panel.js", "site-pattern-settings.js", "starter-adapters.js", "summarize.js", "summary-text.js", "worker.js",
 ]) {
   await copyFile(join(intermediateDir, "extension", name), join(outputDir, name));

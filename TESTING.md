@@ -19,6 +19,29 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Page-note recovery coverage
+
+`extension/tests/note-editor.test.mjs` drives the real recovery store with
+in-memory synchronous storage. It covers pending debounce, newer input during
+an in-flight save, failed saves, conflicts, empty deletions, exact acknowledged
+snapshot cleanup, independent panels, stale discard, quota errors, blocked
+storage, partial write/cleanup failures, malformed/unrelated entries and
+artifact-key changes. Reopened editors load the current host note and never
+replay recovery text automatically.
+
+`extension/tests/panel.test.mjs` runs the built panel module and shipped HTML
+with the real native client and mocked DOM/Chrome/storage. Its close/reopen
+tests exercise debounce and in-flight-save teardown, a late host completion,
+separate current and recovered text, Copy/Discard, persistent conflicts
+(including empty deletions), subsequent successful edits and visible quota
+errors while native autosave continues. Clipboard calls are captured in memory;
+no test touches the user's clipboard or a real browser profile.
+
+These prove the composed client flow; Chrome storage durability, layout and
+real panel teardown still need the macOS browser gates. The headless macOS
+runner refuses Linux, and no real-browser pass is claimed on this VM. No
+smoke step, real dialog or protocol changed for recovery.
+
 ## Capture Site coverage
 
 `npm run test:extension` builds on the extension build from the development
@@ -462,4 +485,7 @@ This standard is meant to improve with use. When you change it:
 - 2026-10-27: Branch `feat/summary-outputs-pr4`. A summary takes the user's offset from the extension, as captured events do: the panel's `requested_at` (the click's local time with its `±HH:MM` offset, `localTimestamp`) decides which day's log it lands in, and `summarized_at` is the answer's `answered_at` instant rewritten in that offset (`summarized_at_uses_the_click_offset` in host/src/service/finisher.rs), and an unparseable value falls back to UTC. Using the clock at save time instead made every Retry save a different event; stamping `answered_at` once, and re-stamping only when the daily log's 30-day window would refuse it, keeps retries idempotent.
 - 2026-10-27: Branch `fix/forget-for-full-record`. Settings decides whether to offer Forget from `adopted_state.full`, not from warning text, so the tests assert both the flag and the wording: a full record's warning mentions Forget recorded adapters, and write-failure and lock-failure warnings must not mention Forget at all.
 - 2026-10-27: Branch `fix/smoke-macos-flakes` (`brwr-smk`). Since #98, main's required macOS smoke had stopped three ways, each passing on rerun. The fixes are in "Waiting for state, not time". (1) `Extensions.loadUnpacked timed out` on the `macos-15-intel` fallback: the first CDP request had 15 s to cover Chrome's whole cold start. Reproduced locally with the old runner under 3x CPU load. On the arm64 CI runners, loading plus the profile check already took 12.9 s, and Chrome writes `Preferences` about ten seconds late, so the old 12 s profile wait was nearly as tight. (2) `Expected exactly two claude runs; got []`: a reopened panel enables **Summarize & log** before `restore()` adds earlier cards, so the earlier, already-summarized Codex card was taken for the new run, and the check ran before Claude Code started. Reproduced 2 of 5 under full load, where the fake's log showed both Claude turns starting after the check. (3) `Expected one open of the allowed page in the hourly totals; found []`: never reproduced locally (0 of 8 before the fix, including 4 old runs at 3x load). The step went on once settings looked connected, not once the worker held the new lease. The lease the worker held before matches only `/items/{id:int}`, which gives exactly an empty total. Probes found settings enables its controls only after its lease install, and showed no stale document after `Page.reload`, so this cause is inferred, not shown. The new waits record the worker's lease in the timeout message, so a recurrence will tell a late lease from a product fault. A fourth stop appeared under load: `openPanel()` gave up when one `chrome.sidePanel.open` evaluate timed out. Results: before the fix, 3 of 3 idle and 3 of 5 under full load passed; after, 16 consecutive passes (6 idle, 6 under full load, 4 under 3x load). No product race was found.
+- 2026-10-27: Cookie's `brwr-d3m`/`brwr-p9r` cycle. Duration presentation tests should inspect both the worklog and a regenerated artifact file, including numeric frontmatter, rather than only the shared formatter. Panel startup tests now hold hello or `install_policy` to cover opening Recent before connection, during policy installation, and after startup. The connected policy-install window already permits requests; retry only views that actually waited. The fake DOM supplies `Option` and select `add` for real Recent rendering. For focused test diagnostics in a runner whose child test output is opaque, `node --test --test-isolation=none --test-name-pattern='Recent loads once' extension/tests/panel.test.mjs` prints the individual cases; still run the normal complete extension suite for the gate.
+- 2026-10-27: Independent review of the brief-activity/startup-Recent cycle reproduced two additional startup failures before fixing them: no home folder left both areas saying "Waiting for the host…" after connection, and a worker policy-install error prevented history loads despite a usable host configuration. Composed-panel regressions now cover setup guidance with Copy disabled and exactly one history/worklog request after that worker failure.
+- 2026-10-27: Branch `salvage/cookie-cycles-2-3` (`brwr-p9r` follow-up). A startup Recent test that releases the policy install together with `hello` cannot tell "loads on connect" from "loads after startup finishes"; hold `install_policy` pending and assert the history results arrive first.
 - 2026-10-27: Branch `feat/summary-outputs-pr4` (`brwr-t53`). The headless smoke now covers summary outputs end to end ("Summary outputs (headless smoke)" above). The new steps run after `agent.env`, not straight after the first Codex summary, because a panel restores only the newest five finished runs (`MAX_RESTORED_FINISHED`), and Restore expects exactly the five earlier runs; three more runs before it would push the Codex card out. A summary on an unrecognized page has no measured activity, so its artifact's Timeline has no rollup; the rollup order is checked on the recognized page's artifact, which does. As built, `markdown::inline` also escapes `=`, so the `<img>` entity is written `\<img src\=…\>`. Every new wait uses `waitUntil`, and every navigation calls `workerHoldsHostPolicy()` first. Three consecutive runs passed.

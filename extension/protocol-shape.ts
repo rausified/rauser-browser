@@ -149,6 +149,19 @@ export function isRunView(value: unknown): boolean {
     (run.answer === null || isRunAnswer(run.answer));
 }
 
+const ARTIFACT_REF_KEYS = ["artifact_id", "artifact_type", "title", "url"];
+
+function isArtifactRef(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  return ARTIFACT_REF_KEYS.every((key) => typeof ref[key] === "string");
+}
+
+function isContainedArtifact(value: unknown): boolean {
+  return isArtifactRef(value) &&
+    isUnsignedInteger((value as Record<string, unknown>).focused_seconds);
+}
+
 function isArtifact(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Record<string, unknown>;
@@ -157,7 +170,10 @@ function isArtifact(value: unknown): boolean {
     ["focused_seconds", "background_seconds", "opens", "days_opened", "linked_count"]
       .every((key) => isUnsignedInteger(artifact[key])) &&
     (artifact.last_mode === null || ["view", "edit", "review"].includes(String(artifact.last_mode))) &&
-    stringOrNull(artifact.why);
+    stringOrNull(artifact.why) &&
+    (artifact.within === null || isArtifactRef(artifact.within)) &&
+    Array.isArray(artifact.contained) && artifact.contained.length <= 20 &&
+    artifact.contained.every(isContainedArtifact);
 }
 
 /** Exactly the v6 `SummaryView` keys; the host bounds the strings. */

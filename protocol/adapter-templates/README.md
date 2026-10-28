@@ -21,7 +21,7 @@ An **adapter document** is the JSON form of the `[adapters]` TOML table:
 {"format": 1, "artifacts": [{"type": "...", "origin": "...", "match": [{"path": "...", "query": {}, "absent": [], "mode": "..."}], "id": "...", ...}]}
 ```
 
-Adapter keys are `type`, `origin`, `match`, `id`, `title`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, and `fields`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
+Adapter keys are `type`, `origin`, `match`, `id`, `title`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, `fields`, and `within`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
 
 A case's `doc` field (called `existing` for `draft` cases) is either an inline adapter document or `{"$fixture": "<name>"}`, which refers to an entry in `fixtures`. `$fixture` is never a real document key.
 
@@ -92,6 +92,7 @@ The TS engine validates only what the worker needs (§12). The TS harness must s
   - `title_entry`: the index of the matching entry, or `null` for the fallback.
   - `alias_id`: the suggested tab-title alias ID, or `null`.
   - `refs`: `[{"type", "value"}]`, in scan order.
+- **Additional field when the adapter declares `within`** (§8.3): `within: {"type", "artifact_id"}`, the container's type and built ID. The key is absent when the adapter declares no `within`, and also when the container ID would exceed 512 bytes; the match stands either way.
 
 Reasons, in the order they are decided:
 
@@ -174,6 +175,7 @@ This is the conservative §10.3 comparison:
   - Each pair has rules from different adapters on the same origin that may overlap.
   - `first` is the earlier rule in config order, the one that wins.
   - Pairs are ordered by `first`, then by `second`.
+  - A declared fall-through is not a pair: when the earlier adapter declares `within` whose type is the later adapter's type on the same origin (§8.3), none of their rule pairs are reported. The reverse order, and the same rules without `within`, are reported.
 
 ### `draft` (rust)
 
@@ -213,6 +215,7 @@ These are the complete format-1 enum. Every code appears in at least one vector.
 | Title | `title_too_long`, `title_syntax`, `title_unbounded_capture`, `title_capture_swallows`, `title_unknown_capture`, `title_type_mismatch`, `too_many_titles`, `empty_title_list` |
 | Alias | `bad_alias`, `alias_capture_not_id`, `alias_capture_not_in_title`, `alias_type_mismatch` |
 | Refs | `too_many_refs`, `bad_ref`, `bad_ref_find` |
+| Within | `within_bad_type`, `within_self`, `within_id_syntax`, `within_id_reserved_scheme`, `within_unknown_capture` |
 
 The draft codes are `draft_forbidden_key`, `draft_no_scope_source`, `draft_scope_conflict`, `draft_no_leading_literal`, `draft_rest_second`, `draft_id_needs_typed_capture`, `draft_search_capture`, `draft_matches_probe`, and `draft_overlap`.
 
@@ -231,7 +234,7 @@ The first failing check is reported.
       - An adapter that is not a table gives `wrong_type`.
       - Unknown keys give `unknown_key`.
       - A missing `type`, `origin`, `match`, or `id` gives `missing_key`.
-      - A mistyped value gives `wrong_type`.
+      - A mistyped value gives `wrong_type`. `within` must be a table with exactly the keys `type` and `id`, both strings.
    2. **`type`, `origin`, `path_case`.**
       - `type`: `bad_adapter_type`, or `reserved_adapter_type` for `web.page`.
       - `origin`: `bad_origin`. The origin must equal its own WHATWG origin serialization and use `http` or `https`, and its host must be an IP address or an ASCII hostname (SQ15).
@@ -253,7 +256,6 @@ The first failing check is reported.
          2. `too_many_segments`
          3. `rest_not_last`
          4. `optional_misplaced`
-         5. `no_literal_segment`
       4. **`query`.**
          - `too_many_query`
          - Then each condition in ascending key order by Unicode code point, not document order (SQ-V21):
@@ -285,6 +287,7 @@ The first failing check is reported.
       6. `scope_capture_not_bound`, per rule. A scoped capture that is optional counts as not bound.
       7. `scope_bad_value`: each listed value must be the canonical value of the capture as at least one rule binds it. Only `mode` can differ between rules (SQ-V22).
       8. `shared_origin_unscoped`
+      9. `no_literal_segment`, per rule, unless some required path segment is an anchor (§4.1) or is a required path capture whose name is a `scope` key. A capture bound from a query value never anchors, and an `unscoped` adapter gets no scope anchor. This check follows scope so that scope keys are in view.
    8. **`title`.**
       - For the list: a value that is neither a string nor a list gives `wrong_type`. Then `empty_title_list` and `too_many_titles`.
       - For each entry, which sets `entry`:
@@ -308,12 +311,20 @@ The first failing check is reported.
        3. `bad_ref`: the shape is exactly `{type, find}`, and `type` must follow the adapter-type grammar.
        4. `bad_ref_find`: only `jira_key`, `int`, `hex`, and `uuid` are allowed, with no bounds (SQ21).
    11. **`fields`:** `wrong_type` unless it is a table of strings.
+   12. **`within`** (§8.3), typed in step 1:
+       1. `within_bad_type`: `type` breaks the adapter-type grammar or is `web.page`.
+       2. `within_self`: `type` equals the adapter's own `type`.
+       3. `within_id_syntax`: `id` breaks the §8.1 grammar.
+       4. `within_id_reserved_scheme`: the scheme is `web`.
+       5. `within_self`: `id` is the adapter's own ID template, scheme and part by part, which would give the artifact and its container one record key.
+       6. `within_unknown_capture`, per rule: a `{name}` that is not a capture the rule binds and the adapter's `id` uses or `scope` lists, or that is `mode`. A second `{host}` is such a name (SQ-V19). Because the names come from the ID and scope, step 6's `extra_capture` is unchanged.
 
 ## Fixtures
 
 | Name | Contents |
 |---|---|
-| `starters` | 0 `jira.issue` and 1 `confluence.page` on `acme.atlassian.net` (§11), 2 `gdoc` (§11), 3 `github.pr` scoped to `acme-corp` (§11), 4 `github.issue` (synthetic, same scope, DESIGN 6.8), 5 `sharepoint.doc` on `acme.sharepoint.com`, and 6 `sharepoint.doc` on `acme-my.sharepoint.com` (OneDrive for work, SQ-V2) |
+| `starters` | 0 `jira.issue` and 1 `confluence.page` on `acme.atlassian.net` (§11), 2 `gdoc` (§11), 3 `github.pr` scoped to `acme-corp` (§11), 4 `github.issue` (synthetic, same scope, DESIGN 6.8), each `within` its `github.repo`, 5 the `github.repo` catch-all `/{owner}/{repo}/{*}` (same scope, no title, after the PR and issue adapters it contains, §8.3), 6 `sharepoint.doc` on `acme.sharepoint.com`, and 7 `sharepoint.doc` on `acme-my.sharepoint.com` (OneDrive for work, SQ-V2) |
+| `github_without_repo` | The `starters` PR and issue adapters (with `within`, without titles or refs) and no repository catch-all, for GitHub drafts that the catch-all would overlap (§10.4) |
 | `notion_starter` | The §11 Notion adapter verbatim, anchored by its fixed-shape `hex(32)` capture (§4.1). |
 | `mail` | A prefix title list: `["({~}) {title} - Mail", "{title} - Mail"]` |
 | `tracker` | Title captures that must agree with path captures, with a tab-title alias on `num` |
@@ -393,17 +404,17 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 
 | Kind | Cases | Impls |
 |---|---|---|
-| validate | 576 | rust, ts |
-| evaluate | 373 | rust, ts |
+| validate | 602 | rust, ts |
+| evaluate | 392 | rust, ts |
 | capture | 119 | rust, ts |
 | segments | 50 | rust, ts |
 | refs | 37 | rust, ts |
 | overlap | 35 | rust |
-| draft | 37 | rust |
+| draft | 38 | rust |
 | meta_alias | 9 | rust |
 | refs_resolve | 8 | rust |
-| overlap_report | 4 | rust |
-| **Total** | **1248** | |
+| overlap_report | 6 | rust |
+| **Total** | **1296** | |
 
 ## Maintenance
 
@@ -415,6 +426,8 @@ The file is generated by an author-side script. The expected values were written
 The eight `eval.bounds` cases added later (`longest_uuid`, `4_title_entries_*`, `title_512_*`, and `url_2048_*`) and the budgets on `eval.long_jira.exactly_512` and `eval.long_jira.514` were derived by hand, then checked against both engines.
 
 The limit, folding, trimming, refs-cap, and `long_once` cases added with SQ-V25 were derived by hand, then checked against both engines. Each was also run against a mutated engine (20-ref cap off by one, Unicode case folding, U+0085 dropped from the trim set, ID cap at 513 bytes) to confirm it catches that mutation. The `bounds_ci_alts` budgets fail when an insensitive comparison lowercases the whole segment per literal.
+
+The `github.repo` starter changed `starters`: the `eval.github.repo_*` cases and `draft.github_inside_repo_overlaps` were added, and five GitHub URLs the PR and issue rules miss (`repo_root`, `pulls_list`, `issue_new`, `pr_bad_number`, `pr_leading_zero`) now fall through to the repository. Their expectations, the `within` on every PR and issue match, and the `overlap_report.starters` and `overlap_report.container_*` results were derived by hand, then checked against both engines. `draft.github_scope_copied` and `draft.github_first_capture` moved to `github_without_repo`, because the catch-all overlaps every GitHub draft path with two or more segments, `/orgs/{owner}/projects/{number}` included (overlap ignores scope).
 
 `npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) complements these vectors. It generates seeded random documents, URLs, and titles, including near misses, and runs them through `brauser adapters eval` and the TypeScript engine. It fails on any difference. Reproduce a failure with `--seed S --only N`.
 

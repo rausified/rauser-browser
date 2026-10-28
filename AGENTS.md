@@ -15,6 +15,14 @@ it could not save. The capture housekeeping controls from M1 collapsed into a
 one-line, expandable capture strip. The answer card, Summary section, and full
 omnibar are not built (M2/M3).
 
+Unacknowledged note edits now have synchronous browser-local recovery
+(`extension/note-recovery.ts`, `brwr-3nq`). Every snapshot has an immutable
+key, and native acknowledgements/discards only remove the exact snapshot
+they saw. Reopening shows recovered copies beside the current host note with
+Copy/Discard; they never enter the editor or autosave automatically. Storage
+failures warn without preventing host saves. Preserve that boundary when
+changing note identity, save sequencing or panel teardown.
+
 Open access (protocol version 6, PR 1 of
 `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`)
 removed the per-site grant wall. The manifest requests `http://*/*` and
@@ -217,13 +225,52 @@ the snapshot and offers **Stop stripping**.
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety
-probes inline, with separate GitHub pull-request and issue organization lists,
+probes inline. GitHub now offers repositories alongside pull requests and
+issues, all three checked by default and sharing one organization field
+(2026-10-27) instead of separate PR and issue lists; the field is pre-filled
+from the current URL's owner segment (also `/orgs/<org>/…`), lowercased and
+shown for the user to confirm or edit rather than applied unseen, and a page
+with no usable owner (the GitHub root, a reserved top-level route, `/orgs`
+with no org) gets no pre-fill and asks instead. The confirmation line names
+only the types actually checked, so it is never wider than what is saved. It
 then saves once through revisioned `update_config`. It preserves configured
 sites and global pauses, refuses pending local pauses/removals and stale
 reviews, and saves old note edits before reloading their host-derived identity.
 Installing policy from a page seeds already-open recognized tabs for attention
 measurement without inventing cold opens; background renewals retain their
 normal navigation accounting.
+
+GitHub repositories as container artifacts (2026-10-27): the adapter-template
+language gained a general mechanism for an adapter to declare
+`within = { type, id }`, naming a container artifact its own matches sit
+inside (adapter-templates.md §3, §8.3), and a required path capture a `scope`
+key restricts to a literal list now counts as an anchor segment too (§4.1,
+§6), not only a literal or a fixed-shape capture. `github.repo` is the first
+adapter to use either: a new starter, a catch-all over everything inside a
+GitHub repository that no PR or issue adapter claims, scoped to the owner
+like the other two, with `github.pr` and `github.issue` now declaring
+`within` it. `orderContainedFirst` (`extension/starter-adapters.ts`) keeps PR
+and issue adapters ahead of the repo catch-all on every save path (the panel,
+settings, and the JSON editor), because adapters on one origin are tried in
+config order and a PR or issue visit already rolls up into its repository.
+The host's index (`host/src/index.rs`) derives each contained visit's
+container by re-evaluating the logged URL, not by recording it at log time,
+so existing PR and issue history rolls up into repositories retroactively; a
+`within` edge records the relationship, worklog and day totals count a
+rolled-up visit once, and a container whose own page has never been opened
+directly still gets a title and URL derived from its ID instead of a stale or
+missing one. The route-history guard in `host/src/config.rs` is amended so a
+declared container may overlap the routes of a retired or removed contract it
+is exactly the container of, which is what lets settings add `github.repo` on
+top of already-configured PR/issue adapters (adding `within` to them in the
+same save) without tripping the existing-history freeze. Protocol version 7
+exposes the relationship to the panel: `ArtifactView.within` and `.contained`
+on `get_artifact`/`list_artifacts`, with the card showing "In <repo>" on a
+contained artifact's own card and "Worked on inside" with its rolled-up
+contents on a container's card. Downgrading after adding repositories is
+unsupported: older hosts reject `within` in the adapter config and in adapter
+history.
+
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
 Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier
@@ -276,6 +323,16 @@ changes a contract.
 Run the commands in [README.md](README.md#development) before proposing a code change. The Rust version is pinned in `rust-toolchain.toml`. `deny.toml` is the Rust dependency policy (license allowlist; no wildcard versions, unknown registries, or unknown git sources) that CI's `cargo-deny` job enforces — run `cargo deny check --all-features --locked` before adding or upgrading a Rust dependency. After changing either adapter-template engine, run `npm run test:adapter-diff` (differential testing against the shared vectors, `adapter-templates.md` §12).
 
 For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a window or takes focus. Only when the user asks for it, run `npm run smoke:macos -- --auto` instead (real dialogs, UI scripting; warn them before it takes focus) — `--auto` and `--headless` are mutually exclusive flags of the same script, not combinable. See [TESTING.md](TESTING.md) for what each check (`smoke:macos:headless`, `probe:m15a`) actually does, how to run the real-dialog variants, and what headless cannot prove — it is the single, self-contained source for testing guidance; update it with anything you learn here.
+
+## Review and merge cadence
+
+These rules exist because repeated review passes, main moving under open PRs, and strictly serial review chains cost more time than building (2026-10-27).
+
+- **One Codex pass.** Run `codex exec review --base origin/main` once, after the full gate. Fix every P1 test-first. File each P2 and P3 as a bead (with the finding text and file) instead of fixing it in the PR, unless the fix is a few lines and needs no new test seam. Run a second pass only when the P1 fixes changed behaviour substantially; never a third.
+- **Run the Codex review alongside CI**, not after it. Both start on the same pushed head.
+- **Announce the final stretch of a big PR.** Before merging main into a PR that touches more than about ten files or a shared seam (protocol schema, `adapter-templates`, `service/`, `config.rs`), tell the other active sessions so they hold merges that touch the same files until it lands. Whoever merges second resolves the conflicts.
+- **Overlap per-task review with the next task** in multi-task plans: review task N while task N+1 is being built, unless N+1 depends on code the review may change. Batch small, low-risk tasks (docs, wiring) into one review.
+- **Check scope before a large build.** For a plan of more than about five tasks, list the user-facing decisions it assumes and confirm any that are open before building.
 
 ## Security rules
 
