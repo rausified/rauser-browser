@@ -847,9 +847,6 @@ async function takeReady(): Promise<ReadyBatch | null> {
   const lease = await activeLease();
   if (!lease || lease.expires_at <= Date.now() || !lease.capture_enabled) return null;
   const queue = await readQueue();
-  if (queue.overflow_delivery && queue.overflow_delivery.retry_after <= Date.now()) {
-    return { ...queue.overflow_delivery, items: [] };
-  }
   const currentOverflow = !queue.overflow_delivery && queue.overflow_count > 0 &&
       queue.overflow_first_at && queue.overflow_last_at
     ? {
@@ -864,6 +861,11 @@ async function takeReady(): Promise<ReadyBatch | null> {
   );
   const first = ready[0];
   if (!first) {
+    // Deliver ready activity before retrying standalone evidence: a marker
+    // refused by an older host or an unavailable log must not block capture.
+    if (queue.overflow_delivery && queue.overflow_delivery.retry_after <= Date.now()) {
+      return { ...queue.overflow_delivery, items: [] };
+    }
     if (queue.items.length > 0 || !currentOverflow) return null;
     queue.overflow_delivery = {
       batch_id: crypto.randomUUID(), overflow: currentOverflow, retry_after: 0,

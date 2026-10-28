@@ -56,7 +56,10 @@ the real pressure path. Both are dropped; acknowledging the final batch must
 immediately send their count and range with empty `events`, without another
 navigation. Other cases lose a standalone reply, read its frozen ID/snapshot
 back from storage, add later drops, observe backoff and retry, and pause a
-pending delivery. Existing attached-snapshot and Dismiss races remain covered.
+pending delivery. A refused-retry regression queues new activity beside an expired
+standalone snapshot and checks that the activity drains first, even when the
+marker receives `overflow_recorded: false` or an older host's `invalid_request`.
+Existing attached-snapshot and Dismiss races remain covered.
 
 `capture::tests::standalone_overflow_*` checks the offset-derived log day,
 exact marker payload, torn compact-intent recovery, duplicate retries after
@@ -701,3 +704,9 @@ config filename; another config file in the same directory is not a fresh
 installation. Panel tests hold and reorder preflight replies to verify that
 edits, invalid selections and closing/reopening cannot reuse an older verdict.
 These fixtures use local storage and scripted native replies only.
+
+- 2026-10-28: Independent review reproduced a standalone overflow retry
+  starving every newer capture batch when its old log or timestamp is refused.
+  Ready activity now drains before standalone retries, while the failed marker
+  retains its original ID, snapshot and backoff. The failing-first worker
+  regression covers both a false acknowledgement and an older-host error.

@@ -2424,6 +2424,48 @@ test("an unrecorded standalone marker waits for retry and respects Pause", async
   assert.equal(values.get(storageKey("queue_v1")).overflow_count, 1);
 });
 
+test("a refused standalone retry cannot block newer capture batches", async () => {
+  for (const refusal of ["unrecorded", "older_host"]) {
+    const origin = "https://overflow-blocked.example";
+    resetSync(origin, 2 * HOUR_MS);
+    queueWith(activityVisit("new-hour", `${origin}/items/new-hour`));
+    const queue = values.get(storageKey("queue_v1"));
+    const overflow = { count: 1,
+      first_occurred_at: "2026-09-01T12:00:00+00:00",
+      last_occurred_at: "2026-09-01T12:00:00+00:00" };
+    Object.assign(queue, { overflow_count: 1,
+      overflow_first_at: overflow.first_occurred_at,
+      overflow_last_at: overflow.last_occurred_at,
+      overflow_delivery: { batch_id: crypto.randomUUID(), overflow, retry_after: 0 } });
+    values.set(storageKey("queue_v1"), queue);
+
+    const answered = send({ kind: "sync_now" });
+    const port = await until(() => ports[0], "capture with refused overflow pending");
+    let deliveredEvents = 0;
+    for (let index = 1; ; index += 1) {
+      const request = await sentOn(port, index);
+      if (request.events.length) {
+        deliveredEvents += request.events.length;
+        assert.equal(request.overflow, null, "the standalone retry owns its frozen evidence");
+        port.reply(batchRecorded(request));
+      } else {
+        assert.equal(request.batch_id, queue.overflow_delivery.batch_id);
+        if (refusal === "older_host") {
+          port.reply({ type: "error", protocol_version: PROTOCOL_VERSION,
+            request_id: request.request_id, code: "invalid_request",
+            message: "a capture batch must contain 1 to 64 events" });
+        } else port.reply(batchRecorded(request));
+        break;
+      }
+    }
+    const status = await answered;
+    assert.equal(deliveredEvents, 1, refusal);
+    assert.equal(status.queued, 0, refusal);
+    assert.equal(status.overflow_count, 1, "refused evidence stays pending");
+    assert.deepEqual(values.get(storageKey("queue_v1")).overflow_delivery.overflow, overflow);
+  }
+});
+
 test("queue pressure turns on the toolbar badge at eighty percent", async () => {
   const origin = "https://pressure.example";
   resetSync(origin, 2 * HOUR_MS);
