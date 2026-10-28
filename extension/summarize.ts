@@ -25,6 +25,8 @@ export interface SummarizeDeps {
   /** Where an accepted run is recorded, so a later panel restores it. */
   storage: Pick<ChromeStorageArea, "set">;
   now(): Date;
+  /** Overrides ALL_FRAMES_TIMEOUT_MS (tests). */
+  allFramesTimeoutMs?: number;
 }
 
 /** What a failed summarizeTab tells the user, the same on every path: the
@@ -56,6 +58,12 @@ function sameAddress(a: string, b: unknown): boolean {
 // A top frame with at least this much trimmed text is the page's content,
 // whatever its subframes hold (ads, embeds, comment widgets).
 const TOP_FRAME_ENOUGH_CHARS = 200;
+// A top frame Readability found no article in (suite bars, footers,
+// noscript text) yields to a subframe holding this many times its text.
+const CHROME_TOP_FRAME_RATIO = 5;
+// How long the all-frames extractor may take before a slow or hung subframe
+// is given up on and the top frame alone is read, as before 2026-10-28.
+export const ALL_FRAMES_TIMEOUT_MS = 10_000;
 
 /** A frame's extractor result, if it is one. */
 function framePage(value: unknown): ExtractedPage | undefined {
@@ -71,7 +79,10 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * address stand for the tab), and the content and selection to send. The
  * content is the top frame's when it has at least TOP_FRAME_ENOUGH_CHARS or
  * the most text, else the longest subframe's: Word for the web and similar
- * editors render the document in a cross-origin iframe. Missing,
+ * editors render the document in a cross-origin iframe. A top frame with
+ * no article (`readable === false`) also yields to a subframe holding at
+ * least CHROME_TOP_FRAME_RATIO times its text, so page chrome such as
+ * SharePoint's suite bar never stands in for the document. Missing,
  * malformed, or failed frame results are skipped. */
 function choosePage(
   results: readonly { frameId: number; result?: unknown }[],
@@ -89,9 +100,16 @@ function choosePage(
   }
   if (!top) return undefined;
   const length = (page: ExtractedPage): number => page.content.trim().length;
+  let longestSub: ExtractedPage | undefined;
+  for (const page of pages) {
+    if (page !== top && (!longestSub || length(page) > length(longestSub))) longestSub = page;
+  }
   let chosen = top;
-  if (length(top) < TOP_FRAME_ENOUGH_CHARS) {
-    for (const page of pages) if (length(page) > length(chosen)) chosen = page;
+  if (longestSub && length(top) < TOP_FRAME_ENOUGH_CHARS) {
+    if (length(longestSub) > length(top)) chosen = longestSub;
+  } else if (longestSub && top.readable === false
+    && length(longestSub) >= CHROME_TOP_FRAME_RATIO * length(top)) {
+    chosen = longestSub;
   }
   if (length(chosen) === 0) return undefined;
   // The chosen frame's own selection fits its content by construction; one
@@ -123,14 +141,24 @@ export async function summarizeTab(
   } catch {
     // The extractor falls back to body text where Readability did not load.
   }
-  let results: { frameId: number; result?: unknown }[];
+  type FrameResults = { frameId: number; result?: unknown }[];
+  const extract = (frames: typeof target | { tabId: number; frameIds: number[] }): Promise<FrameResults> =>
+    deps.scripting.executeScript({ target: frames, func: extractReadablePage, args: [EXTRACT_LIMITS] });
+  let results: FrameResults;
   try {
-    // Chrome skips a subframe it cannot inject and rejects only when the top
-    // frame fails: some pages are refused (the Web Store, other extensions'
-    // pages), and a page can navigate away mid-injection.
-    results = await deps.scripting.executeScript({
-      target, func: extractReadablePage, args: [EXTRACT_LIMITS],
+    // Chrome rejects when the main frame fails its up-front permission check
+    // (the Web Store, other extensions' pages) or when exactly one frame was
+    // targeted; otherwise it drops every frame that failed, the top frame
+    // included, from the results and resolves. A missing top frame result
+    // (say, a navigation mid-injection) reads as unreadable below.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS);
     });
+    const all = await Promise.race([extract(target), timedOut]).finally(() => clearTimeout(timer));
+    // A slow or hung subframe holds the whole call, so the top frame is read
+    // alone, as before every frame was.
+    results = all === "timeout" ? await extract({ tabId: tab.id, frameIds: [0] }) : all;
   } catch {
     results = [];
   }

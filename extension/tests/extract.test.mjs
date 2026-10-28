@@ -474,3 +474,42 @@ test("a selection borrowed from another frame never pushes start_run past the ca
   const bytes = Buffer.byteLength(JSON.stringify(request.content)) + Buffer.byteLength(JSON.stringify(request.selection));
   assert.ok(bytes <= EXTRACT_LIMITS.maxRequestBytes);
 });
+
+test("a non-article top frame yields to a subframe with five times its text", async () => {
+  const chrome = "Suite bar Sign in Footer ".repeat(16).slice(0, 400);
+  const doc = "The document body. ".repeat(300).slice(0, 5000);
+  const sub = (content, readable = true) => ({
+    frameId: 3, result: framePage({ content, readable, href: "https://word-edit.officeapps.live.com/x" }),
+  });
+  const chromeTop = framesDeps([{ frameId: 0, result: framePage({ title: "Plan.docx", content: chrome }) }, sub(doc)]);
+  await summarizeTab(TAB, chromeTop.deps);
+  assert.equal(chromeTop.requests[0].content, doc);
+  assert.equal(chromeTop.requests[0].title, "Plan.docx");
+
+  // An article top frame wins whatever its subframes hold.
+  const articleTop = framesDeps([{ frameId: 0, result: framePage({ content: chrome, readable: true }) }, sub(doc)]);
+  await summarizeTab(TAB, articleTop.deps);
+  assert.equal(articleTop.requests[0].content, chrome);
+
+  // Under five times the top frame's text, the top frame stays.
+  const close = framesDeps([{ frameId: 0, result: framePage({ content: chrome }) }, sub(doc.slice(0, 1000))]);
+  await summarizeTab(TAB, close.deps);
+  assert.equal(close.requests[0].content, chrome);
+});
+
+test("a hung subframe falls back to reading the top frame alone", async () => {
+  const { deps, requests, injections } = framesDeps((injection) => injection.target.allFrames
+    ? new Promise(() => {})
+    : [{ frameId: 0, result: framePage({ content: "Top text" }) }]);
+  deps.allFramesTimeoutMs = 20;
+  await summarizeTab(TAB, deps);
+  assert.deepEqual(injections.map((injection) => injection.target), [
+    { tabId: 9, allFrames: true }, { tabId: 9, allFrames: true }, { tabId: 9, frameIds: [0] },
+  ]);
+  assert.equal(requests[0].content, "Top text");
+});
+
+test("the all-frames timeout is ten seconds", async () => {
+  const { ALL_FRAMES_TIMEOUT_MS } = await import("../dist/summarize.js");
+  assert.equal(ALL_FRAMES_TIMEOUT_MS, 10_000);
+});
