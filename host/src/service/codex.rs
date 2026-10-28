@@ -73,7 +73,12 @@ impl HarnessRunner for CodexRunner {
             next_id: 0,
             thread_id: String::new(),
             cwd: spec.cwd.clone(),
-            output_schema: self.output_schema.clone(),
+            // The run kind's schema, when the supervisor set one (a site
+            // draft); otherwise this runner's own.
+            output_schema: spec
+                .output_schema
+                .clone()
+                .or_else(|| self.output_schema.clone()),
             pending: Vec::new(),
             turns: 0,
             exited: false,
@@ -560,6 +565,7 @@ done
                 cwd: self.kb(),
                 page_path: self.dir.path().join("page.md"),
                 prompt: "the prompt".to_string(),
+                output_schema: None,
                 env: vec![
                     (OsString::from("PATH"), self.search_path()),
                     (OsString::from("HOME"), OsString::from("/users/someone")),
@@ -996,6 +1002,19 @@ done
         let fake = Fake::turns(&simple_turn());
         run(fake.runner(None), fake.spec(), &["the prompt"]);
         assert!(fake.requests()[3]["params"].get("outputSchema").is_none());
+    }
+
+    /// A run kind's own schema (a site draft's) beats the runner's summary
+    /// schema, on every turn.
+    #[test]
+    fn spec_output_schema_overrides_the_runners_own() {
+        let summary = json!({"type": "object", "required": ["title"]});
+        let site = crate::site_draft_answer::site_draft_schema();
+        let fake = Fake::turns(&simple_turn());
+        let mut spec = fake.spec();
+        spec.output_schema = Some(site.clone());
+        run(fake.runner(Some(summary)), spec, &["the prompt"]);
+        assert_eq!(fake.requests()[3]["params"]["outputSchema"], site);
     }
 
     /// Setup's probe asks for one word, so it must not be held to the

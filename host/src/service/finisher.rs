@@ -38,7 +38,7 @@
 
 use std::path::{Path, PathBuf};
 
-use brauser_protocol::{ErrorCode, HarnessId};
+use brauser_protocol::{ErrorCode, HarnessId, RunKind};
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
@@ -53,6 +53,7 @@ use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::markdown::link_style;
 use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key, summary_artifact};
+use crate::site_draft_answer::parse_site_draft_answer;
 use crate::summary::{MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, render_summary};
 use crate::vault::{FoundSummary, OwnedWrite, Vault};
 
@@ -377,6 +378,70 @@ fn session_link(run: &RunStatusFile) -> SessionLink {
     .unwrap_or(SessionLink::None)
 }
 
+/// Accepts a Capture Site agent's answer (`site_draft_answer`) and writes
+/// nothing: the validated tables stay in the run's `result.json` until the
+/// host fetches and judges them, and only the panel's own save writes
+/// config. Nothing reaches the home folder, the knowledge base or
+/// `config.toml`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SiteDraftFinisher;
+
+impl RunFinisher for SiteDraftFinisher {
+    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
+        // A site-draft run's url is its origin.
+        parse_site_draft_answer(final_text, &run.url)
+    }
+
+    fn save(
+        &self,
+        run: &RunStatusFile,
+        _result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure> {
+        Ok(SavedRun {
+            written_key: run.start_key.clone(),
+            summary_path: None,
+        })
+    }
+}
+
+/// The service's finisher: each run goes to the finisher of its kind, so a
+/// site-draft run never reaches the summary finisher.
+pub struct KindFinisher {
+    summary: Box<dyn RunFinisher>,
+    site_draft: SiteDraftFinisher,
+}
+
+impl KindFinisher {
+    /// Summaries go to `summary` (the service's [`SummaryFinisher`]).
+    pub fn new(summary: impl RunFinisher + 'static) -> Self {
+        Self {
+            summary: Box::new(summary),
+            site_draft: SiteDraftFinisher,
+        }
+    }
+
+    fn of(&self, run: &RunStatusFile) -> &dyn RunFinisher {
+        match run.kind {
+            RunKind::Summary => self.summary.as_ref(),
+            RunKind::SiteDraft => &self.site_draft,
+        }
+    }
+}
+
+impl RunFinisher for KindFinisher {
+    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
+        self.of(run).accept(run, final_text)
+    }
+
+    fn save(
+        &self,
+        run: &RunStatusFile,
+        result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure> {
+        self.of(run).save(run, result)
+    }
+}
+
 /// `now` in `requested_at`'s offset (the user's clock when they clicked),
 /// to the whole second; an unparseable `requested_at` gives UTC (`Z`).
 pub(crate) fn summarized_at(now: OffsetDateTime, requested_at: &str) -> String {
@@ -597,7 +662,103 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            kind: RunKind::Summary,
         }
+    }
+
+    /// Counts what reaches it, accepting and saving everything.
+    #[derive(Clone, Default)]
+    struct Counting {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl RunFinisher for Counting {
+        fn accept(&self, _: &RunStatusFile, _: &str) -> Result<serde_json::Value, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(serde_json::json!({}))
+        }
+
+        fn save(
+            &self,
+            run: &RunStatusFile,
+            _: &serde_json::Value,
+        ) -> Result<SavedRun, SaveFailure> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(SavedRun {
+                written_key: run.start_key.clone(),
+                summary_path: Some("summaries/x.summary.md".into()),
+            })
+        }
+    }
+
+    fn site_run(world: &World) -> RunStatusFile {
+        let mut status = run(world, "https://tools.example.com", HarnessId::Codex);
+        status.kind = RunKind::SiteDraft;
+        status.start_key = RecordKey {
+            kind: RecordKeyKind::Url,
+            value: "https://tools.example.com".into(),
+        };
+        status
+    }
+
+    #[test]
+    fn site_draft_runs_never_reach_the_summary_finisher() {
+        let world = World::new();
+        let summary = Counting::default();
+        let finisher = KindFinisher::new(summary.clone());
+        let site = site_run(&world);
+        let tables = serde_json::json!({"adapters": [
+            {"type": "tools.docs", "origin": "https://tools.example.com", "scope": {}}
+        ]});
+        let kept = finisher.accept(&site, &tables.to_string()).unwrap();
+        assert_eq!(kept, tables);
+        assert!(finisher.accept(&site, "not json").is_err());
+        assert!(finisher.accept(&site, TEST_ANSWER).is_err());
+        let saved = finisher.save(&site, &kept).unwrap();
+        assert_eq!(saved.written_key, site.start_key);
+        assert_eq!(saved.summary_path, None);
+        assert_eq!(summary.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // A summary run still goes to the summary finisher.
+        let page = run(&world, PAGE, HarnessId::Codex);
+        finisher.accept(&page, TEST_ANSWER).unwrap();
+        finisher.save(&page, &answer()).unwrap();
+        assert_eq!(summary.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// A site-draft save leaves the home folder and config exactly as they
+    /// were, even through the real summary finisher's dispatch.
+    #[test]
+    fn a_site_draft_save_writes_nothing() {
+        let world = World::new();
+        let finisher = KindFinisher::new(world.finisher());
+        let before = snapshot(world.dir.path());
+        let site = site_run(&world);
+        let tables = serde_json::json!({"adapters": [
+            {"type": "tools.docs", "origin": "https://tools.example.com"}
+        ]});
+        let kept = finisher.accept(&site, &tables.to_string()).unwrap();
+        finisher.save(&site, &kept).unwrap();
+        assert_eq!(snapshot(world.dir.path()), before);
+    }
+
+    /// Every file under `root` with its bytes.
+    fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let bytes = fs::read(&path).unwrap();
+                    files.push((path, bytes));
+                }
+            }
+        }
+        files.sort();
+        files
     }
 
     fn answer() -> serde_json::Value {

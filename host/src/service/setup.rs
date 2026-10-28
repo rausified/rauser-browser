@@ -239,6 +239,7 @@ pub fn set_up(
         cwd: knowledge_base,
         page_path: PathBuf::from(NO_PAGE),
         prompt: PROBE_PROMPT.to_owned(),
+        output_schema: None,
         env,
     };
     let probe_runner = runner.for_probe();
@@ -636,6 +637,7 @@ mod tests {
             cwd: setup.fake.path("notes"),
             page_path: PathBuf::from(NO_PAGE),
             prompt: PROBE_PROMPT.into(),
+            output_schema: None,
             env: setup.run_env(),
         };
         let started = Instant::now();

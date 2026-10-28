@@ -28,12 +28,19 @@ pub struct RunSpec {
     pub run_id: Uuid,
     pub harness: HarnessId,
     pub title: String,
-    /// The harness's working directory: the knowledge base folder.
+    /// The harness's working directory: the knowledge base folder for a
+    /// summary, the run's own directory for a site draft.
     pub cwd: PathBuf,
-    /// Absolute path to the run's `page.md`.
+    /// Absolute path to the run's `page.md`: the page for a summary, the
+    /// untrusted-data block for a site draft.
     pub page_path: PathBuf,
-    /// The §6.4 prompt ([`super::prompt::summary_prompt`]).
+    /// The first-turn prompt ([`super::prompt::summary_prompt`] or
+    /// [`super::prompt::site_draft_prompt`]).
     pub prompt: String,
+    /// The JSON Schema a harness that takes one holds the final answer to,
+    /// set per run kind; `None` leaves the runner's own (Codex holds a
+    /// summary to [`crate::answer::answer_schema`]). Claude Code ignores it.
+    pub output_schema: Option<serde_json::Value>,
     /// The complete child environment, built by the server: the service's
     /// environment overlaid with `agent.env`. Runners clear the inherited
     /// environment and set exactly these.
@@ -319,6 +326,7 @@ mod tests {
             cwd: cwd.to_path_buf(),
             page_path: cwd.join("page.md"),
             prompt: "prompt".into(),
+            output_schema: None,
             env: Vec::new(),
         }
     }

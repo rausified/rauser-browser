@@ -162,7 +162,7 @@ const MAX_TYPE_CHARS: usize = 64;
 /// Whether `origin` is exactly the serialized origin of an HTTP(S) URL with
 /// a host and no credentials: no path, query, fragment, trailing slash,
 /// default port or uppercase that the browser's own origin would not show.
-fn exact_origin(origin: &str) -> bool {
+pub(crate) fn exact_origin(origin: &str) -> bool {
     if origin.is_empty() || origin.chars().count() > MAX_ORIGIN_CHARS {
         return false;
     }

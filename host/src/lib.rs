@@ -42,5 +42,8 @@ mod presentation;
 // The service is plain POSIX; only its launchd glue is macOS-only.
 #[cfg(unix)]
 pub mod service;
+// The Capture Site agent's answer; only the service reads it.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) mod site_draft_answer;
 mod summary;
 pub mod vault;
