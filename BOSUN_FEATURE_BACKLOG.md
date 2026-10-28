@@ -227,7 +227,9 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   several openers at once. Use WAL, a busy timeout, and one writer at a time
   for index updates and dirty-set regeneration. Test concurrent hosts with no
   surfaced `SQLITE_BUSY`, no lost or duplicated rows, and no double
-  regeneration.
+  regeneration. **Dependency-blocked:** `brwr-b2e` first requires human
+  `brwr-mff`; bundled `rusqlite` is still absent from the manifest, lockfile,
+  and local crate cache as of `3397bb43dce3` (2026-10-28).
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8 — Certify the three starter adapters.** Check
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
@@ -1330,3 +1332,30 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` is on a read-only filesystem. No retry or remote command
   ran. The complete green diff, closed/exported bead and excluded
   `.bosun_commit_msg` are ready for the driver to commit as Cookie.
+
+### Assigned-work blocker handoff (2026-10-28, base 3397bb43dce3)
+
+- Opening tree was clean and no commit-gate failure file existed. The required
+  health gate passed: 972 reported Rust outcomes (including sandbox IPC skips),
+  15 extension test files, both Clippy configurations, build, fmt, generation,
+  npm install, typecheck and lint. README extras passed too: current-state and
+  queue checks, two script files, and 10,696 inert Markdown renderings.
+  Headless macOS smoke refused Linux before setup; browser acceptance remains
+  untested here. No product code changed or feature shipped this cycle.
+- Both assignments are externally blocked. To unblock `brwr-7vf`, complete
+  human `brwr-mff` (add/lock bundled rusqlite, check cargo-deny, warm the cache),
+  then implement `brwr-b2e` before the concurrent-host acceptance test. Neither
+  rusqlite nor libsqlite3-sys is cached locally. `brwr-iqx` needs operator
+  reconciliation of its deleted VaultCheckFinisher target; the missing-folder regression
+  passed. Evidence was appended to both beads and exported; no assigned label,
+  acceptance criterion, dependency or human gate changed.
+- Queue review found no actionable assigned work. Keep the existing larger
+  product proposals (`brwr-ued` focus sessions and `brwr-ppn` worklog curation)
+  for when assigned work clears; no duplicate proposal or internal hardening
+  task was added to fill a blocked cycle. DESIGN.md's contracts are unchanged.
+  CookieFeature.md and pending feature briefings remain unchanged because
+  there is no shipped feature to document. No remote review or API ran; the
+  driver supplies the independent review and unrestricted IPC checks.
+- The single commit attempt failed at `git add` because `.git/index.lock`
+  is read-only. The reviewed diff and excluded `.bosun_commit_msg` are ready
+  for the driver; no retry, push or merge ran.
