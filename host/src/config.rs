@@ -26,7 +26,7 @@ thread_local! {
     static ADAPTER_OVERLAP_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-use crate::brand::{APP_NAME, NAMESPACE};
+use crate::brand::APP_NAME;
 use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::vault::{
@@ -325,8 +325,9 @@ impl ConfigStore {
             return;
         }
         if let Err(error) = self.migrate_layout() {
-            eprintln!(
-                "{NAMESPACE}: warning: could not move folders to the fixed layout: {error:#}"
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not move folders to the fixed layout"
             );
         }
     }
@@ -423,7 +424,7 @@ impl ConfigStore {
             // inert instead; each request refreshes, fails the same way, and
             // answers invalid_config until the file is readable again.
             Err(error) => {
-                eprintln!("{NAMESPACE}: warning: configuration is unreadable: {error:#}");
+                tracing::warn!(error = format!("{error:#}"), "configuration is unreadable");
                 let mut store = Self::for_path(path);
                 store.become_inert();
                 store
@@ -457,7 +458,10 @@ impl ConfigStore {
         if let Some(parent) = self.path.parent()
             && let Err(error) = sweep_config_temporaries(parent)
         {
-            eprintln!("{NAMESPACE}: warning: could not sweep config temporaries: {error:#}");
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not sweep config temporaries"
+            );
         }
         if !self.configured() {
             return;
@@ -468,8 +472,9 @@ impl ConfigStore {
         if let Err(error) = Vault::open_checked(storage, self.root_identity())
             .and_then(|vault| vault.sweep_stale_temporaries())
         {
-            eprintln!(
-                "{NAMESPACE}: warning: could not sweep page-note and summary temporaries: {error:#}"
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not sweep page-note and summary temporaries"
             );
         }
         // A host killed during an artifact pass leaves its temporaries.
@@ -477,7 +482,10 @@ impl ConfigStore {
             ArtifactIndex::open_in(storage, self.root_identity(), &cache_dir)?
                 .sweep_stale_temporaries()
         }) {
-            eprintln!("{NAMESPACE}: warning: could not sweep artifact temporaries: {error:#}");
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not sweep artifact temporaries"
+            );
         }
     }
 
@@ -548,8 +556,9 @@ impl ConfigStore {
                 // Until then a hand removal of one leaves its pages on URL
                 // keys (DESIGN.md §6.2), which settings reports.
                 Err(error) => {
-                    eprintln!(
-                        "{NAMESPACE}: warning: could not record adopted adapter contracts: {error:#}"
+                    tracing::warn!(
+                        error = format!("{error:#}"),
+                        "could not record adopted adapter contracts"
                     );
                     let state = path.display();
                     self.adopted_full = error.downcast_ref::<RecordFull>().is_some();
@@ -1738,7 +1747,10 @@ fn publish_config(parent: &Path, path: &Path, serialized: &str) -> Result<String
     write_result?;
     fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
     if let Err(error) = sync_parent(parent) {
-        eprintln!("{NAMESPACE}: warning: config was saved but directory sync failed: {error:#}");
+        tracing::warn!(
+            error = format!("{error:#}"),
+            "config was saved but directory sync failed"
+        );
     }
     Ok(revision_for(serialized.as_bytes()))
 }
@@ -2738,8 +2750,9 @@ fn record_adopted_contracts(
     write_result?;
     fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
     if let Err(error) = sync_parent(parent) {
-        eprintln!(
-            "{NAMESPACE}: warning: contract state was saved but directory sync failed: {error:#}"
+        tracing::warn!(
+            error = format!("{error:#}"),
+            "contract state was saved but directory sync failed"
         );
     }
     Ok(AdoptedContracts::Read {

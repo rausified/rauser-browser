@@ -113,10 +113,7 @@ fn exit_when_parent_goes_away() {
                 Err(_) => break,
             }
         }
-        eprintln!(
-            "{}: dialog closed because its request ended",
-            crate::brand::NAMESPACE
-        );
+        tracing::warn!("dialog closed because its request ended");
         std::process::exit(1);
     });
 }
@@ -290,10 +287,7 @@ pub mod scripted {
         timeout: Duration,
     ) -> Result<String> {
         let dialog = dialog_name(command)?;
-        eprintln!(
-            "{}: scripted dialog {dialog}; no UI shown",
-            crate::brand::NAMESPACE
-        );
+        tracing::warn!(dialog, "scripted dialog; no UI shown");
         let mut line = serde_json::to_string(&Shown { dialog, text })?;
         line.push('\n');
         OpenOptions::new()

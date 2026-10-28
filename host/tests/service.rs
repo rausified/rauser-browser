@@ -151,7 +151,9 @@ impl World {
             .env(SCRIPTED_DIALOGS_ENV, self.path("dialogs"))
             .env(FAKE_HARNESS_ENV, self.harness())
             .env(SERVICE_IDLE_SECS_ENV, self.idle_secs)
-            .env(RUN_TIMEOUT_SECS_ENV, "30");
+            .env(RUN_TIMEOUT_SECS_ENV, "30")
+            // Test builds log only where this says (diag.rs).
+            .env("BRAUSER_LOG_DIR", self.path("logs"));
         if self.spawn {
             command.env(SERVICE_SPAWN_ENV, "1");
         }

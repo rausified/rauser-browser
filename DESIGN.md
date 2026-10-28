@@ -17,7 +17,7 @@ Brauser turns the browser into a place where context accumulates instead of disa
 - **Surfaces** related pages from the user's history and notes
 - Provides an **omnibar** for commands and free-text workflows, usually operating on the current page
 
-Captured notes, the artifact log, artifact files, and read-later items are plain Markdown in a folder the user chooses. Operational config and a rebuildable search index stay in standard per-user OS locations. No cloud service, no account, no telemetry.
+Captured notes, the artifact log, artifact files, and read-later items are plain Markdown in a folder the user chooses. Operational config and a rebuildable search index stay in standard per-user OS locations. No cloud service, no account, no telemetry: local diagnostics files (§15) stay on the computer and are never sent anywhere.
 
 ## 2. Design Principles
 
@@ -1412,7 +1412,7 @@ M1.5a adds `idle` and uses `tabs.onActivated`, `tabs.onRemoved`, `tabs.onReplace
 /host             Rust native host and `brauser` CLI, one crate
 /adapter-templates Rust crate for the adapter-template language (M1.5a; adapter-templates.md)
 /protocol         Shared message schema (JSON Schema → generated TS and Rust types)
-/scripts          Development scripts: dev native-host registration and the macOS smoke runner
+/scripts          Development scripts: dev native-host registration, the macOS smoke runner, and the log reader (§15)
 /installers       macOS user installer; optional Homebrew formula
 /fixtures         Sample vault and captured pages for tests
 /docs             DESIGN.md, adapter-templates.md, SECURITY.md, CONTRIBUTING.md, config reference, one page per starter adapter (docs/adapters/)
@@ -1606,3 +1606,48 @@ The open M2 question about where a Chrome-spawned host gets auth values, closed 
 Side panel decisions (2026-09-28):
 
 - The editable-notes, no-AI-output, and `/log`-on-any-page decisions, now stated in §5.3 and §5.6, and the notes-on-any-page decision, superseded by Standing access (above): (history: [docs/history.md §14](docs/history.md#14-open-questions--history))
+
+## 15. Diagnostics
+
+Brauser keeps local diagnostics so a failure can be followed after the fact: structured logs and spans from the native host, the service, and the CLI, and a small ring buffer in the extension. They are files on this computer. Nothing is sent anywhere, and there is no setting that sends them; a user shares them only by copying them out.
+
+**Files.** Each process appends JSON lines to its own file in the log directory: `host.jsonl` (every native host process Chrome starts), `service.jsonl` (the Brauser service), and `cli.jsonl` (`brauser reindex`, `brauser adapters`, and other commands). A file is rotated when it reaches 5 MiB, to `.1` (newest) through `.3`; older copies are deleted. Files are created mode 0600 on Unix. Many host processes may write `host.jsonl` at once: each event is one append, and a process that finds the file already rotated by another follows it instead of rotating again (`RotatingFile` in host/src/diag.rs).
+
+| OS | Log directory |
+|---|---|
+| macOS | `~/Library/Logs/Brauser/` (beside the development service's `service.log`) |
+| Windows | `%LOCALAPPDATA%\Brauser\data\logs\` |
+| Linux (development only, §13) | `$XDG_DATA_HOME/brauser/logs/`, default `~/.local/share/brauser/logs/` |
+
+`BRAUSER_LOG_DIR` replaces the directory. `BRAUSER_LOG` sets the filter in `tracing-subscriber` `EnvFilter` syntax (`debug`, `brauser_host::service=debug`); the default is `info`. Test builds and `scripted-dialogs` builds write no file unless `BRAUSER_LOG_DIR` is set, so tests and the headless smoke run never touch the real directory. A directory that cannot be opened never fails the process: it logs to stderr only and says why once.
+
+**Line shape.** `tracing-subscriber`'s JSON format, one event per line:
+
+```json
+{"timestamp":"2026-10-28T12:02:48.433990Z","level":"WARN","fields":{"message":"request failed","outcome":"service_unavailable","error":"…","elapsed_ms":40},"target":"brauser_host::native","spans":[{"name":"process","proc":"host","pid":49063,"build":"0.1.0+c8b3bd86a120"},{"name":"request","request_id":"…","kind":"start_run"}]}
+```
+
+`timestamp` is UTC. `level` is `TRACE` through `ERROR`. `fields.message` is a short, stable, lower-case event name (a grep key); the other `fields` are the event's own. `spans` lists the spans the event happened in, outermost first. The first is always the root `process` span: `proc` (`host`, `service`, or `cli`), `pid`, and `build` (`BUILD_LABEL`, the `<version>+<commit>` label the page headers show), so lines from many short-lived host processes stay apart. Spans write no open or close lines of their own; each ends with an explicit event (`request done`, `service call done`, `run finished`, `connection closed`) that carries its outcome and `elapsed_ms`. A panic is logged as an `error` event `panic` with its location, in the spans it happened in, before the default hook prints it.
+
+**Correlation.** Every protocol request carries a `request_id` the extension makes (`crypto.randomUUID`); the host enters a span with it for the request and forwards it to the service with a run message, so one id follows a click from the extension, through the host, into the service. A run's `run_id` is a span field for everything the service does for that run (queue, harness turns, finishing). Field names are fixed:
+
+| Field | Meaning |
+|---|---|
+| `request_id` | the extension's id for one protocol request |
+| `kind` | the request's protocol tag (`start_run`, `visit`, `update_config`, …) |
+| `run_id` | the service run |
+| `harness` | the run's `HarnessId` (`codex` or `claude`) |
+| `outcome` | `ok`, or the protocol `ErrorCode` as its wire string (`service_unavailable`) |
+| `error` | the error's message text |
+| `elapsed_ms` | wall time of the step the event ends |
+| `origin` | a page's origin, the only form of a URL in a log |
+
+**Levels.** `error`: something failed that the user will notice. `warn`: degraded but continued (what was an `eprintln!` warning). `info`: one line per request and per run lifecycle step. `debug`: detail, such as batch internals. The info volume stays modest: one line per capture or visit request, never one per event in a batch.
+
+**stderr.** Warnings and errors are also written to stderr as plain text, as before the files existed: Chrome's log for the host, and launchd's `~/Library/Logs/Brauser/service.log` for the development service (§3.2).
+
+**Extension.** `extension/diag.ts` keeps a capped in-memory ring buffer of recent events in each extension context (`{ts, level, ctx, event, fields}`, with `ctx` naming the context), under the same field names and privacy rules, and puts the `request_id` it sends on its own events. The options page's **Copy diagnostics** copies the buffer to the clipboard as JSON lines; nothing else takes it out of the extension.
+
+**Reader.** `npm run logs` (`scripts/brauser-logs.mjs`) reads all three files and their rotations from the directory above (or `BRAUSER_LOG_DIR`, or `--dir`), merges them by time, and prints one compact line per event: time, `proc:pid`, level, message, and the key fields, with ids shortened. It filters by `--request` and `--run` (a prefix of the id, matched on the event or any of its spans), `--level`, `--errors` (warn and up), `--since` (`10m`, `2h`, or an ISO time), and `--proc`; `--json` prints the raw lines, `--follow` tails the live files, and `--extension <file>` merges a Copy diagnostics export as proc `ext`. It counts and reports malformed lines instead of failing, and never writes to the log directory.
+
+**Privacy.** Diagnostics record what happened, never what the user read or wrote. Never log page text or extracted content, note text, titles, prompts, answers, streamed agent output, a harness's stdout or stderr, file contents, or any `agent.env` name or value. A URL is logged only as its origin (`diag::url_origin`; `https://example.com`). A vault path is logged only relative to the home folder, or as a file name. Errors are logged with their message text, as the stderr warnings already were. A harness's own output stays in its run's `run.log` (§4.5), never in a diagnostics file.

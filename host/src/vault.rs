@@ -500,9 +500,10 @@ impl Vault {
         for (folder, prefix) in folders {
             match self.sweep_temporaries_in(folder, &prefix) {
                 Ok(count) => removed += count,
-                Err(error) => eprintln!(
-                    "{NAMESPACE}: warning: could not sweep temporaries in {}: {error:#}",
-                    folder.display()
+                Err(error) => tracing::warn!(
+                    folder = %folder.file_name().unwrap_or_default().to_string_lossy(),
+                    error = format!("{error:#}"),
+                    "could not sweep temporaries"
                 ),
             }
         }

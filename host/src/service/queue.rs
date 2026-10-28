@@ -119,6 +119,16 @@ impl Scheduler {
         self.running.is_empty() && self.waiting.is_empty()
     }
 
+    /// How many runs wait for a slot.
+    pub fn waiting_len(&self) -> usize {
+        self.waiting.len()
+    }
+
+    /// How many runs hold a slot.
+    pub fn running_len(&self) -> usize {
+        self.running.len()
+    }
+
     fn free_key(&mut self, id: Uuid) {
         self.by_key.retain(|_, owner| *owner != id);
         self.held.remove(&id);

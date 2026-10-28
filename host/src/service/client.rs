@@ -108,16 +108,79 @@ impl ServiceLink {
     /// A restart is decided under [`ServiceLink::restart_lock`], with the
     /// build checked again once the lock is held, so a host that waited for
     /// another host's restart finds the fresh service and leaves it running.
+    ///
+    /// Runs in a `service call` span (`request_id`, `kind`, `launch`,
+    /// `connect_attempts`, `restarted`, `reconnected`, `outcome`,
+    /// `elapsed_ms`) that ends with one `service call done` event. `launch`
+    /// is `already_running` when nothing had to be started, else the last
+    /// start's result: `started`, `not_installed`, or `refused`.
     pub fn request(&self, request: &Request) -> Result<Response, ServiceError> {
+        let started = Instant::now();
+        let span = tracing::info_span!(
+            "service call",
+            request_id = request.request_id(),
+            kind = crate::native::request_kind(request),
+            launch = tracing::field::Empty,
+            connect_attempts = tracing::field::Empty,
+            restarted = tracing::field::Empty,
+            reconnected = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            elapsed_ms = tracing::field::Empty,
+        );
+        let _entered = span.enter();
+        let mut trace = CallTrace::default();
+        let result = self.call(request, &mut trace);
+        let elapsed_ms = crate::diag::elapsed_ms(started);
+        let launch = trace.launch.unwrap_or("already_running");
+        span.record("launch", launch);
+        span.record("connect_attempts", trace.connect_attempts);
+        span.record("restarted", trace.restarted);
+        span.record("reconnected", trace.reconnected);
+        span.record("elapsed_ms", elapsed_ms);
+        match &result {
+            Ok(response) => {
+                let outcome = match response {
+                    Response::Error(refused) => crate::native::error_code_name(refused.code),
+                    _ => "ok",
+                };
+                span.record("outcome", outcome);
+                tracing::info!(outcome, launch, elapsed_ms, "service call done");
+            }
+            Err(ServiceError::Unavailable(message)) => {
+                span.record("outcome", "service_unavailable");
+                tracing::warn!(
+                    outcome = "service_unavailable",
+                    launch,
+                    elapsed_ms,
+                    error = %message,
+                    "service call done"
+                );
+            }
+            Err(ServiceError::Protocol(detail)) => {
+                span.record("outcome", "internal");
+                tracing::warn!(
+                    outcome = "internal",
+                    launch,
+                    elapsed_ms,
+                    error = %detail,
+                    "service call done"
+                );
+            }
+        }
+        result
+    }
+
+    fn call(&self, request: &Request, trace: &mut CallTrace) -> Result<Response, ServiceError> {
         let mut launched = false;
-        let mut restarted = false;
-        let mut reconnected = false;
         let mut restart_lock = None;
         loop {
-            let mut stream = self.connect(&mut launched)?;
+            let mut stream = self.connect(&mut launched, trace)?;
             let current = match self.hello(&mut stream, request.request_id()) {
-                Err(ServiceError::Unavailable(message)) if message == NO_ANSWER && !reconnected => {
-                    reconnected = true;
+                Err(ServiceError::Unavailable(message))
+                    if message == NO_ANSWER && !trace.reconnected =>
+                {
+                    tracing::debug!("service closed the connection; reconnecting");
+                    trace.reconnected = true;
                     launched = false;
                     continue;
                 }
@@ -127,22 +190,24 @@ impl ServiceLink {
                 drop(restart_lock);
                 return exchange(&mut stream, request);
             }
-            if restarted {
+            if trace.restarted {
                 return Err(ServiceError::Unavailable(WRONG_BUILD.into()));
             }
             if (self.disk_build)() != self.build_id {
+                tracing::warn!("this host is older than the build on disk; not restarting");
                 return Err(ServiceError::Unavailable(HOST_OUTDATED.into()));
             }
             drop(stream);
             if restart_lock.is_none() {
+                tracing::info!("service is another build; taking the restart lock");
                 restart_lock = Some(self.lock_restart()?);
                 continue;
             }
-            restarted = true;
+            trace.restarted = true;
             // The restart starts the service, so a refused connection while
             // it comes up is waited out rather than launched again.
             launched = true;
-            self.start(true)?;
+            self.start(true, trace)?;
         }
     }
 
@@ -167,25 +232,50 @@ impl ServiceLink {
         Ok(file)
     }
 
-    fn start(&self, restart: bool) -> Result<(), ServiceError> {
-        match (self.launch)(restart) {
-            Launch::Started => Ok(()),
-            Launch::NotInstalled => Err(ServiceError::Unavailable(NOT_INSTALLED.into())),
-            Launch::Failed(reason) => Err(ServiceError::Unavailable(format!(
-                "The Brauser service could not be started: {reason}"
-            ))),
+    /// Start (or restart) the service, logging a `service launch` event.
+    fn start(&self, restart: bool, trace: &mut CallTrace) -> Result<(), ServiceError> {
+        let launch = (self.launch)(restart);
+        let outcome = match &launch {
+            Launch::Started => "started",
+            Launch::NotInstalled => "not_installed",
+            Launch::Failed(_) => "refused",
+        };
+        trace.launch = Some(outcome);
+        match launch {
+            Launch::Started => {
+                tracing::info!(restart, launch = outcome, "service launch");
+                Ok(())
+            }
+            Launch::NotInstalled => {
+                tracing::warn!(restart, launch = outcome, "service launch");
+                Err(ServiceError::Unavailable(NOT_INSTALLED.into()))
+            }
+            Launch::Failed(reason) => {
+                tracing::warn!(restart, launch = outcome, error = %reason, "service launch");
+                Err(ServiceError::Unavailable(format!(
+                    "The Brauser service could not be started: {reason}"
+                )))
+            }
         }
     }
 
     /// Connect, starting the service once if nothing listens, then retrying
     /// every 100 ms for `wait`. A start this call made that still has nothing
     /// listening after [`RELAUNCH_AFTER`] is repeated once.
-    fn connect(&self, launched: &mut bool) -> Result<UnixStream, ServiceError> {
+    fn connect(
+        &self,
+        launched: &mut bool,
+        trace: &mut CallTrace,
+    ) -> Result<UnixStream, ServiceError> {
         let mut deadline = None;
         let mut relaunch_at = None;
         loop {
+            trace.connect_attempts += 1;
             match UnixStream::connect(&self.socket) {
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => {
+                    tracing::debug!(attempts = trace.connect_attempts, "service connected");
+                    return Ok(stream);
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -193,15 +283,21 @@ impl ServiceLink {
                     ) =>
                 {
                     if !*launched {
+                        tracing::debug!(error = %error, "service not listening; starting it");
                         *launched = true;
-                        self.start(false)?;
+                        self.start(false, trace)?;
                         relaunch_at = Some(Instant::now() + RELAUNCH_AFTER);
                     } else if relaunch_at.is_some_and(|at| Instant::now() >= at) {
+                        tracing::info!("service still not listening; starting it again");
                         relaunch_at = None;
-                        self.start(false)?;
+                        self.start(false, trace)?;
                     }
                     let deadline = *deadline.get_or_insert_with(|| Instant::now() + self.wait);
                     if Instant::now() >= deadline {
+                        tracing::warn!(
+                            attempts = trace.connect_attempts,
+                            "service did not start in time"
+                        );
                         return Err(ServiceError::Unavailable(NOT_STARTED.into()));
                     }
                     thread::sleep(RETRY);
@@ -231,6 +327,17 @@ impl ServiceLink {
             )),
         }
     }
+}
+
+/// What one [`ServiceLink::request`] did on the way to its answer, for its
+/// span.
+#[derive(Default)]
+struct CallTrace {
+    /// The last start's result; `None` when the service was already up.
+    launch: Option<&'static str>,
+    connect_attempts: u32,
+    restarted: bool,
+    reconnected: bool,
 }
 
 /// Send one request and read its correlated response.
@@ -307,13 +414,48 @@ pub fn launchd_kickstart(restart: bool) -> Launch {
         .arg(&target)
         .stdin(Stdio::null())
         .stdout(Stdio::null());
-    match command.output() {
-        Ok(output) => kickstart_outcome(
+    let started = Instant::now();
+    let (status, launch) = match command.output() {
+        Ok(output) => (
             output.status.code(),
-            &String::from_utf8_lossy(&output.stderr),
+            kickstart_outcome(
+                output.status.code(),
+                &String::from_utf8_lossy(&output.stderr),
+            ),
         ),
-        Err(error) => Launch::Failed(format!("could not run launchctl: {error}")),
+        Err(error) => (
+            None,
+            Launch::Failed(format!("could not run launchctl: {error}")),
+        ),
+    };
+    let elapsed_ms = crate::diag::elapsed_ms(started);
+    match &launch {
+        Launch::Started => {
+            tracing::info!(
+                restart,
+                status,
+                outcome = "started",
+                elapsed_ms,
+                "launchd kickstart"
+            );
+        }
+        Launch::NotInstalled => tracing::info!(
+            restart,
+            status,
+            outcome = "not_installed",
+            elapsed_ms,
+            "launchd kickstart"
+        ),
+        Launch::Failed(reason) => tracing::info!(
+            restart,
+            status,
+            outcome = "refused",
+            elapsed_ms,
+            error = %reason,
+            "launchd kickstart"
+        ),
     }
+    launch
 }
 
 /// launchctl exits 113 (or says so) when the label is not loaded.
@@ -591,6 +733,39 @@ mod tests {
         let requests = service.requests();
         assert!(matches!(requests[0], Request::ServiceHello(_)));
         assert_eq!(requests[1], list_runs());
+    }
+
+    #[test]
+    fn a_service_call_logs_its_request_launch_and_outcome() {
+        use crate::diag::test_capture::{capture, events, span};
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let dir = fake::short_dir();
+        let socket = fake::socket_in(&dir);
+        let _service = FakeService::listen(&socket, fake::answering(BUILD));
+        let (running, _) = link(socket, |_| panic!("must not launch"));
+        let (response, lines, _) = capture(|| running.request(&list_runs()));
+        assert!(matches!(response, Ok(Response::RunsListed(_))));
+        let done = events(&lines, "service call done");
+        assert_eq!(done.len(), 1, "{lines:?}");
+        assert_eq!(done[0]["level"], "INFO");
+        assert_eq!(done[0]["fields"]["outcome"], "ok");
+        assert_eq!(done[0]["fields"]["launch"], "already_running");
+        let call = span(done[0], "service call").unwrap();
+        assert_eq!(call["request_id"], "list-1");
+        assert_eq!(call["kind"], "list_runs");
+
+        let dir = fake::short_dir();
+        let (missing, _) = link(fake::socket_in(&dir), |_| Launch::NotInstalled);
+        let (_, lines, _) = capture(|| missing.request(&list_runs()));
+        let launch = events(&lines, "service launch");
+        assert_eq!(launch.len(), 1, "{lines:?}");
+        assert_eq!(launch[0]["fields"]["launch"], "not_installed");
+        let done = events(&lines, "service call done");
+        assert_eq!(done[0]["level"], "WARN");
+        assert_eq!(done[0]["fields"]["outcome"], "service_unavailable");
+        assert_eq!(done[0]["fields"]["launch"], "not_installed");
     }
 
     #[test]

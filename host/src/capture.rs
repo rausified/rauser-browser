@@ -2054,7 +2054,7 @@ fn publish_intent(path: &Path, intent: &VisitIntent) -> Result<()> {
         Ok(())
     })();
     if let Err(error) = fs::remove_file(&temporary) {
-        eprintln!("{NAMESPACE}: warning: could not remove visit intent temporary file: {error}");
+        tracing::warn!(%error, "could not remove visit intent temporary file");
     }
     result
 }
@@ -2112,7 +2112,7 @@ fn publish_batch_intent(path: &Path, intent: &BatchIntent) -> Result<()> {
     if let Err(error) = fs::remove_file(&temporary)
         && error.kind() != io::ErrorKind::NotFound
     {
-        eprintln!("{NAMESPACE}: warning: could not remove batch intent temporary file: {error}");
+        tracing::warn!(%error, "could not remove batch intent temporary file");
     }
     result
 }
@@ -2291,7 +2291,7 @@ fn ensure_daily_log(dir: &Dir, name: &str) -> Result<bool> {
     }
     cleanup.disarm();
     if let Err(error) = dir.remove_file(&temporary) {
-        eprintln!("{NAMESPACE}: warning: could not remove daily log temporary file: {error}");
+        tracing::warn!(%error, "could not remove daily log temporary file");
     }
     sync_directory(dir).context("syncing new daily log directory")?;
     Ok(true)
@@ -2338,9 +2338,9 @@ fn roll_back_append(dir: &Dir, name: &Path, offset: u64, entry: &[u8]) {
     })();
     match result {
         Ok(true) => {}
-        Ok(false) => eprintln!("{NAMESPACE}: warning: daily log changed during a failed append"),
+        Ok(false) => tracing::warn!("daily log changed during a failed append"),
         Err(error) => {
-            eprintln!("{NAMESPACE}: warning: could not roll back a failed append: {error}")
+            tracing::warn!(%error, "could not roll back a failed append")
         }
     }
 }

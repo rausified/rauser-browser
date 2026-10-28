@@ -4,13 +4,57 @@ use anyhow::{Result, bail};
 #[cfg(unix)]
 use brauser_host::service;
 use brauser_host::{
-    adapters, brand::NAMESPACE, config::ConfigStore, dialog, index::ArtifactIndex, native,
+    adapters, brand::NAMESPACE, config::ConfigStore, diag, dialog, index::ArtifactIndex, native,
 };
 
 fn main() {
+    let command = std::env::args().nth(1);
+    let _diagnostics = if writes_no_files(command.as_deref()) {
+        stderr_only_diagnostics();
+        None
+    } else {
+        diag::init(process_kind(command.as_deref()))
+    };
     if let Err(error) = run() {
-        eprintln!("{NAMESPACE}: {error:#}");
+        tracing::error!(
+            error = format!("{error:#}"),
+            "{NAMESPACE} exited with an error"
+        );
         std::process::exit(1);
+    }
+}
+
+/// Read-only commands that must create no file, not even a log
+/// (`host/tests/aliases_preview.rs`): the adapter developer tools and the
+/// version and path queries.
+fn writes_no_files(command: Option<&str>) -> bool {
+    matches!(
+        command,
+        Some(adapters::COMMAND | "--version" | "--config-path")
+    )
+}
+
+/// Warnings and errors to stderr, as `diag::init` mirrors them, with no
+/// log file.
+fn stderr_only_diagnostics() {
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_target(false)
+        .without_time()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
+/// Which diagnostics file a command logs to (diag.rs).
+fn process_kind(command: Option<&str>) -> diag::Process {
+    match command {
+        None | Some("serve") => diag::Process::Host,
+        Some(origin) if origin.starts_with("chrome-extension://") => diag::Process::Host,
+        Some(command) if command == dialog::PICK_FOLDER_COMMAND => diag::Process::Host,
+        #[cfg(unix)]
+        Some(service::COMMAND) => diag::Process::Service,
+        Some(_) => diag::Process::Cli,
     }
 }
 

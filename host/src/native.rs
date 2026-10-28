@@ -2,6 +2,7 @@
 //! `crate::frame`; stdout contains frames only.
 
 use std::io::{self, Read, Write};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
@@ -12,10 +13,10 @@ use brauser_protocol::{
     WhyRecorded, WorklogResult,
 };
 
-use crate::brand::NAMESPACE;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
 use crate::config::{self, ConfigStore, NoteKeyRule};
 use crate::consent::ConsentAuthority;
+use crate::diag;
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::index::ArtifactIndex;
 use crate::note;
@@ -72,7 +73,10 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
     #[cfg(unix)]
     let link = ServiceLink::for_config(&config)
         .inspect_err(|link_error| {
-            eprintln!("{NAMESPACE}: the service cannot be reached: {link_error:#}");
+            tracing::warn!(
+                error = format!("{link_error:#}"),
+                "the service cannot be reached"
+            );
         })
         .ok();
     #[cfg(unix)]
@@ -85,20 +89,100 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
     serve_with_context(input, output, config, &context)
 }
 
+/// Process requests until the browser closes the pipe, inside one
+/// `connection` span that ends with a `connection closed` event recording
+/// `interactive`, the number of `requests`, and the `close` reason: `eof`,
+/// `oversized`, `io_error` (reading), or `write_error`.
 pub fn serve_with_context<R: Read, W: Write>(
+    input: R,
+    output: W,
+    config: ConfigStore,
+    context: &SetupContext<'_>,
+) -> Result<()> {
+    let span = tracing::info_span!(
+        "connection",
+        interactive = tracing::field::Empty,
+        requests = tracing::field::Empty,
+        close = tracing::field::Empty,
+    );
+    let _entered = span.enter();
+    tracing::debug!("connection open");
+    let mut connection = Connection::default();
+    let result = serve_requests(input, output, config, context, &mut connection);
+    let close = match &result {
+        Ok(()) => "eof",
+        Err(ServeEnd::Oversized) => "oversized",
+        Err(ServeEnd::Read(_)) => "io_error",
+        Err(ServeEnd::Write(_)) => "write_error",
+    };
+    let Connection {
+        requests,
+        interactive,
+    } = connection;
+    span.record("interactive", interactive);
+    span.record("requests", requests);
+    span.record("close", close);
+    match result {
+        Ok(()) => {
+            tracing::info!(close, requests, interactive, "connection closed");
+            Ok(())
+        }
+        Err(ServeEnd::Oversized) => {
+            tracing::warn!(close, requests, interactive, "connection closed");
+            bail!("oversized native message; connection closed")
+        }
+        Err(ServeEnd::Read(read_error)) => {
+            tracing::warn!(
+                close,
+                requests,
+                interactive,
+                error = format!("{read_error:#}"),
+                "connection closed"
+            );
+            Err(read_error).context("reading native message")
+        }
+        Err(ServeEnd::Write(write_error)) => {
+            tracing::warn!(
+                close,
+                requests,
+                interactive,
+                error = format!("{write_error:#}"),
+                "connection closed"
+            );
+            Err(write_error)
+        }
+    }
+}
+
+/// What one connection has seen so far, for its span.
+#[derive(Default)]
+struct Connection {
+    /// Messages dispatched (framing refusals excluded).
+    requests: u64,
+    /// Whether this is the panel's connection (`panel_request`).
+    interactive: bool,
+}
+
+/// Why a connection ended before the end of its input.
+enum ServeEnd {
+    Oversized,
+    Read(io::Error),
+    Write(anyhow::Error),
+}
+
+fn serve_requests<R: Read, W: Write>(
     mut input: R,
     mut output: W,
     mut config: ConfigStore,
     context: &SetupContext<'_>,
-) -> Result<()> {
+    connection: &mut Connection,
+) -> std::result::Result<(), ServeEnd> {
     let mut consent = ConsentAuthority::new();
-    // Whether this is the panel's connection (`panel_request`).
-    let mut interactive = false;
     loop {
         let body = match read_frame(&mut input) {
             Ok(Some(body)) => body,
             Ok(None) => {
-                regenerate_artifacts(&mut config, interactive);
+                regenerate_artifacts(&mut config, connection.interactive);
                 return Ok(());
             }
             Err(FrameError::TooLarge) => {
@@ -109,10 +193,16 @@ pub fn serve_with_context<R: Read, W: Write>(
                         ErrorCode::MessageTooLarge,
                         "native message exceeds the 4 MiB inbound limit",
                     ),
-                )?;
-                bail!("oversized native message; connection closed");
+                )
+                .map_err(ServeEnd::Write)?;
+                return Err(ServeEnd::Oversized);
             }
             Err(FrameError::InvalidLength) => {
+                tracing::info!(
+                    kind = "invalid",
+                    outcome = "invalid_request",
+                    "empty native message"
+                );
                 write_frame(
                     &mut output,
                     &error(
@@ -120,14 +210,16 @@ pub fn serve_with_context<R: Read, W: Write>(
                         ErrorCode::InvalidRequest,
                         "native message has an empty body",
                     ),
-                )?;
+                )
+                .map_err(ServeEnd::Write)?;
                 continue;
             }
-            Err(FrameError::Io(error)) => return Err(error).context("reading native message"),
+            Err(FrameError::Io(read_error)) => return Err(ServeEnd::Read(read_error)),
         };
-        interactive = interactive || panel_request(&body);
+        connection.requests += 1;
+        connection.interactive = connection.interactive || panel_request(&body);
         let response = dispatch_json(&body, &mut config, &mut consent, context);
-        write_frame(&mut output, &response)?;
+        write_frame(&mut output, &response).map_err(ServeEnd::Write)?;
     }
 }
 
@@ -162,16 +254,184 @@ fn panel_request(body: &[u8]) -> bool {
     })
 }
 
+/// Answer one message inside a `request` span (`request_id`, `kind`,
+/// `run_id`, `harness`, `outcome`, `elapsed_ms`) that ends with one
+/// `request done` event. A message whose envelope cannot be read has kind
+/// `invalid` and the empty request id its refusal carries.
 fn dispatch_json(
     body: &[u8],
     config: &mut ConfigStore,
     consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
-    match parse_envelope(body) {
-        Ok((_, request)) => dispatch(request, config, consent, context),
-        Err(response) => response,
+    let started = Instant::now();
+    let span = tracing::info_span!(
+        "request",
+        request_id = tracing::field::Empty,
+        kind = tracing::field::Empty,
+        run_id = tracing::field::Empty,
+        harness = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        elapsed_ms = tracing::field::Empty,
+    );
+    let _entered = span.enter();
+    // A failed harness setup's message can quote the probe's stderr; log
+    // only its code (DESIGN.md §15), as the service does.
+    let mut quotes_output = false;
+    let response = match parse_envelope(body) {
+        Ok((request_id, request)) => {
+            quotes_output = matches!(request, Request::SetUpHarness(_));
+            span.record("request_id", request_id.as_str());
+            span.record("kind", request_kind(&request));
+            record_run_fields(&span, request_run_fields(&request));
+            dispatch(request, config, consent, context)
+        }
+        Err(response) => {
+            span.record("request_id", response.request_id());
+            span.record("kind", "invalid");
+            response
+        }
+    };
+    record_run_fields(&span, response_run_fields(&response));
+    let elapsed_ms = diag::elapsed_ms(started);
+    span.record("elapsed_ms", elapsed_ms);
+    match &response {
+        Response::Error(refused) => {
+            let outcome = error_code_name(refused.code);
+            span.record("outcome", outcome);
+            let error = (!quotes_output).then_some(refused.message.as_str());
+            if error_code_is_failure(refused.code) {
+                tracing::warn!(outcome, elapsed_ms, error, "request done");
+            } else {
+                tracing::info!(outcome, elapsed_ms, error, "request done");
+            }
+        }
+        _ => {
+            span.record("outcome", "ok");
+            // The panel polls `get_run` while a run card is open; as in the
+            // service, a successful poll is `debug`.
+            if matches!(response, Response::RunFetched(_)) {
+                tracing::debug!(outcome = "ok", elapsed_ms, "request done");
+            } else {
+                tracing::info!(outcome = "ok", elapsed_ms, "request done");
+            }
+        }
     }
+    response
+}
+
+/// A request's serde tag (`start_run`), the `kind` field of its span.
+pub fn request_kind(request: &Request) -> &'static str {
+    match request {
+        Request::Hello(_) => "hello",
+        Request::GetConfig(_) => "get_config",
+        Request::UpdateConfig(_) => "update_config",
+        Request::ChooseFolder(_) => "choose_folder",
+        Request::RecordVisit(_) => "record_visit",
+        Request::RecordActivity(_) => "record_activity",
+        Request::RecordBatch(_) => "record_batch",
+        Request::RecordWhy(_) => "record_why",
+        Request::LoadNote(_) => "load_note",
+        Request::SaveNote(_) => "save_note",
+        Request::UseArtifactNote(_) => "use_artifact_note",
+        Request::ViewOlderNote(_) => "view_older_note",
+        Request::ListPreservedNotes(_) => "list_preserved_notes",
+        Request::ViewPreservedNote(_) => "view_preserved_note",
+        Request::GetArtifact(_) => "get_artifact",
+        Request::ListArtifacts(_) => "list_artifacts",
+        Request::Worklog(_) => "worklog",
+        Request::RefreshArtifacts(_) => "refresh_artifacts",
+        Request::DiscoverHarnesses(_) => "discover_harnesses",
+        Request::SetUpHarness(_) => "set_up_harness",
+        Request::StartRun(_) => "start_run",
+        Request::GetRun(_) => "get_run",
+        Request::ListRuns(_) => "list_runs",
+        Request::CancelRun(_) => "cancel_run",
+        Request::RetrySave(_) => "retry_save",
+        Request::OpenPath(_) => "open_path",
+        Request::OpenSummary(_) => "open_summary",
+        Request::GetAgentEnv(_) => "get_agent_env",
+        Request::DraftSite(_) => "draft_site",
+        Request::StartSiteDraft(_) => "start_site_draft",
+        Request::CheckSiteDraft(_) => "check_site_draft",
+        Request::WorklogReport(_) => "worklog_report",
+        Request::CheckCaptureSite(_) => "check_capture_site",
+        Request::GetSiteRestore(_) => "get_site_restore",
+        Request::ForgetAdoptedContracts(_) => "forget_adopted_contracts",
+        Request::ServiceHello(_) => "service_hello",
+    }
+}
+
+/// An error code's snake_case wire string, the `outcome` of a refusal.
+pub fn error_code_name(code: ErrorCode) -> &'static str {
+    match code {
+        ErrorCode::InvalidRequest => "invalid_request",
+        ErrorCode::UnsupportedProtocolVersion => "unsupported_protocol_version",
+        ErrorCode::InvalidConfig => "invalid_config",
+        ErrorCode::NotConfigured => "not_configured",
+        ErrorCode::Unauthorized => "unauthorized",
+        ErrorCode::Conflict => "conflict",
+        ErrorCode::MessageTooLarge => "message_too_large",
+        ErrorCode::Internal => "internal",
+        ErrorCode::Cancelled => "cancelled",
+        ErrorCode::ServiceUnavailable => "service_unavailable",
+    }
+}
+
+/// Whether a refusal means something failed (`warn`), rather than an
+/// answer the panel expects to show, such as a conflict (`info`).
+pub fn error_code_is_failure(code: ErrorCode) -> bool {
+    matches!(
+        code,
+        ErrorCode::Internal | ErrorCode::ServiceUnavailable | ErrorCode::MessageTooLarge
+    )
+}
+
+/// A harness id's wire string, the `harness` field.
+pub fn harness_name(harness: brauser_protocol::HarnessId) -> &'static str {
+    match harness {
+        brauser_protocol::HarnessId::Codex => "codex",
+        brauser_protocol::HarnessId::Claude => "claude",
+    }
+}
+
+type RunFields<'a> = (Option<&'a str>, Option<brauser_protocol::HarnessId>);
+
+/// The run and harness a request names, when it names one.
+fn request_run_fields(request: &Request) -> RunFields<'_> {
+    match request {
+        Request::StartRun(value) => (None, value.harness),
+        Request::SetUpHarness(value) => (None, Some(value.harness)),
+        Request::GetRun(value) => (Some(&value.run_id), None),
+        Request::CancelRun(value) => (Some(&value.run_id), None),
+        Request::RetrySave(value) => (Some(&value.run_id), None),
+        _ => (None, None),
+    }
+}
+
+/// The run and harness an answer is about, when it carries a run.
+fn response_run_fields(response: &Response) -> RunFields<'_> {
+    match response {
+        Response::RunStarted(value) => (Some(&value.run.run_id), Some(value.run.harness)),
+        Response::RunFetched(value) => (Some(&value.run.run_id), Some(value.run.harness)),
+        Response::RunUpdated(value) => (Some(&value.run.run_id), Some(value.run.harness)),
+        _ => (None, None),
+    }
+}
+
+fn record_run_fields(span: &tracing::Span, (run_id, harness): RunFields<'_>) {
+    if let Some(run_id) = run_id {
+        span.record("run_id", run_id);
+    }
+    if let Some(harness) = harness {
+        span.record("harness", harness_name(harness));
+    }
+}
+
+/// Log why a request was answered as unavailable; its response says only
+/// that it was. `what` is the event message, short and stable.
+fn warn_cause(cause: &anyhow::Error, what: &'static str) {
+    tracing::warn!(error = format!("{cause:#}"), "{what}");
 }
 
 /// Read the common envelope before the version-specific request. A newer
@@ -332,7 +592,10 @@ fn dispatch(
                     "the record of adopted adapters changed; read the settings again before forgetting it",
                 ),
                 Err(forget_error) => {
-                    eprintln!("{NAMESPACE}: could not forget adopted adapters: {forget_error:#}");
+                    tracing::error!(
+                        error = format!("{forget_error:#}"),
+                        "could not forget adopted adapters"
+                    );
                     error(
                         &value.request_id,
                         ErrorCode::Internal,
@@ -454,7 +717,10 @@ fn dispatch(
                     // The failure may come from the picker itself or from
                     // checking the folder the user picked (for example one
                     // macOS privacy settings protect); keep the cause.
-                    eprintln!("{NAMESPACE}: folder selection failed: {choose_error:#}");
+                    tracing::error!(
+                        error = format!("{choose_error:#}"),
+                        "folder selection failed"
+                    );
                     error(
                         &value.request_id,
                         ErrorCode::Internal,
@@ -590,7 +856,10 @@ fn start_run(
     // too when it reads the run's working directory.
     let resolved = match config.lock_current() {
         Ok(_config_lock) => resolve_record_key(config, &value.url),
-        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable".into())),
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            Err((ErrorCode::Internal, "configuration is unavailable".into()))
+        }
     };
     match resolved {
         Ok(key) => value.record_key = Some(key),
@@ -627,7 +896,7 @@ pub(crate) fn forward(request: &Request, service: Option<&ServiceLink>) -> Respo
             error(id, ErrorCode::ServiceUnavailable, &message)
         }
         Err(ServiceError::Protocol(detail)) => {
-            eprintln!("{NAMESPACE}: service protocol error: {detail}");
+            tracing::error!(error = %detail, "service protocol error");
             error(
                 id,
                 ErrorCode::Internal,
@@ -660,7 +929,10 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
     // lock is held. A revoked site cannot be appended after revocation commits.
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => return retryable("configuration is unavailable"),
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            return retryable("configuration is unavailable");
+        }
     };
     if config.refresh().is_err() || config.config_issue().is_some() {
         return retryable("configuration is unavailable or needs repair");
@@ -700,7 +972,10 @@ fn record_visit(value: brauser_protocol::RecordVisitRequest, config: &mut Config
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => return retryable("home folder is unavailable"),
+        Err(open_error) => {
+            warn_cause(&open_error, "capture store unavailable");
+            return retryable("home folder is unavailable");
+        }
     };
     let policy = CapturePolicy {
         enabled: config.snapshot().capture_enabled,
@@ -748,7 +1023,8 @@ fn record_activity(
     };
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return answer(
                 VisitOutcome::Retryable,
                 Some("configuration is unavailable".into()),
@@ -792,7 +1068,8 @@ fn record_activity(
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => {
+        Err(open_error) => {
+            warn_cause(&open_error, "capture store unavailable");
             return answer(
                 VisitOutcome::Retryable,
                 Some("home folder is unavailable".into()),
@@ -902,7 +1179,8 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
     };
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return Response::BatchRecorded(BatchRecorded {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -992,7 +1270,8 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => {
+        Err(open_error) => {
+            warn_cause(&open_error, "capture store unavailable");
             results.extend(durable.into_iter().map(|event| BatchEventResult {
                 event_id: match event {
                     Accepted::Visit(event) => event.event_id.clone(),
@@ -1064,7 +1343,10 @@ fn record_batch(value: brauser_protocol::RecordBatchRequest, config: &mut Config
         && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_activities(activities, &config.snapshot().strip_params)
     {
-        eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
+        tracing::warn!(
+            error = format!("{error:#}"),
+            "could not update artifact index"
+        );
     }
     results.extend(outcome.events.into_iter().map(|(event_id, outcome)| {
         let (outcome, reason, relative_path) = match outcome {
@@ -1159,7 +1441,8 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
     };
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return answer(
                 VisitOutcome::Retryable,
                 Some("configuration is unavailable".into()),
@@ -1197,7 +1480,8 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
     {
         Ok(store) => store,
-        Err(_) => {
+        Err(open_error) => {
+            warn_cause(&open_error, "capture store unavailable");
             return answer(
                 VisitOutcome::Retryable,
                 Some("home folder is unavailable".into()),
@@ -1216,7 +1500,10 @@ fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStor
         && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_why(&value.event, &config.snapshot().strip_params)
     {
-        eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
+        tracing::warn!(
+            error = format!("{error:#}"),
+            "could not update artifact index"
+        );
     } else if capture_outcome_is_duplicate(&capture_outcome) {
         reconcile_index_from_logs(config);
     }
@@ -1241,7 +1528,10 @@ fn update_activity_index(config: &ConfigStore, event: &brauser_protocol::Activit
         && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.record_activity(event, &config.snapshot().strip_params)
     {
-        eprintln!("{NAMESPACE}: warning: could not update artifact index: {error:#}");
+        tracing::warn!(
+            error = format!("{error:#}"),
+            "could not update artifact index"
+        );
     }
 }
 
@@ -1274,7 +1564,10 @@ fn reconcile_index_from_logs(config: &ConfigStore) {
         && let Ok(index) = open_index(config, storage, &cache_dir)
         && let Err(error) = index.reconcile_from_logs()
     {
-        eprintln!("{NAMESPACE}: warning: could not reconcile artifact index: {error:#}");
+        tracing::warn!(
+            error = format!("{error:#}"),
+            "could not reconcile artifact index"
+        );
     }
 }
 
@@ -1282,39 +1575,65 @@ fn reconcile_index_from_logs(config: &ConfigStore) {
 /// and on the first connection of each local day. Delivery alone only marks
 /// artifacts dirty, so a background sync does not rewrite their files.
 fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
-    let Ok(_lock) = config.lock_current() else {
-        return;
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(lock_error) => {
+            warn_cause(&lock_error, "artifact pass skipped: config lock failed");
+            return;
+        }
     };
     if config.refresh().is_err() || config.config_issue().is_some() {
+        tracing::debug!("artifact pass skipped: configuration needs repair");
         return;
     }
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return;
     };
-    let Ok(cache_dir) = config.cache_dir() else {
-        return;
+    let cache_dir = match config.cache_dir() {
+        Ok(cache_dir) => cache_dir,
+        Err(cache_error) => {
+            warn_cause(&cache_error, "artifact pass skipped: no cache directory");
+            return;
+        }
     };
     let index = match open_index(config, storage, &cache_dir) {
         Ok(index) => index,
         Err(error) => {
-            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not regenerate artifact files"
+            );
             return;
         }
     };
     if !interactive && !index.daily_pass_due(time::OffsetDateTime::now_utc()) {
         return;
     }
+    let started = Instant::now();
     match index.regenerate_dirty() {
         Ok(report) => {
+            tracing::info!(
+                interactive,
+                written = report.written,
+                unchanged = report.unchanged,
+                conflicts = report.conflicts,
+                failed = report.failed,
+                elapsed_ms = diag::elapsed_ms(started),
+                "artifact pass"
+            );
             if let Some(failure) = report.first_failure {
-                eprintln!(
-                    "{NAMESPACE}: warning: {} artifact file(s) could not be regenerated: {failure}",
-                    report.failed
+                tracing::warn!(
+                    failed = report.failed,
+                    error = %failure,
+                    "artifact files could not be regenerated"
                 );
             }
         }
         Err(error) => {
-            eprintln!("{NAMESPACE}: warning: could not regenerate artifact files: {error:#}");
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not regenerate artifact files"
+            );
         }
     }
 }
@@ -1561,11 +1880,14 @@ fn note_error(request_id: &str, error_value: note::NoteRequestError) -> Response
         note::NoteRequestError::Conflict(note::OwnershipConflict(message)) => {
             error(request_id, ErrorCode::Conflict, &message)
         }
-        note::NoteRequestError::Internal(_) => error(
-            request_id,
-            ErrorCode::Internal,
-            "could not access this page's note",
-        ),
+        note::NoteRequestError::Internal(note_error) => {
+            warn_cause(&note_error, "note access failed");
+            error(
+                request_id,
+                ErrorCode::Internal,
+                "could not access this page's note",
+            )
+        }
     }
 }
 
@@ -1573,7 +1895,8 @@ fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore)
     // Note identity lookup can catch up and publish the history cache.
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -1610,7 +1933,8 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
     // below and the write it guards happen without a concurrent writer.
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -1693,7 +2017,8 @@ fn use_artifact_note(
 ) -> Response {
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -1765,7 +2090,8 @@ fn view_older_note(
     // Note identity lookup can catch up and publish the history cache.
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -1827,7 +2153,8 @@ fn list_preserved_notes(
 ) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -1855,7 +2182,8 @@ fn view_preserved_note(
 ) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -1885,7 +2213,8 @@ fn view_preserved_note(
 fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut ConfigStore) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -2231,7 +2560,8 @@ fn list_artifacts(
 ) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -2279,7 +2609,8 @@ fn worklog_response(
 ) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -2353,7 +2684,8 @@ fn refresh_artifacts(
 ) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
             return error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -2455,6 +2787,217 @@ mod tests {
         let mut input = Cursor::new(wire);
         let json = read_frame(&mut input).unwrap().unwrap();
         serde_json::from_slice(&json).unwrap()
+    }
+
+    /// Diagnostics (diag.rs): every message gets a `request` span and one
+    /// `request done` event; no page text, title, or note reaches a log line.
+    mod diagnostics {
+        use super::*;
+        use crate::diag::test_capture::{capture, events, span};
+
+        const SENTINEL: &str = "sentinel-page-text-4c1e";
+
+        fn responses(output: Vec<u8>) -> Vec<Response> {
+            let mut reader = Cursor::new(output);
+            let mut responses = Vec::new();
+            while let Some(body) = read_frame(&mut reader).unwrap() {
+                responses.push(serde_json::from_slice::<Response>(&body).unwrap());
+            }
+            responses
+        }
+
+        fn serve_requests(input: Vec<u8>, path: &std::path::Path) -> Vec<Response> {
+            let mut output = Vec::new();
+            let config = loaded(path);
+            serve_with_context(
+                Cursor::new(input),
+                &mut output,
+                config,
+                &SetupContext::new(),
+            )
+            .unwrap();
+            responses(output)
+        }
+
+        #[test]
+        fn requests_log_their_id_kind_and_outcome_but_never_content() {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(
+                &path,
+                &root,
+                r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+            );
+            let url = format!("https://work.example/items/7?q={SENTINEL}#{SENTINEL}");
+            let occurred_at = crate::capture::fixtures::event_time()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            let ((first, second), lines, text) = capture(|| {
+                let first = serve_requests(
+                    [
+                        Request::LoadNote(brauser_protocol::LoadNoteRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "load-diag".into(),
+                            url: url.clone(),
+                        }),
+                        Request::RecordVisit(RecordVisitRequest {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: "visit-diag".into(),
+                            event: VisitEvent {
+                                event_id: "00000000-0000-4000-8000-0000000000d1".into(),
+                                url: url.clone(),
+                                title: Some(format!("Title {SENTINEL}")),
+                                occurred_at: occurred_at.clone(),
+                                incognito: false,
+                            },
+                        }),
+                    ]
+                    .into_iter()
+                    .flat_map(encoded_request)
+                    .collect(),
+                    &path,
+                );
+                let Response::NoteLoaded(loaded_note) = &first[0] else {
+                    panic!("expected note_loaded, got {:?}", first[0]);
+                };
+                let mut input =
+                    encoded_request(Request::SaveNote(brauser_protocol::SaveNoteRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "save-diag".into(),
+                        url: url.clone(),
+                        title: format!("Note {SENTINEL}"),
+                        body: format!("Body {SENTINEL}"),
+                        expected_revision: loaded_note.revision.clone(),
+                        expected_key: loaded_note.key.clone(),
+                    }));
+                // An unreadable envelope still gets a span, kind `invalid`.
+                input.extend(encoded_json(
+                    format!("{{\"type\":\"{SENTINEL}\",").as_bytes(),
+                ));
+                (first, serve_requests(input, &path))
+            });
+            assert!(matches!(first[1], Response::VisitRecorded(_)), "{first:?}");
+            assert!(matches!(second[0], Response::NoteSaved(_)), "{second:?}");
+            assert!(matches!(second[1], Response::Error(_)), "{second:?}");
+            assert!(
+                !text.contains(SENTINEL),
+                "content leaked into the log:\n{text}"
+            );
+            assert!(!text.contains("Title "), "a title leaked:\n{text}");
+
+            let done = events(&lines, "request done");
+            let summary: Vec<(String, String, String)> = done
+                .iter()
+                .map(|line| {
+                    let request = span(line, "request").expect("inside a request span");
+                    assert!(request["elapsed_ms"].is_u64(), "{line}");
+                    assert_eq!(request["outcome"], line["fields"]["outcome"]);
+                    (
+                        request["request_id"].as_str().unwrap().to_owned(),
+                        request["kind"].as_str().unwrap().to_owned(),
+                        request["outcome"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            let expected = [
+                ("load-diag", "load_note", "ok"),
+                ("visit-diag", "record_visit", "ok"),
+                ("save-diag", "save_note", "ok"),
+                ("", "invalid", "invalid_request"),
+            ]
+            .map(|(id, kind, outcome)| (id.to_owned(), kind.to_owned(), outcome.to_owned()));
+            assert_eq!(summary, expected);
+            assert!(done.iter().all(|line| line["level"] == "INFO"));
+            assert!(
+                done.iter().all(|line| span(line, "connection").is_some()),
+                "requests nest in their connection"
+            );
+
+            let closed = events(&lines, "connection closed");
+            assert_eq!(closed.len(), 2);
+            assert_eq!(closed[0]["fields"]["close"], "eof");
+            assert_eq!(closed[0]["fields"]["requests"], 2);
+            assert_eq!(closed[0]["fields"]["interactive"], true);
+            assert_eq!(closed[1]["fields"]["requests"], 2);
+        }
+
+        #[test]
+        fn failures_log_at_warn_and_an_oversized_frame_closes_the_connection() {
+            let folder = tempfile::tempdir().unwrap();
+            let config = ConfigStore::for_test(folder.path().join("config.toml"));
+            #[cfg(unix)]
+            let request = Request::ListRuns(brauser_protocol::ListRunsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "runs-diag".into(),
+            });
+            #[cfg(not(unix))]
+            let request = hello_request("runs-diag");
+            let mut input = encoded_request(request);
+            input.extend(((MAX_INBOUND_BYTES + 1) as u32).to_ne_bytes());
+            let (result, lines, _) = capture(|| {
+                serve_with_context(
+                    Cursor::new(input),
+                    &mut Vec::new(),
+                    config,
+                    &SetupContext::new(),
+                )
+            });
+            assert!(result.is_err());
+            #[cfg(unix)]
+            {
+                let done = events(&lines, "request done");
+                assert_eq!(done[0]["level"], "WARN");
+                assert_eq!(done[0]["fields"]["outcome"], "service_unavailable");
+                let request = span(done[0], "request").unwrap();
+                assert_eq!(request["kind"], "list_runs");
+            }
+            let closed = events(&lines, "connection closed");
+            assert_eq!(closed[0]["level"], "WARN");
+            assert_eq!(closed[0]["fields"]["close"], "oversized");
+        }
+
+        #[test]
+        fn wire_names_match_the_protocol() {
+            for code in [
+                ErrorCode::InvalidRequest,
+                ErrorCode::UnsupportedProtocolVersion,
+                ErrorCode::InvalidConfig,
+                ErrorCode::NotConfigured,
+                ErrorCode::Unauthorized,
+                ErrorCode::Conflict,
+                ErrorCode::MessageTooLarge,
+                ErrorCode::Internal,
+                ErrorCode::Cancelled,
+                ErrorCode::ServiceUnavailable,
+            ] {
+                assert_eq!(
+                    serde_json::to_value(code).unwrap(),
+                    error_code_name(code),
+                    "{code:?}"
+                );
+            }
+            let request = hello_request("kind");
+            assert_eq!(
+                serde_json::to_value(&request).unwrap()["type"],
+                request_kind(&request)
+            );
+            for harness in [
+                brauser_protocol::HarnessId::Codex,
+                brauser_protocol::HarnessId::Claude,
+            ] {
+                assert_eq!(
+                    serde_json::to_value(harness).unwrap(),
+                    harness_name(harness)
+                );
+            }
+        }
     }
 
     #[test]
@@ -8660,6 +9203,57 @@ title = "{title} - Jira"
                 &SetupContext::new(),
             );
             assert_eq!(refused(&response).0, ErrorCode::ServiceUnavailable);
+        }
+
+        /// A failed harness setup's message can quote the probe's stderr,
+        /// so its log lines carry only the outcome code (DESIGN.md §15).
+        #[test]
+        fn a_failed_setup_logs_its_code_but_not_the_probe_output() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            const PROBE_STDERR: &str = "sentinel-probe-stderr-77a2";
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let _service = FakeService::listen(
+                &socket,
+                Arc::new(|request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::SetUpHarness(value) => error(
+                        &value.request_id,
+                        ErrorCode::InvalidConfig,
+                        &format!("Codex failed its test run ({PROBE_STDERR}); summaries stay off"),
+                    ),
+                    _ => fake::runs_listed(request),
+                }),
+            );
+            let link = link(socket, never);
+            let context = SetupContext {
+                service: Some(&link),
+                ..SetupContext::new()
+            };
+            let body = serde_json::to_vec(&Request::SetUpHarness(
+                brauser_protocol::SetUpHarnessRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "setup-diag".into(),
+                    expected_revision: config.revision().to_owned(),
+                    harness: brauser_protocol::HarnessId::Codex,
+                    timeout_secs: None,
+                    summaries_dir: None,
+                },
+            ))
+            .unwrap();
+            let (response, lines, text) = crate::diag::test_capture::capture(|| {
+                dispatch_json(&body, &mut config, &mut ConsentAuthority::new(), &context)
+            });
+            // The extension still gets the full reason to show the user.
+            assert!(refused(&response).1.contains(PROBE_STDERR));
+            let done = crate::diag::test_capture::events(&lines, "request done");
+            assert_eq!(done.len(), 1, "{text}");
+            assert_eq!(done[0]["fields"]["outcome"], "invalid_config");
+            assert!(!text.contains(PROBE_STDERR), "{text}");
         }
 
         /// open_path and get_agent_env act on the service's own directory,

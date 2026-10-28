@@ -16,6 +16,7 @@ import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
+import { initDiag } from "./diag.js";
 import { SETUP_WARNING } from "./agent.js";
 import { NEEDS_HARNESS_MESSAGE, harnessReady, summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
@@ -34,6 +35,8 @@ import type {
   SummaryView,
   WorklogReported,
 } from "../protocol/ts/generated.js";
+
+initDiag("panel");
 
 const status = element<HTMLDivElement>("status");
 const buildId = element<HTMLSpanElement>("build-id");

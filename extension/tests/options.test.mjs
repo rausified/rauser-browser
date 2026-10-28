@@ -119,6 +119,7 @@ function install({
     ["adopted-state", "div"], ["adopted-issue", "p"], ["adopted-warnings", "ul"],
     ["forget-adopted", "button"], ["forget-adopted-confirm", "div"],
     ["forget-adopted-yes", "button"], ["forget-adopted-no", "button"],
+    ["diag-count", "p"], ["copy-diagnostics", "button"], ["clear-diagnostics", "button"],
   ]) {
     elements.set(id, new FakeElement(tag));
   }
@@ -1963,4 +1964,51 @@ test("a starter update the host refuses as a retired-contract change explains it
   await until(() => statusText().startsWith("This update") && idle(), "the refused save");
   assert.equal(statusText(), "This update overlaps an adapter you used before; edit it by hand in the editor.");
   assert.equal(env.elements.get("adapter-editor").hidden, false, "the editor stays open for a hand edit");
+});
+
+test("diagnostics show their count, copy as JSON lines with a header, and clear", async () => {
+  const { DIAG_STORAGE_KEY, diag } = await import("../dist/diag.js");
+  const seeded = [
+    { ts: "2026-10-28T00:00:00.000Z", level: "warn", ctx: "worker", event: "host sync failed", fields: { error: "offline" } },
+    { ts: "2026-10-28T00:00:01.000Z", level: "info", ctx: "panel", event: "native request failed", fields: { request_id: "r1" } },
+  ];
+  // Entries earlier settings pages left pending belong to their own storage.
+  await diag.clear();
+  install({ storage: { [DIAG_STORAGE_KEY]: seeded } });
+  chrome.runtime.getManifest = () => ({ version: "0.4.2" });
+  const copied = [];
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true, value: { async writeText(text) { copied.push(text); } },
+  });
+  try {
+    await openSettings();
+    const count = env.elements.get("diag-count");
+    await until(() => /diagnostic entr/.test(count.textContent), "the diagnostics count");
+    assert.match(count.textContent, /^\d+ diagnostic entries recorded\.$/);
+    assert.ok(Number.parseInt(count.textContent, 10) >= seeded.length);
+
+    env.elements.get("copy-diagnostics").click();
+    await until(() => copied.length === 1 && count.textContent.endsWith("Copied."), "the copy");
+    const lines = copied[0].trimEnd().split("\n").map((line) => JSON.parse(line));
+    assert.equal(lines[0].type, "brauser_diagnostics");
+    assert.equal(lines[0].extension_version, "0.4.2");
+    assert.equal(lines[0].build_id, "abc1234def56");
+    assert.equal(lines[0].protocol_version, PROTOCOL_VERSION);
+    assert.equal(lines[0].host_version, "0.0.0");
+    assert.equal(lines[0].entries, lines.length - 1);
+    assert.deepEqual(lines.slice(1, 3), seeded);
+    // The page's own native requests join the seeded entries.
+    const requests = lines.slice(1).filter((line) => line.fields?.kind === "get_config");
+    assert.ok(requests.length > 0, "the page's own native requests are logged");
+    assert.ok(requests.every((line) => line.ctx === "options" && typeof line.fields.request_id === "string"));
+    assert.equal(copied[0].includes("/vault"), false, "no folder path from a config reply is logged");
+
+    env.elements.get("clear-diagnostics").click();
+    await until(() => count.textContent === "No diagnostics recorded.", "the clear");
+    assert.equal(env.storage.has(DIAG_STORAGE_KEY), false);
+    assert.equal(env.requests.filter((request) => request.type === "update_config").length, 0);
+  } finally {
+    delete globalThis.navigator.clipboard;
+    await diag.clear();
+  }
 });
