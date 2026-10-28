@@ -945,6 +945,7 @@ captureSite = new CaptureSitePanel(session, {
     await refreshArtifact(true);
   },
   openSettings,
+  agentReady: () => harnessReady(session),
 });
 
 function copyUnsavedText(): void {
