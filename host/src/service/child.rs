@@ -6,12 +6,16 @@
 //! cancel and timeout reach the child's whole process group.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use crate::diag;
 
 use rustix::process::{Pid, Signal, kill_process_group};
 
@@ -50,6 +54,34 @@ pub struct LineChild {
     /// once what was queued is written.
     stdin: Option<Sender<Vec<u8>>>,
     lines: Receiver<ChildLine>,
+    /// What diagnostics record about the child: never its output.
+    trace: ExitTrace,
+}
+
+/// The program's file name, when it started, and how many stderr bytes it
+/// has written, for the `harness exited` event, which is logged once.
+struct ExitTrace {
+    program: String,
+    started: Instant,
+    stderr_bytes: Arc<AtomicU64>,
+    logged: bool,
+}
+
+impl ExitTrace {
+    fn log(&mut self, status: &ExitStatus) {
+        if std::mem::replace(&mut self.logged, true) {
+            return;
+        }
+        tracing::info!(
+            program = self.program.as_str(),
+            exit_code = status.code(),
+            signal = status.signal(),
+            elapsed_ms = diag::elapsed_ms(self.started),
+            // Read so far; the readers may still be draining the pipe.
+            stderr_bytes = self.stderr_bytes.load(Ordering::Relaxed),
+            "harness exited"
+        );
+    }
 }
 
 impl LineChild {
@@ -61,7 +93,19 @@ impl LineChild {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = slot.spawn(&mut command)?;
+        let program = Path::new(command.get_program())
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut child = match slot.spawn(&mut command) {
+            Ok(child) => child,
+            Err(error) => {
+                tracing::debug!(program, error = %error, "harness did not spawn");
+                return Err(error);
+            }
+        };
+        tracing::info!(program, pid = child.id(), "harness spawned");
+        let stderr_bytes = Arc::new(AtomicU64::new(0));
         let stdin = child.stdin.take().map(writer);
         let (sender, lines) = mpsc::sync_channel(QUEUE_CAPACITY);
         let open = Arc::new(AtomicUsize::new(2));
@@ -72,9 +116,17 @@ impl LineChild {
             None => finish(&sender, &open),
         }
         match child.stderr.take() {
-            Some(stderr) => reader(sender.clone(), Arc::clone(&open), move |send| {
-                read_chunks(stderr, send)
-            }),
+            Some(stderr) => {
+                let counted = Arc::clone(&stderr_bytes);
+                reader(sender.clone(), Arc::clone(&open), move |send| {
+                    read_chunks(stderr, &|line| {
+                        if let ChildLine::Stderr(bytes) = &line {
+                            counted.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        }
+                        send(line)
+                    });
+                });
+            }
             None => finish(&sender, &open),
         }
         Ok(Self {
@@ -83,6 +135,12 @@ impl LineChild {
             status: None,
             stdin,
             lines,
+            trace: ExitTrace {
+                program,
+                started: Instant::now(),
+                stderr_bytes,
+                logged: false,
+            },
         })
     }
 
@@ -141,6 +199,9 @@ impl LineChild {
         }
         let _ = kill_process_group(Pid::from_child(&self.child), Signal::KILL);
         self.status = self.slot.try_reap(&mut self.child)?;
+        if let Some(status) = &self.status {
+            self.trace.log(status);
+        }
         Ok(self.status)
     }
 
@@ -155,13 +216,16 @@ impl LineChild {
             status,
             stdin,
             lines,
+            mut trace,
         } = self;
         drop(stdin);
         drop(lines);
-        match status {
-            Some(status) => Ok(status),
-            None => slot.reap(&mut child),
-        }
+        let status = match status {
+            Some(status) => status,
+            None => slot.reap(&mut child)?,
+        };
+        trace.log(&status);
+        Ok(status)
     }
 }
 

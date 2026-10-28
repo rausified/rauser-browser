@@ -29,9 +29,9 @@ use super::paths::{self, ServicePaths};
 use super::record::check_start_run;
 use super::setup;
 use super::supervisor::{CwdCheck, EnvSource, ServiceOptions, StartRun, Supervisor};
-use crate::brand::NAMESPACE;
 use crate::capture_site::exact_origin;
 use crate::config::{ConfigLock, ConfigStore, default_summary_vocabulary};
+use crate::diag;
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::native::{error, parse_envelope};
@@ -122,6 +122,7 @@ pub fn serve(
         _lock: lock,
     };
     write_pid(&cleanup.pid)?;
+    tracing::debug!(file = file_name(&cleanup.pid), "pid file written");
     let socket = paths.socket()?;
     remove_stale_socket(&socket)?;
     let supervisor = supervisor()?;
@@ -133,6 +134,12 @@ pub fn serve(
     listener
         .set_nonblocking(true)
         .context("configuring the service socket")?;
+    tracing::info!(
+        socket = file_name(&socket),
+        idle_exit_secs = options.idle_exit.as_secs(),
+        run_timeout_secs = options.run_timeout.as_secs(),
+        "service started"
+    );
 
     let server = Arc::new(Server {
         paths: paths.clone(),
@@ -149,7 +156,10 @@ pub fn serve(
             Ok((stream, _)) => {
                 server.arrived();
                 let server = server.clone();
-                thread::spawn(move || server.connection(stream));
+                // The process span, which lives as long as the service.
+                thread::spawn(super::traced(tracing::Span::current(), move || {
+                    server.connection(stream);
+                }));
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 if server.idle(options.idle_exit) {
@@ -160,7 +170,7 @@ pub fn serve(
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             // Running out of descriptors is transient; keep serving.
             Err(error) => {
-                eprintln!("{NAMESPACE} service: accepting a connection: {error}");
+                tracing::warn!(error = %error, "accepting a connection");
                 thread::sleep(ACCEPT_POLL);
             }
         }
@@ -184,6 +194,13 @@ impl Drop for Cleanup {
     }
 }
 
+/// A path's file name, the only part of a support-directory path logged.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn write_pid(path: &Path) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -200,7 +217,10 @@ fn write_pid(path: &Path) -> Result<()> {
 fn remove_stale_socket(socket: &Path) -> Result<()> {
     match fs::symlink_metadata(socket) {
         Ok(metadata) if metadata.file_type().is_socket() => {
-            fs::remove_file(socket).with_context(|| format!("removing stale {}", socket.display()))
+            fs::remove_file(socket)
+                .with_context(|| format!("removing stale {}", socket.display()))?;
+            tracing::info!(socket = file_name(socket), "stale socket removed");
+            Ok(())
         }
         Ok(_) => bail!("{} exists and is not a socket", socket.display()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
@@ -264,13 +284,67 @@ impl Server {
             };
             self.arrived();
             let response = match parse_envelope(&body) {
-                Ok((_, request)) => self.dispatch_service(request),
-                Err(response) => response,
+                Ok((id, request)) => self.traced_dispatch(&id, &request_kind(&body), request),
+                Err(response) => {
+                    tracing::info!(
+                        outcome = outcome(&response),
+                        error = refusal(&response),
+                        "request refused"
+                    );
+                    response
+                }
             };
             if write_frame(&mut stream, &response).is_err() {
+                tracing::debug!("connection closed before the response");
                 return;
             }
         }
+    }
+
+    /// [`Server::dispatch_service`] inside a `request` span carrying the
+    /// extension's `request_id`, so one request joins `host.jsonl` and
+    /// `service.jsonl`. The panel polls `get_run` while a run card is open,
+    /// so that one is `debug`; every other request is `info`. Error text is
+    /// host-authored, except a harness setup's refusal, which can quote the
+    /// probe's stderr, so only its code is recorded.
+    fn traced_dispatch(&self, id: &str, kind: &str, request: Request) -> Response {
+        let span = if kind == "get_run" {
+            tracing::debug_span!(
+                "request",
+                request_id = id,
+                kind,
+                outcome = tracing::field::Empty,
+                error = tracing::field::Empty,
+                elapsed_ms = tracing::field::Empty,
+            )
+        } else {
+            tracing::info_span!(
+                "request",
+                request_id = id,
+                kind,
+                outcome = tracing::field::Empty,
+                error = tracing::field::Empty,
+                elapsed_ms = tracing::field::Empty,
+            )
+        };
+        let _entered = span.enter();
+        let started = Instant::now();
+        let quotes_output = matches!(request, Request::SetUpHarness(_));
+        let response = self.dispatch_service(request);
+        let outcome = outcome(&response);
+        span.record("outcome", outcome);
+        if !quotes_output && let Some(error) = refusal(&response) {
+            span.record("error", error);
+        }
+        span.record("elapsed_ms", diag::elapsed_ms(started));
+        // A span's close line does not carry the span's own fields, so this
+        // line is where the outcome is read. A failed poll is `info` too.
+        if kind == "get_run" && outcome == "ok" {
+            tracing::debug!("request finished");
+        } else {
+            tracing::info!("request finished");
+        }
+        response
     }
 
     fn dispatch_service(&self, request: Request) -> Response {
@@ -609,6 +683,51 @@ fn run_updated(
     }
 }
 
+/// A request's serde tag (`start_run`), read from a frame `parse_envelope`
+/// already accepted.
+fn request_kind(body: &[u8]) -> String {
+    #[derive(serde::Deserialize)]
+    struct Tag {
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    serde_json::from_slice::<Tag>(body)
+        .map(|tag| tag.kind)
+        .unwrap_or_default()
+}
+
+/// `ok`, or the response's error code as its wire string.
+fn outcome(response: &Response) -> &'static str {
+    match response {
+        Response::Error(error) => error_code_name(error.code),
+        _ => "ok",
+    }
+}
+
+/// An error response's message.
+fn refusal(response: &Response) -> Option<&str> {
+    match response {
+        Response::Error(error) => Some(error.message.as_str()),
+        _ => None,
+    }
+}
+
+/// An error code's snake_case wire string.
+fn error_code_name(code: ErrorCode) -> &'static str {
+    match code {
+        ErrorCode::InvalidRequest => "invalid_request",
+        ErrorCode::UnsupportedProtocolVersion => "unsupported_protocol_version",
+        ErrorCode::InvalidConfig => "invalid_config",
+        ErrorCode::NotConfigured => "not_configured",
+        ErrorCode::Unauthorized => "unauthorized",
+        ErrorCode::Conflict => "conflict",
+        ErrorCode::MessageTooLarge => "message_too_large",
+        ErrorCode::Internal => "internal",
+        ErrorCode::Cancelled => "cancelled",
+        ErrorCode::ServiceUnavailable => "service_unavailable",
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -749,7 +868,8 @@ mod tests {
             let config = self.config();
             let finisher_config = self.support.join("config.toml");
             let program = self.program.clone();
-            let handle = thread::spawn(move || {
+            // Under the test's own subscriber, if it set one (`capture`).
+            let serving = crate::service::traced(tracing::Span::none(), move || {
                 let options = Self::options(&paths, &config, idle_exit, run_timeout);
                 serve(&paths, config, &options, || {
                     let registry = HarnessRegistry::from_lookup(|name| {
@@ -765,6 +885,7 @@ mod tests {
                     ))
                 })
             });
+            let handle = thread::spawn(serving);
             let deadline = Instant::now() + Duration::from_secs(5);
             while UnixStream::connect(self.socket()).is_err() {
                 assert!(Instant::now() < deadline, "service never listened");
@@ -907,6 +1028,198 @@ mod tests {
             .unwrap();
             assert_eq!(read_response(&mut stream).request_id(), id);
         }
+    }
+
+    /// The JSON lines written while `body` runs on this thread, and on the
+    /// threads it starts through `traced`, at every level.
+    fn capture(body: impl FnOnce()) -> Vec<serde_json::Value> {
+        #[derive(Clone, Default)]
+        struct Lines(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for Lines {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_current_span(false)
+            .with_span_list(true)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, body);
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        text.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// The first line whose message is `message` (a span's close line is
+    /// `close`) inside a span with `field` = `value`.
+    fn line_in<'a>(
+        lines: &'a [serde_json::Value],
+        message: &str,
+        field: &str,
+        value: &str,
+    ) -> Option<&'a serde_json::Value> {
+        lines.iter().find(|line| {
+            line["fields"]["message"] == message
+                && line["spans"]
+                    .as_array()
+                    .is_some_and(|spans| spans.iter().any(|span| span[field] == value))
+        })
+    }
+
+    #[test]
+    fn a_run_is_logged_by_request_and_run_id_without_page_or_harness_text() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        const PAGE: &str = "page-sentinel-3b7e";
+        const TITLE: &str = "title-sentinel-9a41";
+        const PATH: &str = "path-sentinel-c02d";
+        const ANSWER: &str = "answer-sentinel-55f0";
+        const STDERR: &str = "stderr-sentinel-e81a";
+        let world = World::new(&format!("echo '{STDERR}' >&2\n{}", answering(ANSWER)));
+        let url = format!("https://example.com/{PATH}?q={PATH}");
+        let mut run_id = String::new();
+        let lines = capture(|| {
+            let service = world.start(Duration::from_millis(300));
+            let started = world.call(&Request::StartRun(StartRunRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "req-start-1".into(),
+                url: url.clone(),
+                title: TITLE.into(),
+                content: PAGE.into(),
+                selection: None,
+                harness: None,
+                record_key: Some(RecordKey {
+                    kind: RecordKeyKind::Url,
+                    value: url.clone(),
+                }),
+                requested_at: "2026-10-26T10:00:00Z".into(),
+                kind: None,
+            }));
+            run_id = match started {
+                Response::RunStarted(started) => started.run.run_id,
+                other => panic!("unexpected response: {other:?}"),
+            };
+            let fetched = world.wait_finished(&run_id);
+            assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+            assert!(fetched.stream_text.contains(ANSWER), "{fetched:?}");
+            // Idle exit closes the run's span and logs the exit.
+            assert_eq!(service.join().unwrap().unwrap(), ServeExit::Idle);
+        });
+        let all = lines
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for sentinel in [PAGE, TITLE, PATH, ANSWER, STDERR] {
+            assert!(!all.contains(sentinel), "{sentinel} was logged:\n{all}");
+        }
+
+        // The start_run request: it finishes with its outcome, and the run
+        // is queued inside it, so request_id meets run_id.
+        let request = line_in(&lines, "request finished", "request_id", "req-start-1").expect(&all);
+        let span = &request["spans"].as_array().unwrap().last().unwrap();
+        assert_eq!(span["kind"], "start_run", "{all}");
+        assert_eq!(span["outcome"], "ok", "{all}");
+        assert!(span["elapsed_ms"].is_u64(), "{all}");
+        let queued = line_in(&lines, "run queued", "request_id", "req-start-1").expect(&all);
+        assert_eq!(queued["fields"]["run_id"], run_id.as_str(), "{all}");
+        assert_eq!(queued["fields"]["origin"], "https://example.com", "{all}");
+
+        // The run's own events, in order, inside its `run` span.
+        let position = |message: &str| {
+            lines
+                .iter()
+                .position(|line| {
+                    line["fields"]["message"] == message
+                        && line["spans"].as_array().is_some_and(|spans| {
+                            spans.iter().any(|span| {
+                                span["name"] == "run" && span["run_id"] == run_id.as_str()
+                            })
+                        })
+                })
+                .unwrap_or_else(|| panic!("no {message} in the run span:\n{all}"))
+        };
+        let order = [
+            "run started",
+            "harness spawned",
+            "first output",
+            "turn completed",
+            "answer validated",
+            "run saved",
+            "run finished",
+        ]
+        .map(position);
+        assert!(order.is_sorted(), "{order:?}\n{all}");
+        // The harness may exit before its first line is read.
+        let exited = position("harness exited");
+        assert!(order[1] < exited && exited < order[3], "{all}");
+        let finished = &lines[order[6]];
+        assert_eq!(finished["fields"]["state"], "succeeded", "{all}");
+        assert!(finished["fields"]["elapsed_ms"].is_u64(), "{all}");
+        assert_eq!(lines[exited]["fields"]["exit_code"], 0, "{all}");
+        let run = line_in(&lines, "run started", "run_id", &run_id).unwrap();
+        let span = run["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["name"] == "run")
+            .unwrap();
+        assert_eq!(span["harness"], "claude", "{all}");
+        assert_eq!(span["kind"], "summary", "{all}");
+        assert_eq!(span["origin"], "https://example.com", "{all}");
+        let service = lines
+            .iter()
+            .find(|line| line["fields"]["message"] == "service started")
+            .expect(&all);
+        assert_eq!(service["fields"]["socket"], "service.sock", "{all}");
+    }
+
+    #[test]
+    fn a_failed_run_logs_its_reason_code_but_not_the_harness_stderr() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        const STDERR: &str = "stderr-sentinel-0c9b";
+        let world = World::new(&format!("echo '{STDERR}' >&2\nexit 3\n"));
+        let mut run_id = String::new();
+        let lines = capture(|| {
+            world.start(Duration::from_secs(600));
+            run_id = world.started_run_id();
+            let fetched = world.wait_finished(&run_id);
+            assert_eq!(fetched.run.state, RunState::Failed, "{fetched:?}");
+            // The run's own error quotes the stderr; the logs never do.
+            assert!(
+                fetched.run.error.as_deref().unwrap_or("").contains(STDERR),
+                "{fetched:?}"
+            );
+        });
+        let all = lines
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!all.contains(STDERR), "{all}");
+        let failed = line_in(&lines, "run failed", "run_id", &run_id).expect(&all);
+        assert_eq!(failed["level"], "ERROR", "{all}");
+        assert_eq!(failed["fields"]["reason"], "harness_failed", "{all}");
+        let exited = line_in(&lines, "harness exited", "run_id", &run_id).expect(&all);
+        assert_eq!(exited["fields"]["exit_code"], 3, "{all}");
+        assert!(exited["fields"]["stderr_bytes"].as_u64() > Some(0), "{all}");
+        let finished = line_in(&lines, "run finished", "run_id", &run_id).expect(&all);
+        assert_eq!(finished["fields"]["state"], "failed", "{all}");
+        assert_eq!(finished["fields"]["error_kind"], "harness_failed", "{all}");
     }
 
     #[test]

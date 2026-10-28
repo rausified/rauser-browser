@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 
-use crate::brand::NAMESPACE;
 use crate::config::ConfigStore;
 use finisher::{KindFinisher, SummaryFinisher};
 use harness_api::HarnessRegistry;
@@ -59,11 +58,37 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
             Box::new(finisher),
             options.clone(),
         ))
-    })?;
-    if exit == ServeExit::AlreadyRunning {
-        eprintln!("{NAMESPACE} service: another service process is already running");
+    });
+    match exit {
+        Ok(ServeExit::Idle) => tracing::info!(reason = "idle", "service exiting"),
+        Ok(ServeExit::AlreadyRunning) => tracing::info!(
+            reason = "second instance",
+            detail = "another service process is already running",
+            "service exiting"
+        ),
+        Err(error) => {
+            tracing::error!(
+                reason = "error",
+                error = format!("{error:#}"),
+                "service exiting"
+            );
+            return Err(error);
+        }
     }
     Ok(())
+}
+
+/// Wrap `body` to run on another thread under this thread's subscriber and
+/// inside `span`, so what it logs joins the caller's file and the request
+/// or run it belongs to. Pass the span explicitly: a thread holds what it
+/// captures for its whole life, and a request span held by a long-lived
+/// thread would close late.
+pub(crate) fn traced<T>(
+    span: tracing::Span,
+    body: impl FnOnce() -> T + Send + 'static,
+) -> impl FnOnce() -> T + Send + 'static {
+    let dispatch = tracing::dispatcher::get_default(Clone::clone);
+    move || tracing::dispatcher::with_default(&dispatch, || span.in_scope(body))
 }
 
 fn options(paths: &ServicePaths, config: &ConfigStore) -> ServiceOptions {

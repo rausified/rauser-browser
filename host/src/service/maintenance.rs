@@ -55,19 +55,32 @@ pub fn recover(
         match status.state {
             RunState::Queued => queued.push(id),
             RunState::Running => {
-                if let Some(group) = orphan_group(&status, now, own_pid, alive) {
+                let orphan = orphan_group(&status, now, own_pid, alive);
+                if let Some(group) = orphan {
                     kill(group);
                 }
+                tracing::info!(
+                    run_id = %id,
+                    killed_group = orphan.is_some(),
+                    "interrupted run failed on restart"
+                );
                 status.state = RunState::Failed;
                 status.error_kind = Some(RunErrorKind::ServiceRestarted);
                 status.error = Some(SERVICE_RESTARTED.to_string());
                 status.finished_at = Some(super::supervisor::timestamp(now));
                 if let Err(error) = store.write_status(&status) {
-                    eprintln!("brauser service: recovering run {id}: {error:#}");
+                    tracing::error!(
+                        run_id = %id,
+                        error = format!("{error:#}"),
+                        "recovering run"
+                    );
                 }
             }
             RunState::Succeeded | RunState::Failed | RunState::Canceled => {}
         }
+    }
+    if !queued.is_empty() {
+        tracing::info!(queued = queued.len(), "queued runs found on restart");
     }
     queued
 }
@@ -129,13 +142,16 @@ pub fn prune_with(
         let mut remove = || match store.remove(id) {
             Ok(()) => true,
             Err(error) => {
-                eprintln!("brauser service: pruning run {id}: {error:#}");
+                tracing::warn!(run_id = %id, error = format!("{error:#}"), "pruning run");
                 false
             }
         };
         if guarded(id, &mut remove) {
             removed += 1;
         }
+    }
+    if removed > 0 {
+        tracing::info!(removed, "old runs pruned");
     }
     removed
 }

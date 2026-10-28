@@ -46,7 +46,7 @@ use time::{OffsetDateTime, UtcOffset};
 use super::record::RunStatusFile;
 use super::supervisor::{RunFinisher, SaveFailure, SavedRun, accept_summary_answer, timestamp};
 use crate::answer::SummaryAnswer;
-use crate::brand::{APP_NAME, NAMESPACE};
+use crate::brand::APP_NAME;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url_with_provenance};
 use crate::config::{ADOPTED_CONTRACTS_PAUSED, ConfigStore};
 use crate::index::ArtifactIndex;
@@ -58,6 +58,7 @@ use crate::summary::{MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument,
 use crate::vault::{FoundSummary, OwnedWrite, Vault};
 
 const INVALID_ANSWER: &str = "The stored answer is not a valid summary.";
+const INVALID_URL: &str = "The page URL is invalid; this run cannot be saved.";
 const NEEDS_REPAIR: &str = "The configuration needs repair. Fix it in settings, then Retry save.";
 const NO_STORAGE: &str = "Choose a notes folder in settings, then Retry save.";
 const LAYOUT_MOVING: &str = concat!(
@@ -82,6 +83,7 @@ const INDEX_UNAVAILABLE: &str =
     "The artifact index could not be read to log this summary. Retry save.";
 const STALE: &str =
     "A newer summary of this page was saved after this run, so this run's summary was not saved.";
+const CONFIG_LOCK: &str = "The configuration could not be locked. Retry save.";
 const LOG_ORIGINAL_FOLDER: &str = "An earlier attempt to log this summary was interrupted in a notes folder that has since changed. Choose that folder again in settings, then Retry save.";
 
 /// Writes a run's summary under the config read at save time.
@@ -118,8 +120,8 @@ impl RunFinisher for SummaryFinisher {
             .map_err(|_| SaveFailure::final_reason(INVALID_ANSWER, None))?;
         let mut config = ConfigStore::load_from(self.config_path.clone());
         let _config_lock = config.lock_current().map_err(|error| {
-            eprintln!("{NAMESPACE} service: locking the configuration: {error:#}");
-            SaveFailure::from("The configuration could not be locked. Retry save.")
+            tracing::warn!(error = format!("{error:#}"), "locking the configuration");
+            SaveFailure::from(CONFIG_LOCK)
         })?;
         if config.refresh().is_err() {
             return Err(NEEDS_REPAIR.into());
@@ -148,12 +150,7 @@ impl RunFinisher for SummaryFinisher {
         }
         let key = resolve_record_key(&mut config, &run.url).map_err(key_error)?;
         let stored = canonical_url_with_provenance(&run.url, &config.snapshot().strip_params)
-            .map_err(|_| {
-                SaveFailure::final_reason(
-                    "The page URL is invalid; this run cannot be saved.",
-                    None,
-                )
-            })?;
+            .map_err(|_| SaveFailure::final_reason(INVALID_URL, None))?;
 
         let canonical = stored.url;
         let style = link_style(&storage.profile);
@@ -202,7 +199,7 @@ impl RunFinisher for SummaryFinisher {
             Ok(OwnedWrite::Written(warnings)) => {
                 // Published: a failed sync or cleanup is only logged.
                 for warning in warnings {
-                    eprintln!("{NAMESPACE} service: after writing a summary file: {warning:?}");
+                    tracing::warn!(warning = ?warning, "after writing a summary file");
                 }
             }
             Ok(OwnedWrite::Unchanged) => {}
@@ -219,7 +216,7 @@ impl RunFinisher for SummaryFinisher {
             .cache_dir()
             .and_then(|cache_dir| open_index(&config, &storage, &cache_dir));
         if let Err(error) = &index {
-            eprintln!("{NAMESPACE} service: opening the artifact index: {error:#}");
+            tracing::warn!(error = format!("{error:#}"), "opening the artifact index");
         }
         let index = index.ok();
         // Written from here on: every failure still lets the run card open
@@ -276,9 +273,45 @@ impl RunFinisher for SummaryFinisher {
         // The daily log is authoritative and already holds the event; the
         // index catches up from it on its next read.
         if let Some(Err(error)) = indexed {
-            eprintln!("{NAMESPACE} service: updating the artifact index: {error:#}");
+            tracing::warn!(error = format!("{error:#}"), "updating the artifact index");
         }
         Ok(written)
+    }
+}
+
+/// A save failure's reason as a stable code for diagnostics, which never
+/// record the reason itself (it can name a file in the home folder).
+pub fn save_reason_code(reason: &str) -> &'static str {
+    const CODES: [(&str, &str); 17] = [
+        (INVALID_ANSWER, "invalid_answer"),
+        (NEEDS_REPAIR, "needs_repair"),
+        (NO_STORAGE, "no_storage"),
+        (LAYOUT_MOVING, "layout_moving"),
+        (FOLDER_UNAVAILABLE, "folder_unavailable"),
+        (FILE_UNWRITABLE, "file_unwritable"),
+        (LOG_UNWRITABLE, "log_unwritable"),
+        (LOG_CLOCK, "log_clock"),
+        (LOG_FULL, "log_full"),
+        (LOG_NAME_CONFLICT, "log_name_conflict"),
+        (LOG_INVALID, "log_invalid"),
+        (LOG_INTERRUPTED, "log_interrupted"),
+        (INDEX_UNAVAILABLE, "index_unavailable"),
+        (STALE, "stale"),
+        (LOG_ORIGINAL_FOLDER, "log_original_folder"),
+        (CONFIG_LOCK, "config_lock"),
+        (INVALID_URL, "invalid_url"),
+    ];
+    if let Some((_, code)) = CODES.iter().find(|(text, _)| *text == reason) {
+        return code;
+    }
+    if reason.starts_with(ADOPTED_CONTRACTS_PAUSED) {
+        "adopted_contracts_paused"
+    } else if reason.starts_with("A file ") {
+        "file_conflict"
+    } else if reason.starts_with("This page's notes record could not be found") {
+        "record_not_found"
+    } else {
+        "other"
     }
 }
 
@@ -312,7 +345,7 @@ fn key_error((code, message): crate::native::Refusal) -> SaveFailure {
 }
 
 fn unwritable(error: &anyhow::Error) -> SaveFailure {
-    eprintln!("{NAMESPACE} service: writing a summary file: {error:#}");
+    tracing::warn!(error = format!("{error:#}"), "writing a summary file");
     FILE_UNWRITABLE.into()
 }
 
@@ -322,7 +355,7 @@ fn unwritable(error: &anyhow::Error) -> SaveFailure {
 /// summary is an explicit action, so `capture_disabled` and
 /// `site_not_allowed` do not apply to it.)
 fn log_refusal(reason: &str, written: &SavedRun) -> SaveFailure {
-    eprintln!("{NAMESPACE} service: the daily log refused a summary event: {reason}");
+    tracing::warn!(reason, "the daily log refused a summary event");
     match reason {
         // A retry re-stamps an answer outside the window (`retry_save`).
         "timestamp_too_old" | "timestamp_in_future" => {
@@ -339,7 +372,7 @@ fn log_refusal(reason: &str, written: &SavedRun) -> SaveFailure {
 /// entry no longer matches cannot be fixed by retrying; any other failure
 /// (I/O, mostly) can.
 fn log_failure(message: &str, written: &SavedRun) -> SaveFailure {
-    eprintln!("{NAMESPACE} service: appending a summary event: {message}");
+    tracing::warn!(error = message, "appending a summary event");
     if message.contains("original home folder changed")
         || message.contains("previously selected home folder")
     {
@@ -478,6 +511,40 @@ mod tests {
     const WORK_ID: &str = "work:work.example/7";
     const WORK_ADAPTER: &str = "[[artifacts]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n";
     const WORK_HISTORY: &str = "[[adapter_id_history]]\ntype = \"work.item\"\norigin = \"https://work.example\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"work:{host}/{id}\"\n";
+
+    #[test]
+    fn every_save_reason_has_its_own_code() {
+        let reasons = [
+            INVALID_ANSWER,
+            NEEDS_REPAIR,
+            NO_STORAGE,
+            LAYOUT_MOVING,
+            FOLDER_UNAVAILABLE,
+            FILE_UNWRITABLE,
+            LOG_UNWRITABLE,
+            LOG_CLOCK,
+            LOG_FULL,
+            LOG_NAME_CONFLICT,
+            LOG_INVALID,
+            LOG_INTERRUPTED,
+            INDEX_UNAVAILABLE,
+            STALE,
+            LOG_ORIGINAL_FOLDER,
+            CONFIG_LOCK,
+            INVALID_URL,
+        ];
+        let codes: std::collections::HashSet<_> = reasons
+            .iter()
+            .map(|reason| save_reason_code(reason))
+            .collect();
+        assert_eq!(codes.len(), reasons.len());
+        assert!(!codes.contains("other"));
+        assert_eq!(
+            save_reason_code("A file Brauser does not own is at summaries/x.md. Move it."),
+            "file_conflict"
+        );
+        assert_eq!(save_reason_code("something new"), "other");
+    }
 
     /// The click time of every test run; only its offset is used.
     const REQUESTED_AT: &str = "2026-10-26T14:00:00-07:00";

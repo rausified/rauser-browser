@@ -213,6 +213,7 @@ impl HarnessSession for ClaudeSession {
             match child.next(POLL) {
                 Some(ChildLine::Stdout(line)) => match parse_line(&line) {
                     ClaudeLine::Session(id) => {
+                        tracing::debug!(event_type = "system", "stream event");
                         if self.reported.as_deref() != Some(id.as_str()) {
                             sink(HarnessEvent::Session(SessionRef::ClaudeSession(id.clone())));
                             self.reported = Some(id);
@@ -231,7 +232,10 @@ impl HarnessSession for ClaudeSession {
                             emit(text, sink);
                         }
                     }
-                    ClaudeLine::Result { is_error, text } => result = Some((is_error, text)),
+                    ClaudeLine::Result { is_error, text } => {
+                        tracing::debug!(event_type = "result", is_error, "stream event");
+                        result = Some((is_error, text));
+                    }
                     // Stdout that is not stream-json is kept for run.log.
                     ClaudeLine::Other => {
                         let line = line.trim();
@@ -273,6 +277,12 @@ impl HarnessSession for ClaudeSession {
             return failed(format!("waiting for claude: {error}"));
         }
         let status = exit.expect("the loop ends only after the child exits");
+        tracing::debug!(
+            turn = self.turns,
+            result = result.is_some(),
+            streamed,
+            "claude turn ended"
+        );
         match result {
             Some((false, final_text)) if status.success() => TurnOutcome::Answered { final_text },
             Some((true, text)) if !text.trim().is_empty() => failed(text.trim().to_string()),
