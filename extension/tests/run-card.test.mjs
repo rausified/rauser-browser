@@ -736,3 +736,36 @@ test("a run recorded while list_runs is in flight is not cleared", async () => {
   assert.equal(await runsMayExist(storage), true);
   page.runCards.dispose();
 });
+
+test("cards show only for the followed page", async () => {
+  const other = view({
+    run_id: "00000000-0000-4000-8000-000000000041", url: "https://read.example/b", title: "Another page",
+  });
+  const page = setup({
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: request.run_id === other.run_id ? other : view(), stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  page.runCards.follow("https://read.example/a#section");
+  page.runCards.show(view());
+  page.runCards.show(other);
+  await settle();
+  const shown = () => cards(page.container).filter((card) => !card.hidden).map((card) => card.dataset.runId);
+  // A card for another page is kept, hidden, so it is back when its page is.
+  assert.equal(cards(page.container).length, 2);
+  assert.deepEqual(shown(), [view().run_id]);
+  page.runCards.follow("https://read.example/b");
+  assert.deepEqual(shown(), [other.run_id]);
+  // A page that is not a web page shows no card.
+  page.runCards.follow(null);
+  assert.deepEqual(shown(), []);
+  page.runCards.dispose();
+});
+
+test("panel.css hides a hidden run card despite its display rule", async () => {
+  // `.run-card { display: grid }` outranks Chrome's [hidden] style, so the
+  // card itself needs its own rule or follow() hides nothing on screen.
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.run-card\[hidden\][^{]*\{\s*display:\s*none;/);
+});

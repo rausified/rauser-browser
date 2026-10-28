@@ -4291,3 +4291,20 @@ test("an older host gives worklog rebuild guidance with Copy disabled", async ()
   assert.equal(page.el("copy-worklog").disabled, true);
   assert.equal(page.el("worklog-gaps").hidden, true);
 });
+
+test("run cards follow the page: another tab's card hides and comes back", async () => {
+  const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]) });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  const card = () => page.el("run-area").children.find((child) => child.className.split(" ").includes("run-card"));
+  await until(() => card() && /Readable title/.test(card().textContent), "the run card");
+  assert.equal(card().hidden, false);
+
+  page.navigate("https://other.example/b", 2);
+  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  assert.equal(card().hidden, true);
+
+  page.navigate(ARTICLE_URL, 1);
+  await until(() => page.el("page-url").textContent === ARTICLE_URL, "tab 1 to show");
+  assert.equal(card().hidden, false);
+});
