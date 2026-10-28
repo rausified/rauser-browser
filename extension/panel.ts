@@ -12,7 +12,7 @@ import {
 } from "./model.js";
 import { ConfigSession, captureStateText, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
 import { evaluate } from "./adapter-templates.js";
-import { PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
@@ -32,7 +32,7 @@ import type {
   ContainedArtifactView,
   OlderNote,
   SummaryView,
-  WorklogResult,
+  WorklogReported,
 } from "../protocol/ts/generated.js";
 
 const status = element<HTMLDivElement>("status");
@@ -110,6 +110,10 @@ const recentList = element<HTMLDivElement>("recent-list");
 const worklogPeriod = element<HTMLSelectElement>("worklog-period");
 const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
+const worklogGaps = element<HTMLElement>("worklog-gaps");
+const worklogGapStatus = element<HTMLElement>("worklog-gap-status");
+const worklogGapList = element<HTMLElement>("worklog-gap-list");
+const includeWorklogGaps = element<HTMLInputElement>("worklog-include-gaps");
 const summarizeButton = element<HTMLButtonElement>("summarize");
 const runArea = element<HTMLDivElement>("run-area");
 const pageSummary = element<HTMLDivElement>("page-summary");
@@ -192,6 +196,7 @@ let recentLoadSeq = 0;
 let recentWaitingForHost = false;
 let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
+let worklogReport: WorklogReported | null = null;
 
 function show(message: string, warning = false): void {
   status.textContent = message;
@@ -1288,6 +1293,8 @@ async function loadRecent(): Promise<void> {
 
 async function loadWorklog(): Promise<void> {
   const seq = ++worklogLoadSeq;
+  worklogReport = null;
+  worklogGaps.hidden = true;
   if (!session.connected) {
     worklogWaitingForHost = true;
     worklogText.textContent = "Waiting for the host…";
@@ -1304,20 +1311,44 @@ async function loadWorklog(): Promise<void> {
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
   try {
-    const response: WorklogResult = await session.host.call({
-      type: "worklog",
+    const response: WorklogReported = await session.host.call({
+      type: "worklog_report",
       protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(),
       start_date: range.start,
       end_date: range.end,
-    }, "worklog_result");
+    }, "worklog_reported");
     if (seq !== worklogLoadSeq) return;
-    worklogText.textContent = response.text;
+    if (response.start_date !== range.start || response.end_date !== range.end) throw new Error("The host returned a different worklog period. Try again.");
+    worklogReport = response;
+    renderWorklog();
     copyWorklogButton.disabled = false;
   } catch (error) {
     if (seq !== worklogLoadSeq) return;
-    worklogText.textContent = `Could not generate worklog: ${describe(error)}`;
+    worklogText.textContent = error instanceof HostError && error.code === "invalid_request" && /unsupported request/.test(error.message)
+      ? "Rebuild the Brauser host and extension together, then reopen Recent to review capture gaps."
+      : `Could not generate worklog: ${describe(error)}`;
   }
+}
+
+function renderWorklog(): void {
+  const report = worklogReport;
+  if (!report) return;
+  const lines = report.gaps.map((gap) =>
+    `${gap.count} completed activity-hour record${gap.count === 1 ? "" : "s"} missing from ${gap.first_occurred_at} through ${gap.last_occurred_at}.`);
+  const hasGaps = lines.length > 0 || report.gaps_truncated;
+  worklogGaps.hidden = !hasGaps;
+  worklogGapStatus.textContent = "Known capture gaps intersect this period. Counts cover each full reported range; ranges may overlap. Missing activity is excluded from totals.";
+  if (report.gaps_truncated) lines.push("More capture gaps are recorded; only the first 32 notices are shown.");
+  worklogGapList.replaceChildren();
+  for (const line of lines) {
+    const item = document.createElement("li");
+    item.textContent = line;
+    worklogGapList.append(item);
+  }
+  worklogText.textContent = report.text + (hasGaps && includeWorklogGaps.checked
+    ? `\n\nCapture gaps: this worklog is incomplete. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
+    : "");
 }
 
 function scheduleRecent(): void {
@@ -1486,6 +1517,7 @@ recentTab.addEventListener("click", () => selectView("recent"));
 recentType.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
 worklogPeriod.addEventListener("change", () => void loadWorklog());
+includeWorklogGaps.addEventListener("change", renderWorklog);
 copyWorklogButton.addEventListener("click", copyWorklog);
 summarizeButton.addEventListener("click", () => void summarize());
 pageSummaryOpen.addEventListener("click", () => void openPageSummary());

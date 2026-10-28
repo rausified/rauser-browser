@@ -274,9 +274,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   panel already has; do not rewrite shipped views solely to create an
   abstraction. Close it as not needed if no second consumer appears by PR 3.
 
-- [ ] `brwr-9r7` **Show capture gaps beside copied worklogs.** Surface durable
-  overflow ranges where people review a day or week, and let them include a
-  clear gap note in copied text. Missing hours must never become activity.
 - [ ] `brwr-o1l` **Share one authorize-and-open path across delivery entry
   points.** `record_visit`, `record_activity`, and `record_batch` repeat the
   lock, refresh, policy, and store setup, and `capture.rs` has twin
@@ -349,6 +346,9 @@ strip_params note-identity follow-up has shipped (see Shipped).
   during debounce and an in-flight save, retaining any lost edits in durable
   recovery. This P2 stabilization gate precedes M2; use only isolated local
   fixtures and preserve setup smoke and dialog counts.
+  **2026-10-28:** still awaiting actual macOS Chrome evidence. This Linux VM
+  refuses `smoke:macos:headless` before launching Chrome; local built-panel
+  tests pass. No browser acceptance or dialog-count evidence is claimed.
 
 - [ ] `brwr-bzx` **Windows CI.** Add a `windows-latest` job for the host build,
   tests, and clippy, plus the extension checks. Fix code and tests that have
@@ -371,12 +371,19 @@ strip_params note-identity follow-up has shipped (see Shipped).
   example `cfg(unix)`-gated tests) states why, add the reason where it is
   missing, then close this item. `brwr-i1g` stays open for the interactive
   Windows acceptance.
+  **2026-10-28:** current cross-platform CI cannot be verified from this
+  isolated Linux run (remote/API access is prohibited). Existing jobs remain
+  intact; retain this item for current Windows/macOS evidence and the final
+  Windows skip-reason audit.
 
 
 
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Review capture gaps before sharing worklogs (2026-10-28).** Completed assigned `brwr-9r7`. The worklog reviews durable overflow ranges and missing activity-hour record counts, with a checked-by-default choice to include an incompleteness note in the exact copied preview. Local-date intersections preserve full ranges/counts, overlapping notices stay separate, and retries deduplicate without inventing work. Attached and standalone markers survive restart, bounded cache upgrades and reindex; stale or failed reports cannot leave Copy enabled. **Metrics:** 990 workspace Rust outcomes (+3 regressions; 43 explicit IPC sandbox skips), six new panel cases and all 15 extension files, both Clippy configurations, 853 scripted-build outcomes, two script files and 10,696 inert Markdown renderings green.
+
 
 - **Category:** New Capability. **Preview artifact identity corrections offline (2026-10-28).** `brauser adapters aliases-preview` derives endpoint identities from supplied old and proposed adapter documents, then shows canonical groups and pending suggestions for confirmed, suggested and unalias operations. Chains, moves back and pairwise corrections replay deterministically; forged IDs, out-of-scope endpoints, cross-type links and insufficient stripped-query evidence refuse the rehearsal. It reads no settings or vault and grants no migration authority. Completes `brwr-sq9`; parent Re-learn (`brwr-6x2`) remains in progress for impact planning, durable migration and panel review. **Metrics:** 987 reported Rust passes (+15 tests, including 3 real CLI isolation cases; guarded IPC skips included), 15 extension files, both Clippy configurations and all required/README gates green.
 
@@ -1360,3 +1367,49 @@ stop product work, and no history reset or production IPC change is called for.
 - The single commit attempt failed at `git add`: `.git/index.lock` is
   read-only. No retry, push or merge ran. The complete green working tree,
   exported queue and excluded `.bosun_commit_msg` are ready for the driver.
+
+### Worklog capture-gap handoff (2026-10-28)
+
+- Opening health was clean: no gate-failure file, no incomplete working tree,
+  and every required command passed before feature work. The existing P2
+  assigned items `brwr-bzx` and `brwr-9xg` still require external platform
+  evidence; their notes preserve prior operator history and state the Linux
+  limitation. No remote was contacted and neither item was closed.
+- Completed assigned P3 `brwr-9r7` ahead of self-directed work. Capture gaps
+  now appear where someone reviews and copies a worklog. The additive v8
+  report returns work and notices together; original worklog clients keep
+  their existing message shape. A checked-by-default inclusion choice keeps
+  the preview identical to Copy, while notices remain visible when excluded.
+- Real capture tests caught the difference between standalone overflow and
+  markers attached to a normal batch (URL/provenance and anchor time). Both
+  now read correctly, including a long anchor URL and a different loss time.
+  Missing records remain system evidence: no invented focus or artifact rows,
+  no summed overlapping counts, and no guessed allocation across days.
+- Format-8 caches use separate gap checkpoints. Upgrades preserve the event
+  checkpoints needed to detect deleted/truncated logs, and rescan once under
+  the existing read bound. Reindex reproduces notices without rewriting logs.
+  Partial passes remain unavailable; the following query resumes them.
+- The complete code/generated/doc diff was read fresh. Reused the existing
+  checkbox style and date/range authorization path. Full gate evidence is
+  `target/cookie-worklog-gaps-gate.log`: 990 reported workspace outcomes
+  (43 explicit IPC skips), 853 scripted outcomes (53 explicit IPC skips),
+  all 15 extension files, six new composed-panel cases, both Clippy builds,
+  two script files and 10,696 inert renderings. The macOS smoke refuses Linux;
+  CI must supply unrestricted IPC and actual Chrome acceptance. No real
+  harness/API review ran; the driver supplies independent review.
+- Next assigned product work is restoring recorded site rules (`brwr-cua`).
+  Keep the host's original scope and custom identity visible in its review;
+  the existing recording preflight is not itself a restore implementation.
+  The prior Re-learn parent `brwr-6x2` remains in progress without enabling
+  migrations. Do not bypass human gates to make these items look complete.
+- Product observation: recorded gaps describe known buffer loss, not all
+  uncaptured browsing. Avoid a completeness percentage inferred from them.
+  For further sharing value, use existing worklog curation proposal
+  `brwr-ppn` to select what is shared while retaining these honest notices;
+  another diagnostics/status surface would add less value. The current
+  proposal list already includes focus sessions and rule restoration, so no
+  duplicate proposal or speculative robustness bead was added this cycle.
+- The one commit attempt failed creating `.git/index.lock` on the
+  read-only Git metadata. No retry or remote action ran. The green working
+  tree, exported queue and excluded `.bosun_commit_msg` are ready for the
+  driver to commit and independently review.
