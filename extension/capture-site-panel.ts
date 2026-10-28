@@ -184,6 +184,7 @@ export class CaptureSitePanel {
   private sample: { key: string; samples: SampledShape[] | null; revision: string | null; hint: boolean } | null = null;
   private target: (CapturePage & { revision: string; mode: CaptureMode; origin: string }) | null = null;
   private plan: CapturePlan | null = null;
+  private starterCheck = 0;
   // The drafted flow. The link shapes (in `draftInput`) and the draft live
   // only here and are cleared by close().
   private draft: SiteDrafted | null = null;
@@ -336,6 +337,7 @@ export class CaptureSitePanel {
   }
 
   private close(): void {
+    this.starterCheck += 1;
     this.target = null;
     this.plan = null;
     this.draft = null;
@@ -632,11 +634,25 @@ export class CaptureSitePanel {
       pullRequests: this.prs.checked,
       issues: this.issues.checked,
     });
-    this.plan = result.ok ? result.plan : null;
-    this.previewMessage = result.ok
-      ? result.plan.startsCapture ? "Saving enables these pages. Other sites keep their existing rules."
-        : "Capture is paused for all sites. This saves the site; resume capture in settings when you are ready."
-      : result.message;
+    const target = this.target;
+    const check = ++this.starterCheck;
+    this.plan = null;
+    this.previewMessage = result.ok ? "Checking saved site identities…" : result.message;
+    if (result.ok) {
+      const plan = result.plan;
+      void this.session.checkCaptureSite(plan.document, target.revision).then(() => {
+        if (this.target !== target || this.starterCheck !== check || this.session.revision !== target.revision) return;
+        this.plan = plan;
+        this.previewMessage = plan.startsCapture
+          ? "Saving enables these pages. Other sites keep their existing rules."
+          : "Capture is paused for all sites. This saves the site; resume capture in settings when you are ready.";
+        this.updateControls(this.actions.isBusy());
+      }).catch((error: unknown) => {
+        if (this.target !== target || this.starterCheck !== check) return;
+        this.previewMessage = `These rules cannot be saved: ${describe(error)}`;
+        this.updateControls(this.actions.isBusy());
+      });
+    }
     if (result.ok) {
       const plan = result.plan;
       const summary = document.createElement("p");

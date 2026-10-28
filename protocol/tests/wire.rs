@@ -1123,3 +1123,30 @@ mod schema_subset {
         }
     }
 }
+
+#[test]
+fn capture_site_preflight_requires_revision_and_document_and_round_trips() {
+    let request = json!({
+        "type": "check_capture_site", "protocol_version": 7, "request_id": "preflight",
+        "expected_revision": "revision", "adapters": {"format": 1, "artifacts": []}
+    });
+    let parsed: Request = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), request);
+    for field in ["expected_revision", "adapters"] {
+        let mut invalid = request.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<Request>(invalid).is_err());
+    }
+    let mut with_url = request;
+    with_url["url"] = "https://example.com/private".into();
+    assert!(serde_json::from_value::<Request>(with_url).is_err());
+    let reply = json!({
+        "type": "capture_site_checked", "protocol_version": 7, "request_id": "preflight",
+        "revision": "revision"
+    });
+    let parsed: Response = serde_json::from_value(reply.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), reply);
+    let mut missing = reply;
+    missing.as_object_mut().unwrap().remove("revision");
+    assert!(serde_json::from_value::<Response>(missing).is_err());
+}

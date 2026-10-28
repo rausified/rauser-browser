@@ -78,6 +78,7 @@
         { "$ref": "#/$defs/GetAgentEnvRequest" },
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
+        { "$ref": "#/$defs/CheckCaptureSiteRequest" },
         { "$ref": "#/$defs/ForgetAdoptedContractsRequest" },
         { "$ref": "#/$defs/ServiceHelloRequest" }
       ]
@@ -141,6 +142,7 @@
         { "$ref": "#/$defs/AgentEnvListed" },
         { "$ref": "#/$defs/SiteDrafted" },
         { "$ref": "#/$defs/SiteDraftChecked" },
+        { "$ref": "#/$defs/CaptureSiteChecked" },
         { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
@@ -2247,6 +2249,31 @@
     "ScopeChoiceView": {
       "description": "The review's scope choice for one adapter, sent beside the checked table and never inside it; null means no choice.",
       "oneOf": [{ "$ref": "#/$defs/ScopeValues" }, { "$ref": "#/$defs/UnscopedChoice" }]
+    },
+    "CheckCaptureSiteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read-only preflight of a proposed Capture Site adapter document against current, retired and hand-removed contracts. Sends no page URL or title. The normal revision-checked update_config still authorizes the save.",
+      "required": ["type", "protocol_version", "request_id", "expected_revision", "adapters"],
+      "properties": {
+        "type": { "const": "check_capture_site" },
+        "protocol_version": { "type": "integer", "const": 7 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "adapters": { "$ref": "#/$defs/AdapterDocument" }
+      }
+    },
+    "CaptureSiteChecked": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The proposed adapter document passed the host's transition checks at this revision. This response writes nothing and is not a save authorization token.",
+      "required": ["type", "protocol_version", "request_id", "revision"],
+      "properties": {
+        "type": { "const": "capture_site_checked" },
+        "protocol_version": { "type": "integer", "const": 7 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
     },
     "CheckSiteDraftRequest": {
       "type": "object",

@@ -354,6 +354,18 @@ export class ConfigSession {
     }, "site_draft_checked");
   }
 
+  /** Read-only starter preflight, including host-only retired identities. */
+  async checkCaptureSite(adapters: AdapterDocument, expectedRevision: string): Promise<void> {
+    const checked = await this.host.call({
+      type: "check_capture_site",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      expected_revision: expectedRevision,
+      adapters,
+    }, "capture_site_checked");
+    if (checked.revision !== expectedRevision) throw new Error("Settings changed. Open Capture Site again.");
+  }
+
   /** The names agent.env sets, from the service. Values never leave it. */
   async listAgentEnv(): Promise<{ names: string[]; problem: string | null }> {
     const reply = await this.host.call({

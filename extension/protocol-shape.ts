@@ -437,6 +437,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         isStringArray(value.names) && stringOrNull(value.problem);
     case "site_drafted":
       return isSiteDrafted(value);
+    case "capture_site_checked":
+      return isMessage(value, ["revision"]);
     case "site_draft_checked":
       return isSiteDraftChecked(value);
     default:
