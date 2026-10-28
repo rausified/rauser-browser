@@ -419,10 +419,19 @@ async function saveWhy(): Promise<void> {
  * the user turned capture off, though the host would still record, and
  * finishing it takes Pause capture rather than Resume. */
 function whyPausedReason(): string | null {
+  if (currentPage && session.status?.pending_removals.includes(new URL(currentPage.url).origin)) {
+    return "This site's removal is pending, so this can't be saved. Open settings to finish removing the site.";
+  }
   if (session.config?.capture_enabled === false) {
     return "Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.";
   }
   if (session.status?.pause_pending === true) {
+    if (!session.connected) {
+      return "Capture is paused locally, so this can't be saved. The native host is unavailable. Reopen the panel to finish saving the pause.";
+    }
+    if (changing() || session.configIssue || session.adapterIssue) {
+      return "Capture is paused locally, so this can't be saved. Wait for the panel to finish, or open settings if the configuration needs repair.";
+    }
     return "Capture is paused locally, so this can't be saved. Use Pause capture to finish saving this setting in the host.";
   }
   return null;
@@ -641,7 +650,9 @@ async function reloadConfig(): Promise<void> {
     : "Capture is paused. Resume it in settings.");
   if (session.status?.pause_pending && session.config?.capture_enabled &&
       !session.configIssue && !session.adapterIssue) {
-    show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
+    // This status can outlive the connection. The live Why hint names the
+    // control only while the host is reachable.
+    show("Capture is paused locally; its host setting has not been saved yet.", true);
   }
 }
 

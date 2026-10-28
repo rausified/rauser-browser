@@ -1844,3 +1844,36 @@ test("recording warnings Forget cannot fix are shown as notices without the forg
   assert.equal(el("forget-adopted").hidden, true);
   assert.equal(el("new-adapter").disabled, false);
 });
+
+// Captured from the real host; the Rust native test verifies these replies
+// against their source config.toml so the UI cannot invent a repair shape.
+const ADAPTER_REPAIR_CASES = JSON.parse(readFileSync(
+  new URL("../../host/tests/fixtures/adapter-repair-responses.json", import.meta.url), "utf8"));
+
+for (const { name, response } of ADAPTER_REPAIR_CASES) {
+  test(`host adapter repair reply reaches settings: ${name}`, async () => {
+    const { isResponseShape } = await import("../dist/protocol-shape.js");
+    assert.equal(isResponseShape(response), true);
+    const { validateAdapterDocument } = await import("../dist/adapter-review.js");
+    // Receiving a repair document never makes it valid outgoing policy.
+    assert.equal(validateAdapterDocument(response.config.adapters) !== null, response.adapter_issue !== null);
+    for (const malformed of [null, [], "adapter", 7]) {
+      const bad = structuredClone(response);
+      bad.config.adapters.artifacts = [malformed];
+      assert.equal(isResponseShape(bad), false);
+    }
+    if (!response.adapter_issue) return;
+    const state = install({ host: { get_config: (_request, current) => current.revision === 1
+      ? response
+      : { ...response, revision: String(current.revision), config: current.config, adapter_issue: null },
+    } });
+    await openSettings();
+    assert.match(statusText(), /adapter configuration is invalid/);
+    assert.doesNotMatch(statusText(), /protocol response is invalid|Native host unavailable/);
+    assert.equal(env.elements.get("reset-adapters").disabled, false);
+    env.elements.get("reset-adapters").click();
+    await until(() => state.config.adapters.format === 1 &&
+      state.config.adapters.artifacts.length === 0 && idle(), "repair reset");
+    assert.match(statusText(), /adapter rules removed/);
+  });
+}

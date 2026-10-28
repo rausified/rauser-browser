@@ -2676,3 +2676,38 @@ test("expired capture-site drafts are deleted at startup and on maintenance", as
   assert.ok(sessionValues.has("captureSiteDraft:fresh"));
   sessionValues.clear();
 });
+
+for (const [name, oldTitle, newTitle, oldRefs, newRefs, expected] of [
+  ["new title drops old refs", "PROJ-1 fix", "Release notes", [{ artifact_type: "jira.issue", value: "PROJ-1" }], [], []],
+  ["same title keeps distinct refs", "PROJ-1 fix", "PROJ-1 fix", [{ artifact_type: "jira.issue", value: "PROJ-1" }],
+    [{ artifact_type: "jira.issue", value: "PROJ-1" }, { artifact_type: "jira.issue", value: "PROJ-1" }],
+    [{ artifact_type: "jira.issue", value: "PROJ-1" }]],
+  ["null title keeps the prior title evidence", "PROJ-1 fix", null, [{ artifact_type: "jira.issue", value: "PROJ-1" }], [],
+    [{ artifact_type: "jira.issue", value: "PROJ-1" }]],
+  ["first title supplies its own refs", null, "PROJ-2 fix", [], [{ artifact_type: "jira.issue", value: "PROJ-2" }],
+    [{ artifact_type: "jira.issue", value: "PROJ-2" }]],
+]) {
+  test(`pressure-coalesced activity uses the winning title's refs: ${name}`, async () => {
+    const origin = "https://pressure.example";
+    resetSync(origin, 2 * HOUR_MS);
+    queueWith(activityVisit("00000000-0000-4000-8000-000000000001", `${origin}/items/shared`, {
+      title: oldTitle, refs: oldRefs,
+    }), ...Array.from({ length: 204 }, (_, index) => visit(`refs-filler-${index}`, `${origin}/items/${index}`)));
+    values.set(storageKey("activity_totals_v1"), {
+      version: 1,
+      totals: [{
+        event_id: "00000000-0000-4000-8000-000000000002",
+        artifact_id: "test:pressure.example/shared", artifact_type: "test.item",
+        hour_start: "2026-10-15T10:00:00+00:00", url: `${origin}/items/shared`, title: newTitle,
+        opens: 1, focused_ms: 1_000, background_ms: 0, modes: [], trails: [], refs: newRefs,
+      }],
+    });
+    await send({ kind: "get_status" });
+    const queue = values.get(storageKey("queue_v1"));
+    assert.equal(queue.items.length, 205);
+    const merged = queue.items[0].event;
+    assert.equal(merged.opens, 2, "the two events really coalesced");
+    assert.equal(merged.title, newTitle ?? oldTitle);
+    assert.deepEqual(merged.refs, expected);
+  });
+}

@@ -60,8 +60,11 @@ function isAgentStatus(value: unknown): boolean {
 function isAdapterDocument(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const document = value as Record<string, unknown>;
+  // A host may preserve an invalid document for repair and report its
+  // adapter_issue. Check its wire shape here; the adapter engine still
+  // enforces format and size limits before enabling or editing policy.
   return typeof document.format === "number" && Number.isInteger(document.format) &&
-    document.format >= 1 && Array.isArray(document.artifacts) && document.artifacts.length <= 64 &&
+    Array.isArray(document.artifacts) &&
     document.artifacts.every((artifact: unknown) =>
       typeof artifact === "object" && artifact !== null && !Array.isArray(artifact));
 }

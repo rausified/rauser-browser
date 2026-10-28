@@ -2421,6 +2421,34 @@ mod tests {
     }
 
     #[test]
+    fn adapter_repair_response_fixtures_match_the_real_host() {
+        // These same wire replies exercise the extension's runtime guard and
+        // settings repair UI. Keep them tied to actual on-disk host behavior.
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/adapter-repair-responses.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            std::fs::write(&path, case["toml"].as_str().unwrap()).unwrap();
+            let config = ConfigStore::for_test(path);
+            let request = Request::GetConfig(GetConfigRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "repair-fixture".into(),
+            });
+            let mut output = Vec::new();
+            serve_with_io(Cursor::new(encoded_request(request)), &mut output, config).unwrap();
+            assert_eq!(
+                serde_json::to_value(decoded_response(output)).unwrap(),
+                case["response"],
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
     fn native_config_flow_preserves_an_invalid_adapter_document() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("config.toml");
