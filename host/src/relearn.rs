@@ -1120,4 +1120,33 @@ mod tests {
         std::os::unix::fs::symlink("missing", f.root.join("notes/link.md")).unwrap();
         assert!(plan(&f.config, &f.request(vec![standard()])).is_err());
     }
+
+    // POSIX symlink fixtures are unavailable without Windows symlink privileges.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_log_history_refuses_incomplete_review() {
+        for location in ["file", "subdirectory", "root"] {
+            let f = fixture(vec![standard()]);
+            let log = f.log("work:work.example/1", "/items/1");
+            let logs = f.root.join("logs");
+            let source = match location {
+                "file" => log,
+                "subdirectory" => {
+                    let nested = logs.join("archive");
+                    fs::create_dir(&nested).unwrap();
+                    fs::rename(&log, nested.join("day.md")).unwrap();
+                    nested
+                }
+                _ => logs,
+            };
+            let saved = f.root.join("saved-history");
+            fs::rename(&source, &saved).unwrap();
+            std::os::unix::fs::symlink(&saved, &source).unwrap();
+            assert!(
+                plan(&f.config, &f.request(vec![standard()])).is_err(),
+                "a symlinked log {location} must not yield a complete impact plan"
+            );
+            assert!(!f.config.cache_dir().unwrap().exists());
+        }
+    }
 }

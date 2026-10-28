@@ -927,6 +927,9 @@ repository roll-ups without a direct open, hand-removed/retired contracts,
 query and absence provenance, files already present on both sides, stale
 revisions and strict scan refusal. Assertions preserve exact file/config
 bytes and verify no cache or adopted-contract file is created.
+The log inventory regression refuses symlinked daily files, archive directories
+and the logs directory itself, so the index's normal symlink skipping cannot
+produce an incomplete impact plan.
 `cargo test --locked -p brauser --test relearn_plan` also runs the real CLI
 against malformed/oversized requests and an apply flag. An injected absolute
 `--config` path keeps these child processes away from real user state on every
