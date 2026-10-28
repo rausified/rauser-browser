@@ -1016,8 +1016,7 @@ async function summarize(): Promise<void> {
       { id: tabId, url: page.url, title: page.title },
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
     );
-    // Run cards are not per tab, so the card shows whichever tab is followed
-    // now; only this tab's own line goes.
+    // The card shows only while its page is followed; this tab's line goes.
     if (runLine?.tabId === tabId) clearRunLine();
     runCards.show(run);
   } catch (error) {
@@ -1407,6 +1406,7 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   resetPreservedNotes();
   currentPage = null;
+  runCards.follow(null);
   updateControls();
   void refreshArtifact();
   pageTitle.textContent = title;
@@ -1457,6 +1457,8 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   showPageArea("note");
   if (currentPage?.url !== tab.url || currentPage.tabId !== tab.id) resetPreservedNotes();
   currentPage = { url: tab.url, title, tabId: tab.id };
+  // Run cards follow the page too, so another page's cards go with it.
+  runCards.follow(tab.url);
   // Another page's summary line, and its Open summary, go now rather than
   // when this page's lookup returns.
   if (summaryPageUrl !== tab.url) renderPageSummary(null, null);

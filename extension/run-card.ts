@@ -90,6 +90,12 @@ export function resumeCommand(cwd: string, sessionId: string): string {
   return `cd ${shellQuote(cwd)} && claude --resume ${id}`;
 }
 
+/** Whether a run for `runUrl` belongs to the page at `pageUrl`. A fragment
+ * names a place in the page, not another page. */
+export function samePage(runUrl: string, pageUrl: string): boolean {
+  return runUrl.split("#")[0] === pageUrl.split("#")[0];
+}
+
 /** The runs a newly opened panel shows: every queued or running run, then the
  * newest {@link MAX_RESTORED_FINISHED} finished in the last day that the user
  * has not dismissed. */
@@ -209,6 +215,10 @@ class RunCard {
 
   get runId(): string {
     return this.view.run_id;
+  }
+
+  get url(): string {
+    return this.view.url;
   }
 
   start(): void {
@@ -436,6 +446,9 @@ export class RunCards {
   private readonly cards = new Map<string, RunCard>();
   private notice: HTMLElement | null = null;
   private disposed = false;
+  // The page the panel follows: only its cards show. Undefined until the
+  // panel first follows a tab, when every card shows; null for no web page.
+  private followed: string | null | undefined = undefined;
   /** Dismissals write one after another, so each read sees the last write
    * and two quick dismissals both stay remembered. */
   private dismissWrites: Promise<void> = Promise.resolve();
@@ -472,6 +485,13 @@ export class RunCards {
     if (shown.length === 0 && this.cards.size === 0) await clearRunsMayExist(this.deps.storage, listedAt);
   }
 
+  /** Shows only the cards for the page at `url` (null: no web page). The
+   * others stay, hidden and still polling, until their page is followed. */
+  follow(url: string | null): void {
+    this.followed = url;
+    for (const card of this.cards.values()) this.place(card);
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const card of this.cards.values()) card.dispose();
@@ -485,6 +505,7 @@ export class RunCards {
       return;
     }
     const card = new RunCard(run, this.deps, (dismissed) => void this.dismiss(dismissed));
+    this.place(card);
     const cardElements = new Set<Element>(Array.from(this.cards.values(), (other) => other.element));
     const children = Array.from(this.container.children);
     const cardPositions = children.flatMap((child, index) => cardElements.has(child) ? [index] : []);
@@ -496,6 +517,11 @@ export class RunCards {
     this.cards.set(run.run_id, card);
     void markRunsMayExist(this.deps.storage, this.deps.now());
     card.start();
+  }
+
+  private place(card: RunCard): void {
+    const followed = this.followed;
+    card.element.hidden = followed !== undefined && (followed === null || !samePage(card.url, followed));
   }
 
   private remove(element: HTMLElement): void {
