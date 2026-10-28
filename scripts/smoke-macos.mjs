@@ -861,8 +861,10 @@ const describeState = (state) => {
 // wanted; the accepted state is returned. On timeout the error names what was
 // awaited, how long it waited, and the last state observed (and the last
 // error, if observing failed), so a stop says what the run saw, not only what
-// it expected. An error marked `fatal` stops the wait at once.
-async function waitUntil(what, observe, accept, { timeout = 30_000, interval = 500, signal } = {}) {
+// it expected. An error marked `fatal` stops the wait at once. `diagnose`,
+// if given, is called once on timeout for more context (for example what
+// the service says), so a costly read stays out of every poll.
+async function waitUntil(what, observe, accept, { timeout = 30_000, interval = 500, signal, diagnose } = {}) {
   const started = Date.now();
   let observed = false;
   let lastState;
@@ -884,6 +886,8 @@ async function waitUntil(what, observe, accept, { timeout = 30_000, interval = 5
       const seen = [
         observed ? `last observed ${describeState(lastState)}` : "nothing observed",
         ...(lastError ? [`last error: ${lastError.message}`] : []),
+        ...(diagnose ? [await diagnose().then((extra) => `also ${describeState(extra)}`,
+          (error) => `diagnosis failed: ${error.message}`)] : []),
       ].join("; ");
       throw new Error(`Timed out after ${(waited / 1000).toFixed(1)}s waiting for ${what}; ${seen}`);
     }
@@ -1864,12 +1868,18 @@ async function run() {
       if (!button) throw new Error(${JSON.stringify(`The run card has no ${label} button`)});
       button.click();
     })()`)));
-    const cardIn = (runId, states, timeout = 60_000) => waitFor(async () => {
-      const card = (await runCards()).find((candidate) => candidate.id === runId);
-      requireCondition(card, `The panel shows no card for run ${runId}`);
-      requireCondition(states.some((state) => card.state.startsWith(state)), `The run card says: ${card.state}`);
-      return card;
-    }, { timeout, interval: 500, signal: abort.signal });
+    // Resolves with run `runId`'s card once it shows one of `states`. On
+    // timeout it reports the card (or that there is none) and the run as the
+    // service sees it, which tells a slow run from a card that stopped updating.
+    const cardIn = async (runId, states, timeout = 60_000) => (await waitUntil(
+      `the card for run ${runId} to show ${states.join(" or ")}`,
+      async () => ({ card: (await runCards()).find((candidate) => candidate.id === runId) ?? null }),
+      ({ card }) => card !== null && states.some((state) => card.state.startsWith(state)),
+      { timeout, interval: 500, signal: abort.signal, diagnose: async () => {
+        const reply = await getRun(runId);
+        return reply.type === "run_fetched"
+          ? { service: { state: reply.run.state, error_kind: reply.run.error_kind, error: reply.run.error } } : reply;
+      } })).card;
     const finished = ["Summarized", "Failed", "Canceled"];
     // Follow the article tab in a freshly opened panel, so it reads the
     // harness state from the host again.
