@@ -39,6 +39,18 @@ or newer TOML file yields an inert empty snapshot, its raw-file revision, and a
 `config_issue` in `hello_result` and `config_result`. A revision-checked repair
 backs up those exact bytes before replacing the file.
 
+`record_batch` accepts 1–64 typed events, or empty `events` with non-null
+`overflow` for standalone loss evidence. A batch with neither is refused.
+Standalone evidence contains no URL or path: the host validates its count and
+time range, derives the daily log from the last timestamp inside the checked
+home folder, and uses normal compact-intent durability and idempotency. The
+worker freezes the batch ID and snapshot in local storage before dispatch;
+`overflow_recorded: false` retains it for retry even with no event outcomes.
+This widens protocol v7's existing request without adding fields. Earlier v7
+hosts refuse the empty batch, leaving its evidence pending until host upgrade.
+The schema's array minimum changes; regenerated Rust and TypeScript types are
+unchanged because both already represent `events` as an array.
+
 `ConfigSnapshot.storage` must be present: use `null` only to explicitly clear
 the selected home folder. `storage.root` is the home folder; the content
 locations inside it are fixed (DESIGN.md §6.1). Without a protocol change,

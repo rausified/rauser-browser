@@ -336,3 +336,27 @@ combinations and both mixed-batch orders. The full local gate passes with
 931 Rust outcomes (888 exercised, 43 explicit IPC sandbox skips), all 15
 extension files and two script files. macOS smoke remains unverified on this
 Linux VM. Completes assigned `brwr-u8r`.
+
+
+## Deliver capture-loss evidence after the last batch (2026-10-28)
+
+Brauser now finishes recording a queue-overflow notice even when there is no
+later page visit to carry it. Previously, hours dropped while the final native
+batch was awaiting acknowledgement stayed visible in the panel but could wait
+indefinitely for their durable log marker. The worker now follows that final
+batch with a standalone delivery containing only the dropped count and time
+range. It stores the delivery ID and exact snapshot before sending; lost
+replies and worker restarts reuse them, while newer losses remain counted for
+a separate marker. Failed deliveries back off and remain visible, and Pause
+still prevents dispatch.
+
+The host takes no page URL or path for this notice. It validates the count,
+timestamps and chronological range, rechecks capture policy and the selected
+home folder, and derives the daily log from the last timestamp. The same owned
+log, compact intent, append/sync and duplicate checks protect this write;
+existing batches keep their historical recovery rendering. Tests reproduce two
+actual dropped hours during the last batch, exercise lost replies and Dismiss
+races, and recover a torn log append exactly once after restart. All required
+checks pass with 936 Rust outcomes including existing sandbox IPC skips, all
+15 extension files and two script files, plus 10,696 inert Markdown renderings.
+Real macOS smoke remains unverified here. Completes assigned `brwr-m64`.

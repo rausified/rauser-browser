@@ -48,6 +48,26 @@ the completed intent without touching the old log, and capture continues in
 the new folder. The interruption seam is compiled only into unit tests. All
 use disposable local directories; no browser or network is used.
 
+## Standalone overflow delivery
+
+`extension/tests/worker.test.mjs` fills the byte-capped queue with one final
+batch, holds its native reply, then freezes two completed activity hours through
+the real pressure path. Both are dropped; acknowledging the final batch must
+immediately send their count and range with empty `events`, without another
+navigation. Other cases lose a standalone reply, read its frozen ID/snapshot
+back from storage, add later drops, observe backoff and retry, and pause a
+pending delivery. Existing attached-snapshot and Dismiss races remain covered.
+
+`capture::tests::standalone_overflow_*` checks the offset-derived log day,
+exact marker payload, torn compact-intent recovery, duplicate retries after
+restart, malformed/range-invalid times, and preservation of unowned logs.
+`native::tests::standalone_overflow_uses_the_validated_home_and_obeys_capture_gates`
+checks real writes and duplicate delivery plus Pause, invalid adapter policy,
+missing home selection and a replaced home directory. The wire test rejects
+an invented URL in an overflow payload. All fixtures are local; no browser,
+external service or real user directory is involved. The macOS smoke dialog
+count is unchanged.
+
 ## Summary title extraction
 
 `extension/tests/extract.test.mjs` serializes the real extractor into a fresh
