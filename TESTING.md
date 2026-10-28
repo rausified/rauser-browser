@@ -1143,3 +1143,5 @@ existing child-pipe IPC probe returned EPERM. The long run was interrupted
 and is not validation evidence. Follow-up `brwr-wg5` will identify the exact
 wait and bound the diagnostic; the required gate and engine vectors passed,
 and neither adapter engine changed here.
+
+<!-- docs-only CI proof for #181; this PR is closed unmerged. -->
