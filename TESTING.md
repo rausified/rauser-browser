@@ -344,6 +344,58 @@ shows the artifact card, and checks no native dialog was shown. `Site
 removal` then removes both origins. This proves the real Chrome injection
 and save on one simple site; it does not certify drafts on live tools.
 
+### Agent drafting, Improve with AI (`brwr-f45`)
+
+Each step 7.7 case's agent answer is one fixture under
+`host/tests/fixtures/site-draft-answers/` (an `{"adapters":[…]}` answer,
+plus one `.txt` answer that does not parse), so the same answer drives three
+layers:
+
+- the crate, `adapter-templates/tests/agent_draft.rs`: `check_agent_draft`
+  against each `planted_*` input of `tests/structural.rs` (eight
+  `agent_planted_*` mirrors, `agent_planted_blocked_route_word_is_dropped`
+  reading every blocked word from `catalog.json`, the overlap case, a Tier 0
+  rule the structural pass missed) and the whole-draft refusals before the
+  preview (Tier 1 fields, a title template, `scope`/`unscoped`, a table that
+  does not parse);
+- the service, `host/src/service/supervisor.rs` and
+  `host/src/site_draft_answer.rs`: every fixture passes the form check
+  unchanged (`every_site_draft_fixture_answer_passes_the_service_unchanged`,
+  forbidden keys included, for the host to judge), an invalid answer gets one
+  repair turn and then fails as `invalid_output`, the run's cwd is its run
+  directory, nothing outside it is written, and a site-draft run never
+  reaches the summary finisher. Service tests use in-process fake runners or
+  `HarnessRegistry::from_lookup` with a temp-dir fake script; none sets an
+  environment variable;
+- the host end to end, `host/src/capture_site.rs` (`host_agent_*` and
+  `host_unparseable_agent_draft_is_discarded_without_being_shown`) through
+  `service::client::fake::FakeService`, plus `start_site_draft` building the
+  input from the host's own structural draft and refusing a `kind` from the
+  extension, and `agent_preview_lists_every_non_artifact_shape_a_borderline_draft_matches`.
+
+Extension tests cover the client and plan (`capture-site.test.mjs`), the run
+progress (`run-card.test.mjs`) and the review (`panel.test.mjs`): the button
+disabled with Summarize's setup hint, the held shapes sent with nothing new
+read from the page, only the host's `site_drafted` rendered, `unseen` rules
+unchecked with their label, Use basic draft, failed or rejected drafts keeping
+the basic draft, cancel on close and reattach on reopen, the unchanged save,
+the shared-origin tenant pre-fill, the older-host rebuild message, and restored
+summary cards skipping site-draft runs.
+
+The headless smoke run adds `step("Improve with AI waits for a harness")`
+before harness setup and `step("Capture Site improves a draft with AI")`
+after it. Its fake `codex` and `claude` answer any prompt that starts with
+the site-draft task with one `smoke.kb` table of three rules (an article
+rule a page showed, a `/kb/print/` rule none did, and a `/search/` rule).
+The step checks the review shows "Improved with AI (<harness>), checked by
+Brauser" with the article rule checked, the print rule unchecked as
+`unseen`, the search rule in "won't capture" (`draft_blocked_route`), and
+Use basic draft; that the new run is a `site_draft` run of the configured
+harness whose prompt named its own `page.md` by path, with the usual argv,
+in its run directory; and that the same Save writes the draft. This proves
+the real Chrome, host and service path with a fake agent; it does not judge
+a real agent's drafts.
+
 ## Page-pattern review coverage
 
 `extension/tests/site-patterns.test.mjs` covers the shared URL shaper against
@@ -617,6 +669,7 @@ This standard is meant to improve with use. When you change it:
   Check both the store error and native reply: an otherwise helpful size
   error becomes a generic internal failure without a typed dispatch mapping.
 
+- 2026-10-28: Branch `feat/capture-site-agent` (`brwr-f45`). One agent-answer fixture per step 7.7 case under `host/tests/fixtures/site-draft-answers/` drives the crate, service and host layers, so a case cannot pass in one layer with a different answer than another. The service's form check must keep forbidden keys and failing rules unchanged for the host to judge; a repair turn that removed them would hide what the agent tried. `scripts/check_current_state.py` now rejects the retired "agent drafting (`brwr-f45`) … are not built" claim and the DESIGN.md rule that the hint drafted with the agent.
 - 2026-10-27: Branch `feat/capture-site-unknown` (`brwr-t40`). Unknown-site Capture Site pins the host catalog and real URL shapes in `protocol/capture-site/` and reads them from both the Rust and extension suites, so neither side keeps a private copy of the probe list, fill values or shaper expectations ("Unknown-site drafting" above). Scope, `unscoped` and title overlays are tested on both sides of `check_site_draft`: the checked request never carries them, and a table that does is still refused. `scripts/check_current_state.py` now rejects the retired "Unknown-site automatic drafting is still in development" claim. After merging #126 (protocol v7), the drafter's scoped-tenant anchor is pinned on both sides: `validate.drafted.*` vectors (rust, ts) show a drafted shared-origin adapter whose only anchor is its tenant validating scoped and failing `no_literal_segment` unscoped in both engines, plus the drafted Notion adapter and the ID-less rule (`id_unknown_capture`); `draft_rules` vectors and host `check_site_draft` tests show the same tables kept, `scope_anchored`, and refused unscoped as `draft_scope_choice`. The step 7.6 shared-origin panel test now expects the tab's tenant pre-filled and chosen as "Capture for <tenant>" (one-click Save), and a tab with no tenant in its URL still waiting for a choice.
 - 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).
   Failing-first host tests (`config::tests::strip_params_readers`,

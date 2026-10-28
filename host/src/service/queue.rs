@@ -1,12 +1,14 @@
 //! The run queue: at most [`MAX_RUNNING`] runs execute at once, the rest wait
-//! FIFO, and each record key has at most one queued-or-running run.
+//! FIFO, and each run kind and record key has at most one queued-or-running
+//! run. A site-draft run (keyed by its origin) and a summary run never share
+//! a key, whatever their values.
 //!
 //! This is a pure state machine. The supervisor owns the threads and calls
 //! [`Scheduler::next_ready`] whenever a slot may have opened.
 
 use std::collections::{HashMap, VecDeque};
 
-use brauser_protocol::{RecordKey, RecordKeyKind};
+use brauser_protocol::{RecordKey, RecordKeyKind, RunKind};
 use uuid::Uuid;
 
 /// How many runs may execute at the same time.
@@ -21,16 +23,21 @@ pub enum Submit {
     Existing(Uuid),
 }
 
-/// A hashable identity for a [`RecordKey`]. The generated protocol types do
-/// not derive `Hash`, so the kind is mapped to a small tag.
-type KeyId = (u8, String);
+/// A hashable identity for a run kind and [`RecordKey`]. The generated
+/// protocol types do not derive `Hash`, so each kind is mapped to a small
+/// tag.
+type KeyId = (u8, u8, String);
 
-fn key_id(key: &RecordKey) -> KeyId {
+fn key_id(run: RunKind, key: &RecordKey) -> KeyId {
+    let run = match run {
+        RunKind::Summary => 0,
+        RunKind::SiteDraft => 1,
+    };
     let kind = match key.kind {
         RecordKeyKind::Url => 0,
         RecordKeyKind::Artifact => 1,
     };
-    (kind, key.value.clone())
+    (run, kind, key.value.clone())
 }
 
 #[derive(Debug, Default)]
@@ -45,10 +52,11 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    /// Queues `id` under `key` unless that key already has a queued or running
-    /// run, in which case the existing run's id is returned and nothing changes.
-    pub fn submit(&mut self, key: &RecordKey, id: Uuid) -> Submit {
-        let key = key_id(key);
+    /// Queues `id` under `run` and `key` unless they already have a queued or
+    /// running run, in which case the existing run's id is returned and
+    /// nothing changes.
+    pub fn submit(&mut self, run: RunKind, key: &RecordKey, id: Uuid) -> Submit {
+        let key = key_id(run, key);
         if let Some(existing) = self.by_key.get(&key) {
             return Submit::Existing(*existing);
         }
@@ -62,8 +70,8 @@ impl Scheduler {
 
     /// Takes `key` for `id`, a run recovery could not resume, until
     /// [`Scheduler::finished`] frees it. It takes no slot.
-    pub fn hold(&mut self, key: &RecordKey, id: Uuid) {
-        self.held.insert(id, key_id(key));
+    pub fn hold(&mut self, run: RunKind, key: &RecordKey, id: Uuid) {
+        self.held.insert(id, key_id(run, key));
     }
 
     /// Moves the oldest waiting run to running, if a slot is free.
@@ -121,6 +129,8 @@ impl Scheduler {
 mod tests {
     use super::*;
 
+    const SUMMARY: RunKind = RunKind::Summary;
+
     fn url(value: &str) -> RecordKey {
         RecordKey {
             kind: RecordKeyKind::Url,
@@ -140,42 +150,68 @@ mod tests {
         let (k1, k2, k3) = (url("https://a/"), url("https://b/"), url("https://c/"));
         let [a, b, c, d, e] = [(); 5].map(|()| Uuid::new_v4());
         let mut s = Scheduler::default();
-        assert!(matches!(s.submit(&k1, a), Submit::New));
-        assert_eq!(s.submit(&k2, b), Submit::New);
-        assert_eq!(s.submit(&k3, c), Submit::New);
+        assert!(matches!(s.submit(SUMMARY, &k1, a), Submit::New));
+        assert_eq!(s.submit(SUMMARY, &k2, b), Submit::New);
+        assert_eq!(s.submit(SUMMARY, &k3, c), Submit::New);
         assert_eq!(
             [s.next_ready(), s.next_ready(), s.next_ready()],
             [Some(a), Some(b), None]
         );
-        assert!(matches!(s.submit(&k1, d), Submit::Existing(x) if x == a));
+        assert!(matches!(s.submit(SUMMARY, &k1, d), Submit::Existing(x) if x == a));
         // A waiting run's key is also taken.
-        assert_eq!(s.submit(&k3, d), Submit::Existing(c));
+        assert_eq!(s.submit(SUMMARY, &k3, d), Submit::Existing(c));
         s.finished(a);
         assert_eq!(s.next_ready(), Some(c));
         assert_eq!(s.next_ready(), None);
-        assert!(matches!(s.submit(&k1, e), Submit::New));
+        assert!(matches!(s.submit(SUMMARY, &k1, e), Submit::New));
     }
 
     #[test]
     fn url_and_artifact_keys_with_the_same_value_are_distinct() {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let mut s = Scheduler::default();
-        assert_eq!(s.submit(&url("same"), a), Submit::New);
-        assert_eq!(s.submit(&artifact("same"), b), Submit::New);
+        assert_eq!(s.submit(SUMMARY, &url("same"), a), Submit::New);
+        assert_eq!(s.submit(SUMMARY, &artifact("same"), b), Submit::New);
         assert_eq!(
-            s.submit(&artifact("same"), Uuid::new_v4()),
+            s.submit(SUMMARY, &artifact("same"), Uuid::new_v4()),
             Submit::Existing(b)
         );
-        assert_eq!(s.submit(&url("same"), Uuid::new_v4()), Submit::Existing(a));
+        assert_eq!(
+            s.submit(SUMMARY, &url("same"), Uuid::new_v4()),
+            Submit::Existing(a)
+        );
+    }
+
+    #[test]
+    fn a_site_draft_run_and_a_summary_run_never_share_a_queue_slot() {
+        let [a, b, c, d] = [(); 4].map(|()| Uuid::new_v4());
+        let origin = url("https://tools.example.com");
+        let mut s = Scheduler::default();
+        assert_eq!(s.submit(RunKind::SiteDraft, &origin, a), Submit::New);
+        assert_eq!(s.submit(SUMMARY, &origin, b), Submit::New);
+        assert_eq!(
+            s.submit(RunKind::SiteDraft, &origin, c),
+            Submit::Existing(a)
+        );
+        assert_eq!(s.submit(SUMMARY, &origin, c), Submit::Existing(b));
+        // A held site-draft key holds only that kind.
+        s.finished(a);
+        s.hold(RunKind::SiteDraft, &origin, c);
+        assert_eq!(
+            s.submit(RunKind::SiteDraft, &origin, d),
+            Submit::Existing(c)
+        );
+        s.finished(b);
+        assert_eq!(s.submit(SUMMARY, &origin, d), Submit::New);
     }
 
     #[test]
     fn dequeued_run_frees_its_key() {
         let [a, b, c, d] = [(); 4].map(|()| Uuid::new_v4());
         let mut s = Scheduler::default();
-        s.submit(&url("1"), a);
-        s.submit(&url("2"), b);
-        s.submit(&url("3"), c);
+        s.submit(SUMMARY, &url("1"), a);
+        s.submit(SUMMARY, &url("2"), b);
+        s.submit(SUMMARY, &url("3"), c);
         assert_eq!(s.next_ready(), Some(a));
         assert_eq!(s.next_ready(), Some(b));
         assert!(s.is_waiting(c));
@@ -186,21 +222,24 @@ mod tests {
         assert!(s.dequeue(c));
         assert!(!s.is_waiting(c));
         assert!(!s.dequeue(c));
-        assert_eq!(s.submit(&url("3"), d), Submit::New);
+        assert_eq!(s.submit(SUMMARY, &url("3"), d), Submit::New);
         s.finished(a);
         // The dequeued run never starts; the resubmitted one does.
         assert_eq!(s.next_ready(), Some(d));
         // A running run keeps its key after a failed dequeue.
-        assert_eq!(s.submit(&url("2"), Uuid::new_v4()), Submit::Existing(b));
+        assert_eq!(
+            s.submit(SUMMARY, &url("2"), Uuid::new_v4()),
+            Submit::Existing(b)
+        );
     }
 
     #[test]
     fn a_released_run_frees_its_slot_but_keeps_its_key_until_finished() {
         let [a, b, c, d] = [(); 4].map(|()| Uuid::new_v4());
         let mut s = Scheduler::default();
-        s.submit(&url("1"), a);
-        s.submit(&url("2"), b);
-        s.submit(&url("3"), c);
+        s.submit(SUMMARY, &url("1"), a);
+        s.submit(SUMMARY, &url("2"), b);
+        s.submit(SUMMARY, &url("3"), c);
         assert_eq!(s.next_ready(), Some(a));
         assert_eq!(s.next_ready(), Some(b));
         s.release(a);
@@ -210,9 +249,9 @@ mod tests {
         s.finished(c);
         assert!(s.is_idle());
         // The key is still taken until the run is finished.
-        assert_eq!(s.submit(&url("1"), d), Submit::Existing(a));
+        assert_eq!(s.submit(SUMMARY, &url("1"), d), Submit::Existing(a));
         s.finished(a);
-        assert_eq!(s.submit(&url("1"), d), Submit::New);
+        assert_eq!(s.submit(SUMMARY, &url("1"), d), Submit::New);
     }
 
     #[test]
@@ -220,17 +259,17 @@ mod tests {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let mut s = Scheduler::default();
         assert!(s.is_idle());
-        s.submit(&url("1"), a);
+        s.submit(SUMMARY, &url("1"), a);
         assert!(!s.is_idle(), "waiting run");
         assert_eq!(s.next_ready(), Some(a));
         assert!(!s.is_idle(), "running run");
-        s.submit(&url("2"), b);
+        s.submit(SUMMARY, &url("2"), b);
         s.finished(a);
         assert!(!s.is_idle(), "still waiting");
         assert!(s.dequeue(b));
         assert!(s.is_idle());
         // Finishing a run that was still waiting also removes it.
-        s.submit(&url("3"), a);
+        s.submit(SUMMARY, &url("3"), a);
         s.finished(a);
         assert!(s.is_idle());
         assert_eq!(s.next_ready(), None);

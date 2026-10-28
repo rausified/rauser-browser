@@ -17,7 +17,7 @@ import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
 import { SETUP_WARNING } from "./agent.js";
-import { summarizeFailureText, summarizeTab } from "./summarize.js";
+import { NEEDS_HARNESS_MESSAGE, harnessReady, summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor } from "./note-editor.js";
@@ -153,7 +153,6 @@ const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
 const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
 const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v1");
-const SUMMARIZE_NEEDS_HARNESS = "Set up a summary harness in settings first.";
 
 // --- Page area (§5.3, §5.7) --------------------------------------------------
 // The panel follows the active tab. `tabRefreshSeq` lets a refresh whose tab
@@ -737,10 +736,10 @@ function updateControls(): void {
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
-  const harnessReady = session.agentStatus?.state === "ready";
+  const ready = harnessReady(session);
   summarizeButton.hidden = currentPage === null;
-  summarizeButton.disabled = !harnessReady || summarizing || currentPage?.tabId === undefined;
-  summarizeButton.title = harnessReady ? "" : SUMMARIZE_NEEDS_HARNESS;
+  summarizeButton.disabled = !ready || summarizing || currentPage?.tabId === undefined;
+  summarizeButton.title = ready ? "" : NEEDS_HARNESS_MESSAGE;
   pageSummaryOpen.disabled = !connected;
   for (const open of recentOpenButtons) open.disabled = !connected;
   const paused = whyPausedReason();
@@ -1163,6 +1162,7 @@ captureSite = new CaptureSitePanel(session, {
     await refreshArtifact(true);
   },
   openSettings,
+  agentReady: () => harnessReady(session),
 });
 
 function localDate(date: Date): string {

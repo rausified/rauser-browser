@@ -1,0 +1,34 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.about",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/about/team"
+        }
+      ],
+      "id": "tools.about:{host}"
+    },
+    {
+      "type": "tools.pages",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/pages/{s:name}"
+        }
+      ],
+      "id": "tools.pages:{host}/{s}"
+    }
+  ]
+}

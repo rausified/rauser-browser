@@ -1,11 +1,14 @@
-import type { AdapterDocument, SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
+import type { AdapterDocument, HarnessId, RunView, SiteDrafted, UncheckedReason } from "../protocol/ts/generated.js";
 import { previewDocument, validateAdapterDocument } from "./adapter-review.js";
+import { harnessName, serviceSetupText } from "./agent.js";
 import type { WorkerStatus } from "./model.js";
 import { HostError } from "./native.js";
+import { RunProgress, type RunProgressDeps } from "./run-card.js";
+import { NEEDS_HARNESS_MESSAGE } from "./summarize.js";
 import { ConfigSession, describe, element, leaseFor, withConfigMutationLock, worker } from "./settings.js";
 import {
-  DROP_REASONS, captureMode, captureOrigin, checkReason, draftRequest, planCaptureSite, planDraftedSite, recurringHint,
-  siteConfigured, tenantPrefill,
+  DROP_REASONS, captureMode, captureOrigin, checkReason, defaultChecked, draftRequest, planCaptureSite, planDraftedSite,
+  recurringHint, siteConfigured, tenantPrefill,
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
@@ -28,10 +31,17 @@ interface CaptureActions {
   beforeSave(): Promise<void>;
   afterSave(): Promise<void>;
   openSettings(): void;
+  /** Whether settings has a ready harness, so Improve with AI can run. */
+  agentReady(): boolean;
 }
 
 const STARTER_SOURCE = "Development starter draft · live-tool certification is still pending.";
 const DRAFT_SOURCE = "Drafted by Brauser from this site's page patterns. No agent and no page content were used; review each kind of page before saving.";
+const AGENT_SOURCE = "Drafted by Brauser from this site's page patterns, then improved by AI from the same patterns. No page content was used, and Brauser checked every rule; review each kind of page before saving.";
+const DRAFTED_BY = "Drafted from this site's page patterns";
+const AGENT_REBUILD = "This Brauser host is older than the extension and cannot improve drafts with AI. Rebuild and reinstall the Brauser host, then open Capture Site again.";
+const AGENT_FORBIDDEN = "it tried to set fields drafts may not set (titles, scope or page fields)";
+const AGENT_NO_RULES = "none of its rules passed Brauser's safety checks";
 const STALE = "Settings changed. Cancel and open Capture Site again to review the current settings.";
 const SCOPE_INTRO = "This site holds many workspaces and accounts. Choose which ones Brauser remembers.";
 const SCOPED_TEXT = "Only these workspaces or accounts";
@@ -40,6 +50,7 @@ const MAX_TENANTS = 64;
 const UNCHECKED_LABELS: Record<UncheckedReason, string> = {
   link_only: "seen only in links on this page",
   token_only: "loose: its ID has no fixed shape",
+  unseen: "suggested by AI: no page you visited or linked here matches it",
 };
 
 /** One capture of a path template, in words. */
@@ -205,6 +216,19 @@ export class CaptureSitePanel {
   private draftProblem: string | null = null;
   private draftViews: DraftKindView[] = [];
   private previewMessage = "";
+  // Improve with AI: the structural draft it refines (shown again by Use
+  // basic draft), the watched site-draft run, and the harness that drafted
+  // the shown agent draft. Cleared by close() with the other draft fields.
+  private basicDraft: SiteDrafted | null = null;
+  private agentProgress: RunProgress | null = null;
+  // A start_site_draft or a judging draft_site is in flight.
+  private agentPending = false;
+  private agentHarness: HarnessId | null = null;
+  private readonly drafterLine = element<HTMLElement>("capture-site-drafter");
+  private readonly improveButton = element<HTMLButtonElement>("capture-site-improve");
+  private readonly basicButton = element<HTMLButtonElement>("capture-site-basic");
+  private readonly improveHint = element<HTMLElement>("capture-site-improve-hint");
+  private readonly agentRun = element<HTMLElement>("capture-site-agent-run");
   saving = false;
 
   constructor(private readonly session: ConfigSession, private readonly actions: CaptureActions) {
@@ -231,6 +255,8 @@ export class CaptureSitePanel {
       input.addEventListener("input", () => this.updateDraftPreview());
     }
     this.advanced.addEventListener("click", () => void this.openAdvanced());
+    this.improveButton.addEventListener("click", () => void this.improve());
+    this.basicButton.addEventListener("click", () => this.useBasicDraft());
     // As for Page patterns: a reload or document replacement keeps the tab
     // ID and can keep the URL, so any new load or URL change in the reviewed
     // tab discards a drafted review and its link shapes.
@@ -407,6 +433,17 @@ export class CaptureSitePanel {
 
   private close(): void {
     this.starterCheck += 1;
+    // An unfinished AI run is canceled: the shapes it drafts from are
+    // discarded with this review.
+    const progress = this.agentProgress;
+    this.agentProgress = null;
+    if (progress) void progress.close();
+    this.agentPending = false;
+    this.agentHarness = null;
+    this.basicDraft = null;
+    this.agentRun.replaceChildren();
+    this.drafterLine.textContent = "";
+    this.drafterLine.hidden = true;
     this.target = null;
     this.plan = null;
     this.restorePlan = null;
@@ -484,6 +521,12 @@ export class CaptureSitePanel {
   /** The plain-language review: what Brauser will and will not remember,
    * with the controls that shape the selection. */
   private renderDraft(draft: SiteDrafted, target: NonNullable<CaptureSitePanel["target"]>): void {
+    const agent = draft.drafter === "agent";
+    this.source.textContent = agent ? AGENT_SOURCE : DRAFT_SOURCE;
+    this.drafterLine.hidden = false;
+    this.drafterLine.textContent = agent
+      ? `Improved with AI${this.agentHarness ? ` (${harnessName(this.agentHarness)})` : ""}, checked by Brauser`
+      : DRAFTED_BY;
     this.kinds.replaceChildren();
     this.draftViews = [];
     for (const [a, view] of draft.adapters.entries()) {
@@ -507,7 +550,7 @@ export class CaptureSitePanel {
         const row = child(card, "label", "", "check-label");
         const box = child(row, "input");
         box.type = "checkbox";
-        box.checked = entry.checked;
+        box.checked = defaultChecked(entry);
         box.dataset.rule = `${a}/${entry.rule}`;
         box.addEventListener("input", () => this.updateDraftPreview());
         const reason = entry.unchecked_reason ? ` · ${UNCHECKED_LABELS[entry.unchecked_reason]}` : "";
@@ -556,7 +599,11 @@ export class CaptureSitePanel {
       child(this.dropped, "p", "Brauser won't capture:");
       const list = child(this.dropped, "ul", "", "plain-list");
       for (const row of draft.dropped) {
-        const type = row.adapter === null ? undefined : draft.adapters[row.adapter]?.adapter.type;
+        // An agent drop's `adapter` indexes the agent's answer, not
+        // `adapters`, so only a structural row may name its kind.
+        const type = row.adapter === null || draft.drafter === "agent"
+          ? undefined
+          : draft.adapters[row.adapter]?.adapter.type;
         const subject = row.shape ?? (typeof type === "string" ? `A drafted ${type} rule` : "A drafted rule");
         child(list, "li", `${subject}: ${DROP_REASONS[row.reason]}`);
       }
@@ -697,6 +744,137 @@ export class CaptureSitePanel {
     this.save.textContent = this.saving ? "Saving…" : this.target?.mode === "restore"
       ? plan?.startsCapture ? "Restore capture rules" : "Restore rules · keep capture paused"
       : plan?.startsCapture ? "Start capturing this site" : "Save site · keep capture paused";
+    // Improve with AI refines a shown structural draft; Use basic draft
+    // returns to it from an agent draft.
+    const drafted = this.target?.mode === "draft" ? this.draft : null;
+    const ready = this.actions.agentReady();
+    this.improveButton.hidden = drafted?.drafter !== "structural";
+    this.improveButton.disabled = !ready || busy || this.saving || !!problem || !this.session.connected ||
+      this.agentPending || this.agentProgress !== null;
+    this.improveButton.title = ready ? "" : NEEDS_HARNESS_MESSAGE;
+    this.improveHint.textContent = ready ? "" : NEEDS_HARNESS_MESSAGE;
+    this.improveHint.hidden = this.improveButton.hidden || ready;
+    this.basicButton.hidden = drafted?.drafter !== "agent" || this.basicDraft === null;
+    this.basicButton.disabled = this.saving;
+  }
+
+  private runDeps(): RunProgressDeps {
+    return {
+      host: this.session.host,
+      now: () => Date.now(),
+      copy: (text) => navigator.clipboard.writeText(text),
+      visible: () => document.visibilityState !== "hidden",
+    };
+  }
+
+  /** Improve with AI: start (or rejoin) the site-draft run from the shapes
+   * already held for the structural draft. Nothing is read from the page
+   * again, and the host builds the agent's input itself. */
+  private async improve(): Promise<void> {
+    const target = this.target;
+    const input = this.draftInput;
+    if (!target || target.mode !== "draft" || !input || this.draft?.drafter !== "structural" ||
+        this.improveButton.disabled || this.improveButton.hidden || this.actions.isBusy() || !this.actions.agentReady()) return;
+    this.agentPending = true;
+    this.agentRun.replaceChildren();
+    this.updateControls(this.actions.isBusy());
+    let started;
+    try {
+      started = await this.session.startSiteDraft(input.origin, input.visited, input.links);
+    } catch (error) {
+      if (this.target !== target) return;
+      this.agentPending = false;
+      this.agentNotUsed(this.agentErrorText(error));
+      return;
+    }
+    if (this.target !== target) {
+      // The review closed while the run started; its shapes are discarded.
+      if (!started.existing) void new RunProgress(started.run, this.runDeps(), () => undefined).close();
+      return;
+    }
+    this.agentPending = false;
+    // A run already under way for this origin (from a review whose panel
+    // closed) is rejoined rather than started again.
+    const progress: RunProgress = new RunProgress(started.run, this.runDeps(),
+      (run) => void this.agentFinished(run, target, input, progress));
+    this.agentProgress = progress;
+    this.agentRun.replaceChildren(progress.element);
+    this.updateControls(this.actions.isBusy());
+    progress.start();
+  }
+
+  /** A finished site-draft run. Only the host's judgment of it is shown:
+   * draft_site with the run id re-checks its tables as the structural ones
+   * are checked. Anything else keeps the basic draft and says why. */
+  private async agentFinished(
+    run: RunView, target: NonNullable<CaptureSitePanel["target"]>, input: DraftRequest, progress: RunProgress,
+  ): Promise<void> {
+    if (this.agentProgress !== progress || this.target !== target) return;
+    this.agentProgress = null;
+    progress.dispose();
+    this.agentRun.replaceChildren();
+    if (run.state !== "succeeded") {
+      this.agentNotUsed(`The AI draft was not used: ${run.state === "canceled" ? "it was canceled" : run.error ?? "the run did not finish"}`);
+      return;
+    }
+    this.agentPending = true;
+    this.updateControls(this.actions.isBusy());
+    let draft: SiteDrafted;
+    try {
+      draft = await this.session.draftSite(input.origin, input.visited, input.links, run.run_id);
+    } catch (error) {
+      if (this.target !== target) return;
+      this.agentPending = false;
+      this.agentNotUsed(this.agentErrorText(error));
+      return;
+    }
+    if (this.target !== target) return;
+    this.agentPending = false;
+    if (draft.revision !== target.revision) {
+      this.draftProblem = STALE;
+      this.updateControls(this.actions.isBusy());
+      return;
+    }
+    if (!draft.adapters.length) {
+      const forbidden = draft.dropped.some((row) => row.reason === "draft_forbidden_key");
+      this.agentNotUsed(`The AI draft was not used: ${forbidden ? AGENT_FORBIDDEN : AGENT_NO_RULES}`);
+      return;
+    }
+    if (this.draft?.drafter === "structural") this.basicDraft = this.draft;
+    this.draft = draft;
+    this.agentHarness = run.harness;
+    this.renderDraft(draft, target);
+  }
+
+  /** Back to the structural draft, with its own default choices. */
+  private useBasicDraft(): void {
+    const target = this.target;
+    const basic = this.basicDraft;
+    if (!target || target.mode !== "draft" || !basic || this.saving) return;
+    this.basicDraft = null;
+    this.agentHarness = null;
+    this.draft = basic;
+    this.agentRun.replaceChildren();
+    this.renderDraft(basic, target);
+  }
+
+  private agentErrorText(error: unknown): string {
+    if (error instanceof HostError && error.code === "invalid_request" && /unsupported request/.test(error.message)) {
+      return AGENT_REBUILD;
+    }
+    if (error instanceof HostError && error.code === "service_unavailable") {
+      return `The AI draft was not used: ${serviceSetupText(error.message)}`;
+    }
+    return `The AI draft was not used: ${describe(error)}`;
+  }
+
+  /** The basic draft stays on screen, with one line saying why. */
+  private agentNotUsed(text: string): void {
+    const line = document.createElement("p");
+    line.className = "warning";
+    line.textContent = text;
+    this.agentRun.replaceChildren(line);
+    this.updateControls(this.actions.isBusy());
   }
 
   private updatePreview(): void {

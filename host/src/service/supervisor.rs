@@ -33,23 +33,24 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use brauser_protocol::{
-    ErrorCode, HarnessId, RecordKey, RunErrorKind, RunState, RunView, SummaryVocabulary,
+    ErrorCode, HarnessId, RecordKey, RunErrorKind, RunKind, RunState, RunView, SummaryVocabulary,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::harness_api::{
-    HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
+    HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
-use super::prompt::{repair_prompt, summary_prompt};
+use super::prompt::{repair_prompt, site_draft_prompt, summary_prompt};
 use super::queue::{Scheduler, Submit};
 use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, fit_session_id,
     page_markdown,
 };
 use crate::answer::parse_answer;
+use crate::capture_site::catalog;
 use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
 use crate::open::Opener;
 
@@ -210,8 +211,15 @@ impl fmt::Debug for ServiceOptions {
 /// working directory; the child environment comes from
 /// [`ServiceOptions::run_env`] when the run starts, so the supervisor never
 /// reads `agent.env` itself.
+///
+/// A site-draft run (`kind: SiteDraft`) differs in three ways: `url` is the
+/// origin, `content` is the host-built untrusted-data block written as
+/// `page.md` unchanged, and it runs in its own run directory, so `cwd` is
+/// ignored and the knowledge base check ([`ServiceOptions::run_cwd`]) is
+/// skipped.
 #[derive(Debug, Clone)]
 pub struct StartRun {
+    pub kind: RunKind,
     pub url: String,
     pub title: String,
     pub content: String,
@@ -243,6 +251,7 @@ struct StopState {
 
 /// What the worker needs that is not in `status.json`.
 struct Launch {
+    kind: RunKind,
     cwd: PathBuf,
     vocabulary: SummaryVocabulary,
 }
@@ -467,9 +476,14 @@ impl Supervisor {
             let Ok(status) = inner.store.status(id) else {
                 continue;
             };
-            let resumable = status.cwd.as_ref().map(|cwd| {
+            // A site draft always runs in its own run directory.
+            let cwd = match status.kind {
+                RunKind::Summary => status.cwd.as_ref().map(PathBuf::from),
+                RunKind::SiteDraft => Some(inner.store.run_dir(id)),
+            };
+            let resumable = cwd.map(|cwd| {
                 let mut scheduler = lock(&inner.scheduler);
-                (scheduler.submit(&status.start_key, id), PathBuf::from(cwd))
+                (scheduler.submit(status.kind, &status.start_key, id), cwd)
             });
             match resumable {
                 Some((Submit::New, cwd)) => {
@@ -486,13 +500,17 @@ impl Supervisor {
                         .vocabulary
                         .filter(valid_summary_vocabulary)
                         .unwrap_or_else(default_summary_vocabulary);
-                    let launch = Launch { cwd, vocabulary };
+                    let launch = Launch {
+                        kind: status.kind,
+                        cwd,
+                        vocabulary,
+                    };
                     let control = RunControl::new(launch, timeout);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
                 Some((Submit::Existing(_), _)) | None => {
                     // Its key stays taken until this end state is recorded.
-                    lock(&inner.scheduler).hold(&status.start_key, id);
+                    lock(&inner.scheduler).hold(status.kind, &status.start_key, id);
                     inner.finish(id, |status| {
                         status.state = RunState::Failed;
                         status.error_kind = Some(RunErrorKind::ServiceRestarted);
@@ -532,11 +550,20 @@ impl Supervisor {
             let mut scheduler = lock(&inner.scheduler);
             // A run whose end state is now recorded gives up its key first.
             inner.settle_locked(&mut scheduler);
-            if let Submit::Existing(owner) = scheduler.submit(&req.record_key, id) {
+            if let Submit::Existing(owner) = scheduler.submit(req.kind, &req.record_key, id) {
                 drop(scheduler);
                 return inner.view(owner).map(|view| (view, true));
             }
             let now = now_timestamp();
+            let (cwd, page) = match req.kind {
+                RunKind::Summary => (
+                    req.cwd,
+                    page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref()),
+                ),
+                // Its own run directory, never the knowledge base; its page
+                // is the host's untrusted-data block as it came.
+                RunKind::SiteDraft => (inner.store.run_dir(id), req.content),
+            };
             let status = RunStatusFile {
                 version: 1,
                 run_id: id.to_string(),
@@ -547,7 +574,7 @@ impl Supervisor {
                 heartbeat_at: None,
                 thread_id: None,
                 session_id: None,
-                cwd: Some(req.cwd.display().to_string()),
+                cwd: Some(cwd.display().to_string()),
                 start_key: req.record_key.clone(),
                 written_key: None,
                 url: req.url.clone(),
@@ -565,8 +592,8 @@ impl Supervisor {
                 answered_at: None,
                 first_answered_at: None,
                 save_final: false,
+                kind: req.kind,
             };
-            let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
                 scheduler.finished(id);
                 eprintln!("brauser service: could not create run {id}: {error:#}");
@@ -577,7 +604,8 @@ impl Supervisor {
             }
             let timeout = inner.options.timeout_for(req.timeout);
             let launch = Launch {
-                cwd: req.cwd,
+                kind: req.kind,
+                cwd,
                 vocabulary: req.vocabulary,
             };
             let control = RunControl::new(launch, timeout);
@@ -648,11 +676,15 @@ impl Supervisor {
                 .cmp(&a.created_at)
                 .then_with(|| b.run_id.cmp(&a.run_id))
         });
+        // A site draft's tables come only from `get_run`, so twenty views
+        // still fit one outbound frame.
         chosen
             .iter()
             .filter_map(|run| {
                 let id = Uuid::parse_str(&run.run_id).ok()?;
-                Some(self.inner.view_of(id, run))
+                let mut view = self.inner.view_of(id, run);
+                view.site_draft = None;
+                Some(view)
             })
             .collect()
     }
@@ -928,8 +960,11 @@ impl Inner {
             }
         };
         // The folder as it is now, not as it was when the run was queued.
+        // A site draft runs in its own run directory, not the knowledge
+        // base, so it has no knowledge base to check.
         if let Some(Err(reason)) = launch
             .as_ref()
+            .filter(|launch| launch.kind == RunKind::Summary)
             .map(|launch| (this.options.run_cwd)(&launch.cwd))
         {
             control.end_turn();
@@ -1021,11 +1056,26 @@ impl Inner {
             return Driven::Failed("The AI harness is no longer set up.".to_string());
         };
         let page_path = self.store.page_path(id);
+        // Only the prompt, the answer schema and (through the finisher) the
+        // answer's validation differ by kind; the turns and the repair turn
+        // are shared. A site draft sends no schema: Codex's strict structured
+        // output cannot describe adapter tables (see [`OutputSchema::Omit`]).
+        let (prompt, output_schema) = match status.kind {
+            RunKind::Summary => (
+                summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
+                OutputSchema::RunnerDefault,
+            ),
+            RunKind::SiteDraft => (
+                site_draft_prompt(&page_path, &status.url, catalog()),
+                OutputSchema::Omit,
+            ),
+        };
         let spec = RunSpec {
             run_id: id,
             harness: status.harness,
             title: status.title.clone(),
-            prompt: summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
+            prompt,
+            output_schema,
             cwd: launch.cwd,
             page_path,
             env,
@@ -1470,8 +1520,9 @@ mod tests {
 
     use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
-    use crate::service::finisher::SummaryFinisher;
+    use crate::service::finisher::{KindFinisher, SummaryFinisher};
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
+    use crate::service::prompt::site_draft_input;
     use crate::service::record::{RunStatusFile, RunStore};
 
     /// Accepts a §6.4 answer and saves nothing, counting its saves and
@@ -1526,6 +1577,9 @@ mod tests {
     /// check fail, as if the knowledge base folder had been replaced.
     const FOLDER_CHANGED: &str = "folder-changed";
     const FOLDER_CHANGED_ERROR: &str = "The knowledge base folder changed.";
+    /// A file in a fixture's temp directory that makes every folder check
+    /// fail, as if no knowledge base were configured at all.
+    const KNOWLEDGE_BASE_GONE: &str = "knowledge-base-gone";
 
     struct Fixture {
         dir: tempfile::TempDir,
@@ -1654,25 +1708,29 @@ mod tests {
             let seen = SeenRun::default();
             let finisher: Box<dyn RunFinisher> = match finisher {
                 Some(build) => build(dir.path()),
-                None => Box::new(TestFinisher {
+                // As the service does, a site-draft run goes to its own
+                // finisher and never reaches this one.
+                None => Box::new(KindFinisher::new(TestFinisher {
                     fail_saves: fail_saves.clone(),
                     saves: saves.clone(),
                     seen: seen.clone(),
-                }),
+                })),
             };
             let env: SharedEnv = Arc::new(Mutex::new(match env_error {
                 Some(error) => Err(error.to_string()),
                 None => Ok(default_env(dir.path())),
             }));
             let source = env.clone();
+            let root = dir.path().to_path_buf();
             let options = ServiceOptions {
                 run_timeout,
                 forced_run_timeout: None,
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
-                run_cwd: Arc::new(|cwd: &Path| {
-                    if cwd.join(FOLDER_CHANGED).exists() {
+                run_cwd: Arc::new(move |cwd: &Path| {
+                    if cwd.join(FOLDER_CHANGED).exists() || root.join(KNOWLEDGE_BASE_GONE).exists()
+                    {
                         Err(FOLDER_CHANGED_ERROR.to_string())
                     } else {
                         Ok(())
@@ -1706,6 +1764,7 @@ mod tests {
 
         fn request(&self, key: &str) -> StartRun {
             StartRun {
+                kind: RunKind::Summary,
                 url: format!("https://example.com/{key}"),
                 title: format!("Page {key}"),
                 content: "Body text".to_string(),
@@ -2826,6 +2885,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            kind: RunKind::Summary,
         }
     }
 
@@ -2901,6 +2961,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            kind: RunKind::Summary,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
@@ -3491,5 +3552,639 @@ mod tests {
         };
         let debug = format!("{options:?}");
         assert!(!debug.contains("secret-value"), "{debug}");
+    }
+
+    // Site-draft runs (the Capture Site agent drafter).
+
+    const TOOLS: &str = "https://tools.example.com";
+
+    macro_rules! answer_fixture {
+        ($case:literal, $ext:literal) => {
+            include_str!(concat!(
+                "../../tests/fixtures/site-draft-answers/",
+                $case,
+                $ext
+            ))
+        };
+        ($case:literal) => {
+            ($case, answer_fixture!($case, ".json"))
+        };
+    }
+
+    type Case = (
+        (&'static str, &'static str),
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+
+    /// Each step 7.7 answer fixture with the planted visited and link
+    /// shapes of its crate case (`adapter-templates/tests/agent_draft.rs`).
+    const SITE_DRAFT_CASES: &[Case] = &[
+        (
+            answer_fixture!("agent_planted_links_toward_rest_after_first_segment_are_dropped"),
+            &["/docs/{num}"],
+            &[
+                "/{slug}",
+                "/{slug}/{slug}",
+                "/{slug}/{slug}/{slug}",
+                "/docs/{slug}/{slug}",
+                "/docs/{slug}/{slug}/{slug}",
+                "/{num}/{slug}/{slug}",
+                "/{key}/{slug}/{slug}/{slug}",
+                "/docs/{num}/{slug}/{slug}",
+            ],
+        ),
+        (
+            answer_fixture!("agent_planted_root_match_is_dropped"),
+            &["/docs/{num}"],
+            &["/", "/?id={num}", "//{num}", "/{num}"],
+        ),
+        (
+            answer_fixture!("agent_planted_search_page_is_dropped"),
+            &["/docs/{num}"],
+            &[
+                "/search?q={slug}",
+                "/?q={slug}",
+                "/search/{num}",
+                "/find?q={num}",
+                "/docs?query={id}",
+                "/query/{key}",
+                "/filter/{uuid}",
+            ],
+        ),
+        (
+            answer_fixture!("agent_planted_secret_query_parameter_id_is_dropped"),
+            &["/docs/{num}"],
+            &[
+                "/files/{num}?token={id}",
+                "/doc/{num}?access_token={hex64}",
+                "/view?sig={hex32}",
+                "/cb?code={id}",
+            ],
+        ),
+        (
+            answer_fixture!("agent_planted_auth_or_capability_route_is_dropped"),
+            &["/docs/{num}"],
+            &[
+                "/invite/{hex32}",
+                "/reset/{uuid}",
+                "/password/reset/{hex64}",
+                "/verify/{id}",
+                "/confirm/{num}",
+            ],
+        ),
+        (
+            answer_fixture!("agent_planted_search_or_paging_parameter_id_is_dropped"),
+            &["/docs/{num}", "/docs/{num}?page={num}"],
+            &[
+                "/items?page={num}",
+                "/items?cursor={id}",
+                "/items?offset={num}&sort={slug}",
+                "/items?q={key}",
+                "/items?jql={slug}&start={num}",
+                "/items?tab={num}&view={uuid}",
+            ],
+        ),
+        (
+            answer_fixture!("agent_planted_id_less_rule_is_dropped"),
+            &["/docs/{num}"],
+            &[
+                "/about/team",
+                "/pages/{slug}",
+                "/docs/{slug}/{slug}/{slug}",
+                "/docs/list?owner={slug}",
+                "/docs?{param}={num}",
+            ],
+        ),
+        (
+            answer_fixture!(
+                "agent_planted_alternative_on_visited_rule_starts_unchecked_or_is_dropped"
+            ),
+            &["/wiki/doc/{num}"],
+            &["/wiki/page/{num}", "/wiki/doc/{num}/{slug}/{slug}"],
+        ),
+        (
+            answer_fixture!("agent_planted_blocked_route_word_is_dropped"),
+            &["/docs/{num}"],
+            &["/invite/{hex32}", "/share/{key}"],
+        ),
+        (
+            answer_fixture!(
+                "agent_draft_overlapping_existing_adapter_loses_only_overlapping_rules"
+            ),
+            &[
+                "/docs/{num}",
+                "/docs/{num}/{slug}/{slug}",
+                "/docs/{num}/history",
+                "/tickets/{key}",
+            ],
+            &[],
+        ),
+        (
+            answer_fixture!("agent_draft_with_tier1_fields_is_rejected_before_the_preview"),
+            &["/docs/{num}"],
+            &[],
+        ),
+        (
+            answer_fixture!("agent_draft_with_a_title_template_is_rejected_before_the_preview"),
+            &["/docs/{num}"],
+            &[],
+        ),
+        (
+            answer_fixture!("agent_draft_with_a_scope_is_rejected_before_the_preview"),
+            &["/docs/{num}"],
+            &[],
+        ),
+        (
+            answer_fixture!(
+                "agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_checks"
+            ),
+            &["/docs/{num}", "/{uuid}/view/{num}"],
+            &[],
+        ),
+    ];
+
+    const UNPARSEABLE: &str = answer_fixture!(
+        "unparseable_agent_draft_is_discarded_without_being_shown",
+        ".txt"
+    );
+
+    /// The structural tables a fixture's input block carries.
+    fn structural_tables() -> Vec<serde_json::Value> {
+        vec![serde_json::json!({
+            "type": "tools.docs",
+            "origin": TOOLS,
+            "match": [{"path": "/docs/{n:int}"}],
+            "id": "tools.docs:{host}/{n}",
+        })]
+    }
+
+    fn counted(shapes: &[&str]) -> Vec<(String, u32)> {
+        shapes.iter().map(|shape| (shape.to_string(), 1)).collect()
+    }
+
+    /// A one-table site answer for `origin`.
+    fn site_answer(origin: &str) -> String {
+        serde_json::json!({"adapters": [{
+            "type": "tools.docs",
+            "origin": origin,
+            "match": [{"path": "/docs/{n:int}"}],
+            "id": "tools.docs:{host}/{n}",
+        }]})
+        .to_string()
+    }
+
+    /// What a [`RecordingRunner`] saw: each session's spec with its
+    /// `page.md` as the session started, and every turn's prompt.
+    #[derive(Default)]
+    struct Seen {
+        starts: Vec<(RunSpec, String)>,
+        prompts: Vec<String>,
+    }
+
+    type SharedSeen = Arc<Mutex<Seen>>;
+
+    /// An in-process harness that records what it is given; turn `n` of
+    /// each session answers `answers[n - 1]`.
+    struct RecordingRunner {
+        answers: Vec<String>,
+        seen: SharedSeen,
+    }
+
+    struct RecordingSession {
+        answers: Vec<String>,
+        turns: usize,
+        seen: SharedSeen,
+    }
+
+    impl HarnessRunner for RecordingRunner {
+        fn harness(&self) -> HarnessId {
+            HarnessId::Codex
+        }
+
+        fn start(
+            &self,
+            spec: &RunSpec,
+            _slot: &ProcessSlot,
+        ) -> anyhow::Result<Box<dyn HarnessSession>> {
+            let page = std::fs::read_to_string(&spec.page_path).unwrap_or_default();
+            self.seen.lock().unwrap().starts.push((spec.clone(), page));
+            Ok(Box::new(RecordingSession {
+                answers: self.answers.clone(),
+                turns: 0,
+                seen: self.seen.clone(),
+            }))
+        }
+    }
+
+    impl HarnessSession for RecordingSession {
+        fn turn(&mut self, prompt: &str, _sink: &mut dyn FnMut(HarnessEvent)) -> TurnOutcome {
+            self.seen.lock().unwrap().prompts.push(prompt.to_string());
+            self.turns += 1;
+            match self.answers.get(self.turns - 1) {
+                Some(answer) => TurnOutcome::Answered {
+                    final_text: answer.clone(),
+                },
+                None => TurnOutcome::Failed {
+                    reason: "no more turns".to_string(),
+                },
+            }
+        }
+
+        fn close(self: Box<Self>) {}
+    }
+
+    /// A supervisor whose only harness is a [`RecordingRunner`], saving
+    /// through `finisher` when given.
+    fn recording_with(
+        answers: &[&str],
+        finisher: Option<FinisherFactory>,
+    ) -> (Fixture, SharedSeen) {
+        let seen = SharedSeen::default();
+        let runner = RecordingRunner {
+            answers: answers.iter().map(|answer| answer.to_string()).collect(),
+            seen: seen.clone(),
+        };
+        let fixture = Fixture::build(
+            tempfile::tempdir().unwrap(),
+            HarnessRegistry::of(vec![Box::new(runner)]),
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+            finisher,
+        );
+        (fixture, seen)
+    }
+
+    fn recording(answers: &[&str]) -> (Fixture, SharedSeen) {
+        recording_with(answers, None)
+    }
+
+    impl Fixture {
+        /// A site-draft run for `origin` with `input` as its `page.md`. Its
+        /// `cwd` names the fixture's knowledge base, which a site draft
+        /// ignores.
+        fn site_draft_request(&self, origin: &str, input: &str) -> StartRun {
+            StartRun {
+                kind: RunKind::SiteDraft,
+                url: origin.to_string(),
+                title: format!("Capture Site: {origin}"),
+                content: input.to_string(),
+                selection: None,
+                harness: None,
+                record_key: RecordKey {
+                    kind: RecordKeyKind::Url,
+                    value: origin.to_string(),
+                },
+                requested_at: "2026-10-26T10:00:00Z".to_string(),
+                cwd: self.dir.path().to_path_buf(),
+                timeout: None,
+                vocabulary: default_summary_vocabulary(),
+            }
+        }
+
+        fn start_site_draft(&self, origin: &str) -> Uuid {
+            let input = site_draft_input(origin, &counted(&["/docs/{num}"]), &[], &[]);
+            self.start_site_draft_with(origin, &input)
+        }
+
+        fn start_site_draft_with(&self, origin: &str, input: &str) -> Uuid {
+            let (view, existing) = self
+                .supervisor
+                .start_run(self.site_draft_request(origin, input))
+                .unwrap();
+            assert!(!existing);
+            assert_eq!(view.kind, Some(RunKind::SiteDraft));
+            Uuid::parse_str(&view.run_id).unwrap()
+        }
+    }
+
+    #[test]
+    fn every_site_draft_fixture_answer_passes_the_service_unchanged() {
+        assert_eq!(SITE_DRAFT_CASES.len(), 14, "every JSON fixture is listed");
+        for ((case, answer), visited, links) in SITE_DRAFT_CASES {
+            let (fixture, seen) = recording(&[answer]);
+            let input = site_draft_input(
+                TOOLS,
+                &counted(visited),
+                &counted(links),
+                &structural_tables(),
+            );
+            let id = fixture.start_site_draft_with(TOOLS, &input);
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Succeeded, "{case}: {view:?}");
+            let expected: serde_json::Value = serde_json::from_str(answer).unwrap();
+            let tables = view.site_draft.as_ref().map(|draft| &draft.adapters);
+            assert_eq!(tables, expected["adapters"].as_array(), "{case}");
+            assert_eq!(view.answer, None, "{case}");
+            assert_eq!(view.kind, Some(RunKind::SiteDraft), "{case}");
+            let seen = seen.lock().unwrap();
+            let (_, page) = &seen.starts[0];
+            assert_eq!(page, &input, "{case}");
+            for shape in visited.iter().chain(links.iter()) {
+                let quoted = serde_json::to_string(shape).unwrap();
+                assert!(page.contains(&quoted), "{case}: {shape} not in page.md");
+            }
+            assert_eq!(seen.prompts.len(), 1, "{case}: a repair turn ran");
+            assert_eq!(fixture.saves.load(Ordering::SeqCst), 0, "{case}");
+        }
+    }
+
+    #[test]
+    fn unparseable_agent_draft_is_discarded_without_being_shown() {
+        let (fixture, seen) = recording(&[UNPARSEABLE, UNPARSEABLE]);
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::InvalidOutput));
+        assert_eq!(view.site_draft, None);
+        assert_eq!(view.answer, None);
+        let error = view.error.unwrap();
+        assert_eq!(
+            error,
+            "The agent's answer was not valid after one correction: the answer is not valid JSON"
+        );
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.prompts.len(), 2, "exactly one repair turn");
+        assert!(
+            seen.prompts[1]
+                .starts_with("Your previous answer was not valid: the answer is not valid JSON"),
+            "{}",
+            seen.prompts[1]
+        );
+        assert!(!run_dir(&fixture, id).join("result.json").exists());
+        assert_eq!(fixture.supervisor.list_runs()[0].site_draft, None);
+    }
+
+    #[test]
+    fn invalid_site_draft_answer_gets_one_repair_turn_then_fails_as_invalid_output() {
+        let wrong = site_answer("https://other.example.com");
+        let (fixture, seen) = recording(&[&wrong, &wrong]);
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(
+            view.error_kind,
+            Some(RunErrorKind::InvalidOutput),
+            "{view:?}"
+        );
+        assert_eq!(
+            view.error.as_deref(),
+            Some(
+                "The agent's answer was not valid after one correction: \
+                 adapters[0].origin must be https://tools.example.com"
+            )
+        );
+        assert_eq!(seen.lock().unwrap().prompts.len(), 2);
+
+        // A corrected answer in the repair turn is kept.
+        let right = site_answer(TOOLS);
+        let (fixture, seen) = recording(&[&wrong, &right]);
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let expected: serde_json::Value = serde_json::from_str(&right).unwrap();
+        assert_eq!(
+            view.site_draft.map(|draft| draft.adapters),
+            expected["adapters"].as_array().cloned()
+        );
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.prompts[1],
+            repair_prompt("adapters[0].origin must be https://tools.example.com")
+        );
+    }
+
+    #[test]
+    fn site_draft_run_cwd_is_its_run_directory() {
+        let (fixture, seen) = recording(&[&site_answer(TOOLS)]);
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let dir = run_dir(&fixture, id);
+        assert_eq!(view.cwd, Some(dir.display().to_string()));
+        let seen = seen.lock().unwrap();
+        let (spec, _) = &seen.starts[0];
+        assert_eq!(spec.cwd, dir);
+        assert_ne!(spec.cwd, fixture.dir.path(), "never the knowledge base");
+        assert_eq!(spec.page_path, dir.join("page.md"));
+        let line = format!("Input file: {}", dir.join("page.md").display());
+        assert_eq!(
+            seen.prompts[0].lines().filter(|l| *l == line).count(),
+            1,
+            "{}",
+            seen.prompts[0]
+        );
+    }
+
+    #[test]
+    fn codex_gets_no_output_schema_for_site_draft_runs() {
+        let (fixture, seen) = recording(&[&site_answer(TOOLS)]);
+        let id = fixture.start_site_draft(TOOLS);
+        fixture.wait_finished(id);
+        let (fixture_summary, seen_summary) = recording(&[TEST_ANSWER]);
+        let summary = fixture_summary.start("a");
+        assert_eq!(
+            fixture_summary.wait_finished(summary).state,
+            RunState::Succeeded
+        );
+        let seen = seen.lock().unwrap();
+        // Strict structured output cannot describe a Tier 0 table (the
+        // query map has open keys), so a site draft sends no schema at all
+        // rather than falling back to the summary's.
+        assert_eq!(seen.starts[0].0.output_schema, OutputSchema::Omit);
+        assert!(seen.prompts[0].starts_with("Improve Brauser's draft"));
+        // A summary keeps the runner's own schema.
+        let seen_summary = seen_summary.lock().unwrap();
+        assert_eq!(
+            seen_summary.starts[0].0.output_schema,
+            OutputSchema::RunnerDefault
+        );
+        assert!(seen_summary.prompts[0].starts_with("Summarize a web page"));
+    }
+
+    #[test]
+    fn site_draft_runs_skip_the_knowledge_base_check_when_they_start() {
+        let (fixture, _) = recording(&[&site_answer(TOOLS)]);
+        std::fs::write(fixture.path(KNOWLEDGE_BASE_GONE), "").unwrap();
+        let summary = fixture.start("a");
+        let view = fixture.wait_finished(summary);
+        assert_eq!(
+            view.error.as_deref(),
+            Some(FOLDER_CHANGED_ERROR),
+            "{view:?}"
+        );
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+    }
+
+    /// Every file under `root`, with its bytes, except under `skip`.
+    fn snapshot(root: &Path, skip: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.starts_with(skip) {
+                    continue;
+                }
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    files.push((path, bytes));
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn site_draft_run_writes_nothing_outside_its_run_directory() {
+        // The service's own finisher, with a home folder, its config and a
+        // knowledge base (the fixture's directory) beside the runs.
+        let finisher: FinisherFactory = Box::new(|dir: &Path| {
+            let root = dir.join("home");
+            std::fs::create_dir(&root).unwrap();
+            let config = dir.join("config.toml");
+            crate::config::fixtures::write(&config, &root, "", "", "");
+            std::fs::write(dir.join("note.md"), "# A note\n").unwrap();
+            Box::new(KindFinisher::new(SummaryFinisher::new(config)))
+        });
+        let (fixture, _) = recording_with(&[&site_answer(TOOLS)], Some(finisher));
+        let before = snapshot(fixture.dir.path(), &fixture.path("runs"));
+        assert!(before.iter().any(|(path, _)| path.ends_with("config.toml")));
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.summary_path, None);
+        assert_eq!(
+            snapshot(fixture.dir.path(), &run_dir(&fixture, id)),
+            before,
+            "something was written outside the run directory"
+        );
+    }
+
+    #[test]
+    fn a_second_site_draft_start_for_the_origin_returns_the_existing_run() {
+        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
+        let id = fixture.start_site_draft(TOOLS);
+        let input = site_draft_input(TOOLS, &[], &[], &[]);
+        let (view, existing) = fixture
+            .supervisor
+            .start_run(fixture.site_draft_request(TOOLS, &input))
+            .unwrap();
+        assert!(existing);
+        assert_eq!(view.run_id, id.to_string());
+        // A summary with the same record key is a different queue slot.
+        let mut summary = fixture.request("a");
+        summary.record_key = RecordKey {
+            kind: RecordKeyKind::Url,
+            value: TOOLS.to_string(),
+        };
+        let (view, existing) = fixture.supervisor.start_run(summary).unwrap();
+        assert!(!existing);
+        assert_ne!(view.run_id, id.to_string());
+        fixture.release();
+        fixture.wait_finished(id);
+        fixture.wait_finished(Uuid::parse_str(&view.run_id).unwrap());
+        // Once it has ended, the origin takes a new run.
+        let again = fixture.start_site_draft(TOOLS);
+        assert_ne!(again, id);
+        fixture.wait_finished(again);
+    }
+
+    #[test]
+    fn cancel_and_timeout_end_a_site_draft_run_like_a_summary_run() {
+        let fixture = Fixture::new("echo started\nexec sleep 30\n");
+        let id = fixture.start_site_draft(TOOLS);
+        fixture.wait_for(id, |view| view.state == RunState::Running);
+        let view = fixture.supervisor.cancel_run(id).unwrap();
+        assert_eq!(view.state, RunState::Canceled, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::Canceled));
+        assert_eq!(view.site_draft, None);
+
+        let fixture = Fixture::with_timeout("exec sleep 30\n", Duration::from_millis(300));
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.error_kind, Some(RunErrorKind::TimedOut), "{view:?}");
+        assert_eq!(view.kind, Some(RunKind::SiteDraft));
+    }
+
+    /// Seed a site-draft record for `origin`, with no recorded folder.
+    fn seed_site_draft(store: &RunStore, state: RunState, origin: &str, at: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        let mut status = sample_status(id);
+        status.state = state;
+        status.kind = RunKind::SiteDraft;
+        status.service_pid = Some(1_000_000);
+        status.url = origin.to_string();
+        status.start_key.value = origin.to_string();
+        status.created_at = at.to_string();
+        store
+            .create(&status, &site_draft_input(origin, &[], &[], &[]))
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn recovered_site_draft_records_keep_their_kind() {
+        let origin = "https://a.example.com";
+        let script = format!(
+            "/bin/pwd -P > \"$COUNT.cwd\"\n/bin/cat <<'EOF'\n{}\nEOF\n",
+            site_answer(origin)
+        );
+        let mut interrupted = None;
+        let mut queued = None;
+        let fixture = Fixture::seeded(&script, DEFAULT_RUN_TIMEOUT, |store, _| {
+            interrupted = Some(seed_site_draft(
+                store,
+                RunState::Running,
+                TOOLS,
+                "2026-10-26T09:00:00.000000000Z",
+            ));
+            queued = Some(seed_site_draft(
+                store,
+                RunState::Queued,
+                origin,
+                "2026-10-26T09:00:01.000000000Z",
+            ));
+        });
+        let view = fixture.view(interrupted.unwrap());
+        assert_eq!(view.error_kind, Some(RunErrorKind::ServiceRestarted));
+        assert_eq!(view.kind, Some(RunKind::SiteDraft));
+        let stored = fixture
+            .supervisor
+            .store()
+            .status(interrupted.unwrap())
+            .unwrap();
+        assert_eq!(stored.kind, RunKind::SiteDraft);
+
+        let queued = queued.unwrap();
+        let view = fixture.wait_finished(queued);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.kind, Some(RunKind::SiteDraft));
+        assert!(view.site_draft.is_some(), "{view:?}");
+        // Resumed without a recorded folder, it still ran in its own run
+        // directory, past the folder check.
+        let ran_in = read(&fixture.path("count.cwd"));
+        let expected = std::fs::canonicalize(run_dir(&fixture, queued)).unwrap();
+        assert_eq!(ran_in.trim_end(), expected.display().to_string());
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// A summary run never carries site-draft tables, and list_runs leaves
+    /// a site draft's tables to get_run.
+    #[test]
+    fn list_runs_leaves_site_draft_tables_to_get_run() {
+        let (fixture, _) = recording(&[&site_answer(TOOLS)]);
+        let id = fixture.start_site_draft(TOOLS);
+        let view = fixture.wait_finished(id);
+        assert!(view.site_draft.is_some());
+        let listed = fixture.supervisor.list_runs();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].site_draft, None);
+        assert_eq!(listed[0].kind, Some(RunKind::SiteDraft));
     }
 }

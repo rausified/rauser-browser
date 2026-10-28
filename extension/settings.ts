@@ -4,13 +4,14 @@
 // another page has saved a different revision.
 import type {
   AdapterDocument, AdapterWarning, AdoptedState, AgentStatus, ConfigSnapshot, HarnessFound, HarnessId,
-  ShapeCount, SiteDraftChecked, SiteDrafted,
+  RunStarted, ShapeCount, SiteDraftChecked, SiteDrafted,
 } from "../protocol/ts/generated.js";
 import type { DraftChecked } from "./capture-site.js";
 import {
   POLICY_LEASE_MS,
   POLICY_STORAGE_KEY,
   isPolicyLease,
+  localTimestamp,
   type PolicyLease,
   type WorkerReply,
   type WorkerRequest,
@@ -315,8 +316,12 @@ export class ConfigSession {
    * Capture Site drafting for an unknown origin. Only the origin and private
    * URL shapes cross; the host drafts against its current config and returns
    * the revision it drafted against. It writes nothing.
+   *
+   * With `runId`, the host instead judges that finished Improve with AI run's
+   * validated tables with the same checks and answers an agent draft; the
+   * structural request stays exactly as it was, with no `run_id` key.
    */
-  async draftSite(origin: string, visited: ShapeCount[], links: ShapeCount[]): Promise<SiteDrafted> {
+  async draftSite(origin: string, visited: ShapeCount[], links: ShapeCount[], runId?: string): Promise<SiteDrafted> {
     return this.host.call({
       type: "draft_site",
       protocol_version: PROTOCOL_VERSION,
@@ -324,7 +329,27 @@ export class ConfigSession {
       origin,
       visited,
       links,
+      ...(runId === undefined ? {} : { run_id: runId }),
     }, "site_drafted");
+  }
+
+  /**
+   * Improve with AI: starts (or joins) the site-draft run for `origin`. Only
+   * the origin and the same private shapes `draftSite` sent cross; the host
+   * builds the agent's input from its own structural draft and chooses the
+   * run kind. `harness: null` is the default harness from settings.
+   */
+  async startSiteDraft(origin: string, visited: ShapeCount[], links: ShapeCount[]): Promise<RunStarted> {
+    return this.host.call({
+      type: "start_site_draft",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      origin,
+      visited,
+      links,
+      harness: null,
+      requested_at: localTimestamp(new Date()),
+    }, "run_started");
   }
 
   /**

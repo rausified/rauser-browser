@@ -1,7 +1,7 @@
 // Summarize & log: reads a tab's main text and starts its summary run. The
 // panel button, the `summarize` shortcut, and the context menu all use
 // summarizeTab; the host and the service check every field again.
-import type { RunView } from "../protocol/ts/generated.js";
+import type { AgentStatus, RunView } from "../protocol/ts/generated.js";
 import { serviceSetupText } from "./agent.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
@@ -16,6 +16,9 @@ export const NOT_A_WEB_PAGE_MESSAGE = "Summaries work on http(s) pages.";
 export const SITE_ACCESS_NEEDED_MESSAGE =
   `${APP_NAME} needs site access to summarize this page — re-enable it in Chrome's extension settings for ${APP_NAME}.`;
 export const PAGE_CHANGED_MESSAGE = "The page changed before it could be read. Summarize it again.";
+/** Why Summarize & log, and Capture Site's Improve with AI, are unavailable:
+ * both run the harness set up in settings. */
+export const NEEDS_HARNESS_MESSAGE = "Set up a summary harness in settings first.";
 // The start_run schema's title bound.
 const MAX_TITLE_CHARS = 2048;
 
@@ -25,6 +28,12 @@ export interface SummarizeDeps {
   /** Where an accepted run is recorded, so a later panel restores it. */
   storage: Pick<ChromeStorageArea, "set">;
   now(): Date;
+}
+
+/** Whether settings has a harness that answered its probe, so a run can
+ * start. Summarize & log and Improve with AI both wait for it. */
+export function harnessReady(session: { agentStatus: AgentStatus | null }): boolean {
+  return session.agentStatus?.state === "ready";
 }
 
 /** What a failed summarizeTab tells the user, the same on every path: the

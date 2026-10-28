@@ -25,6 +25,11 @@
 //! earlier-ranked adapters first, and reports each dropped shape with its
 //! reason. [`draft_kinds`] is the same draft before those checks.
 //!
+//! [`check_agent_draft`] judges an agent drafter's tables (`brwr-f45`) with
+//! the same check loop, so an agent rule is held to exactly the checks a
+//! structural rule is, and [`describe_rules`] gives any table's rules the
+//! review fields the structural review shows.
+//!
 //! Every collection is sorted by shape string before it is grouped, so the
 //! order of the input never changes the output. Link shapes come from the
 //! page and are untrusted: they never change how visited shapes group, nor
@@ -35,12 +40,15 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 
-use crate::document::{Document, MAX_RULES};
+use crate::ctype::{BaseType, CType};
+use crate::document::{Adapter, Document, MAX_RULES, QueryCond, Rule};
 use crate::draft::{
-    DraftOutcome, Provenance, RuleVerdict, ScopeState, check_draft_rules, scope_state,
+    DraftOutcome, DraftRulesReport, Provenance, RuleVerdict, ScopeState, check_draft_rules,
+    has_forbidden_key, scope_state,
 };
 use crate::error::DraftErrorCode;
 use crate::eval::{Prepared, match_rule};
+use crate::path::Segment;
 use crate::policy::{DraftPolicy, SharedOrigin};
 use crate::shape::{QueryName, ShapeClass, ShapePart, UrlShape};
 use crate::value::Value;
@@ -827,6 +835,10 @@ pub struct DraftedRule {
     /// Summed counts of the visited and link shapes behind the rule.
     pub visited: u32,
     pub links: u32,
+    /// No visited or link shape matches it: starts unchecked, "suggested by
+    /// AI: no page you visited or linked here matches it". Always `false`
+    /// for structural rules, whose kinds come from shapes.
+    pub unseen: bool,
     /// An illustrative URL the rule matches, filled from the catalog's fixed
     /// examples. It is never a URL the user visited.
     pub example: String,
@@ -852,6 +864,25 @@ pub struct DraftedAdapter {
 pub struct SiteDraft {
     pub adapters: Vec<DraftedAdapter>,
     pub dropped: Vec<Dropped>,
+    /// Set when [`check_agent_draft`] refused the whole agent draft before
+    /// any rule was judged, so none of it is shown: a forbidden key, a table
+    /// for another origin, or a table that does not parse. Always `None`
+    /// from [`draft_site`].
+    pub rejected: Option<DraftErrorCode>,
+    /// The agent rules a check dropped, in table and rule order. Always
+    /// empty from [`draft_site`], which reports dropped shapes instead.
+    pub dropped_rules: Vec<DroppedRule>,
+}
+
+/// An agent rule a check dropped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DroppedRule {
+    /// The index of the agent's table.
+    pub table: usize,
+    /// The rule's index in that table's `match`, or `None` when a
+    /// table-level check dropped every rule of the table.
+    pub rule: Option<usize>,
+    pub reason: DraftErrorCode,
 }
 
 /// The capture type a placeholder class maps to.
@@ -1034,6 +1065,7 @@ impl Candidate {
                     token_only: self.token_only,
                     visited: r.visited,
                     links: r.links,
+                    unseen: false,
                     example: r.example(origin, policy),
                 })
                 .collect(),
@@ -1526,6 +1558,7 @@ pub fn draft_kinds(
             .map(|c| c.drafted(origin, scope.clone(), policy))
             .collect(),
         dropped,
+        ..SiteDraft::default()
     }
 }
 
@@ -1552,20 +1585,13 @@ pub fn draft_site(
     taken: &[String],
 ) -> SiteDraft {
     let (candidates, mut dropped) = candidates(origin, existing, recorded, input, policy, taken);
-    let mut accepted: Vec<Document> = recorded.to_vec();
+    let tables: Vec<Value> = candidates.iter().map(|c| c.table(origin)).collect();
+    let reports = check_in_rank_order(existing, recorded, policy, &tables);
     let mut adapters = Vec::new();
-    for mut candidate in candidates {
-        let table = candidate.table(origin);
-        let provenance = vec![Provenance::Drafted; candidate.rules.len()];
-        let report = match check_draft_rules(existing, &table, &provenance, policy, &accepted) {
+    for (mut candidate, report) in candidates.into_iter().zip(reports) {
+        let report = match report {
             Ok(report) => report,
-            Err(outcome) => {
-                let code = match outcome {
-                    DraftOutcome::DraftError(code) => code,
-                    DraftOutcome::Invalid(_) | DraftOutcome::Ok { .. } => {
-                        DraftErrorCode::InvalidRule
-                    }
-                };
+            Err(code) => {
                 candidate.drop_all(DropReason::Check(code), &mut dropped);
                 continue;
             }
@@ -1583,13 +1609,630 @@ pub fn draft_site(
             continue;
         }
         candidate.rules = kept;
-        accepted.extend(report.document);
         adapters.push(candidate.drafted(origin, report.scope, policy));
     }
     SiteDraft {
         adapters,
         dropped: tidy(dropped),
+        ..SiteDraft::default()
     }
+}
+
+/// The check loop [`draft_site`] and [`check_agent_draft`] share, so
+/// structural and agent rules cannot drift apart: each table is judged by
+/// [`check_draft_rules`] with every rule drafted, against `existing`, the
+/// recorded contracts and the surviving rules of the tables before it. A
+/// table refused whole gets its code; a table that fails validation as an
+/// adapter is `draft_invalid_rule`.
+fn check_in_rank_order(
+    existing: &Document,
+    recorded: &[Document],
+    policy: &DraftPolicy,
+    tables: &[Value],
+) -> Vec<Result<DraftRulesReport, DraftErrorCode>> {
+    let mut accepted: Vec<Document> = recorded.to_vec();
+    tables
+        .iter()
+        .map(|table| {
+            let rules = table
+                .get("match")
+                .and_then(Value::as_array)
+                .map_or(0, <[Value]>::len);
+            let provenance = vec![Provenance::Drafted; rules];
+            let report = check_draft_rules(existing, table, &provenance, policy, &accepted)
+                .map_err(|outcome| match outcome {
+                    DraftOutcome::DraftError(code) => code,
+                    DraftOutcome::Invalid(_) | DraftOutcome::Ok { .. } => {
+                        DraftErrorCode::InvalidRule
+                    }
+                })?;
+            accepted.extend(report.document.clone());
+            Ok(report)
+        })
+        .collect()
+}
+
+/// Whether an agent table has the form a draft needs before any check: a
+/// table for `origin` whose `type` and `id` are strings, whose ID scheme is
+/// its type, and whose `match` holds 1 to 16 rules.
+fn agent_table_form(table: &Value, origin: &str) -> bool {
+    let text = |key: &str| table.get(key).and_then(Value::as_str);
+    let rules = table.get("match").and_then(Value::as_array);
+    table.as_table().is_some()
+        && only_tier0_keys(table)
+        && text("origin") == Some(origin)
+        && text("type").is_some_and(|t| {
+            text("id")
+                .and_then(|id| id.split_once(':'))
+                .is_some_and(|(scheme, _)| scheme == t)
+        })
+        && rules.is_some_and(|r| (1..=MAX_RULES).contains(&r.len()))
+}
+
+/// Agent table keys: the Tier 0 keys of a checked table (adapter-templates.md §10.4).
+const TIER0_KEYS: &[&str] = &["type", "origin", "match", "id", "modes", "refs"];
+
+/// The longest artifact type a document accepts.
+const MAX_TYPE_LEN: usize = 32;
+
+/// True unless `table` is a table with a key outside [`TIER0_KEYS`]; a
+/// non-table is left to the form check.
+fn only_tier0_keys(table: &Value) -> bool {
+    table
+        .as_table()
+        .is_none_or(|t| t.iter().all(|(k, _)| TIER0_KEYS.contains(&k.as_str())))
+}
+
+/// The table with `type` set to `artifact_type`, and the ID scheme and any
+/// ref to its own old type with it.
+fn renamed(table: &Value, artifact_type: &str) -> Value {
+    let Value::Table(entries) = table else {
+        return table.clone();
+    };
+    let old = table
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Value::Table(
+        entries
+            .iter()
+            .map(|(key, value)| match (key.as_str(), value) {
+                ("type", _) => (key.clone(), Value::String(artifact_type.to_owned())),
+                ("id", Value::String(id)) => {
+                    let rest = id.split_once(':').map_or("", |(_, rest)| rest);
+                    (
+                        key.clone(),
+                        Value::String(format!("{artifact_type}:{rest}")),
+                    )
+                }
+                ("refs", Value::Array(refs)) => (
+                    key.clone(),
+                    Value::Array(
+                        refs.iter()
+                            .map(|r| retarget_ref(r, old, artifact_type))
+                            .collect(),
+                    ),
+                ),
+                _ => (key.clone(), value.clone()),
+            })
+            .collect(),
+    )
+}
+
+/// `r` with its `type` moved from `old` to `new` when it names `old`.
+fn retarget_ref(r: &Value, old: &str, new: &str) -> Value {
+    match r {
+        Value::Table(entries) if r.get("type").and_then(Value::as_str) == Some(old) => {
+            Value::Table(
+                entries
+                    .iter()
+                    .map(|(k, v)| {
+                        if k == "type" {
+                            (k.clone(), Value::String(new.to_owned()))
+                        } else {
+                            (k.clone(), v.clone())
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        _ => r.clone(),
+    }
+}
+
+/// The table with only the rules at `keep` in its `match`.
+fn with_match(table: &Value, keep: &[usize]) -> Value {
+    let Value::Table(entries) = table else {
+        return table.clone();
+    };
+    let rules = table
+        .get("match")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    let kept: Vec<Value> = keep.iter().filter_map(|&i| rules.get(i).cloned()).collect();
+    Value::Table(
+        entries
+            .iter()
+            .map(|(key, value)| match key.as_str() {
+                "match" => (key.clone(), Value::Array(kept.clone())),
+                _ => (key.clone(), value.clone()),
+            })
+            .collect(),
+    )
+}
+
+/// The shared-origin tenant every rule of `document` binds at the catalog's
+/// tenant position, for the review to prefill scope from the current tab.
+fn bound_tenant(
+    document: Option<&Document>,
+    origin: &str,
+    policy: &DraftPolicy,
+) -> Option<(usize, String)> {
+    let (at, capture) = policy.shared_origin(origin)?.tenant.as_ref()?;
+    let adapter = document?.adapters.first()?;
+    adapter
+        .rules
+        .iter()
+        .all(|rule| {
+            matches!(
+                rule.path.segments.get(*at),
+                Some(Segment::Capture { name, optional: false, .. }) if name == capture
+            )
+        })
+        .then(|| (*at, capture.clone()))
+}
+
+/// Judges an agent's adapter tables for `origin` (DESIGN §5.1, step 7.7).
+///
+/// The tables are untrusted: the service only checked their form. They are
+/// judged as drafted rules against the same `existing` document, recorded
+/// contracts and policy as [`draft_site`], so an agent rule never gets more
+/// trust than a structural one:
+///
+/// 1. **Whole-draft refusals**, before any rule is judged: any table with a
+///    key a drafter may not set is `draft_forbidden_key`; no tables, more
+///    than 8, a table for another origin, one that is not an adapter table,
+///    whose ID scheme is not its type, or with no rule or more than 16 is
+///    `draft_invalid_rule`, and so is a table that fails validation as an
+///    adapter. A refusal returns no adapters, with `rejected` set: the
+///    agent ignored the rules, so none of its draft is shown.
+/// 2. **Types** are made unique against `taken`, the starters, `existing`
+///    and earlier tables with the structural Name step's numeric suffix,
+///    and the ID scheme follows the type.
+/// 3. **Per-table checks** through the loop [`draft_site`] uses, in the
+///    agent's table order. A dropped rule is reported in `dropped_rules`
+///    with its code, a table refused whole with `rule: None`, and a table
+///    left with no rule is removed.
+/// 4. **Structural refusals**: a kept rule that captures an input shape
+///    the structural Keep step refuses for a blocked route word in any
+///    path segment is dropped as `draft_blocked_route`, whatever capture,
+///    `{_}`, alternation or `{*}` let it reach that page.
+/// 5. **Review fields** come from [`describe_rules`] on the kept rules,
+///    and a rule that also captures a link shape none of its visited
+///    shapes is starts `link_only`, so it is never checked by default.
+pub fn check_agent_draft(
+    origin: &str,
+    existing: &Document,
+    recorded: &[Document],
+    input: &ShapeInput,
+    policy: &DraftPolicy,
+    taken: &[String],
+    tables: &[Value],
+) -> SiteDraft {
+    let reject = |code| SiteDraft {
+        rejected: Some(code),
+        ..SiteDraft::default()
+    };
+    // `within` is a container link the review never shows; any other key
+    // outside the Tier 0 set fails the form check below.
+    if tables
+        .iter()
+        .any(|t| has_forbidden_key(t) || t.get("within").is_some())
+    {
+        return reject(DraftErrorCode::ForbiddenKey);
+    }
+    if tables.is_empty()
+        || tables.len() > MAX_DRAFT_ADAPTERS
+        || !tables.iter().all(|t| agent_table_form(t, origin))
+    {
+        return reject(DraftErrorCode::InvalidRule);
+    }
+    let mut used: BTreeSet<String> = taken
+        .iter()
+        .chain(&policy.starter_types)
+        .cloned()
+        .chain(existing.adapters.iter().map(|a| a.artifact_type.clone()))
+        .collect();
+    let tables: Vec<Value> = tables
+        .iter()
+        .map(|table| {
+            let base = table
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let mut artifact_type = base.to_owned();
+            let mut n = 2u32;
+            while used.contains(&artifact_type) {
+                // Keep the suffixed type within the type length limit.
+                let suffix = n.to_string();
+                let keep = base.len().min(MAX_TYPE_LEN.saturating_sub(suffix.len()));
+                artifact_type = format!("{}{suffix}", &base[..keep]);
+                n += 1;
+            }
+            used.insert(artifact_type.clone());
+            renamed(table, &artifact_type)
+        })
+        .collect();
+    let reports = check_in_rank_order(existing, recorded, policy, &tables);
+    let refused = refused_shapes(origin, existing, recorded, input, policy);
+    let mut site = SiteDraft::default();
+    for (index, (table, report)) in tables.iter().zip(reports).enumerate() {
+        let report = match report {
+            Ok(report) => report,
+            Err(DraftErrorCode::InvalidRule) => return reject(DraftErrorCode::InvalidRule),
+            Err(code) => {
+                site.dropped_rules.push(DroppedRule {
+                    table: index,
+                    rule: None,
+                    reason: code,
+                });
+                continue;
+            }
+        };
+        let mut keep = Vec::new();
+        let rules = table
+            .get("match")
+            .and_then(Value::as_array)
+            .unwrap_or_default();
+        for (rule, verdict) in report.rules.iter().enumerate() {
+            // A kept rule that captures a page the structural Keep step
+            // refuses for a blocked route word is dropped as one.
+            let refused = || {
+                let document = rules
+                    .get(rule)
+                    .and_then(|r| matching_document(table, r, policy))?;
+                refused
+                    .iter()
+                    .any(|url| matches_url(&document, url))
+                    .then_some(DraftErrorCode::BlockedRoute)
+            };
+            let code = match verdict {
+                RuleVerdict::Dropped(code) => Some(*code),
+                RuleVerdict::Kept | RuleVerdict::Warned(_) => refused(),
+            };
+            match code {
+                Some(reason) => site.dropped_rules.push(DroppedRule {
+                    table: index,
+                    rule: Some(rule),
+                    reason,
+                }),
+                None => keep.push(rule),
+            }
+        }
+        if keep.is_empty() {
+            continue;
+        }
+        let adapter = with_match(table, &keep);
+        let mut rules = describe_rules(&adapter, input, policy);
+        // A rule that also captures a link shape none of its visited shapes
+        // is starts unchecked as link-only: the agent may not widen capture
+        // to pages only the page's links suggested (Decision 4).
+        for (rule, uncovered) in rules
+            .iter_mut()
+            .zip(uncovered_links(&adapter, input, policy))
+        {
+            rule.link_only |= uncovered;
+        }
+        site.adapters.push(DraftedAdapter {
+            tenant: bound_tenant(report.document.as_ref(), origin, policy),
+            adapter,
+            scope: report.scope,
+            rules,
+        });
+    }
+    site
+}
+
+/// The rule's table as a one-rule document the engine can match, without
+/// its own scope: plain, else `unscoped` on a shared origin, else with a
+/// stand-in tenant scope where the rule needs one to validate. The matching
+/// itself ignores scope, as the draft checks do (SQ-V3).
+fn matching_document(table: &Value, rule: &Value, policy: &DraftPolicy) -> Option<Document> {
+    let Value::Table(entries) = table else {
+        return None;
+    };
+    let base: Vec<(String, Value)> = entries
+        .iter()
+        .filter(|(key, _)| key != "scope" && key != "unscoped")
+        .map(|(key, value)| match key.as_str() {
+            "match" => (key.clone(), Value::Array(vec![rule.clone()])),
+            _ => (key.clone(), value.clone()),
+        })
+        .collect();
+    let tenant = table
+        .get("origin")
+        .and_then(Value::as_str)
+        .and_then(|origin| policy.shared_origin(origin))
+        .and_then(|shared| shared.tenant.as_ref())
+        .map(|(_, capture)| capture.clone());
+    let mut forms = vec![base.clone()];
+    let mut unscoped = base.clone();
+    unscoped.push((
+        "unscoped".to_owned(),
+        Value::String("acknowledged".to_owned()),
+    ));
+    forms.push(unscoped);
+    if let Some(capture) = tenant {
+        let mut scoped = base;
+        let values = Value::Array(vec![Value::String("example".to_owned())]);
+        scoped.push(("scope".to_owned(), Value::Table(vec![(capture, values)])));
+        forms.push(scoped);
+    }
+    forms.into_iter().find_map(|form| {
+        Document::from_value(&Value::Table(vec![
+            ("format".to_owned(), Value::Int(1)),
+            (
+                "artifacts".to_owned(),
+                Value::Array(vec![Value::Table(form)]),
+            ),
+        ]))
+        .ok()
+    })
+}
+
+/// An illustrative value of a capture type from the catalog's fixed
+/// examples, when one fits.
+fn fill_value(ctype: &CType, policy: &DraftPolicy) -> Option<String> {
+    let fill = &policy.fill;
+    let candidates: Vec<&str> = match ctype {
+        CType::Alternation(words) => return words.first().cloned(),
+        CType::Typed { base, tail, .. } => match base {
+            BaseType::Int => vec![&fill.num, "1"],
+            BaseType::Hex if *tail => vec![&fill.tailhex32],
+            BaseType::Hex => vec![&fill.hex32, &fill.hex40, &fill.hex64, "0"],
+            BaseType::Token => vec![&fill.id, "x"],
+            BaseType::Name => vec![&fill.slug, "x"],
+            BaseType::JiraKey => vec![&fill.key],
+            BaseType::Uuid => vec![&fill.uuid],
+        },
+    };
+    candidates
+        .into_iter()
+        .find_map(|value| ctype.canonical_whole(value))
+}
+
+/// The rule's own illustrative URL: literals as written, the first word of
+/// an alternation, each capture filled from the catalog's examples, and no
+/// optional segment. Empty when no fill matches the rule.
+fn fill_rule(adapter: &Adapter, rule: &Rule, policy: &DraftPolicy) -> String {
+    let mut url = adapter.origin.clone();
+    let mut path = String::new();
+    for segment in &rule.path.segments {
+        let part = match segment {
+            Segment::Literal(word) => Some(word.clone()),
+            Segment::Alternation(words) => words.first().cloned(),
+            Segment::Capture { optional: true, .. } | Segment::Rest => continue,
+            Segment::Capture { ctype, .. } => fill_value(ctype, policy),
+            Segment::Anonymous => Some(policy.fill.slug.clone()),
+        };
+        let Some(part) = part else {
+            return String::new();
+        };
+        path.push('/');
+        path.push_str(&part);
+    }
+    if path.is_empty() {
+        path.push('/');
+    }
+    url.push_str(&path);
+    for (index, (key, cond)) in rule.query.iter().enumerate() {
+        let value = match cond {
+            QueryCond::Presence => Some("1".to_owned()),
+            QueryCond::Literal(value) => Some(value.clone()),
+            QueryCond::Capture { ctype, .. } => fill_value(ctype, policy),
+        };
+        let Some(value) = value else {
+            return String::new();
+        };
+        let _ = write!(url, "{}{key}={value}", if index == 0 { '?' } else { '&' });
+    }
+    let matches = Prepared::new(&url).is_ok_and(|p| {
+        p.origin == adapter.origin
+            && p.segments
+                .as_deref()
+                .is_some_and(|segments| match_rule(adapter, rule, segments, &p.query).is_some())
+    });
+    if matches { url } else { String::new() }
+}
+
+/// Every identifier capture the adapter's ID uses is a `token`.
+fn id_token_only(adapter: &Adapter) -> bool {
+    let mut identifiers = adapter
+        .id
+        .names()
+        .filter_map(|name| match adapter.id_ctype(name) {
+            Some(CType::Typed { base, .. }) if *base != BaseType::Name => Some(*base),
+            _ => None,
+        })
+        .peekable();
+    identifiers.peek().is_some() && identifiers.all(|base| base == BaseType::Token)
+}
+
+/// Whether the first adapter of `document` matches the prepared URL,
+/// ignoring scope.
+fn matches_prepared(document: &Document, prepared: &Prepared) -> bool {
+    document.adapters.first().is_some_and(|adapter| {
+        prepared.origin == adapter.origin
+            && prepared.segments.as_deref().is_some_and(|segments| {
+                adapter
+                    .rules
+                    .iter()
+                    .any(|rule| match_rule(adapter, rule, segments, &prepared.query).is_some())
+            })
+    })
+}
+
+/// Whether the first adapter of `document` matches `url`, ignoring scope.
+fn matches_url(document: &Document, url: &str) -> bool {
+    Prepared::new(url).is_ok_and(|prepared| matches_prepared(document, &prepared))
+}
+
+/// The input shapes the structural Keep step refuses for a blocked route
+/// word anywhere in the path (the [`filter`] verdict), each filled with the
+/// catalog's examples: no agent rule may capture one. A shape refused only
+/// for its search, paging or secret query is not here: a path rule ignores
+/// the query, so a borderline rule may still match it, and the preview
+/// lists it as the structural review does (DESIGN §12.2 step 7.7).
+fn refused_shapes(
+    origin: &str,
+    existing: &Document,
+    recorded: &[Document],
+    input: &ShapeInput,
+    policy: &DraftPolicy,
+) -> Vec<String> {
+    let (_, dropped) = filter(origin, existing, recorded, input, policy);
+    let refused: BTreeSet<String> = dropped
+        .into_iter()
+        .filter(|d| d.reason == DropReason::BlockedRoute)
+        .map(|d| d.shape)
+        .collect();
+    input
+        .visited
+        .iter()
+        .chain(&input.links)
+        .filter(|(shape, _)| refused.contains(&shape.to_string()))
+        .map(|(shape, _)| shape.fill(origin, policy))
+        .collect()
+}
+
+/// For each rule of `table`, whether it captures a link shape that is not
+/// also one of the visited shapes it captures: a page only the page's links
+/// suggested, which the structural drafter would have kept out of a visited
+/// rule. Shapes count toward the first rule that matches, as in
+/// [`describe_rules`].
+fn uncovered_links(table: &Value, input: &ShapeInput, policy: &DraftPolicy) -> Vec<bool> {
+    let origin = table
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let rules = table
+        .get("match")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    let documents: Vec<Option<Document>> = rules
+        .iter()
+        .map(|rule| matching_document(table, rule, policy))
+        .collect();
+    let first_rule = |shape: &UrlShape| {
+        let url = shape.fill(origin, policy);
+        documents
+            .iter()
+            .position(|d| d.as_ref().is_some_and(|d| matches_url(d, &url)))
+    };
+    let mut visited: Vec<BTreeSet<String>> = vec![BTreeSet::new(); rules.len()];
+    for (shape, _) in &input.visited {
+        if let Some(index) = first_rule(shape) {
+            visited[index].insert(shape.to_string());
+        }
+    }
+    let mut uncovered = vec![false; rules.len()];
+    for (shape, _) in &input.links {
+        if let Some(index) = first_rule(shape)
+            && !visited[index].contains(&shape.to_string())
+        {
+            uncovered[index] = true;
+        }
+    }
+    uncovered
+}
+
+/// The review fields of every rule of an adapter table, from the shapes it
+/// matches: each visited and link shape is filled with the catalog's
+/// examples and matched against the rule without scope. `visited` and
+/// `links` sum the matching shapes' counts; a rule only link shapes match
+/// is `link_only`, one no shape matches is `unseen`; `token_only` is set
+/// when every identifier the ID uses is a `token`; and `example` is the
+/// fill of the first matching shape in shape order, else the rule's own
+/// fill. A rule that does not validate gets zero counts and `unseen`.
+///
+/// For a structural table this agrees with the drafter's own counts.
+pub fn describe_rules(table: &Value, input: &ShapeInput, policy: &DraftPolicy) -> Vec<DraftedRule> {
+    let origin = table
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let rules = table
+        .get("match")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    // Each rule as a one-rule document, `None` when it does not validate.
+    let documents: Vec<Option<Document>> = rules
+        .iter()
+        .map(|rule| matching_document(table, rule, policy))
+        .collect();
+    let first_rule = |prepared: &Prepared| {
+        documents.iter().position(|document| {
+            document
+                .as_ref()
+                .is_some_and(|document| matches_prepared(document, prepared))
+        })
+    };
+    let mut described: Vec<DraftedRule> = (0..rules.len())
+        .map(|rule| DraftedRule {
+            rule,
+            link_only: false,
+            token_only: false,
+            visited: 0,
+            links: 0,
+            unseen: true,
+            example: String::new(),
+        })
+        .collect();
+    // The first matching shape of each rule, in shape order.
+    let mut first: Vec<Option<(String, String)>> = vec![None; rules.len()];
+    // A page is captured by the first rule that matches it, as evaluation
+    // does, so each shape counts toward that rule only.
+    for (from_links, shapes) in [(false, &input.visited), (true, &input.links)] {
+        for (shape, count) in shapes {
+            let url = shape.fill(origin, policy);
+            let Ok(prepared) = Prepared::new(&url) else {
+                continue;
+            };
+            let Some(index) = first_rule(&prepared) else {
+                continue;
+            };
+            let entry = &mut described[index];
+            if from_links {
+                entry.links = entry.links.saturating_add(*count);
+            } else {
+                entry.visited = entry.visited.saturating_add(*count);
+            }
+            let text = shape.to_string();
+            if first[index]
+                .as_ref()
+                .is_none_or(|(best, _)| text.as_str() < best.as_str())
+            {
+                first[index] = Some((text, url));
+            }
+        }
+    }
+    for ((entry, document), first) in described.iter_mut().zip(&documents).zip(first) {
+        let Some(adapter) = document.as_ref().and_then(|d| d.adapters.first()) else {
+            continue;
+        };
+        entry.token_only = id_token_only(adapter);
+        entry.unseen = first.is_none();
+        entry.link_only = entry.visited == 0 && !entry.unseen;
+        entry.example = match first {
+            Some((_, url)) => url,
+            None => adapter
+                .rules
+                .first()
+                .map(|rule| fill_rule(adapter, rule, policy))
+                .unwrap_or_default(),
+        };
+    }
+    described
 }
 
 #[cfg(test)]
@@ -3118,5 +3761,651 @@ mod tests {
             [("/login/oauth/{id}", DropReason::BlockedRoute)]
         );
         assert_eq!(draft.adapters.len(), 1);
+    }
+
+    // --- check_agent_draft and describe_rules ---
+
+    /// The loop `draft_site` ran before [`check_in_rank_order`] was shared,
+    /// kept verbatim as the reference.
+    fn draft_site_reference(
+        origin: &str,
+        existing: &Document,
+        recorded: &[Document],
+        input: &ShapeInput,
+        policy: &DraftPolicy,
+        taken: &[String],
+    ) -> SiteDraft {
+        let (candidates, mut dropped) =
+            candidates(origin, existing, recorded, input, policy, taken);
+        let mut accepted: Vec<Document> = recorded.to_vec();
+        let mut adapters = Vec::new();
+        for mut candidate in candidates {
+            let table = candidate.table(origin);
+            let provenance = vec![Provenance::Drafted; candidate.rules.len()];
+            let report = match check_draft_rules(existing, &table, &provenance, policy, &accepted) {
+                Ok(report) => report,
+                Err(outcome) => {
+                    let code = match outcome {
+                        DraftOutcome::DraftError(code) => code,
+                        DraftOutcome::Invalid(_) | DraftOutcome::Ok { .. } => {
+                            DraftErrorCode::InvalidRule
+                        }
+                    };
+                    candidate.drop_all(DropReason::Check(code), &mut dropped);
+                    continue;
+                }
+            };
+            let mut kept = Vec::new();
+            for (rule, verdict) in candidate.rules.drain(..).zip(&report.rules) {
+                match verdict {
+                    RuleVerdict::Dropped(code) => {
+                        drop_rule(&rule, DropReason::Check(*code), &mut dropped)
+                    }
+                    RuleVerdict::Kept | RuleVerdict::Warned(_) => kept.push(rule),
+                }
+            }
+            if kept.is_empty() {
+                continue;
+            }
+            candidate.rules = kept;
+            accepted.extend(report.document);
+            adapters.push(candidate.drafted(origin, report.scope, policy));
+        }
+        SiteDraft {
+            adapters,
+            dropped: tidy(dropped),
+            ..SiteDraft::default()
+        }
+    }
+
+    fn table(v: Json) -> Value {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A Tier 0 table on `origin` with these rule paths.
+    fn tier0(origin: &str, artifact_type: &str, paths: &[&str], id: &[&str]) -> Value {
+        let id: String = id.iter().map(|n| format!("/{{{n}}}")).collect();
+        table(json!({
+            "type": artifact_type,
+            "origin": origin,
+            "match": paths.iter().map(|p| json!({"path": p})).collect::<Vec<_>>(),
+            "id": format!("{artifact_type}:{{host}}{id}"),
+        }))
+    }
+
+    fn agent(
+        origin: &str,
+        existing: &Document,
+        recorded: &[Document],
+        input: &ShapeInput,
+        taken: &[&str],
+        tables: &[Value],
+    ) -> SiteDraft {
+        let taken: Vec<String> = taken.iter().map(|t| (*t).to_owned()).collect();
+        check_agent_draft(
+            origin,
+            existing,
+            recorded,
+            input,
+            &test_catalog(),
+            &taken,
+            tables,
+        )
+    }
+
+    /// The structural inputs the shared loop is pinned on: drops of every
+    /// kind, overlaps with existing and recorded contracts, shared origins.
+    fn structural_cases() -> Vec<(&'static str, Document, Vec<Document>, ShapeInput)> {
+        let history = doc(json!([{
+            "type": "tools.history",
+            "origin": TOOLS,
+            "match": [{"path": "/docs/{n:int}/history"}],
+            "id": "tools.history:{host}/{n}",
+        }]));
+        vec![
+            (
+                TOOLS,
+                Document::default(),
+                Vec::new(),
+                input(
+                    &[
+                        "/docs/{num}",
+                        "/d/{id}",
+                        "/x/{num}/files",
+                        "/",
+                        "/search/{num}",
+                    ],
+                    &["/wiki/page/{num}", "/docs/{num}/{slug}/{slug}", "/{slug}"],
+                ),
+            ),
+            (
+                TOOLS,
+                history.clone(),
+                Vec::new(),
+                input(
+                    &["/docs/{num}", "/docs/{num}/{slug}/{slug}", "/tickets/{key}"],
+                    &[],
+                ),
+            ),
+            (
+                TOOLS,
+                Document::default(),
+                vec![history],
+                input(
+                    &["/docs/{num}/history", "/docs/{num}"],
+                    &["/docs/{num}/{slug}/{slug}"],
+                ),
+            ),
+            (
+                GITHUB,
+                Document::default(),
+                Vec::new(),
+                input(
+                    &["/acme/{slug}/issues/{num}", "/acme/{slug}/wiki/{num}"],
+                    &["/acme/{slug}/pull/{num}/files"],
+                ),
+            ),
+            (
+                DOCS,
+                Document::default(),
+                Vec::new(),
+                input(
+                    &["/document/d/{id}/edit", "/document/u/{num}/d/{id}/edit"],
+                    &[],
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn draft_site_results_are_unchanged_by_the_shared_check_loop() {
+        let policy = test_catalog();
+        for (origin, existing, recorded, input) in structural_cases() {
+            let taken = vec!["tools.docs".to_owned()];
+            assert_eq!(
+                draft_site(origin, &existing, &recorded, &input, &policy, &taken),
+                draft_site_reference(origin, &existing, &recorded, &input, &policy, &taken),
+                "{origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_tables_get_the_same_verdicts_as_identical_structural_tables() {
+        for (origin, existing, recorded, input) in structural_cases() {
+            let policy = test_catalog();
+            let unchecked = draft_kinds(origin, &existing, &recorded, &input, &policy, &[]);
+            let tables: Vec<Value> = unchecked
+                .adapters
+                .iter()
+                .map(|a| a.adapter.clone())
+                .collect();
+            let structural = draft_site(origin, &existing, &recorded, &input, &policy, &[]);
+            let agent = agent(origin, &existing, &recorded, &input, &[], &tables);
+            assert_eq!(agent.rejected, None, "{origin}");
+            assert_eq!(agent.adapters.len(), structural.adapters.len(), "{origin}");
+            for (a, s) in agent.adapters.iter().zip(&structural.adapters) {
+                assert_eq!(json_of(&a.adapter), json_of(&s.adapter), "{origin}");
+                assert_eq!(a.scope, s.scope, "{origin}");
+                assert_eq!(a.tenant, s.tenant, "{origin}");
+                let flags = |rules: &[DraftedRule]| -> Vec<(usize, bool, bool, u32, u32)> {
+                    rules
+                        .iter()
+                        .map(|r| (r.rule, r.link_only, r.token_only, r.visited, r.links))
+                        .collect()
+                };
+                assert_eq!(flags(&a.rules), flags(&s.rules), "{origin}");
+            }
+            // Every rule the structural pass dropped by a check, the agent
+            // pass drops with the same code.
+            let mut structural_codes: Vec<DraftErrorCode> = structural
+                .dropped
+                .iter()
+                .filter_map(|d| match d.reason {
+                    DropReason::Check(code) => Some(code),
+                    _ => None,
+                })
+                .collect();
+            let mut agent_codes: Vec<DraftErrorCode> =
+                agent.dropped_rules.iter().map(|d| d.reason).collect();
+            structural_codes.sort();
+            structural_codes.dedup();
+            agent_codes.sort();
+            agent_codes.dedup();
+            assert_eq!(agent_codes, structural_codes, "{origin}");
+        }
+    }
+
+    #[test]
+    fn agent_draft_with_a_forbidden_key_in_any_table_is_rejected_whole() {
+        let good = tier0(TOOLS, "tools.docs", &["/docs/{n:int}"], &["n"]);
+        let input = input(&["/docs/{num}"], &[]);
+        for (key, val) in [
+            ("title", json!("{n}")),
+            ("scope", json!({"n": ["1"]})),
+            ("unscoped", json!("acknowledged")),
+            ("alias", json!({"capture": "n"})),
+            ("fields", json!({"a": "{n}"})),
+            ("path_case", json!("insensitive")),
+        ] {
+            let Value::Table(mut entries) = tier0(TOOLS, "tools.wiki", &["/wiki/{n:int}"], &["n"])
+            else {
+                unreachable!()
+            };
+            entries.push((key.to_owned(), table(val)));
+            let bad = Value::Table(entries);
+            for tables in [[good.clone(), bad.clone()], [bad.clone(), good.clone()]] {
+                let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+                assert_eq!(site.rejected, Some(DraftErrorCode::ForbiddenKey), "{key}");
+                assert!(
+                    site.adapters.is_empty() && site.dropped_rules.is_empty(),
+                    "{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn agent_draft_for_another_origin_is_rejected_whole() {
+        let input = input(&["/docs/{num}"], &[]);
+        let tables = [
+            tier0(TOOLS, "tools.docs", &["/docs/{n:int}"], &["n"]),
+            tier0(
+                "https://other.example.com",
+                "other.docs",
+                &["/docs/{n:int}"],
+                &["n"],
+            ),
+        ];
+        let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+        assert_eq!(site.rejected, Some(DraftErrorCode::InvalidRule));
+        assert!(site.adapters.is_empty());
+    }
+
+    #[test]
+    fn agent_draft_that_does_not_parse_is_rejected_whole() {
+        let input = input(&["/docs/{num}"], &[]);
+        let good = tier0(TOOLS, "tools.docs", &["/docs/{n:int}"], &["n"]);
+        let too_many: Vec<Value> = (0..=MAX_DRAFT_ADAPTERS)
+            .map(|i| {
+                tier0(
+                    TOOLS,
+                    &format!("tools.d{i}"),
+                    &[&format!("/d{i}/{{n:int}}")],
+                    &["n"],
+                )
+            })
+            .collect();
+        let too_many_rules = tier0(
+            TOOLS,
+            "tools.many",
+            &(0..=MAX_RULES)
+                .map(|i| format!("/m{i}/{{n:int}}"))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            &["n"],
+        );
+        for tables in [
+            vec![good.clone(), table(json!(["not", "a", "table"]))],
+            vec![
+                good.clone(),
+                table(
+                    json!({"type": "tools.x", "origin": TOOLS, "match": "/x/{n:int}", "id": "tools.x:{host}/{n}"}),
+                ),
+            ],
+            vec![
+                good.clone(),
+                table(
+                    json!({"type": "tools.x", "origin": TOOLS, "match": [{"path": "/x/{n:int}"}], "id": "tools.x:{host}/{n}", "format": 1}),
+                ),
+            ],
+            vec![good.clone(), too_many_rules],
+            too_many,
+            Vec::new(),
+        ] {
+            let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+            assert_eq!(
+                site.rejected,
+                Some(DraftErrorCode::InvalidRule),
+                "{tables:?}"
+            );
+            assert!(site.adapters.is_empty());
+        }
+    }
+
+    #[test]
+    fn agent_rule_overlapping_an_earlier_agent_table_is_dropped_as_overlap() {
+        let input = input(&["/docs/{num}"], &[]);
+        let tables = [
+            tier0(TOOLS, "tools.docs", &["/docs/{n:int}"], &["n"]),
+            tier0(
+                TOOLS,
+                "tools.other",
+                &["/docs/{m:int}", "/other/{m:int}"],
+                &["m"],
+            ),
+        ];
+        let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+        assert_eq!(
+            site.dropped_rules,
+            [DroppedRule {
+                table: 1,
+                rule: Some(0),
+                reason: DraftErrorCode::Overlap,
+            }]
+        );
+        assert_eq!(rule_texts(&site.adapters[1].adapter), ["/other/{m:int}"]);
+    }
+
+    #[test]
+    fn agent_rule_overlapping_a_recorded_contract_is_dropped_as_overlap() {
+        let recorded = doc(json!([{
+            "type": "tools.history",
+            "origin": TOOLS,
+            "match": [{"path": "/docs/{n:int}/history"}],
+            "id": "tools.history:{host}/{n}",
+        }]));
+        let input = input(&["/docs/{num}", "/docs/{num}/history"], &[]);
+        let tables = [tier0(
+            TOOLS,
+            "tools.docs",
+            &["/docs/{n:int}", "/docs/{n:int}/history"],
+            &["n"],
+        )];
+        let site = agent(
+            TOOLS,
+            &Document::default(),
+            &[recorded],
+            &input,
+            &[],
+            &tables,
+        );
+        assert_eq!(
+            site.dropped_rules,
+            [DroppedRule {
+                table: 0,
+                rule: Some(1),
+                reason: DraftErrorCode::Overlap,
+            }]
+        );
+        assert_eq!(rule_texts(&site.adapters[0].adapter), ["/docs/{n:int}"]);
+    }
+
+    #[test]
+    fn agent_types_that_are_taken_get_a_numeric_suffix_and_the_id_scheme_follows() {
+        let existing = doc(json!([{
+            "type": "tools.wiki",
+            "origin": TOOLS,
+            "match": [{"path": "/wiki/{n:int}"}],
+            "id": "tools.wiki:{host}/{n}",
+        }]));
+        let tables = [
+            tier0(TOOLS, "tools.docs", &["/docs/{n:int}"], &["n"]),
+            tier0(TOOLS, "tools.docs", &["/doc/{n:int}"], &["n"]),
+            tier0(TOOLS, "tools.wiki", &["/w/{n:int}"], &["n"]),
+            tier0(TOOLS, "jira.issue", &["/browse/{k:jira_key}"], &["k"]),
+            tier0(TOOLS, "tools.free", &["/free/{n:int}"], &["n"]),
+        ];
+        let input = input(&["/docs/{num}"], &[]);
+        let site = agent(TOOLS, &existing, &[], &input, &["tools.docs"], &tables);
+        assert_eq!(site.rejected, None, "{site:?}");
+        assert_eq!(
+            types(&site),
+            [
+                "tools.docs2",
+                "tools.docs3",
+                "tools.wiki2",
+                "jira.issue2",
+                "tools.free"
+            ]
+        );
+        assert_eq!(
+            ids(&site),
+            [
+                "tools.docs2:{host}/{n}",
+                "tools.docs3:{host}/{n}",
+                "tools.wiki2:{host}/{n}",
+                "jira.issue2:{host}/{k}",
+                "tools.free:{host}/{n}",
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_id_scheme_that_differs_from_its_type_is_invalid() {
+        let input = input(&["/docs/{num}"], &[]);
+        for id in [
+            "other.docs:{host}/{n}",
+            "{host}/{n}",
+            "tools.docs2:{host}/{n}",
+        ] {
+            let tables = [table(json!({
+                "type": "tools.docs",
+                "origin": TOOLS,
+                "match": [{"path": "/docs/{n:int}"}],
+                "id": id,
+            }))];
+            let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+            assert_eq!(site.rejected, Some(DraftErrorCode::InvalidRule), "{id}");
+            assert!(site.adapters.is_empty());
+        }
+    }
+
+    #[test]
+    fn agent_rule_matching_no_seen_shape_starts_unchecked_as_unseen() {
+        let input = input(&["/docs/{num}"], &["/wiki/{num}"]);
+        let tables = [tier0(
+            TOOLS,
+            "tools.docs",
+            &["/docs/{n:int}", "/tickets/{n:int}", "/wiki/{n:int}"],
+            &["n"],
+        )];
+        let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+        let rules = &site.adapters[0].rules;
+        assert_eq!(
+            rules
+                .iter()
+                .map(|r| (r.rule, r.link_only, r.unseen, r.visited, r.links))
+                .collect::<Vec<_>>(),
+            [
+                (0, false, false, 1, 0),
+                (1, false, true, 0, 0),
+                (2, true, false, 0, 1),
+            ]
+        );
+        // The unseen rule's example is its own fill, never a visited URL.
+        assert_eq!(rules[1].example, format!("{TOOLS}/tickets/123456"));
+        assert_eq!(rules[0].example, format!("{TOOLS}/docs/123456"));
+    }
+
+    /// Whether a rule the review starts checked captures `url`.
+    fn checked_rule_matches(site: &SiteDraft, url: &str) -> bool {
+        let policy = test_catalog();
+        site.adapters.iter().any(|adapter| {
+            let rules = adapter
+                .adapter
+                .get("match")
+                .and_then(Value::as_array)
+                .unwrap_or_default();
+            adapter.rules.iter().any(|r| {
+                !(r.link_only || r.token_only || r.unseen)
+                    && matching_document(&adapter.adapter, &rules[r.rule], &policy)
+                        .is_some_and(|document| matches_url(&document, url))
+            })
+        })
+    }
+
+    #[test]
+    fn agent_rule_widened_over_planted_link_shapes_is_dropped_or_starts_unchecked() {
+        let policy = test_catalog();
+        // (rule path, visited shapes, link shapes, the drop expected)
+        type Case = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+            Option<DraftErrorCode>,
+        );
+        let cases: [Case; 3] = [
+            (
+                "/wiki/{n:int}/{*}",
+                &["/wiki/{num}"],
+                &["/wiki/{num}/share/{slug}", "/wiki/{num}/invite/{hex32}"],
+                Some(DraftErrorCode::BlockedRoute),
+            ),
+            (
+                "/wiki/{_}/{n:int}",
+                &["/wiki/doc/{num}"],
+                &["/wiki/share/{num}", "/wiki/reset/{num}"],
+                Some(DraftErrorCode::BlockedRoute),
+            ),
+            (
+                "/wiki/(doc|page)/{n:int}",
+                &["/wiki/doc/{num}"],
+                &["/wiki/page/{num}"],
+                None,
+            ),
+        ];
+        for (path, visited, links, drop) in cases {
+            let input = input(visited, links);
+            // Only the widened table: no narrow rule before it to overlap.
+            let tables = [tier0(TOOLS, "tools.wiki", &[path], &["n"])];
+            let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+            assert_eq!(site.rejected, None, "{path}: {site:?}");
+            for (shape, _) in &input.links {
+                let url = shape.fill(TOOLS, &policy);
+                assert!(
+                    !checked_rule_matches(&site, &url),
+                    "{path}: a checked rule captures the planted {url}: {site:?}"
+                );
+            }
+            match drop {
+                Some(code) => {
+                    assert!(site.adapters.is_empty(), "{path}: {site:?}");
+                    assert_eq!(
+                        site.dropped_rules,
+                        [DroppedRule {
+                            table: 0,
+                            rule: Some(0),
+                            reason: code
+                        }],
+                        "{path}"
+                    );
+                }
+                None => {
+                    let rule = &site.adapters[0].rules[0];
+                    assert!(rule.link_only, "{path}: {rule:?}");
+                    assert_eq!((rule.visited, rule.links), (1, 1), "{path}");
+                }
+            }
+        }
+        // A link shape the rule's own visited shapes cover leaves it checked.
+        let input = input(&["/wiki/{num}"], &["/wiki/{num}"]);
+        let tables = [tier0(TOOLS, "tools.wiki", &["/wiki/{n:int}"], &["n"])];
+        let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+        let rule = &site.adapters[0].rules[0];
+        assert!(!(rule.link_only || rule.unseen), "{rule:?}");
+        assert_eq!((rule.visited, rule.links), (1, 1));
+    }
+
+    #[test]
+    fn agent_link_only_and_token_only_rules_are_flagged_like_structural_ones() {
+        let input = input(&["/doc/{id}", "/wiki/{num}"], &["/wiki/{num}/history"]);
+        let structural = site(TOOLS, &Document::default(), &input, &[]);
+        let tables = [
+            tier0(TOOLS, "tools.doc", &["/doc/{t:token(1,128)}"], &["t"]),
+            tier0(
+                TOOLS,
+                "tools.wiki",
+                &["/wiki/{n:int}", "/wiki/{n:int}/history"],
+                &["n"],
+            ),
+        ];
+        let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+        let flags = |d: &SiteDraft| -> Vec<(bool, bool, bool)> {
+            d.adapters
+                .iter()
+                .flat_map(|a| {
+                    a.rules
+                        .iter()
+                        .map(|r| (r.link_only, r.token_only, r.unseen))
+                })
+                .collect()
+        };
+        assert_eq!(
+            flags(&site),
+            [
+                (false, true, false),
+                (false, false, false),
+                (true, false, false)
+            ]
+        );
+        assert_eq!(flags(&site), flags(&structural));
+        assert_eq!(
+            site.adapters[0].rules[0].example,
+            format!("{TOOLS}/doc/example123")
+        );
+    }
+
+    #[test]
+    fn describe_rules_agrees_with_structural_counts() {
+        let policy = test_catalog();
+        let input = ShapeInput {
+            visited: counted(&[
+                ("/docs/{num}", 3),
+                ("/docs/{num}/history", 2),
+                ("/d/{id}", 1),
+                ("/x/{num}/files", 4),
+            ]),
+            links: counted(&[("/docs/{num}/{slug}/{slug}", 5), ("/wiki/page/{num}", 2)]),
+        };
+        let draft = draft_site(TOOLS, &Document::default(), &[], &input, &policy, &[]);
+        assert!(draft.adapters.len() >= 3, "{draft:?}");
+        for adapter in &draft.adapters {
+            assert_eq!(
+                describe_rules(&adapter.adapter, &input, &policy),
+                adapter.rules,
+                "{}",
+                str_of(&adapter.adapter, "type")
+            );
+        }
+    }
+
+    #[test]
+    fn agent_shared_origin_tables_get_the_hosts_scope_state_and_tenant() {
+        let input = input(&["/acme/{slug}/wiki/{num}"], &[]);
+        let tables = [table(json!({
+            "type": "github.page",
+            "origin": GITHUB,
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/wiki/{n:int}"}],
+            "id": "github.page:{host}/{owner}/{repo}/{n}",
+        }))];
+        let pending = agent(GITHUB, &Document::default(), &[], &input, &[], &tables);
+        assert_eq!(pending.rejected, None, "{pending:?}");
+        assert_eq!(
+            pending.adapters[0].scope,
+            ScopeState::Pending {
+                capture: "owner".to_owned()
+            }
+        );
+        assert_eq!(pending.adapters[0].tenant, Some((0, "owner".to_owned())));
+        assert!(!pending.adapters[0].rules[0].unseen);
+
+        let existing = doc(json!([{
+            "type": "github.issue",
+            "origin": GITHUB,
+            "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}],
+            "scope": {"owner": ["acme"]},
+            "id": "github.issue:{host}/{owner}/{repo}/{number}",
+        }]));
+        let copied = agent(GITHUB, &existing, &[], &input, &[], &tables);
+        assert_eq!(
+            copied.adapters[0].scope,
+            ScopeState::Copied(vec![("owner".to_owned(), vec!["acme".to_owned()])])
+        );
+        assert_eq!(copied.adapters[0].tenant, Some((0, "owner".to_owned())));
+        // The checked table never carries the scope: the review overlays it.
+        assert!(copied.adapters[0].adapter.get("scope").is_none());
     }
 }

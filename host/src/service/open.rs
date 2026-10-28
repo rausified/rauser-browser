@@ -140,7 +140,7 @@ mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
-    use brauser_protocol::{HarnessId, RecordKey, RecordKeyKind, RunState};
+    use brauser_protocol::{HarnessId, RecordKey, RecordKeyKind, RunKind, RunState};
 
     use crate::service::record::RunStatusFile;
 
@@ -224,6 +224,7 @@ mod tests {
                 answered_at: None,
                 first_answered_at: None,
                 save_final: false,
+                kind: RunKind::Summary,
             };
             self.store.create(&status, "page").unwrap();
             id

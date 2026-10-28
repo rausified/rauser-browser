@@ -22,10 +22,22 @@ use brauser_protocol::{
     ScopeChoiceView, ScopeVerdictView, ShapeCount, SiteDraftChecked, SiteDrafted, SiteDrafter,
     UncheckedReason,
 };
+#[cfg(unix)]
+use brauser_protocol::{
+    GetRunRequest, RecordKey, RecordKeyKind, Request, RunKind, RunState, StartRunRequest,
+    StartSiteDraftRequest,
+};
 use serde::Deserialize;
 
 use crate::config::{ConfigLock, ConfigStore, NoteKeyRule};
 use crate::native::error;
+#[cfg(unix)]
+use crate::service::client::ServiceLink;
+
+/// Where there is no Brauser service (Windows), the only service link is
+/// none: run messages answer `service_unavailable`.
+#[cfg(not(unix))]
+pub enum ServiceLink {}
 
 const CATALOG: &str = include_str!("../../protocol/capture-site/catalog.json");
 
@@ -162,7 +174,7 @@ const MAX_TYPE_CHARS: usize = 64;
 /// Whether `origin` is exactly the serialized origin of an HTTP(S) URL with
 /// a host and no credentials: no path, query, fragment, trailing slash,
 /// default port or uppercase that the browser's own origin would not show.
-fn exact_origin(origin: &str) -> bool {
+pub(crate) fn exact_origin(origin: &str) -> bool {
     if origin.is_empty() || origin.chars().count() > MAX_ORIGIN_CHARS {
         return false;
     }
@@ -403,6 +415,8 @@ fn adapter_view(drafted: &DraftedAdapter) -> DraftedAdapterView {
                     Some(UncheckedReason::LinkOnly)
                 } else if rule.token_only {
                     Some(UncheckedReason::TokenOnly)
+                } else if rule.unseen {
+                    Some(UncheckedReason::Unseen)
                 } else {
                     None
                 };
@@ -545,75 +559,163 @@ fn remapped(config: &ConfigStore, existing: &Document, rows: &[PreviewRowView]) 
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
-/// `draft_site`: the structural draft for one exact origin from private URL
-/// shapes, bound to the config revision it was drafted against (DESIGN
-/// §5.1). It reads the config and writes nothing.
-pub fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response {
-    let id = value.request_id.as_str();
-    if !exact_origin(&value.origin) {
-        return error(
+/// A request's refusal, boxed: a `Response` is large.
+type Refusal = Box<Response>;
+
+/// Checks what every drafting request carries: an exact origin and
+/// shapes within their bounds. `Err` is the request's refusal.
+fn request_input(
+    id: &str,
+    origin: &str,
+    visited: &[ShapeCount],
+    links: &[ShapeCount],
+) -> Result<ShapeInput, Refusal> {
+    if !exact_origin(origin) {
+        return Err(Box::new(error(
             id,
             ErrorCode::InvalidRequest,
             "origin must be an exact HTTP(S) origin",
-        );
+        )));
     }
-    let Some(input) = shape_input(&value.visited, &value.links) else {
-        return error(
+    shape_input(visited, links).ok_or_else(|| {
+        Box::new(error(
             id,
             ErrorCode::InvalidRequest,
             "shapes are invalid or over their bounds",
-        );
-    };
-    let _lock = match locked_document(config) {
-        Ok(lock) => lock,
-        Err((code, message)) => return error(id, code, message),
-    };
-    if let Some(refusal) = adopted_record_refusal(config, id, &value.origin) {
-        return refusal;
+        ))
+    })
+}
+
+/// Takes the config lock for drafting `origin` and applies the refusals
+/// every draft shares (`locked_document`, `adopted_record_refusal`).
+fn lock_for_drafting(
+    config: &mut ConfigStore,
+    id: &str,
+    origin: &str,
+) -> Result<ConfigLock, Refusal> {
+    let lock =
+        locked_document(config).map_err(|(code, message)| Box::new(error(id, code, message)))?;
+    if let Some(refusal) = adopted_record_refusal(config, id, origin) {
+        return Err(Box::new(refusal));
     }
+    Ok(lock)
+}
+
+fn policy_unavailable(id: &str) -> Response {
+    error(
+        id,
+        ErrorCode::InvalidConfig,
+        "adapter policy is unavailable",
+    )
+}
+
+/// Drafts under the config lock with `judge` against the current adapter
+/// document, the recorded contracts and the taken types, then builds the
+/// response from what it returns.
+fn judged_response(
+    request_id: String,
+    origin: &str,
+    input: &ShapeInput,
+    config: &mut ConfigStore,
+    drafter: SiteDrafter,
+    judge: impl FnOnce(&Document, &[Document], &[String]) -> structural::SiteDraft,
+) -> Response {
+    let _lock = match lock_for_drafting(config, &request_id, origin) {
+        Ok(lock) => lock,
+        Err(refusal) => return *refusal,
+    };
     let Ok(existing) = config.adapter_document() else {
-        return error(
-            id,
-            ErrorCode::InvalidConfig,
-            "adapter policy is unavailable",
-        );
+        return policy_unavailable(&request_id);
     };
     let taken = taken_types(config, existing);
-    let recorded = config.recorded_contract_documents();
-    let draft =
-        structural::draft_site(&value.origin, existing, recorded, &input, catalog(), &taken);
+    let draft = judge(existing, config.recorded_contract_documents(), &taken);
+    site_drafted_response(
+        config, existing, origin, input, request_id, drafter, &draft, taken,
+    )
+}
+
+/// The structural draft's response (`draft_site` without a `run_id`).
+fn structural_response(
+    value: DraftSiteRequest,
+    input: &ShapeInput,
+    config: &mut ConfigStore,
+) -> Response {
+    let origin = value.origin;
+    judged_response(
+        value.request_id,
+        &origin,
+        input,
+        config,
+        SiteDrafter::Structural,
+        |existing, recorded, taken| {
+            structural::draft_site(&origin, existing, recorded, input, catalog(), taken)
+        },
+    )
+}
+
+/// The `site_drafted` response for `draft`, structural or agent, with its
+/// match preview, under the remap invariant. Call with the config lock held.
+#[allow(clippy::too_many_arguments)]
+fn site_drafted_response(
+    config: &ConfigStore,
+    existing: &Document,
+    origin: &str,
+    input: &ShapeInput,
+    request_id: String,
+    drafter: SiteDrafter,
+    draft: &structural::SiteDraft,
+    taken: Vec<String>,
+) -> Response {
     let previewed: Vec<Option<PreviewAdapter>> = draft
         .adapters
         .iter()
         .map(|a| preview_adapter(&a.adapter, a.rules.iter().map(|r| r.rule).collect()))
         .collect();
-    let rows = preview(&value.origin, &input, &previewed);
+    let rows = preview(origin, input, &previewed);
     let remapped = remapped(config, existing, &rows);
     // The remap invariant (DESIGN §5.1): a drafted rule never re-keys an
     // artifact the current policy or a recorded contract already names.
     if remapped != 0 {
         return error(
-            id,
+            &request_id,
             ErrorCode::Internal,
             "the draft would move already captured pages to a new kind of page",
         );
     }
+    let index = |i: usize| u32::try_from(i).unwrap_or(u32::MAX);
+    // An agent draft refused whole is one row naming no shape, adapter or
+    // rule. A dropped agent rule names the agent's table and rule (the
+    // index in the run's answer, not in `adapters`), or no rule when its
+    // whole table was refused.
+    let refused = draft.rejected.map(|code| DroppedView {
+        shape: None,
+        adapter: None,
+        rule: None,
+        reason: draft_error_reason(code),
+    });
+    let shapes = draft.dropped.iter().map(|d| DroppedView {
+        shape: Some(d.shape.clone()),
+        adapter: None,
+        rule: None,
+        reason: drop_reason(d.reason),
+    });
+    let rules = draft.dropped_rules.iter().map(|d| DroppedView {
+        shape: None,
+        adapter: Some(index(d.table)),
+        rule: d.rule.map(index),
+        reason: draft_error_reason(d.reason),
+    });
     Response::SiteDrafted(SiteDrafted {
         protocol_version: PROTOCOL_VERSION,
-        request_id: value.request_id,
+        request_id,
         revision: config.revision().to_owned(),
-        drafter: SiteDrafter::Structural,
+        drafter,
         adapters: draft.adapters.iter().map(adapter_view).collect(),
-        dropped: draft
-            .dropped
-            .iter()
+        dropped: refused
+            .into_iter()
+            .chain(shapes)
+            .chain(rules)
             .take(MAX_DROPPED_ROWS)
-            .map(|d| DroppedView {
-                shape: Some(d.shape.clone()),
-                adapter: None,
-                rule: None,
-                reason: drop_reason(d.reason),
-            })
             .collect(),
         preview: rows,
         taken_types: taken
@@ -623,6 +725,225 @@ pub fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response
             .collect(),
         remapped,
     })
+}
+
+/// The length of a service run id (a hyphenated UUID).
+const RUN_ID_CHARS: usize = 36;
+
+/// `draft_site`: the draft for one exact origin from private URL shapes,
+/// bound to the config revision it was drafted against (DESIGN §5.1). It
+/// reads the config and writes nothing.
+///
+/// Without a `run_id` it is the structural draft. With one, it judges that
+/// site-draft run's answer: the tables the service validated, fetched from
+/// the service, never from the extension, and held to the same per-rule
+/// checks as a structural draft (`structural::check_agent_draft`).
+pub fn draft_site(
+    value: DraftSiteRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    let id = value.request_id.as_str();
+    let input = match request_input(id, &value.origin, &value.visited, &value.links) {
+        Ok(input) => input,
+        Err(refusal) => return *refusal,
+    };
+    let Some(run_id) = value.run_id.clone() else {
+        return structural_response(value, &input, config);
+    };
+    if run_id.chars().count() != RUN_ID_CHARS {
+        return error(id, ErrorCode::InvalidRequest, "run_id is not a run id");
+    }
+    // Fetched before the config lock is taken: the service is not asked
+    // anything while the lock is held.
+    let answer = match agent_answer(id, &run_id, &value.origin, service) {
+        Ok(answer) => answer,
+        Err(refusal) => return *refusal,
+    };
+    let tables: Option<Vec<AdapterValue>> = answer
+        .into_iter()
+        .map(|table| serde_json::from_value(table).ok())
+        .collect();
+    let origin = value.origin;
+    judged_response(
+        value.request_id,
+        &origin,
+        &input,
+        config,
+        SiteDrafter::Agent,
+        |existing, recorded, taken| match tables {
+            Some(tables) => structural::check_agent_draft(
+                &origin,
+                existing,
+                recorded,
+                &input,
+                catalog(),
+                taken,
+                &tables,
+            ),
+            // A table that does not read as an adapter-templates value is a
+            // table that does not parse: the whole draft is refused.
+            None => structural::SiteDraft {
+                rejected: Some(DraftErrorCode::InvalidRule),
+                ..structural::SiteDraft::default()
+            },
+        },
+    )
+}
+
+/// The validated tables of the site-draft run `run_id` for `origin`, from
+/// the service. A run of another kind, origin or id, an unfinished run
+/// (`conflict`), or a run that ended without tables is refused.
+#[cfg(unix)]
+fn agent_answer(
+    id: &str,
+    run_id: &str,
+    origin: &str,
+    service: Option<&ServiceLink>,
+) -> Result<Vec<serde_json::Value>, Refusal> {
+    let request = Request::GetRun(GetRunRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: id.to_owned(),
+        run_id: run_id.to_owned(),
+        since_offset: 0,
+    });
+    // The stream page is the agent's progress text; only the validated
+    // tables are judged.
+    let run = match crate::native::forward(&request, service) {
+        Response::RunFetched(fetched) => fetched.run,
+        refusal @ Response::Error(_) => return Err(Box::new(refusal)),
+        _ => {
+            return Err(Box::new(error(
+                id,
+                ErrorCode::Internal,
+                "The Brauser service sent an unexpected reply.",
+            )));
+        }
+    };
+    if run.run_id != run_id
+        || run.kind != Some(RunKind::SiteDraft)
+        || run.url != origin
+        || run.record_key.kind != RecordKeyKind::Url
+        || run.record_key.value != origin
+    {
+        return Err(Box::new(error(
+            id,
+            ErrorCode::InvalidRequest,
+            "that run is not an AI draft for this site",
+        )));
+    }
+    match (run.state, run.site_draft) {
+        (RunState::Succeeded, Some(answer)) => Ok(answer.adapters),
+        (RunState::Queued | RunState::Running, _) => Err(Box::new(error(
+            id,
+            ErrorCode::Conflict,
+            "the AI draft is not ready",
+        ))),
+        _ => Err(Box::new(error(
+            id,
+            ErrorCode::InvalidRequest,
+            "that run ended without an AI draft",
+        ))),
+    }
+}
+
+#[cfg(not(unix))]
+fn agent_answer(
+    id: &str,
+    _run_id: &str,
+    _origin: &str,
+    _service: Option<&ServiceLink>,
+) -> Result<Vec<serde_json::Value>, Refusal> {
+    Err(Box::new(error(
+        id,
+        ErrorCode::ServiceUnavailable,
+        "The Brauser service is not supported on Windows.",
+    )))
+}
+
+/// `start_site_draft`: starts, or joins, the agent drafter's run for one
+/// exact origin. Only the origin and shapes come from the extension: the
+/// host re-runs the structural drafter on its own config and builds the
+/// agent's input from that draft, then forwards a `start_run` whose kind,
+/// title, content and record key are all the host's.
+#[cfg(unix)]
+pub fn start_site_draft(
+    value: StartSiteDraftRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    let id = value.request_id.as_str();
+    let input = match request_input(id, &value.origin, &value.visited, &value.links) {
+        Ok(input) => input,
+        Err(refusal) => return *refusal,
+    };
+    if crate::capture::parse_event_time(&value.requested_at)
+        .and_then(crate::capture::check_event_window)
+        .is_err()
+    {
+        return error(
+            id,
+            ErrorCode::InvalidRequest,
+            "requested_at must be a current RFC 3339 timestamp",
+        );
+    }
+    // Drafted under the lock, which is released before forwarding.
+    let structural: Vec<serde_json::Value> = {
+        let _lock = match lock_for_drafting(config, id, &value.origin) {
+            Ok(lock) => lock,
+            Err(refusal) => return *refusal,
+        };
+        let Ok(existing) = config.adapter_document() else {
+            return policy_unavailable(id);
+        };
+        let taken = taken_types(config, existing);
+        let draft = structural::draft_site(
+            &value.origin,
+            existing,
+            config.recorded_contract_documents(),
+            &input,
+            catalog(),
+            &taken,
+        );
+        draft.adapters.iter().map(|a| to_json(&a.adapter)).collect()
+    };
+    let pairs = |list: &[ShapeCount]| -> Vec<(String, u32)> {
+        list.iter()
+            .map(|entry| (entry.shape.clone(), entry.count))
+            .collect()
+    };
+    let content = crate::service::prompt::site_draft_input(
+        &value.origin,
+        &pairs(&value.visited),
+        &pairs(&value.links),
+        &structural,
+    );
+    let host = url::Url::parse(&value.origin)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let title = format!("Capture Site: {host}");
+    if let Err(message) =
+        crate::service::record::check_start_run(&value.origin, &title, &content, None)
+    {
+        return error(id, ErrorCode::InvalidRequest, message);
+    }
+    let request = Request::StartRun(StartRunRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: value.request_id.clone(),
+        url: value.origin.clone(),
+        title,
+        content,
+        selection: None,
+        harness: value.harness,
+        record_key: Some(RecordKey {
+            kind: RecordKeyKind::Url,
+            value: value.origin,
+        }),
+        requested_at: value.requested_at,
+        kind: Some(RunKind::SiteDraft),
+    });
+    crate::native::forward(&request, service)
 }
 
 fn scope_choice(view: Option<&ScopeChoiceView>) -> ScopeChoice {
@@ -888,7 +1209,7 @@ mod tests {
 
 #[cfg(test)]
 mod handler_tests {
-    use super::{catalog, check_site_draft, draft_site};
+    use super::{catalog, check_site_draft};
     use crate::config::{ConfigStore, fixtures};
     use crate::frame::MAX_OUTBOUND_BYTES;
     use brauser_protocol::{
@@ -907,6 +1228,11 @@ mod handler_tests {
     const LINEAR: &str = "https://linear.app";
     const FIGMA: &str = "https://www.figma.com";
     const TOOLS_ITEMS: &str = "[[artifacts]]\ntype = \"tools.item\"\norigin = \"https://tools.example.com\"\nmatch = [{ path = \"/items/{id:int}\" }]\nid = \"tools.item:{host}/{id}\"\n";
+
+    /// `draft_site` with no service link: every structural request.
+    fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response {
+        super::draft_site(value, config, None)
+    }
 
     struct Setup {
         folder: tempfile::TempDir,
@@ -951,6 +1277,7 @@ mod handler_tests {
             origin: origin.into(),
             visited: counts(visited),
             links: counts(links),
+            run_id: None,
         }
     }
 
@@ -1185,6 +1512,19 @@ mod handler_tests {
             request(TOOLS, &many[..21], &many[..50]),
             &mut s.config,
         ));
+    }
+
+    #[test]
+    fn draft_site_with_a_run_id_and_no_service_is_service_unavailable() {
+        // Judging an agent run needs its answer from the service; drafting
+        // structurally instead would show a basic draft as the AI's.
+        let mut s = setup("");
+        let mut with_run = request(TOOLS, &["/items/{num}"], &[]);
+        with_run.run_id = Some("00000000-0000-4000-8000-000000000001".into());
+        assert_eq!(
+            code(draft_site(with_run, &mut s.config)),
+            ErrorCode::ServiceUnavailable
+        );
     }
 
     #[test]
@@ -1555,6 +1895,42 @@ mod handler_tests {
             site.dropped
                 .iter()
                 .any(|d| d.shape.as_deref() == Some("/search?q={slug}"))
+        );
+    }
+
+    /// The structural response, pinned before `draft_site` was split into
+    /// `structural_response` and `site_drafted_response`: refactoring it
+    /// for agent drafts must not change a byte of it (the revision is the
+    /// temp config's, so it is compared separately).
+    #[test]
+    fn structural_draft_site_response_is_unchanged_by_the_refactor() {
+        let mut s = setup(&adapters(&[TOOLS_ITEMS]));
+        let response = draft_site(
+            request(
+                TOOLS,
+                &[
+                    "/items/{num}",
+                    "/docs/{num}",
+                    "/docs/{num}/edit",
+                    "/search?q={slug}",
+                    "/wiki/{slug}/{uuid}",
+                ],
+                &["/boards/{num}", "/teams/{key}", "/invite/{hex32}"],
+            ),
+            &mut s.config,
+        );
+        let mut json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["revision"], s.config.revision());
+        json["revision"] = json!("<revision>");
+        let pinned: Json = serde_json::from_str(include_str!(
+            "../tests/fixtures/capture-site-structural-response.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            json,
+            pinned,
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap()
         );
     }
 
@@ -2185,6 +2561,1530 @@ mod handler_tests {
                     .all(|r| r.verdict == RuleVerdictKind::Dropped
                         && r.reason.as_deref() == Some("draft_forbidden_key")),
                 "{key}: {response:?}"
+            );
+        }
+    }
+
+    /// `start_site_draft` and `draft_site` with a `run_id`, against a fake
+    /// service on a short `/tmp` socket. No launchd, no real service and no
+    /// harness is ever involved.
+    #[cfg(unix)]
+    mod agent {
+        use super::*;
+        use crate::service::client::fake::{self, FakeService};
+        use crate::service::client::{Launch, ServiceLink};
+        use adapter_templates::Value as AdapterValue;
+        use brauser_protocol::{DraftedRuleView, DroppedView};
+        use brauser_protocol::{
+            HarnessId, RecordKey, RecordKeyKind, Request, RunFetched, RunKind, RunStarted,
+            RunState, RunView, SiteDraftAnswerView, StartSiteDraftRequest, UncheckedReason,
+        };
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        const BUILD: &str = "this-build";
+        const RUN_ID: &str = "00000000-0000-4000-8000-0000000000aa";
+
+        fn now() -> String {
+            time::OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        }
+
+        fn never(_: bool) -> Launch {
+            panic!("the service must not be started")
+        }
+
+        fn link(socket: PathBuf) -> ServiceLink {
+            ServiceLink {
+                restart_lock: socket.with_file_name("restart.lock"),
+                socket,
+                launch: Box::new(never),
+                wait: Duration::from_secs(2),
+                build_id: BUILD.into(),
+                disk_build: || BUILD.to_owned(),
+            }
+        }
+
+        /// A succeeded site-draft run for `origin` holding `tables`.
+        fn site_run(origin: &str, tables: Vec<Json>) -> RunView {
+            let key = RecordKey {
+                kind: RecordKeyKind::Url,
+                value: origin.into(),
+            };
+            RunView {
+                run_id: RUN_ID.into(),
+                state: RunState::Succeeded,
+                url: origin.into(),
+                title: "Capture Site: tools.example.com".into(),
+                written_record_key: Some(key.clone()),
+                kind: Some(RunKind::SiteDraft),
+                site_draft: Some(SiteDraftAnswerView { adapters: tables }),
+                ..fake::run_view(key)
+            }
+        }
+
+        /// A fake service whose get_run answers `run`, and whose start_run
+        /// answers a queued run for the forwarded request.
+        fn service(dir: &tempfile::TempDir, run: RunView) -> (FakeService, ServiceLink) {
+            let socket = fake::socket_in(dir);
+            let service = FakeService::listen(
+                &socket,
+                Arc::new(move |request, _| match request {
+                    Request::ServiceHello(_) => fake::ready(request, BUILD),
+                    Request::GetRun(value) => Response::RunFetched(RunFetched {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        run: run.clone(),
+                        stream_text: "agent text".into(),
+                        next_offset: 10,
+                        more: false,
+                    }),
+                    Request::StartRun(value) => Response::RunStarted(RunStarted {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id.clone(),
+                        run: RunView {
+                            kind: value.kind,
+                            url: value.url.clone(),
+                            ..fake::run_view(value.record_key.clone().unwrap())
+                        },
+                        existing: false,
+                    }),
+                    _ => fake::runs_listed(request),
+                }),
+            );
+            (service, link(socket))
+        }
+
+        fn tools_key() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Url,
+                value: TOOLS.into(),
+            }
+        }
+
+        fn start(origin: &str, visited: &[&str], links: &[&str]) -> StartSiteDraftRequest {
+            StartSiteDraftRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "site-1".into(),
+                origin: origin.into(),
+                visited: counts(visited),
+                links: counts(links),
+                harness: Some(HarnessId::Claude),
+                requested_at: now(),
+            }
+        }
+
+        fn agent_request(origin: &str, visited: &[&str], links: &[&str]) -> DraftSiteRequest {
+            DraftSiteRequest {
+                run_id: Some(RUN_ID.into()),
+                ..request(origin, visited, links)
+            }
+        }
+
+        fn table(kind: &str, paths: &[&str], capture: &str) -> Json {
+            json!({
+                "type": kind,
+                "origin": TOOLS,
+                "match": paths.iter().map(|p| json!({"path": p})).collect::<Vec<_>>(),
+                "id": format!("{kind}:{{host}}/{{{capture}}}"),
+            })
+        }
+
+        /// The one forwarded start_run (after the service_hello).
+        fn forwarded(service: &FakeService) -> brauser_protocol::StartRunRequest {
+            let requests = service.requests();
+            assert_eq!(requests.len(), 2, "{requests:?}");
+            match &requests[1] {
+                Request::StartRun(value) => value.clone(),
+                other => panic!("expected start_run, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn start_site_draft_builds_the_input_from_the_hosts_own_structural_draft() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup(&adapters(&[TOOLS_ITEMS]));
+            let visited = ["/docs/{num}", "/docs/{num}/edit", "/items/{num}"];
+            let links = ["/boards/{num}"];
+            let structural = drafted(draft_site(request(TOOLS, &visited, &links), &mut s.config));
+            assert!(!structural.adapters.is_empty());
+            let dir = fake::short_dir();
+            let (service, link) = service(&dir, fake::run_view(tools_key()));
+            let response = super::super::start_site_draft(
+                start(TOOLS, &visited, &links),
+                &mut s.config,
+                Some(&link),
+            );
+            assert!(matches!(response, Response::RunStarted(_)), "{response:?}");
+            let sent = forwarded(&service);
+            let pairs = |list: &[&str]| -> Vec<(String, u32)> {
+                list.iter().map(|shape| ((*shape).to_owned(), 1)).collect()
+            };
+            let tables: Vec<Json> = structural
+                .adapters
+                .iter()
+                .map(|a| a.adapter.clone())
+                .collect();
+            assert_eq!(
+                sent.content,
+                crate::service::prompt::site_draft_input(
+                    TOOLS,
+                    &pairs(&visited),
+                    &pairs(&links),
+                    &tables
+                )
+            );
+            for shape in visited.iter().chain(&links) {
+                assert!(sent.content.contains(shape), "{shape}");
+            }
+            // The host's structural tables, not anything the extension sent.
+            assert!(sent.content.contains("tools.docs"), "{}", sent.content);
+            // No URL other than the origin: shapes and templates only.
+            for (at, _) in sent.content.match_indices("http") {
+                assert!(
+                    sent.content[at..].starts_with(TOOLS),
+                    "{}",
+                    &sent.content[at..]
+                );
+            }
+        }
+
+        #[test]
+        fn start_site_draft_forwards_kind_site_draft_with_origin_only() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let dir = fake::short_dir();
+            let (service, link) = service(&dir, fake::run_view(tools_key()));
+            let request = start(TOOLS, &["/docs/{num}"], &[]);
+            let requested_at = request.requested_at.clone();
+            let started = match super::super::start_site_draft(request, &mut s.config, Some(&link))
+            {
+                Response::RunStarted(started) => started,
+                other => panic!("expected run_started, got {other:?}"),
+            };
+            assert_eq!(started.request_id, "site-1");
+            assert_eq!(started.run.kind, Some(RunKind::SiteDraft));
+            let sent = forwarded(&service);
+            assert_eq!(sent.kind, Some(RunKind::SiteDraft));
+            assert_eq!(sent.url, TOOLS);
+            assert_eq!(sent.title, "Capture Site: tools.example.com");
+            assert_eq!(sent.selection, None);
+            assert_eq!(sent.harness, Some(HarnessId::Claude));
+            assert_eq!(sent.requested_at, requested_at);
+            assert_eq!(
+                sent.record_key,
+                Some(RecordKey {
+                    kind: RecordKeyKind::Url,
+                    value: TOOLS.into(),
+                })
+            );
+        }
+
+        /// Checked before the service is reached: with no link at all a bad
+        /// request is still `invalid_request`, not `service_unavailable`.
+        #[test]
+        fn start_site_draft_refuses_invalid_shapes_raw_urls_and_stale_requested_at() {
+            let mut s = setup("");
+            let refused = |s: &mut Setup, request: StartSiteDraftRequest| {
+                code(super::super::start_site_draft(request, &mut s.config, None))
+            };
+            for origin in ["https://tools.example.com/", "tools.example.com", ""] {
+                assert_eq!(
+                    refused(&mut s, start(origin, &["/docs/{num}"], &[])),
+                    ErrorCode::InvalidRequest,
+                    "{origin}"
+                );
+            }
+            for shape in [
+                "https://tools.example.com/docs/42",
+                "/docs/42",
+                "/Docs/{num}",
+            ] {
+                assert_eq!(
+                    refused(&mut s, start(TOOLS, &[shape], &[])),
+                    ErrorCode::InvalidRequest,
+                    "visited {shape}"
+                );
+                assert_eq!(
+                    refused(&mut s, start(TOOLS, &["/docs/{num}"], &[shape])),
+                    ErrorCode::InvalidRequest,
+                    "link {shape}"
+                );
+            }
+            let many: Vec<String> = (0..51)
+                .map(|i| format!("/docs/{{num}}/{}", word(i)))
+                .collect();
+            let many: Vec<&str> = many.iter().map(String::as_str).collect();
+            assert_eq!(
+                refused(&mut s, start(TOOLS, &[], &many)),
+                ErrorCode::InvalidRequest
+            );
+            for requested_at in ["yesterday", "2001-01-01T00:00:00Z"] {
+                let mut stale = start(TOOLS, &["/docs/{num}"], &[]);
+                stale.requested_at = requested_at.into();
+                assert_eq!(
+                    refused(&mut s, stale),
+                    ErrorCode::InvalidRequest,
+                    "{requested_at}"
+                );
+            }
+        }
+
+        #[test]
+        fn start_site_draft_refuses_while_adapter_policy_needs_repair() {
+            let mut s = setup("[adapters]\nformat = 2\n");
+            assert!(s.config.adapter_issue().is_some());
+            assert_eq!(
+                code(super::super::start_site_draft(
+                    start(TOOLS, &["/docs/{num}"], &[]),
+                    &mut s.config,
+                    None
+                )),
+                ErrorCode::InvalidConfig
+            );
+        }
+
+        #[test]
+        fn start_site_draft_without_the_service_is_service_unavailable() {
+            let mut s = setup("");
+            assert_eq!(
+                code(super::super::start_site_draft(
+                    start(TOOLS, &["/docs/{num}"], &[]),
+                    &mut s.config,
+                    None
+                )),
+                ErrorCode::ServiceUnavailable
+            );
+        }
+
+        #[test]
+        fn agent_draft_site_returns_agent_drafter_bound_to_the_current_revision() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let dir = fake::short_dir();
+            let tables = vec![
+                table("tools.docs", &["/docs/{n:int}"], "n"),
+                table("tools.boards", &["/boards/{n:int}"], "n"),
+            ];
+            let (service, link) = service(&dir, site_run(TOOLS, tables));
+            let site = drafted(super::super::draft_site(
+                agent_request(TOOLS, &["/docs/{num}"], &[]),
+                &mut s.config,
+                Some(&link),
+            ));
+            assert_eq!(site.request_id, "draft-1");
+            assert_eq!(site.drafter, SiteDrafter::Agent);
+            assert_eq!(site.revision, s.config.revision());
+            assert_eq!(site.adapters.len(), 2, "{site:#?}");
+            let docs = &site.adapters[0];
+            assert_eq!(docs.adapter["type"], "tools.docs");
+            assert!(docs.rules[0].checked);
+            assert_eq!(docs.rules[0].visited, 1);
+            // No page the user saw matches the boards rule: it starts
+            // unchecked, suggested by AI.
+            let boards = &site.adapters[1];
+            assert!(!boards.rules[0].checked);
+            assert_eq!(
+                boards.rules[0].unchecked_reason,
+                Some(UncheckedReason::Unseen)
+            );
+            let requests = service.requests();
+            assert!(
+                matches!(
+                    &requests[1],
+                    Request::GetRun(get) if get.run_id == RUN_ID && get.since_offset == 0
+                ),
+                "{requests:?}"
+            );
+        }
+
+        #[test]
+        fn agent_draft_site_refuses_a_summary_run_another_origin_or_an_unfinished_run() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let good = site_run(TOOLS, vec![table("tools.docs", &["/docs/{n:int}"], "n")]);
+            let other = "https://other.example.com";
+            let cases: Vec<(&str, RunView, ErrorCode)> = vec![
+                (
+                    "summary",
+                    RunView {
+                        kind: None,
+                        site_draft: None,
+                        ..good.clone()
+                    },
+                    ErrorCode::InvalidRequest,
+                ),
+                (
+                    "another origin",
+                    RunView {
+                        url: other.into(),
+                        record_key: RecordKey {
+                            kind: RecordKeyKind::Url,
+                            value: other.into(),
+                        },
+                        ..good.clone()
+                    },
+                    ErrorCode::InvalidRequest,
+                ),
+                (
+                    "another run",
+                    RunView {
+                        run_id: "00000000-0000-4000-8000-0000000000bb".into(),
+                        ..good.clone()
+                    },
+                    ErrorCode::InvalidRequest,
+                ),
+                (
+                    "queued",
+                    RunView {
+                        state: RunState::Queued,
+                        site_draft: None,
+                        ..good.clone()
+                    },
+                    ErrorCode::Conflict,
+                ),
+                (
+                    "running",
+                    RunView {
+                        state: RunState::Running,
+                        site_draft: None,
+                        ..good.clone()
+                    },
+                    ErrorCode::Conflict,
+                ),
+                (
+                    "failed",
+                    RunView {
+                        state: RunState::Failed,
+                        site_draft: None,
+                        error_kind: Some(brauser_protocol::RunErrorKind::InvalidOutput),
+                        ..good.clone()
+                    },
+                    ErrorCode::InvalidRequest,
+                ),
+                (
+                    "succeeded without tables",
+                    RunView {
+                        site_draft: None,
+                        ..good.clone()
+                    },
+                    ErrorCode::InvalidRequest,
+                ),
+            ];
+            for (name, run, expected) in cases {
+                let dir = fake::short_dir();
+                let (_service, link) = service(&dir, run);
+                assert_eq!(
+                    code(super::super::draft_site(
+                        agent_request(TOOLS, &["/docs/{num}"], &[]),
+                        &mut s.config,
+                        Some(&link),
+                    )),
+                    expected,
+                    "{name}"
+                );
+            }
+            // A malformed run id is refused before the service is reached.
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir));
+            let mut bad = agent_request(TOOLS, &["/docs/{num}"], &[]);
+            bad.run_id = Some("not-a-run".into());
+            assert_eq!(
+                code(super::super::draft_site(bad, &mut s.config, Some(&link))),
+                ErrorCode::InvalidRequest
+            );
+        }
+
+        #[test]
+        fn agent_draft_site_preview_lists_every_shape_and_probe() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let dir = fake::short_dir();
+            let (_service, link) = service(
+                &dir,
+                site_run(
+                    TOOLS,
+                    vec![
+                        table("tools.items", &["/items/{n:int}"], "n"),
+                        table("tools.docs", &["/docs/{u:uuid}"], "u"),
+                    ],
+                ),
+            );
+            let site = drafted(super::super::draft_site(
+                agent_request(
+                    TOOLS,
+                    &["/items/{num}", "/search?q={slug}"],
+                    &["/docs/{uuid}"],
+                ),
+                &mut s.config,
+                Some(&link),
+            ));
+            let probes = &catalog().probe_paths;
+            assert_eq!(site.preview.len(), 3 + probes.len());
+            assert_eq!(site.preview[0].shape, "/items/{num}");
+            assert_eq!(site.preview[0].adapter, Some(0));
+            assert_eq!(
+                site.preview[0].artifact_id.as_deref(),
+                Some("tools.items:tools.example.com/123456")
+            );
+            assert_eq!(site.preview[1].adapter, None);
+            assert_eq!(site.preview[2].source, PreviewSource::Link);
+            assert_eq!(site.preview[2].adapter, Some(1));
+            for (row, probe) in site.preview[3..].iter().zip(probes) {
+                assert_eq!(row.source, PreviewSource::Probe);
+                assert_eq!(row.url, format!("{TOOLS}{probe}"));
+                assert_eq!(row.adapter, None, "{probe}");
+            }
+            // A link-only agent rule starts unchecked, as a structural one.
+            assert!(!site.adapters[1].rules[0].checked);
+            assert_eq!(
+                site.adapters[1].rules[0].unchecked_reason,
+                Some(UncheckedReason::LinkOnly)
+            );
+        }
+
+        #[test]
+        fn agent_draft_site_reports_zero_remapped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup(&adapters(&[TOOLS_ITEMS]));
+            let dir = fake::short_dir();
+            let (_service, link) = service(
+                &dir,
+                site_run(
+                    TOOLS,
+                    vec![table(
+                        "tools.docs",
+                        &["/items/{n:int}", "/docs/{n:int}"],
+                        "n",
+                    )],
+                ),
+            );
+            let site = drafted(super::super::draft_site(
+                agent_request(TOOLS, &["/items/{num}", "/docs/{num}"], &[]),
+                &mut s.config,
+                Some(&link),
+            ));
+            assert_eq!(site.remapped, 0);
+            // The rule over the configured route is dropped as an overlap,
+            // so the recognized page keeps its kind.
+            assert!(
+                site.dropped.iter().any(|d| d.shape.is_none()
+                    && d.adapter == Some(0)
+                    && d.rule == Some(0)
+                    && d.reason == DraftDropReason::DraftOverlap),
+                "{:?}",
+                site.dropped
+            );
+            assert_eq!(site.adapters.len(), 1);
+            assert_eq!(
+                site.adapters[0].adapter["match"],
+                json!([{"path": "/docs/{n:int}"}])
+            );
+            assert_eq!(site.preview[0].adapter, None);
+        }
+
+        #[test]
+        fn agent_draft_site_rejects_a_forbidden_key_with_one_dropped_row() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let mut titled = table("tools.docs", &["/docs/{n:int}"], "n");
+            titled["title"] = json!([{"template": "{title}"}]);
+            let dir = fake::short_dir();
+            let (_service, link) = service(&dir, site_run(TOOLS, vec![titled]));
+            let site = drafted(super::super::draft_site(
+                agent_request(TOOLS, &["/docs/{num}"], &[]),
+                &mut s.config,
+                Some(&link),
+            ));
+            assert_eq!(site.drafter, SiteDrafter::Agent);
+            assert!(site.adapters.is_empty());
+            assert_eq!(site.dropped.len(), 1, "{:?}", site.dropped);
+            let row = &site.dropped[0];
+            assert_eq!(
+                (row.shape.as_deref(), row.adapter, row.rule),
+                (None, None, None)
+            );
+            assert_eq!(row.reason, DraftDropReason::DraftForbiddenKey);
+            assert!(site.preview.iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn agent_draft_site_writes_nothing_to_home_or_config_dir() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup(&adapters(&[TOOLS_ITEMS]));
+            {
+                let _lock = s.config.lock_current().unwrap();
+                s.config.refresh().unwrap();
+            }
+            let before = tree(s.folder.path());
+            let dir = fake::short_dir();
+            let (_service, link) = service(
+                &dir,
+                site_run(TOOLS, vec![table("tools.docs", &["/docs/{n:int}"], "n")]),
+            );
+            drafted(super::super::draft_site(
+                agent_request(TOOLS, &["/docs/{num}"], &["/boards/{num}"]),
+                &mut s.config,
+                Some(&link),
+            ));
+            assert!(matches!(
+                super::super::start_site_draft(
+                    start(TOOLS, &["/docs/{num}"], &["/boards/{num}"]),
+                    &mut s.config,
+                    Some(&link),
+                ),
+                Response::RunStarted(_)
+            ));
+            assert_eq!(tree(s.folder.path()), before);
+        }
+
+        #[test]
+        fn agent_draft_site_response_fits_outbound_cap_at_limits() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let origin = format!("https://{}.example", vec!["a".repeat(63); 30].join("."));
+            let shapes: Vec<String> = (0..71).map(long_shape).collect();
+            let shapes: Vec<&str> = shapes.iter().map(String::as_str).collect();
+            let tables: Vec<Json> = (0..8)
+                .map(|a| {
+                    let rules: Vec<Json> = (0..16)
+                        .map(|r| json!({"path": format!("/{}/{}/{{n:int}}", word(a), word(100 + r))}))
+                        .collect();
+                    json!({
+                        "type": format!("long.k{}", word(a)),
+                        "origin": origin,
+                        "match": rules,
+                        "id": format!("long.k{}:{{host}}/{{n}}", word(a))
+                    })
+                })
+                .collect();
+            let dir = fake::short_dir();
+            let (_service, link) = service(&dir, site_run(&origin, tables));
+            let response = super::super::draft_site(
+                agent_request(&origin, &shapes[..21], &shapes[21..]),
+                &mut s.config,
+                Some(&link),
+            );
+            let size = serde_json::to_vec(&response).unwrap().len();
+            let site = drafted(response);
+            assert_eq!(site.adapters.len(), 8, "{:?}", site.dropped);
+            assert!(site.adapters.iter().all(|a| a.rules.len() == 16));
+            assert_eq!(site.preview.len(), 71 + catalog().probe_paths.len());
+            assert!(size < MAX_OUTBOUND_BYTES, "{size}");
+        }
+
+        /// The save does not change for an agent draft: the same selection
+        /// gets the same verdicts whichever drafter offered it.
+        #[test]
+        fn check_site_draft_judges_an_agent_selection_exactly_as_a_structural_one() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup("");
+            let visited = ["/docs/{num}", "/docs/{num}/edit"];
+            let structural = drafted(draft_site(request(TOOLS, &visited, &[]), &mut s.config));
+            let tables: Vec<Json> = structural
+                .adapters
+                .iter()
+                .map(|a| a.adapter.clone())
+                .collect();
+            let dir = fake::short_dir();
+            let (_service, link) = service(&dir, site_run(TOOLS, tables));
+            let agent = drafted(super::super::draft_site(
+                agent_request(TOOLS, &visited, &[]),
+                &mut s.config,
+                Some(&link),
+            ));
+            assert_eq!(agent.drafter, SiteDrafter::Agent);
+            let judge = |s: &mut Setup, site: &SiteDrafted| {
+                let tables: Vec<Json> = site.adapters.iter().map(|a| a.adapter.clone()).collect();
+                let provenance = tables.iter().map(drafted_rules).collect();
+                let scope = vec![None; tables.len()];
+                let mut request = check(TOOLS, &site.revision, tables, provenance, scope);
+                request.visited = counts(&visited);
+                checked(check_site_draft(request, &mut s.config))
+            };
+            let from_structural = judge(&mut s, &structural);
+            let from_agent = judge(&mut s, &agent);
+            assert_eq!(
+                serde_json::to_value(&from_agent).unwrap(),
+                serde_json::to_value(&from_structural).unwrap()
+            );
+            assert_eq!(agent.adapters, structural.adapters);
+            assert_eq!(agent.preview, structural.preview);
+        }
+
+        // Step 7.7 end to end through the host (DESIGN §12.2 step 7.7). Each
+        // case replays the shared agent answer in
+        // `host/tests/fixtures/site-draft-answers/` (the answers the crate
+        // judges in `adapter-templates/tests/agent_draft.rs` and the service
+        // passes on unchanged) as a succeeded site-draft run, then asks
+        // `draft_site` with its `run_id`, so the decision shown is the
+        // host's: `dropped`, `adapters`, `checked` and `preview` of the
+        // `site_drafted` it answers.
+
+        macro_rules! fixture {
+            ($case:literal) => {
+                include_str!(concat!(
+                    "../tests/fixtures/site-draft-answers/",
+                    $case,
+                    ".json"
+                ))
+            };
+        }
+
+        /// The answer's tables, as the service hands them on.
+        fn answer(text: &str) -> Vec<Json> {
+            let answer: Json = serde_json::from_str(text).expect("fixture answer parses");
+            let keys: Vec<&String> = answer.as_object().expect("answer object").keys().collect();
+            assert_eq!(keys, ["adapters"], "an answer's only key is adapters");
+            answer["adapters"].as_array().expect("adapters").clone()
+        }
+
+        /// `draft_site` with the run id of a succeeded site-draft run holding
+        /// `tables`. Every
+        /// preview row names a rule the response keeps.
+        fn judge(s: &mut Setup, tables: &[Json], visited: &[&str], links: &[&str]) -> SiteDrafted {
+            let dir = fake::short_dir();
+            let (service, link) = service(&dir, site_run(TOOLS, tables.to_vec()));
+            let site = drafted(super::super::draft_site(
+                agent_request(TOOLS, visited, links),
+                &mut s.config,
+                Some(&link),
+            ));
+            assert_eq!(site.drafter, SiteDrafter::Agent);
+            assert_eq!(site.revision, s.config.revision());
+            assert_eq!(site.remapped, 0);
+            assert_eq!(
+                site.preview.len(),
+                visited.len() + links.len() + catalog().probe_paths.len()
+            );
+            for row in &site.preview {
+                if let (Some(adapter), Some(rule)) = (row.adapter, row.rule) {
+                    let adapter = &site.adapters[adapter as usize];
+                    assert!(
+                        adapter.rules.iter().any(|r| r.rule == rule),
+                        "{row:?} names a kept rule"
+                    );
+                } else {
+                    assert_eq!(
+                        (row.adapter, row.rule, &row.artifact_id),
+                        (None, None, &None)
+                    );
+                }
+            }
+            // The tables were the service's, fetched with the run id.
+            let requests = service.requests();
+            assert!(
+                matches!(&requests[1], Request::GetRun(get) if get.run_id == RUN_ID),
+                "{requests:?}"
+            );
+            site
+        }
+
+        /// A rule as `path` or `path?key=template&...`.
+        fn rule_text(rule: &Json) -> String {
+            let mut text = rule["path"].as_str().expect("path").to_owned();
+            if let Some(query) = rule.get("query").and_then(Json::as_object) {
+                for (index, (key, template)) in query.iter().enumerate() {
+                    text.push(if index == 0 { '?' } else { '&' });
+                    text.push_str(key);
+                    text.push('=');
+                    text.push_str(template.as_str().unwrap_or("<non-string>"));
+                }
+            }
+            text
+        }
+
+        fn table_rules(table: &Json) -> Vec<String> {
+            table["match"]
+                .as_array()
+                .expect("match")
+                .iter()
+                .map(rule_text)
+                .collect()
+        }
+
+        /// Every dropped agent rule as `(rule text, reason)`, from the rows
+        /// that name the agent's table (and rule; a whole dropped table names
+        /// each of its rules). Shape rows and a whole-draft refusal are not
+        /// agent rules.
+        fn dropped_rules(site: &SiteDrafted, tables: &[Json]) -> Vec<(String, String)> {
+            site.dropped
+                .iter()
+                .filter_map(|d| {
+                    assert_eq!(d.shape, None, "an agent draft drops no shapes: {d:?}");
+                    let texts = table_rules(&tables[d.adapter? as usize]);
+                    let texts = match d.rule {
+                        Some(rule) => vec![texts[rule as usize].clone()],
+                        None => texts,
+                    };
+                    Some(
+                        texts
+                            .into_iter()
+                            .map(move |t| (t, format!("{:?}", d.reason))),
+                    )
+                })
+                .flatten()
+                .collect()
+        }
+
+        /// Each expected `(rule, reason)` pair is reported, and nothing else
+        /// is dropped.
+        fn assert_dropped(
+            site: &SiteDrafted,
+            tables: &[Json],
+            expected: &[(&str, DraftDropReason)],
+        ) {
+            let mut got = dropped_rules(site, tables);
+            let mut want: Vec<(String, String)> = expected
+                .iter()
+                .map(|(text, reason)| ((*text).to_owned(), format!("{reason:?}")))
+                .collect();
+            got.sort();
+            want.sort();
+            assert_eq!(got, want);
+        }
+
+        /// The text of every kept rule.
+        fn all_kept(site: &SiteDrafted) -> Vec<String> {
+            site.adapters
+                .iter()
+                .flat_map(|a| {
+                    let texts = table_rules(&a.adapter);
+                    a.rules
+                        .iter()
+                        .map(move |r| texts[r.rule as usize].clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        }
+
+        /// The kept rule with this text.
+        fn kept<'s>(site: &'s SiteDrafted, text: &str) -> &'s DraftedRuleView {
+            site.adapters
+                .iter()
+                .find_map(|a| {
+                    let texts = table_rules(&a.adapter);
+                    a.rules.iter().find(|r| texts[r.rule as usize] == text)
+                })
+                .unwrap_or_else(|| panic!("{text} kept: {site:#?}"))
+        }
+
+        /// The visited rule is kept and checked: backed by a visited shape,
+        /// with no unchecked reason.
+        fn assert_visited_rule_kept_and_checked(site: &SiteDrafted, text: &str) {
+            assert!(
+                !site.dropped.iter().any(|d| d.adapter.is_none()),
+                "{:?}",
+                site.dropped
+            );
+            let rule = kept(site, text);
+            assert!(
+                rule.checked && rule.unchecked_reason.is_none(),
+                "{text}: {rule:?}"
+            );
+            assert!(rule.visited > 0, "{text}: {rule:?}");
+        }
+
+        /// The type of the first checked rule that evaluates `url`, matched
+        /// without scope as the preview matches.
+        fn checked_type(site: &SiteDrafted, url: &str) -> Option<String> {
+            site.adapters.iter().find_map(|a| {
+                let keep = a
+                    .rules
+                    .iter()
+                    .filter(|r| r.checked)
+                    .map(|r| r.rule as usize);
+                let table: AdapterValue = serde_json::from_value(a.adapter.clone()).unwrap();
+                let preview = super::super::preview_adapter(&table, keep.collect())?;
+                Some(preview.document.evaluate(url, None).ok()?.artifact_type)
+            })
+        }
+
+        /// No checked rule, and no preview row, captures any of `urls`.
+        fn assert_not_captured(site: &SiteDrafted, urls: &[&str]) {
+            for url in urls {
+                assert_eq!(checked_type(site, url), None, "{url}");
+            }
+        }
+
+        #[test]
+        fn host_agent_planted_links_toward_rest_after_first_segment_are_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_planted_links_toward_rest_after_first_segment_are_dropped"
+            ));
+            let planted = [
+                "/{slug}",
+                "/{slug}/{slug}",
+                "/{slug}/{slug}/{slug}",
+                "/docs/{slug}/{slug}",
+                "/docs/{slug}/{slug}/{slug}",
+                "/{num}/{slug}/{slug}",
+                "/{key}/{slug}/{slug}/{slug}",
+                "/docs/{num}/{slug}/{slug}",
+            ];
+            let site = judge(&mut setup(""), &tables, &["/docs/{num}"], &planted);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[
+                    ("/{n:int}/page/{*}", DraftDropReason::DraftNoLeadingLiteral),
+                    ("/docs/{*}", DraftDropReason::DraftRestSecond),
+                ],
+            );
+            assert_eq!(all_kept(&site), ["/docs/{n:int}"]);
+            assert_not_captured(
+                &site,
+                &[
+                    "https://tools.example.com/anything",
+                    "https://tools.example.com/docs/a/b/c",
+                    "https://tools.example.com/42/a/b",
+                ],
+            );
+            // Only the visited row is captured; no planted link is.
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_root_match_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!("agent_planted_root_match_is_dropped"));
+            let site = judge(
+                &mut setup(""),
+                &tables,
+                &["/docs/{num}"],
+                &["/", "/?id={num}", "//{num}", "/{num}"],
+            );
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[
+                    ("/{n:int}/index", DraftDropReason::DraftNoLeadingLiteral),
+                    ("/{n:int}/{_}/view", DraftDropReason::DraftNoLeadingLiteral),
+                    (
+                        "/{m:int}/view?id={n:int}",
+                        DraftDropReason::DraftNoLeadingLiteral,
+                    ),
+                ],
+            );
+            assert_not_captured(
+                &site,
+                &[
+                    "https://tools.example.com/",
+                    "https://tools.example.com/?id=42",
+                    "https://tools.example.com/42",
+                ],
+            );
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_search_page_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!("agent_planted_search_page_is_dropped"));
+            let planted = [
+                "/search?q={slug}",
+                "/?q={slug}",
+                "/search/{num}",
+                "/find?q={num}",
+                "/docs?query={id}",
+                "/query/{key}",
+                "/filter/{uuid}",
+            ];
+            let site = judge(&mut setup(""), &tables, &["/docs/{num}"], &planted);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[
+                    ("/search/{n:int}", DraftDropReason::DraftBlockedRoute),
+                    ("/find?q={n:int}", DraftDropReason::DraftSearchCapture),
+                    (
+                        "/docs?query={t:token(1,128)}",
+                        DraftDropReason::DraftSearchCapture,
+                    ),
+                ],
+            );
+            assert_not_captured(
+                &site,
+                &[
+                    "https://tools.example.com/search/42",
+                    "https://tools.example.com/find?q=42",
+                    "https://tools.example.com/docs?query=abc",
+                ],
+            );
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_secret_query_parameter_id_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_planted_secret_query_parameter_id_is_dropped"
+            ));
+            let planted = [
+                "/files/{num}?token={id}",
+                "/doc/{num}?access_token={hex64}",
+                "/view?sig={hex32}",
+                "/cb?code={id}",
+            ];
+            let site = judge(&mut setup(""), &tables, &["/docs/{num}"], &planted);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[
+                    ("/view?sig={h:hex(32)}", DraftDropReason::DraftSecretCapture),
+                    (
+                        "/cb?code={t:token(1,128)}",
+                        DraftDropReason::DraftSecretCapture,
+                    ),
+                    (
+                        "/files/{_}?token={t:token(1,128)}",
+                        DraftDropReason::DraftSecretCapture,
+                    ),
+                ],
+            );
+            // No surviving ID, kept rule or previewed artifact carries a
+            // secret.
+            for adapter in &site.adapters {
+                let id = adapter.adapter["id"].as_str().unwrap();
+                assert!(!id.contains("{h}") && !id.contains("{t}"), "{id}");
+            }
+            for rule in all_kept(&site) {
+                for key in ["token", "access_token", "sig", "code"] {
+                    assert!(!rule.contains(&format!("{key}=")), "{rule}");
+                }
+            }
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_auth_or_capability_route_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_planted_auth_or_capability_route_is_dropped"
+            ));
+            let planted = [
+                "/invite/{hex32}",
+                "/reset/{uuid}",
+                "/password/reset/{hex64}",
+                "/verify/{id}",
+                "/confirm/{num}",
+            ];
+            let site = judge(&mut setup(""), &tables, &["/docs/{num}"], &planted);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[
+                    ("/invite/{h:hex(32)}", DraftDropReason::DraftBlockedRoute),
+                    ("/reset/{u:uuid}", DraftDropReason::DraftBlockedRoute),
+                    (
+                        "/password/reset/{h:hex(64)}",
+                        DraftDropReason::DraftBlockedRoute,
+                    ),
+                    (
+                        "/verify/{t:token(1,128)}",
+                        DraftDropReason::DraftBlockedRoute,
+                    ),
+                    ("/confirm/{n:int}", DraftDropReason::DraftBlockedRoute),
+                ],
+            );
+            assert_eq!(all_kept(&site), ["/docs/{n:int}"]);
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_search_or_paging_parameter_id_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_planted_search_or_paging_parameter_id_is_dropped"
+            ));
+            let planted = [
+                "/items?page={num}",
+                "/items?cursor={id}",
+                "/items?offset={num}&sort={slug}",
+                "/items?q={key}",
+                "/items?jql={slug}&start={num}",
+                "/items?tab={num}&view={uuid}",
+            ];
+            let site = judge(
+                &mut setup(""),
+                &tables,
+                &["/docs/{num}", "/docs/{num}?page={num}"],
+                &planted,
+            );
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[
+                    ("/items?page={n:int}", DraftDropReason::DraftPagingCapture),
+                    (
+                        "/items?cursor={t:token(1,128)}",
+                        DraftDropReason::DraftPagingCapture,
+                    ),
+                    ("/items?q={k:jira_key}", DraftDropReason::DraftSearchCapture),
+                    ("/items?tab={n:int}", DraftDropReason::DraftPagingCapture),
+                ],
+            );
+            assert_eq!(all_kept(&site), ["/docs/{n:int}"]);
+            assert!(site.preview[2..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_id_less_rule_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!("agent_planted_id_less_rule_is_dropped"));
+            let planted = [
+                "/about/team",
+                "/pages/{slug}",
+                "/docs/{slug}/{slug}/{slug}",
+                "/docs/list?owner={slug}",
+                "/docs?{param}={num}",
+            ];
+            let site = judge(&mut setup(""), &tables, &["/docs/{num}"], &planted);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            // Each ID-less table is dropped whole: one row naming the table
+            // and no rule.
+            let whole = |table: u32| DroppedView {
+                shape: None,
+                adapter: Some(table),
+                rule: None,
+                reason: DraftDropReason::DraftIdNeedsTypedCapture,
+            };
+            assert_eq!(site.dropped, [whole(1), whole(2)]);
+            assert_eq!(all_kept(&site), ["/docs/{n:int}"]);
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_planted_alternative_on_visited_rule_starts_unchecked_or_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_planted_alternative_on_visited_rule_starts_unchecked_or_is_dropped"
+            ));
+            let site = judge(
+                &mut setup(""),
+                &tables,
+                &["/wiki/doc/{num}"],
+                &["/wiki/page/{num}", "/wiki/doc/{num}/{slug}/{slug}"],
+            );
+            assert_visited_rule_kept_and_checked(&site, "/wiki/doc/{n:int}");
+            // Outcome-based: whether the widened rule is dropped or starts
+            // unchecked, no checked rule captures the planted link-only page,
+            // and the visited page is still the checked first table's.
+            assert_eq!(
+                checked_type(&site, "https://tools.example.com/wiki/page/42"),
+                None
+            );
+            assert_eq!(
+                checked_type(&site, "https://tools.example.com/wiki/doc/42").as_deref(),
+                Some("tools.doc")
+            );
+            for rule in site.adapters.iter().flat_map(|a| &a.rules) {
+                assert_eq!(rule.checked, rule.unchecked_reason.is_none(), "{rule:?}");
+            }
+            // The crate drops it as an overlap with the first table.
+            assert_dropped(
+                &site,
+                &tables,
+                &[("/wiki/(doc|page)/{n:int}", DraftDropReason::DraftOverlap)],
+            );
+            assert_eq!(site.preview[0].adapter, Some(0));
+            assert_eq!(site.preview[1].adapter, None);
+        }
+
+        #[test]
+        fn host_agent_widened_rule_alone_never_checks_a_planted_link() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            // Each widened table alone, with no narrow rule before it that
+            // would drop it as an overlap.
+            // (rule path, visited shapes, link shapes, planted URLs, drop)
+            type Case = (
+                &'static str,
+                &'static [&'static str],
+                &'static [&'static str],
+                &'static [&'static str],
+                Option<DraftDropReason>,
+            );
+            let cases: [Case; 3] = [
+                (
+                    "/wiki/{n:int}/{*}",
+                    &["/wiki/{num}"],
+                    &["/wiki/{num}/share/{slug}", "/wiki/{num}/invite/{hex32}"],
+                    &[
+                        "https://tools.example.com/wiki/42/share/team-notes",
+                        "https://tools.example.com/wiki/42/invite/0123456789abcdef0123456789abcdef",
+                    ],
+                    Some(DraftDropReason::DraftBlockedRoute),
+                ),
+                (
+                    "/wiki/{_}/{n:int}",
+                    &["/wiki/doc/{num}"],
+                    &["/wiki/share/{num}", "/wiki/reset/{num}"],
+                    &[
+                        "https://tools.example.com/wiki/share/42",
+                        "https://tools.example.com/wiki/reset/42",
+                    ],
+                    Some(DraftDropReason::DraftBlockedRoute),
+                ),
+                (
+                    "/wiki/(doc|page)/{n:int}",
+                    &["/wiki/doc/{num}"],
+                    &["/wiki/page/{num}"],
+                    &["https://tools.example.com/wiki/page/42"],
+                    None,
+                ),
+            ];
+            for (path, visited, links, planted, drop) in cases {
+                let tables = vec![json!({
+                    "type": "tools.wiki",
+                    "origin": TOOLS,
+                    "match": [{"path": path}],
+                    "id": "tools.wiki:{host}/{n}",
+                })];
+                let site = judge(&mut setup(""), &tables, visited, links);
+                assert_not_captured(&site, planted);
+                for rule in site.adapters.iter().flat_map(|a| &a.rules) {
+                    assert_eq!(rule.checked, rule.unchecked_reason.is_none(), "{rule:?}");
+                }
+                match drop {
+                    Some(reason) => {
+                        assert!(site.adapters.is_empty(), "{path}: {site:?}");
+                        assert_dropped(&site, &tables, &[(path, reason)]);
+                    }
+                    None => {
+                        let rule = kept(&site, path);
+                        assert!(!rule.checked, "{path}: {rule:?}");
+                        assert_eq!(rule.unchecked_reason, Some(UncheckedReason::LinkOnly));
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn host_agent_planted_blocked_route_word_is_dropped() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!("agent_planted_blocked_route_word_is_dropped"));
+            // The expected words come from the host's catalog, never a copy.
+            let mut expected: Vec<String> = catalog()
+                .blocked_route_words
+                .iter()
+                .map(|w| format!("/{w}/{{n:int}}"))
+                .collect();
+            expected.push("/tools/(docs|share)/{n:int}".to_owned());
+            let mut planted: Vec<String> = tables[1..].iter().flat_map(table_rules).collect();
+            planted.sort();
+            expected.sort();
+            assert_eq!(planted, expected, "the fixture plants every catalog word");
+
+            let site = judge(
+                &mut setup(""),
+                &tables,
+                &["/docs/{num}"],
+                &["/invite/{hex32}", "/share/{key}"],
+            );
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            let want: Vec<(&str, DraftDropReason)> = expected
+                .iter()
+                .map(|r| (r.as_str(), DraftDropReason::DraftBlockedRoute))
+                .collect();
+            assert_dropped(&site, &tables, &want);
+            assert_eq!(all_kept(&site), ["/docs/{n:int}"]);
+            assert!(site.preview[1..].iter().all(|r| r.adapter.is_none()));
+        }
+
+        #[test]
+        fn host_agent_draft_overlapping_existing_adapter_loses_only_overlapping_rules() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_draft_overlapping_existing_adapter_loses_only_overlapping_rules"
+            ));
+            let history = "[[artifacts]]\ntype = \"tools.history\"\norigin = \"https://tools.example.com\"\nmatch = [{ path = \"/docs/{n:int}/history\" }]\nid = \"tools.history:{host}/{n}\"\n";
+            let visited = [
+                "/docs/{num}",
+                "/docs/{num}/{slug}/{slug}",
+                "/docs/{num}/history",
+                "/tickets/{key}",
+            ];
+            let site = judge(&mut setup(&adapters(&[history])), &tables, &visited, &[]);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_dropped(
+                &site,
+                &tables,
+                &[("/docs/{n:int}/history", DraftDropReason::DraftOverlap)],
+            );
+            let mut all = all_kept(&site);
+            all.sort();
+            assert_eq!(all, ["/docs/{n:int}", "/tickets/{k:jira_key}"]);
+            assert_visited_rule_kept_and_checked(&site, "/tickets/{k:jira_key}");
+            // The configured page keeps its kind: the draft does not name it.
+            let row = &site.preview[2];
+            assert_eq!(row.shape, "/docs/{num}/history");
+            assert_eq!(row.adapter, None);
+        }
+
+        /// A whole-draft refusal through the host: no adapters, one dropped
+        /// row naming no shape, adapter or rule, and no preview row naming an
+        /// agent rule.
+        fn assert_rejected_before_the_preview(site: &SiteDrafted, reason: DraftDropReason) {
+            assert!(site.adapters.is_empty(), "{site:#?}");
+            assert_eq!(
+                site.dropped,
+                [DroppedView {
+                    shape: None,
+                    adapter: None,
+                    rule: None,
+                    reason,
+                }]
+            );
+            assert!(
+                site.preview
+                    .iter()
+                    .all(|r| r.adapter.is_none() && r.rule.is_none() && r.artifact_id.is_none()),
+                "{:?}",
+                site.preview
+            );
+        }
+
+        /// The answer, and each forbidden table beside the clean visited
+        /// table, is refused whole; without them the same answer is kept.
+        fn assert_each_table_rejected(tables: &[Json]) {
+            let visited = ["/docs/{num}", "/notes/{num}", "/wiki/{num}", "/items/{num}"];
+            let site = judge(&mut setup(""), tables, &visited, &[]);
+            assert_rejected_before_the_preview(&site, DraftDropReason::DraftForbiddenKey);
+            for table in &tables[1..] {
+                let pair = [tables[0].clone(), table.clone()];
+                let site = judge(&mut setup(""), &pair, &visited, &[]);
+                assert_rejected_before_the_preview(&site, DraftDropReason::DraftForbiddenKey);
+            }
+            let clean = judge(&mut setup(""), &tables[..1], &visited, &[]);
+            assert_visited_rule_kept_and_checked(&clean, "/docs/{n:int}");
+            assert_eq!(clean.preview[0].adapter, Some(0));
+        }
+
+        #[test]
+        fn host_agent_draft_with_tier1_fields_is_rejected_before_the_preview() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_draft_with_tier1_fields_is_rejected_before_the_preview"
+            ));
+            for (table, key) in tables[1..].iter().zip(["fields", "alias", "path_case"]) {
+                assert!(table.get(key).is_some(), "the fixture plants {key}");
+            }
+            assert_each_table_rejected(&tables);
+        }
+
+        #[test]
+        fn host_agent_draft_with_a_title_template_is_rejected_before_the_preview() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_draft_with_a_title_template_is_rejected_before_the_preview"
+            ));
+            assert!(tables[1].get("title").is_some());
+            assert_each_table_rejected(&tables);
+        }
+
+        #[test]
+        fn host_agent_draft_with_a_scope_is_rejected_before_the_preview() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let tables = answer(fixture!(
+                "agent_draft_with_a_scope_is_rejected_before_the_preview"
+            ));
+            assert!(tables[1].get("scope").is_some());
+            assert!(tables[2].get("unscoped").is_some());
+            assert_each_table_rejected(&tables);
+        }
+
+        /// The service fails the prose answer (after its repair turn) as
+        /// `invalid_output`, with no tables; the host refuses that run, so no
+        /// `site_drafted` is ever built from it.
+        #[test]
+        fn host_unparseable_agent_draft_is_discarded_without_being_shown() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let text = include_str!(
+                "../tests/fixtures/site-draft-answers/unparseable_agent_draft_is_discarded_without_being_shown.txt"
+            );
+            assert!(crate::site_draft_answer::parse_site_draft_answer(text, TOOLS).is_err());
+            let mut s = setup("");
+            let failed = RunView {
+                state: RunState::Failed,
+                error_kind: Some(brauser_protocol::RunErrorKind::InvalidOutput),
+                site_draft: None,
+                ..site_run(TOOLS, Vec::new())
+            };
+            let dir = fake::short_dir();
+            let (_service, link) = service(&dir, failed);
+            let response = super::super::draft_site(
+                agent_request(TOOLS, &["/docs/{num}"], &[]),
+                &mut s.config,
+                Some(&link),
+            );
+            assert!(
+                !matches!(response, Response::SiteDrafted(_)),
+                "{response:?}"
+            );
+            assert_eq!(code(response), ErrorCode::InvalidRequest);
+        }
+
+        /// Borderline (Review Focus 7): an agent rule that passes every check
+        /// but also matches visited shapes the structural pass dropped as
+        /// search or paging pages, which are not artifacts and not on the
+        /// probe list. The preview row is the only place the review shows
+        /// the rule captures them too, so every one is listed with that rule.
+        #[test]
+        fn agent_preview_lists_every_non_artifact_shape_a_borderline_draft_matches() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let borderline = ["/docs/{slug}?page={num}", "/docs/{slug}?q={slug}"];
+            let elsewhere = "/notes/{slug}?sort={slug}";
+            let visited = ["/docs/{id}", borderline[0], borderline[1], elsewhere];
+            let mut s = setup("");
+            let structural = drafted(draft_site(request(TOOLS, &visited, &[]), &mut s.config));
+            for shape in borderline.iter().chain([&elsewhere]) {
+                assert!(
+                    structural
+                        .dropped
+                        .iter()
+                        .any(|d| d.shape.as_deref() == Some(*shape)
+                            && d.reason == DraftDropReason::SearchOrPaging),
+                    "{shape}: {:?}",
+                    structural.dropped
+                );
+                assert!(!catalog().probe_paths.iter().any(|p| p == shape), "{shape}");
+            }
+            // The rule passes every check; its token ID starts it unchecked.
+            let tables = vec![table("tools.docs", &["/docs/{t:token(1,128)}"], "t")];
+            let site = judge(&mut s, &tables, &visited, &[]);
+            assert!(site.dropped.is_empty(), "{:?}", site.dropped);
+            assert_eq!(site.adapters.len(), 1);
+            let rule = &site.adapters[0].rules[0];
+            assert_eq!(rule.unchecked_reason, Some(UncheckedReason::TokenOnly));
+            assert_eq!(rule.visited, 3, "{rule:?}");
+            for shape in borderline {
+                let row = site
+                    .preview
+                    .iter()
+                    .find(|r| r.shape == shape)
+                    .unwrap_or_else(|| panic!("{shape} previewed"));
+                assert_eq!(row.source, PreviewSource::Visited);
+                assert_eq!((row.adapter, row.rule), (Some(0), Some(0)), "{row:?}");
+                assert_eq!(
+                    row.artifact_id.as_deref(),
+                    Some("tools.docs:tools.example.com/example-page"),
+                    "{row:?}"
+                );
+            }
+            let row = site.preview.iter().find(|r| r.shape == elsewhere).unwrap();
+            assert_eq!(row.adapter, None, "{row:?}");
+        }
+
+        /// The point of the feature (DESIGN §5.1): a visited page the
+        /// structural pass could not draft is covered by a valid anchored
+        /// agent rule, which passes the same checks and starts checked.
+        #[test]
+        fn host_agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_checks()
+         {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let visited = ["/docs/{num}", "/{uuid}/view/{num}"];
+            let mut s = setup("");
+            let structural = drafted(draft_site(request(TOOLS, &visited, &[]), &mut s.config));
+            assert!(
+                structural
+                    .dropped
+                    .iter()
+                    .any(|d| d.shape.as_deref() == Some("/{uuid}/view/{num}")
+                        && d.reason == DraftDropReason::NoRouteWord),
+                "{:?}",
+                structural.dropped
+            );
+            assert_eq!(structural.preview[1].adapter, None);
+            let tables = answer(fixture!(
+                "agent_can_add_a_tier0_rule_the_structural_pass_missed_and_it_passes_the_same_checks"
+            ));
+            let site = judge(&mut s, &tables, &visited, &[]);
+            assert!(site.dropped.is_empty(), "{:?}", site.dropped);
+            assert_visited_rule_kept_and_checked(&site, "/docs/{n:int}");
+            assert_visited_rule_kept_and_checked(&site, "/{_}/view/{n:int}");
+            let row = &site.preview[1];
+            assert_eq!(row.shape, "/{uuid}/view/{num}");
+            assert_eq!((row.adapter, row.rule), (Some(1), Some(0)));
+            assert_eq!(checked_type(&site, &row.url).as_deref(), Some("tools.view"));
+            assert_eq!(checked_type(&site, "https://tools.example.com/"), None);
+            // The save judges the agent's selection as it would any draft.
+            let chosen: Vec<Json> = site.adapters.iter().map(|a| a.adapter.clone()).collect();
+            let provenance = chosen.iter().map(drafted_rules).collect();
+            let scope = vec![None; chosen.len()];
+            let mut check_request = check(TOOLS, &site.revision, chosen, provenance, scope);
+            check_request.visited = counts(&visited);
+            let verdicts = checked(check_site_draft(check_request, &mut s.config));
+            assert!(
+                verdicts
+                    .rules
+                    .iter()
+                    .flatten()
+                    .all(|r| r.verdict == RuleVerdictKind::Kept),
+                "{verdicts:?}"
             );
         }
     }

@@ -147,7 +147,7 @@ pub fn answer_schema() -> Value {
 
 /// `text` without one surrounding Markdown code fence (```` ``` ```` or
 /// ```` ```json ````), when it has one.
-fn strip_fence(text: &str) -> &str {
+pub(crate) fn strip_fence(text: &str) -> &str {
     let Some(rest) = text.strip_prefix("```") else {
         return text;
     };

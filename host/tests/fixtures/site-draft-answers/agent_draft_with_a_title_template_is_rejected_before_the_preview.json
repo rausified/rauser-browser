@@ -1,0 +1,25 @@
+{
+  "adapters": [
+    {
+      "type": "tools.docs",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/docs/{n:int}"
+        }
+      ],
+      "id": "tools.docs:{host}/{n}"
+    },
+    {
+      "type": "tools.titled",
+      "origin": "https://tools.example.com",
+      "match": [
+        {
+          "path": "/notes/{n:int}"
+        }
+      ],
+      "id": "tools.titled:{host}/{n}",
+      "title": "{n} - Tools"
+    }
+  ]
+}

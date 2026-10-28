@@ -272,6 +272,15 @@ const FIXTURE_SUMMARY_ANSWER = {
   related_notes: [],
 };
 
+// The site-draft task line (host/src/service/prompt.rs site_draft_prompt).
+// A prompt that starts with it is answered with one adapter for the origin
+// it names: the visited /kb/articles pages, one rule no page showed (it
+// starts unchecked) and one /search rule the host drops.
+const SITE_DRAFT_TASK = "Improve Brauser's draft of a capture policy for the site ";
+const FAKE_SITE_DRAFT_TYPE = "smoke.kb";
+const FAKE_SITE_DRAFT_RULES = [{ path: "/kb/articles/{n:int}/{_}" }, { path: "/kb/print/{n:int}" }, { path: "/search/{n:int}" }];
+const FAKE_SITE_DRAFT_TABLE = { type: FAKE_SITE_DRAFT_TYPE, match: FAKE_SITE_DRAFT_RULES, id: `${FAKE_SITE_DRAFT_TYPE}:{host}/{n}` };
+
 function fakeHarnessPrelude(name, log) {
   return `#!${process.execPath}
 "use strict";
@@ -288,12 +297,21 @@ function reply(prompt) {
   const current = mode();
   if (current === "fail") return { fail: true };
   if (prompt.trim() === ${JSON.stringify(PROBE_PROMPT)}) return { text: "OK" };
+  if (prompt.startsWith(${JSON.stringify(SITE_DRAFT_TASK)})) {
+    const origin = prompt.slice(${SITE_DRAFT_TASK.length}).split(". ")[0];
+    return { text: JSON.stringify({ adapters: [{ ...${JSON.stringify(FAKE_SITE_DRAFT_TABLE)}, origin }] }) };
+  }
   if (current === "slow") return { slow: true };
   const bad = current === "badjson" || (current === "badjson-once" && !prompt.startsWith(${JSON.stringify(REPAIR_PREFIX)}));
   if (bad) return { text: "Here is my summary, not as JSON." };
   return { text: current === "summary" ? ${JSON.stringify(JSON.stringify(FIXTURE_SUMMARY_ANSWER))}
     : ${JSON.stringify(JSON.stringify(FAKE_ANSWER))} };
 }
+// The input path reaches a fake only inside the prompt it was sent.
+const logInputPath = (prompt) => {
+  const found = /^Input file: (.+)$/m.exec(prompt);
+  if (found) log({ input_path: found[1] });
+};
 const halves = (text) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
 const args = process.argv.slice(2);
 log({ argv: args, cwd: process.cwd(), env: Object.keys(process.env).sort() });
@@ -321,7 +339,9 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   turns += 1;
   const turn = "fake-turn-" + turns;
   send({ id, result: { turn: { id: turn } } });
-  const answer = reply(params.input.map((item) => item.text).join(""));
+  const prompt = params.input.map((item) => item.text).join("");
+  logInputPath(prompt);
+  const answer = reply(prompt);
   if (answer.slow) return;
   if (answer.fail) {
     process.stderr.write("fake failure\\n");
@@ -345,6 +365,7 @@ process.stdin.on("data", (chunk) => chunks.push(chunk));
 process.stdin.on("end", () => {
   const prompt = Buffer.concat(chunks).toString("utf8");
   log({ stdin: prompt });
+  logInputPath(prompt);
   const answer = reply(prompt);
   if (answer.fail) {
     process.stderr.write("fake failure\\n");
@@ -401,15 +422,17 @@ async function harnessLog(argvLog) {
     .map((line) => JSON.parse(line));
 }
 
-// Each fake process: its start entry with what it read on stdin.
+// Each fake process: its start entry with what it read on stdin, and the
+// input path its prompt named.
 async function harnessRuns(argvLog) {
   const runs = new Map();
   for (const entry of await harnessLog(argvLog)) {
-    if (entry.argv) runs.set(entry.pid, { ...entry, rpc: [], stdin: null });
+    if (entry.argv) runs.set(entry.pid, { ...entry, rpc: [], stdin: null, input_path: null });
     const run = runs.get(entry.pid);
     if (!run) continue;
     if (entry.rpc) run.rpc.push(entry.rpc);
     if (typeof entry.stdin === "string") run.stdin = entry.stdin;
+    if (typeof entry.input_path === "string") run.input_path = entry.input_path;
   }
   return [...runs.values()];
 }
@@ -684,17 +707,20 @@ function articlePage(title, caseId) {
 
 // The unknown-site wiki: /wiki/pages/<n>/<Title> pages that link to their
 // siblings, a sibling's subpage, a search and a sign-in page. Capture Site
-// drafts a rule for the pages from these shapes and skips the rest.
+// drafts a rule for the pages from these shapes and skips the rest. The same
+// pages under /kb/articles are the AI draft's: an adapter saved and removed
+// for them leaves a recorded contract that never covers the /wiki pages.
 const WIKI_PAGES = new Map([["101", "Smoke-Home"], ["102", "Smoke-Notes"], ["103", "Smoke-Plans"]]);
-const WIKI_PATH = /^\/wiki\/pages\/(\d+)\/([A-Za-z-]+)$/;
+const WIKI_BASES = new Map([["/wiki/pages", /^\/wiki\/pages\/(\d+)\/([A-Za-z-]+)$/],
+  ["/kb/articles", /^\/kb\/articles\/(\d+)\/([A-Za-z-]+)$/]]);
 const wikiTitle = (name) => `${APP_NAME} smoke wiki ${name}`;
 
-function wikiPage(number, caseId) {
+function wikiPage(number, caseId, base) {
   const name = WIKI_PAGES.get(number);
   const siblings = [...WIKI_PAGES].filter(([other]) => other !== number);
   const links = [
-    ...siblings.map(([other, title]) => [`/wiki/pages/${other}/${title}`, title]),
-    [`/wiki/pages/${siblings[0][0]}/${siblings[0][1]}/History`, `${siblings[0][1]} history`],
+    ...siblings.map(([other, title]) => [`${base}/${other}/${title}`, title]),
+    [`${base}/${siblings[0][0]}/${siblings[0][1]}/History`, `${siblings[0][1]} history`],
     ["/search?q=smoke", "Search"],
     ["/login", "Sign in"],
   ].map(([href, text]) => `<li><a href="${href}">${text}</a></li>`).join("");
@@ -709,10 +735,12 @@ function fixtureServer(caseId) {
       "/allowed/after-removal", "/fresh/page", "/article", "/summary/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
-    const wiki = WIKI_PATH.exec(pathname);
-    if (wiki && WIKI_PAGES.get(wiki[1]) === wiki[2]) {
-      response.end(wikiPage(wiki[1], caseId));
-      return;
+    for (const [base, pattern] of WIKI_BASES) {
+      const wiki = pattern.exec(pathname);
+      if (wiki && WIKI_PAGES.get(wiki[1]) === wiki[2]) {
+        response.end(wikiPage(wiki[1], caseId, base));
+        return;
+      }
     }
     if (!known.has(pathname)) {
       response.writeHead(404);
@@ -926,8 +954,10 @@ async function run() {
   // build.mjs deletes dist before it creates .build, so a build can start
   // after the check above; look again once the import is done or has failed.
   let SETUP_WARNING;
+  let NEEDS_HARNESS_MESSAGE;
   try {
     ({ SETUP_WARNING } = await import(pathToFileURL(path.join(DIST, "agent.js")).href));
+    ({ NEEDS_HARNESS_MESSAGE } = await import(pathToFileURL(path.join(DIST, "summarize.js")).href));
   } finally {
     if (await building() || await distRebuilt()) throw new Error(DIST_REBUILT);
   }
@@ -1261,6 +1291,10 @@ async function run() {
     // The same fixture under a second origin that has no adapter and no
     // starter: Capture Site drafts its rules from the page's shapes.
     const unknownOrigin = origin.replace("://127.0.0.1", "://localhost");
+    // A third name for the fixture, for the Improve with AI steps: saving and
+    // removing a site records its rules for Restore, so the unknown-site
+    // step below must find its own origin untouched.
+    const aiOrigin = origin.replace("://127.0.0.1", "://ai.localhost");
     // The URL typed into settings; the default-port run spells out :80.
     const siteInput = options.defaultPort ? `${origin}:80` : origin;
     const allowed = `${origin}/allowed/page?case=${caseId}`;
@@ -1923,9 +1957,83 @@ async function run() {
     const newRuns = async (since) => (await harnessRuns(argvLog)).slice(since).filter((run) => !isVersionCheck(run));
     const anyArgvHasArticle = (runs) => runs.some((run) => run.argv.some((arg) => arg.includes(articleText(caseId))));
 
+    // Capture Site on the /kb/articles fixture page under the second origin,
+    // for the Improve with AI steps. Resolves with the tab's target id once
+    // the basic review is drafted.
+    const kbUrl = `${aiOrigin}/kb/articles/101/Smoke-Home`;
+    async function openKbReview() {
+      const { targetId } = await cdp.send("Target.createTarget", { url: kbUrl });
+      await cdp.withTarget(targetId, (page) => waitFor(async () => requireCondition(
+        await page.evaluate(`location.href === ${JSON.stringify(kbUrl)} && document.readyState === "complete"`),
+        `The kb page did not finish loading ${kbUrl}`)));
+      await cdp.send("Target.activateTarget", { targetId });
+      await openPanel();
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.text("#page-url") === kbUrl, "The panel does not follow the kb tab");
+        requireCondition(await page.enabled("#capture-site"), "The Capture Site button is disabled");
+      }), { timeout: 20_000 });
+      await onPanel((page) => page.click("#capture-site"));
+      await waitUntil("the basic Capture Site review", () => reviewState(),
+        (state) => !state.hidden && state.types.length > 0, { timeout: 30_000, signal: abort.signal });
+      return targetId;
+    }
+    async function closeTab(targetId) {
+      await cdp.send("Target.closeTarget", { targetId });
+      await waitFor(async () => requireCondition(
+        !(await cdp.targets()).some((entry) => entry.targetId === targetId), "The tab is still closing"));
+    }
+    // The Capture Site review as the panel shows it.
+    const reviewState = () => onPanel((page) => page.evaluate(`(() => {
+      const text = (selector) => document.querySelector(selector)?.textContent ?? "";
+      const improve = document.getElementById("capture-site-improve");
+      const hint = document.getElementById("capture-site-improve-hint");
+      return {
+        hidden: document.getElementById("capture-site-review").hidden,
+        drafter: text("#capture-site-drafter"),
+        improve: { hidden: improve.hidden, disabled: improve.disabled, title: improve.title },
+        hint: { hidden: hint.hidden, text: hint.textContent },
+        basic: !document.getElementById("capture-site-basic").hidden,
+        agentRun: text("#capture-site-agent-run"),
+        types: [...document.querySelectorAll("#capture-site-draft input[data-type]")].map((input) => input.value),
+        rules: [...document.querySelectorAll("#capture-site-draft label.check-label")].map((row) => ({
+          checked: row.querySelector("input[data-rule]")?.checked ?? null, text: row.textContent })),
+        dropped: [...document.querySelectorAll("#capture-site-dropped > ul li")].map((row) => row.textContent),
+        message: text("#capture-site-message"),
+      };
+    })()`));
+    // The JSON between a site-draft run's untrusted-data markers.
+    const siteDraftInput = async (runId) => {
+      const text = await readFile(path.join(runDirOf(runId), "page.md"), "utf8");
+      const begin = "BEGIN UNTRUSTED SITE DATA\n";
+      const end = "\nEND UNTRUSTED SITE DATA\n";
+      requireCondition(text.startsWith(begin) && text.endsWith(end), `The site-draft page.md is not one data block: ${text}`);
+      return JSON.parse(text.slice(begin.length, -end.length));
+    };
+
     if (!options.headless) {
       console.log("\nAgent service and summary steps skipped: they run with --headless only.");
     } else {
+      // Before any harness is set up, Capture Site still drafts, and
+      // Improve with AI says why it cannot run, as Summarize & log does.
+      await step("Improve with AI waits for a harness", async () => {
+        const dialogsBefore = (await dialogLogLines()).length;
+        const before = await hostConfig(wrapper);
+        requireCondition(before.config.agent === null, `A harness is already set up: ${JSON.stringify(before.config.agent)}`);
+        const targetId = await openKbReview();
+        const shown = await reviewState();
+        requireCondition(shown.drafter === "Drafted from this site's page patterns", `The review's drafter line: ${shown.drafter}`);
+        requireCondition(!shown.improve.hidden && shown.improve.disabled && shown.improve.title === NEEDS_HARNESS_MESSAGE &&
+          !shown.hint.hidden && shown.hint.text === NEEDS_HARNESS_MESSAGE && !shown.basic,
+        `Improve with AI before setup: ${JSON.stringify({ improve: shown.improve, hint: shown.hint, basic: shown.basic })}`);
+        await onPanel((page) => page.click("#capture-site-cancel"));
+        await waitFor(() => onPanel(async (page) =>
+          requireCondition(await page.hidden("#capture-site-review") === true, "The review is still open")), { timeout: 20_000 });
+        await closeTab(targetId);
+        const after = await hostConfig(wrapper);
+        requireCondition(after.revision === before.revision, "Opening and canceling the review changed the config");
+        requireCondition((await dialogLogLines()).length === dialogsBefore, "The review opened a native dialog");
+      });
+
       await step("Without the service, a run is service_unavailable", async () => {
         await setAgentMode("ok");
         const reply = await startRun(failPage);
@@ -2161,6 +2269,134 @@ async function run() {
           requireCondition(!(await page.evaluate("document.documentElement.outerHTML")).includes(value),
             "The settings page shows an agent.env value");
         }), { timeout: 20_000 });
+      });
+
+      // Improve with AI (DESIGN.md §5.1, step 7.7): the configured harness
+      // refines the basic draft through the service, the host checks its
+      // answer as it checks a structural draft, and the same Save writes it.
+      await step("Capture Site improves a draft with AI", async () => {
+        await setAgentMode("ok");
+        const dialogsBefore = (await dialogLogLines()).length;
+        const { harness } = (await hostConfig(wrapper)).config.agent;
+        const harnessName = { codex: "Codex", claude: "Claude Code" }[harness];
+        const listed = await agentRequest({ type: "list_runs" });
+        requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
+        const runsBefore = new Set(listed.runs.map((run) => run.run_id));
+        const since = (await harnessRuns(argvLog)).length;
+        const targetId = await openKbReview();
+        await waitUntil("Improve with AI to be offered", () => reviewState(),
+          (state) => state.drafter === "Drafted from this site's page patterns" && !state.improve.hidden &&
+            !state.improve.disabled && state.hint.hidden, { timeout: 20_000, signal: abort.signal });
+        await onPanel((page) => page.click("#capture-site-improve"));
+        const review = await waitUntil("the review to show the AI draft", () => reviewState(),
+          (state) => state.drafter.startsWith("Improved with AI") || state.agentRun.startsWith("The AI draft was not used"),
+          { timeout: 60_000, signal: abort.signal });
+        requireCondition(review.drafter === `Improved with AI (${harnessName}), checked by Brauser`,
+          `The review's drafter line: ${review.drafter}; the run area says: ${review.agentRun}`);
+        // The visited rule starts checked, the rule no page showed unchecked
+        // with its label, and the /search rule is listed as not captured.
+        requireCondition(review.types.length === 1 && review.types[0] === FAKE_SITE_DRAFT_TYPE,
+          `The AI review drafted the kinds ${JSON.stringify(review.types)}`);
+        requireCondition(review.rules.length === 2 && review.rules[0].checked === true && review.rules[1].checked === false &&
+          review.rules[1].text.includes("/kb/print/") &&
+          review.rules[1].text.includes("suggested by AI: no page you visited or linked here matches it"),
+        `The AI review's rules: ${JSON.stringify(review.rules)}`);
+        requireCondition(review.dropped.length === 1 && review.dropped[0].startsWith("A drafted rule: "),
+          `The AI review's "won't capture" list: ${JSON.stringify(review.dropped)}`);
+        requireCondition(review.basic, "Use basic draft is not offered");
+
+        // The run is a site_draft run of the configured harness.
+        const after = await agentRequest({ type: "list_runs" });
+        const fresh = after.runs.filter((run) => !runsBefore.has(run.run_id));
+        requireCondition(fresh.length === 1 && fresh[0].kind === "site_draft" && fresh[0].state === "succeeded" &&
+          fresh[0].harness === harness, `New runs: ${JSON.stringify(fresh)}`);
+        const runId = fresh[0].run_id;
+        // The host's judgment of the answer drops exactly the /search rule.
+        const input = await siteDraftInput(runId);
+        requireCondition(input.origin === aiOrigin && input.visited.some(({ shape }) => shape.startsWith("/kb/articles/")),
+          `The site-draft input: ${JSON.stringify(input)}`);
+        const judged = await agentRequest({
+          type: "draft_site", origin: aiOrigin, visited: input.visited, links: input.links, run_id: runId,
+        });
+        const searchRule = FAKE_SITE_DRAFT_RULES.findIndex((rule) => rule.path.startsWith("/search/"));
+        requireCondition(judged.type === "site_drafted" && judged.drafter === "agent" &&
+          judged.adapters.length === 1 && judged.adapters[0].rules.map((rule) => rule.rule).join() === "0,1" &&
+          judged.dropped.length === 1 && judged.dropped[0].adapter === 0 && judged.dropped[0].rule === searchRule &&
+          judged.dropped[0].reason === "draft_blocked_route",
+        `draft_site with the run answered ${JSON.stringify(judged)}`);
+
+        // The prompt named the run's page.md by path, on stdin or in the
+        // turn/start input, and the harness ran in the run directory with
+        // its usual argv: no shape, no structural rule, no input path.
+        const runs = (await newRuns(since)).filter((run) => run.input_path !== null);
+        requireCondition(runs.length === 1 && runs[0].program === harness,
+          `Expected one ${harness} run whose prompt names an input file; got ${JSON.stringify(runs.map((run) => [run.program, run.argv, run.input_path]))}`);
+        const [agentRun] = runs;
+        const runDirReal = await realpath(runDirOf(runId));
+        requireCondition(agentRun.input_path.endsWith(`/${runId}/page.md`) &&
+          await realpath(path.dirname(agentRun.input_path)) === runDirReal && agentRun.cwd === runDirReal,
+        `The site-draft run read ${agentRun.input_path} in ${agentRun.cwd}; expected ${runDirReal}/page.md`);
+        const { run } = await getRun(runId);
+        requireCondition(await realpath(run.cwd) === runDirReal, `The site-draft run's cwd is ${run.cwd}`);
+        const usual = harness === "codex"
+          ? agentRun.argv.join(" ") === "app-server --listen stdio://"
+          : agentRun.argv[0] === "-p" && agentRun.argv.includes("--dangerously-skip-permissions") &&
+            agentRun.argv.includes("--session-id");
+        requireCondition(usual, `The site-draft run's argv: ${JSON.stringify(agentRun.argv)}`);
+        const secret = [agentRun.input_path, "page.md", ...input.visited.map(({ shape }) => shape),
+          ...input.links.map(({ shape }) => shape),
+          ...input.structural_draft.adapters.flatMap((table) => table.match.map((rule) => rule.path))];
+        requireCondition(!agentRun.argv.some((arg) => secret.some((value) => arg.includes(value))),
+          `The site-draft run's argv holds its input: ${JSON.stringify(agentRun.argv)}`);
+
+        // The same Save writes the AI draft's checked rule, Tier 0 keys only.
+        await onPanel(async (page) => {
+          await page.evaluate('document.getElementById("status").textContent = ""');
+          await page.click("#capture-site-save");
+        });
+        const adapter = await waitFor(async () => {
+          const found = (await hostConfig(wrapper)).config.adapters.artifacts.find((entry) => entry.origin === aiOrigin);
+          requireCondition(found, `The host has no adapter for ${aiOrigin}`);
+          return found;
+        }, { timeout: 30_000, interval: 500, signal: abort.signal });
+        requireCondition(Object.keys(adapter).every((key) => ["type", "origin", "match", "id", "modes"].includes(key)) &&
+          adapter.type === FAKE_SITE_DRAFT_TYPE && adapter.id === FAKE_SITE_DRAFT_TABLE.id &&
+          adapter.match.length === 1 && adapter.match[0].path === FAKE_SITE_DRAFT_RULES[0].path &&
+          Object.keys(adapter.match[0]).every((key) => ["path", "query"].includes(key)),
+        `The host saved the AI adapter ${JSON.stringify(adapter)}`);
+        await waitFor(() => onPanel(async (page) => {
+          const status = await page.text("#status");
+          requireCondition(status?.startsWith(`Saved capture rules for ${new URL(aiOrigin).host}.`),
+            `Panel status says: ${status}`);
+          requireCondition(await page.hidden("#capture-site-review") === true, "The review is still open");
+        }), { timeout: 20_000 });
+        await closeTab(targetId);
+        requireCondition((await dialogLogLines()).length === dialogsBefore, "Improve with AI opened a native dialog");
+
+        // The panel's summary cards restore summary runs only.
+        await panelOnArticle();
+        await waitFor(async () => {
+          const ids = (await runCards()).map((card) => card.id);
+          requireCondition(ids.includes(runIds.codex), `The reopened panel shows ${JSON.stringify(ids)}`);
+          requireCondition(!ids.includes(runId), `The panel restored the site-draft run ${runId} as a summary card`);
+        }, { timeout: 20_000, signal: abort.signal });
+
+        // Leave the second origin unconfigured, as the basic Capture Site
+        // step below expects.
+        await openSettingsTab();
+        await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
+        await settingsConnected();
+        await waitFor(() => onSettings(async (page) => requireCondition(
+          await page.enabled(`button[aria-label="Remove site ${aiOrigin}"]`), `Settings does not list ${aiOrigin}`)),
+        { timeout: 20_000 });
+        await inSettings((page) => page.click(`button[aria-label="Remove site ${aiOrigin}"]`));
+        await waitFor(async () => {
+          const reply = await hostConfig(wrapper);
+          requireCondition(!reply.config.adapters.artifacts.some((entry) => entry.origin === aiOrigin),
+            "The host still has the AI draft's adapter");
+          requireCondition(reply.config.capture_enabled && reply.config.adapters.artifacts.some((entry) => entry.origin === origin),
+            "Removing the AI draft's site changed the configured site");
+        }, { timeout: 20_000, interval: 1_000 });
       });
 
       // Summary outputs (DESIGN.md §5.2 steps 6-7, §6.6): the file, its log
