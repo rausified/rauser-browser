@@ -207,7 +207,7 @@ mod tests {
             cwd: dir.to_path_buf(),
             page_path,
             prompt: "the prompt".to_string(),
-            output_schema: None,
+            output_schema: crate::service::harness_api::OutputSchema::RunnerDefault,
             env: vec![(OsString::from("PATH"), OsString::from("/bin:/usr/bin"))],
         }
     }

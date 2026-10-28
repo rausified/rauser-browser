@@ -257,8 +257,7 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
 - Create `host/src/site_draft_answer.rs`. Register it in `host/src/lib.rs`, next to `answer.rs`. It holds:
   - `pub const MAX_SITE_DRAFT_ANSWER_BYTES: usize = 64 * 1024`;
   - `pub fn parse_site_draft_answer(final_text: &str, origin: &str) -> Result<serde_json::Value, String>`, as in the contract decision. It reuses `answer.rs`'s fence stripping, made `pub(crate)`.
-  - `pub fn site_draft_schema() -> serde_json::Value`, the Codex `outputSchema`: an object with `adapters` as an array of objects.
-- Modify `host/src/service/harness_api.rs`. `RunSpec` gains `output_schema: Option<serde_json::Value>`, and the supervisor sets it per kind. Modify `host/src/service/codex.rs`: `CodexRunner` sends `spec.output_schema` when it is set, and otherwise its own. Claude ignores the field.
+- Modify `host/src/service/harness_api.rs`. `RunSpec` gains `output_schema: OutputSchema` (`RunnerDefault`, `Omit`, or `Schema(Value)`), and the supervisor sets it per kind: `RunnerDefault` for a summary, `Omit` for a site draft. Codex sends `outputSchema` as a strict structured-output format, which needs every object closed with every property required, and a Tier 0 table (open `query` maps) cannot be written that way, so a site draft sends no schema and relies on `parse_site_draft_answer` and the one repair turn. Modify `host/src/service/codex.rs`: `CodexRunner` sends its own schema for `RunnerDefault`, none for `Omit`, and the given one for `Schema`. Claude ignores the field.
 - Modify `host/src/service/finisher.rs`:
   - Add `pub struct SiteDraftFinisher`. `accept` calls `parse_site_draft_answer(final_text, &run.url)`. `save` writes nothing and returns `SavedRun { written_key: run.start_key.clone(), summary_path: None }`.
   - Add `pub struct KindFinisher { summary: SummaryFinisher, site_draft: SiteDraftFinisher }`, which implements `RunFinisher` by `run.kind`. `host/src/service/mod.rs` `run` builds `KindFinisher`.
@@ -285,7 +284,7 @@ The pure judge of an agent's tables. It shares `draft_site`'s check loop, so str
   - `site_draft_run_skips_the_knowledge_base_check`
   - `site_draft_run_writes_nothing_outside_its_run_directory` (snapshot the home, knowledge-base and config dirs before and after)
   - `site_draft_runs_never_reach_the_summary_finisher`
-  - `codex_gets_the_site_draft_schema_for_site_draft_runs`
+  - `codex_gets_no_output_schema_for_site_draft_runs`
   - `a_site_draft_run_and_a_summary_run_never_share_a_queue_slot`
   - `a_second_site_draft_start_for_the_origin_returns_the_existing_run`
   - `cancel_and_timeout_end_a_site_draft_run_like_a_summary_run`

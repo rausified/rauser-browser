@@ -53,23 +53,6 @@ pub fn parse_site_draft_answer(final_text: &str, origin: &str) -> Result<Value, 
     Ok(json!({ "adapters": adapters }))
 }
 
-/// The JSON Schema of the answer, for a harness that accepts one. The
-/// tables themselves are left open: their form is checked by
-/// [`parse_site_draft_answer`] and their content by the host.
-pub fn site_draft_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["adapters"],
-        "properties": {
-            "adapters": {
-                "type": "array",
-                "items": { "type": "object" }
-            }
-        }
-    })
-}
-
 fn adapters(object: &Map<String, Value>) -> Result<&Vec<Value>, String> {
     if object.keys().any(|key| key != "adapters") {
         return Err("the answer must have only the key adapters".to_string());
@@ -272,13 +255,5 @@ mod tests {
             parse_site_draft_answer(&answer(&tables), ORIGIN),
             Ok(json!({ "adapters": tables }))
         );
-    }
-
-    #[test]
-    fn site_draft_schema_requires_only_adapters() {
-        let schema = site_draft_schema();
-        assert_eq!(schema["required"], json!(["adapters"]));
-        assert_eq!(schema["additionalProperties"], json!(false));
-        assert_eq!(schema["properties"]["adapters"]["items"]["type"], "object");
     }
 }

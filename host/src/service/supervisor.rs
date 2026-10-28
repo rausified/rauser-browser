@@ -40,7 +40,7 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::harness_api::{
-    HarnessEvent, HarnessRegistry, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
+    HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
 use super::prompt::{repair_prompt, site_draft_prompt, summary_prompt};
@@ -53,7 +53,6 @@ use crate::answer::parse_answer;
 use crate::capture_site::catalog;
 use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
 use crate::open::Opener;
-use crate::site_draft_answer::site_draft_schema;
 
 /// How long a run may take before its process group is killed.
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -1059,15 +1058,16 @@ impl Inner {
         let page_path = self.store.page_path(id);
         // Only the prompt, the answer schema and (through the finisher) the
         // answer's validation differ by kind; the turns and the repair turn
-        // are shared.
+        // are shared. A site draft sends no schema: Codex's strict structured
+        // output cannot describe adapter tables (see [`OutputSchema::Omit`]).
         let (prompt, output_schema) = match status.kind {
             RunKind::Summary => (
                 summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
-                None,
+                OutputSchema::RunnerDefault,
             ),
             RunKind::SiteDraft => (
                 site_draft_prompt(&page_path, &status.url, catalog()),
-                Some(site_draft_schema()),
+                OutputSchema::Omit,
             ),
         };
         let spec = RunSpec {
@@ -3977,7 +3977,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_gets_the_site_draft_schema_for_site_draft_runs() {
+    fn codex_gets_no_output_schema_for_site_draft_runs() {
         let (fixture, seen) = recording(&[&site_answer(TOOLS)]);
         let id = fixture.start_site_draft(TOOLS);
         fixture.wait_finished(id);
@@ -3988,11 +3988,17 @@ mod tests {
             RunState::Succeeded
         );
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.starts[0].0.output_schema, Some(site_draft_schema()));
+        // Strict structured output cannot describe a Tier 0 table (the
+        // query map has open keys), so a site draft sends no schema at all
+        // rather than falling back to the summary's.
+        assert_eq!(seen.starts[0].0.output_schema, OutputSchema::Omit);
         assert!(seen.prompts[0].starts_with("Improve Brauser's draft"));
         // A summary keeps the runner's own schema.
         let seen_summary = seen_summary.lock().unwrap();
-        assert_eq!(seen_summary.starts[0].0.output_schema, None);
+        assert_eq!(
+            seen_summary.starts[0].0.output_schema,
+            OutputSchema::RunnerDefault
+        );
         assert!(seen_summary.prompts[0].starts_with("Summarize a web page"));
     }
 

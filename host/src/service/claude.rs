@@ -381,7 +381,7 @@ pwd -P > "$LOG/cwd.log"
                 cwd: self.kb(),
                 page_path: self.dir.path().join("page.md"),
                 prompt: "the prompt".to_string(),
-                output_schema: None,
+                output_schema: crate::service::harness_api::OutputSchema::RunnerDefault,
                 env: vec![
                     (OsString::from("PATH"), self.search_path()),
                     (OsString::from("HOME"), OsString::from("/users/someone")),
