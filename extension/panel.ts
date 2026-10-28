@@ -19,7 +19,10 @@ import { hostBuildText } from "./build-info.js";
 import { initDiag } from "./diag.js";
 import { SETUP_WARNING } from "./agent.js";
 import { NEEDS_HARNESS_MESSAGE, harnessReady, summarizeFailureText, summarizeTab } from "./summarize.js";
-import { RunCards, runsMayExist } from "./run-card.js";
+import { RunCards, restoreRunCards, runsMayExist } from "./run-card.js";
+import {
+  TASK_NEEDS_HARNESS_MESSAGE, TASK_REPAIR_MESSAGE, cleanInstruction, startTask, taskFailureText,
+} from "./task.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor } from "./note-editor.js";
 import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
@@ -32,6 +35,7 @@ import type {
   ArtifactView,
   ContainedArtifactView,
   OlderNote,
+  RunView,
   SummaryView,
   WorklogReported,
 } from "../protocol/ts/generated.js";
@@ -122,6 +126,16 @@ const runArea = element<HTMLDivElement>("run-area");
 const pageSummary = element<HTMLDivElement>("page-summary");
 const pageSummaryText = element<HTMLParagraphElement>("page-summary-text");
 const pageSummaryOpen = element<HTMLButtonElement>("page-summary-open");
+const taskBar = element<HTMLElement>("task-bar");
+const taskForm = element<HTMLFormElement>("task-form");
+const taskInput = element<HTMLTextAreaElement>("task-input");
+const taskRunButton = element<HTMLButtonElement>("task-run");
+const taskContext = element<HTMLParagraphElement>("task-context");
+const taskHint = element<HTMLParagraphElement>("task-hint");
+const taskHintText = element<HTMLSpanElement>("task-hint-text");
+const taskHintSettings = element<HTMLButtonElement>("task-hint-settings");
+const taskAnnounce = element<HTMLParagraphElement>("task-announce");
+const taskRunArea = element<HTMLDivElement>("task-run-area");
 
 const session = new ConfigSession(render);
 const runCards = new RunCards(runArea, {
@@ -132,6 +146,19 @@ const runCards = new RunCards(runArea, {
   storage: chrome.storage.local,
   openSettings,
   summarySaved: () => void refreshArtifact(true),
+});
+// Task cards show on every tab, under the task bar (§5.7). Nothing here
+// passes a task's instruction or report to diag (DESIGN.md §15).
+const taskCards = new RunCards(taskRunArea, {
+  host: session.host,
+  now: () => Date.now(),
+  copy: (text) => navigator.clipboard.writeText(text),
+  visible: () => document.visibilityState !== "hidden",
+  storage: chrome.storage.local,
+  openSettings,
+  kind: "task",
+  onTerminal: announceTask,
+  reuse: reuseInstruction,
 });
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
@@ -186,9 +213,20 @@ let summaryPageUrl: string | null = null;
 /** That summary's own file, which Open summary names. */
 let summaryPagePath: string | null = null;
 let summarizing = false;
-// The run area's latest line and the tab it is about; another tab's line goes
-// when the panel follows a different tab.
-let runLine: { tabId: number; element: HTMLElement } | null = null;
+// A task start is in flight; it gates only the task bar, as `summarizing`
+// gates only Summarize & log.
+let taskStarting = false;
+// Each run area's latest line (`#run-area` for summaries, `#task-run-area`
+// for tasks) and the tab it is about; another tab's line goes when the panel
+// follows a different tab. One slot per area, so neither replaces the other.
+const runLines = new Map<HTMLElement, { tabId: number; element: HTMLElement }>();
+// What the page area shows for the followed tab; "site-access" means Chrome
+// withdrew Brauser's access, so the task bar says so.
+let pageState: "none" | "unusable" | "site-access" | "note" = "none";
+// Whether the followed page had a selection when last checked, which the
+// task bar's context line names. Only a boolean is read from the page.
+let taskSelection: { tabId: number; url: string; selected: boolean } | null = null;
+let selectionSeq = 0;
 // The last worker notice shown, since one can arrive both live and stored.
 let shownNotice: string | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
@@ -743,6 +781,7 @@ function updateControls(): void {
   summarizeButton.hidden = currentPage === null;
   summarizeButton.disabled = !ready || summarizing || currentPage?.tabId === undefined;
   summarizeButton.title = ready ? "" : NEEDS_HARNESS_MESSAGE;
+  renderTaskBar();
   pageSummaryOpen.disabled = !connected;
   for (const open of recentOpenButtons) open.disabled = !connected;
   const paused = whyPausedReason();
@@ -956,33 +995,52 @@ async function dismissNotices(): Promise<void> {
 
 // --- Summarize & log ---------------------------------------------------------
 
-function withoutRunAreaChild(child: Element): Element[] {
-  return Array.from(runArea.children).filter((other) => other !== child);
+function withoutRunAreaChild(area: HTMLElement, child: Element): Element[] {
+  return Array.from(area.children).filter((other) => other !== child);
 }
 
-function showRunLine(tabId: number, text: string, warning = false): void {
+/** Shows `text` as `area`'s line about `tabId`, replacing only that area's
+ * previous line. `withSettings` adds Open settings. */
+function showRunLine(area: HTMLElement, tabId: number, text: string, warning = false, withSettings = false): void {
   const line = document.createElement("p");
   line.className = warning ? "run-line warning" : "run-line";
-  line.textContent = text;
-  const kept = runLine ? withoutRunAreaChild(runLine.element) : Array.from(runArea.children);
-  runArea.replaceChildren(...kept, line);
-  runLine = { tabId, element: line };
+  if (withSettings) {
+    const words = document.createElement("span");
+    words.textContent = text;
+    const settings = document.createElement("button");
+    settings.type = "button";
+    settings.className = "secondary compact";
+    settings.textContent = "Open settings";
+    settings.addEventListener("click", openSettings);
+    line.append(words, settings);
+  } else {
+    line.textContent = text;
+  }
+  const previous = runLines.get(area);
+  const kept = previous ? withoutRunAreaChild(area, previous.element) : Array.from(area.children);
+  area.replaceChildren(...kept, line);
+  runLines.set(area, { tabId, element: line });
 }
 
+/** Clears every area's line that is about another tab than `tabId`. */
 function clearRunLineUnlessFor(tabId: number | undefined): void {
-  if (runLine?.tabId !== tabId) clearRunLine();
+  for (const [area, line] of runLines) {
+    if (line.tabId !== tabId) clearRunLine(area);
+  }
 }
 
-function clearRunLine(): void {
-  if (!runLine) return;
-  runArea.replaceChildren(...withoutRunAreaChild(runLine.element));
-  runLine = null;
+function clearRunLine(area: HTMLElement): void {
+  const line = runLines.get(area);
+  if (!line) return;
+  area.replaceChildren(...withoutRunAreaChild(area, line.element));
+  runLines.delete(area);
 }
 
-/** Shows SETUP_WARNING (spec §6.1) with the first summary ever, from any
- * path: the button, or the shortcut or context menu (showNotice). It does not
- * hold the run back. */
-async function showSetupWarningOnce(): Promise<void> {
+/** Shows SETUP_WARNING (spec §6.1) at the top of `area` with the first agent
+ * run ever, of either kind and from any path: Summarize & log, the shortcut
+ * or context menu (showNotice), or the task bar. It does not hold the run
+ * back. */
+async function showSetupWarningOnce(area: HTMLElement): Promise<void> {
   try {
     const stored = await chrome.storage.local.get(SUMMARIZE_WARNING_SEEN_KEY);
     if (stored[SUMMARIZE_WARNING_SEEN_KEY] === true) return;
@@ -998,9 +1056,9 @@ async function showSetupWarningOnce(): Promise<void> {
   dismiss.type = "button";
   dismiss.className = "secondary compact";
   dismiss.textContent = "Got it";
-  dismiss.addEventListener("click", () => runArea.replaceChildren(...withoutRunAreaChild(box)));
+  dismiss.addEventListener("click", () => area.replaceChildren(...withoutRunAreaChild(area, box)));
   box.append(text, dismiss);
-  runArea.replaceChildren(box, ...Array.from(runArea.children));
+  area.replaceChildren(box, ...Array.from(area.children));
 }
 
 async function summarize(): Promise<void> {
@@ -1009,9 +1067,9 @@ async function summarize(): Promise<void> {
   const tabId = page.tabId;
   summarizing = true;
   updateControls();
-  showRunLine(tabId, "Reading this page…");
+  showRunLine(runArea, tabId, "Reading this page…");
   try {
-    await showSetupWarningOnce();
+    await showSetupWarningOnce(runArea);
     // A page already being summarized answers with its run, which shows
     // (or keeps) the same card.
     const { run } = await summarizeTab(
@@ -1019,16 +1077,163 @@ async function summarize(): Promise<void> {
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
     );
     // The card shows only while its page is followed; this tab's line goes.
-    if (runLine?.tabId === tabId) clearRunLine();
+    if (runLines.get(runArea)?.tabId === tabId) clearRunLine(runArea);
     runCards.show(run);
   } catch (error) {
     // The panel may follow another tab by now (a slow cold start); this
     // line is about the tab that was summarized, so it is dropped.
-    if (followedTabId === tabId) showRunLine(tabId, summarizeFailureText(error), true);
+    if (followedTabId === tabId) showRunLine(runArea, tabId, summarizeFailureText(error), true);
   } finally {
     summarizing = false;
     updateControls();
   }
+}
+
+// --- Task bar (§5.7) ----------------------------------------------------------
+
+const SELECTION_PROBE_MS = 1_000;
+
+/** Why the task bar cannot run a task now, in the order the user should fix
+ * it, and whether settings is the fix; null when it can. */
+function taskBlocked(): { text: string; settings: boolean } | null {
+  if (!session.connected) return { text: "Waiting for the native host…", settings: false };
+  if (!session.config?.storage) return { text: "Choose a home folder in settings to run tasks.", settings: true };
+  if (session.configIssue !== null || session.adapterIssue !== null) return { text: TASK_REPAIR_MESSAGE, settings: true };
+  // The Brauser service runs on macOS (and Unix) only; settings cannot fix it.
+  if (/^win/i.test(navigator.platform ?? "")) return { text: "Tasks are not supported on Windows yet.", settings: false };
+  if (!harnessReady(session)) return { text: TASK_NEEDS_HARNESS_MESSAGE, settings: true };
+  if (pageState === "site-access") {
+    return { text: "Re-enable site access in Chrome so the agent can read this page.", settings: false };
+  }
+  if (currentPage === null || currentPage.tabId === undefined) return { text: "Tasks work on http(s) pages.", settings: false };
+  return null;
+}
+
+function renderTaskBar(): void {
+  const blocked = taskBlocked();
+  taskBar.hidden = followedTabId === null;
+  taskRunButton.disabled = blocked !== null || taskStarting;
+  const label = taskStarting ? "Starting…" : "Run";
+  if (taskRunButton.textContent !== label) taskRunButton.textContent = label;
+  taskInput.readOnly = taskStarting;
+  taskHint.hidden = blocked === null;
+  if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
+  taskHintSettings.hidden = blocked?.settings !== true;
+  renderTaskContext();
+}
+
+/** "Uses this page: <title>", naming the selection when the page has one,
+ * so the user sees which page a task will get. */
+function renderTaskContext(): void {
+  const page = currentPage;
+  let text = "";
+  if (page !== null && page.tabId !== undefined) {
+    const selected = taskSelection !== null && taskSelection.selected &&
+      taskSelection.tabId === page.tabId && taskSelection.url === page.url;
+    text = `${selected ? "Uses this page and your selection: " : "Uses this page: "}${page.title}`;
+  }
+  if (taskContext.textContent !== text) taskContext.textContent = text;
+}
+
+/** Runs in the page: whether any text is selected. Only the boolean leaves
+ * the page. */
+function pageHasSelection(): boolean {
+  return (window.getSelection()?.toString() ?? "").trim() !== "";
+}
+
+/** Checks whether the followed page has a selection, for the context line.
+ * Chrome has no selection event the panel can hear, so this runs when the
+ * panel follows a page and when the bar gets focus. Only with a ready agent:
+ * without one no task can run, so the page is not touched. */
+async function probeSelection(): Promise<void> {
+  const seq = ++selectionSeq;
+  const page = currentPage;
+  if (page === null || page.tabId === undefined || !harnessReady(session)) {
+    taskSelection = null;
+    renderTaskContext();
+    return;
+  }
+  const tabId = page.tabId;
+  let selected = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), SELECTION_PROBE_MS);
+    });
+    const results = await Promise.race([
+      chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: pageHasSelection, args: [] }),
+      timedOut,
+    ]);
+    selected = Array.isArray(results) && results.some((frame) => frame?.result === true);
+  } catch {
+    // A page Brauser cannot script reads as having no selection.
+  } finally {
+    clearTimeout(timer);
+  }
+  if (seq !== selectionSeq) return;
+  taskSelection = { tabId, url: page.url, selected };
+  renderTaskContext();
+}
+
+/** Starts the typed task on the followed page. The instruction and the page
+ * are taken together now, so the request goes with the page the context
+ * line names. Only the user's Enter or Run reaches this. */
+async function runTask(): Promise<void> {
+  const page = currentPage;
+  const instruction = taskInput.value;
+  if (taskStarting || taskBlocked() !== null || !page || page.tabId === undefined) return;
+  if (cleanInstruction(instruction) === "") return;
+  const tabId = page.tabId;
+  taskStarting = true;
+  updateControls();
+  showRunLine(taskRunArea, tabId, "Reading this page…");
+  try {
+    await showSetupWarningOnce(taskRunArea);
+    const run = await startTask(
+      { id: tabId, url: page.url, title: page.title },
+      instruction,
+      { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
+    );
+    if (runLines.get(taskRunArea)?.tabId === tabId) clearRunLine(taskRunArea);
+    if (run !== null) {
+      if (taskInput.value === instruction) taskInput.value = "";
+      taskCards.show(run);
+      taskInput.focus();
+    }
+  } catch (error) {
+    // Like Summarize, the line is about the tab the task was started on.
+    if (followedTabId === tabId) {
+      const failure = taskFailureText(error);
+      showRunLine(taskRunArea, tabId, failure.text, true, failure.openSettings);
+    }
+  } finally {
+    taskStarting = false;
+    updateControls();
+  }
+}
+
+/** Announces a task card's finish in `#task-announce`, the bar's only live
+ * region. */
+function announceTask(run: RunView): void {
+  const chars = Array.from(run.instruction ?? "");
+  const shown = chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : chars.join("");
+  const outcome = run.state === "succeeded" ? "done" : run.state === "canceled" ? "canceled" : "failed";
+  taskAnnounce.textContent = `Task ${outcome}: ${shown}`;
+}
+
+/** Reuse on a finished task card: the instruction the service stored goes
+ * back in the bar, the only text other than the user's typing that does. */
+function reuseInstruction(instruction: string): void {
+  if (taskStarting) return;
+  taskInput.value = instruction;
+  taskInput.focus();
+  updateControls();
+}
+
+function restoreCards(): Promise<void> {
+  return restoreRunCards([runCards, taskCards], taskRunArea, {
+    host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
+  });
 }
 
 /** Shows a notice from the worker's shortcut or context-menu summary when it
@@ -1040,14 +1245,14 @@ function showNotice(notice: PanelNotice): boolean {
   shownNotice = id;
   // The shortcut and the context menu start a summary without the panel's
   // button, so the one-time warning (spec §6.1) shows here for them.
-  void showSetupWarningOnce();
+  void showSetupWarningOnce(runArea);
   if (notice.kind === "summarize_failed") {
-    showRunLine(notice.tab_id, notice.message, true);
+    showRunLine(runArea, notice.tab_id, notice.message, true);
   } else {
     // The notice names only the run; list_runs brings its card, as it does
     // for any unfinished run.
-    clearRunLine();
-    void runCards.restore();
+    clearRunLine(runArea);
+    void restoreCards();
   }
   return true;
 }
@@ -1400,6 +1605,7 @@ async function refreshActiveTab(): Promise<void> {
 }
 
 function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void {
+  pageState = state;
   pageUnusable.hidden = state !== "unusable";
   siteAccessWarning.hidden = state !== "site-access";
   noteEditor.hidden = state !== "note";
@@ -1409,7 +1615,10 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   resetPreservedNotes();
   currentPage = null;
+  pageState = state;
   runCards.follow(null);
+  taskSelection = null;
+  selectionSeq++;
   updateControls();
   void refreshArtifact();
   pageTitle.textContent = title;
@@ -1462,6 +1671,8 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   currentPage = { url: tab.url, title, tabId: tab.id };
   // Run cards follow the page too, so another page's cards go with it.
   runCards.follow(tab.url);
+  // The bar keeps the user's draft; its context line names this page.
+  void probeSelection();
   // Another page's summary line, and its Open summary, go now rather than
   // when this page's lookup returns.
   if (summaryPageUrl !== tab.url) renderPageSummary(null, null);
@@ -1525,6 +1736,19 @@ worklogPeriod.addEventListener("change", () => void loadWorklog());
 includeWorklogGaps.addEventListener("change", renderWorklog);
 copyWorklogButton.addEventListener("click", copyWorklog);
 summarizeButton.addEventListener("click", () => void summarize());
+taskForm.addEventListener("submit", (event) => {
+  event.preventDefault?.();
+  void runTask();
+});
+// Enter runs the task; Shift+Enter adds a newline, and Enter that ends an
+// IME composition is left to the input method.
+taskInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+  event.preventDefault?.();
+  void runTask();
+});
+taskInput.addEventListener("focus", () => void probeSelection());
+taskHintSettings.addEventListener("click", openSettings);
 pageSummaryOpen.addEventListener("click", () => void openPageSummary());
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (sender.id === chrome.runtime.id && isPanelNotice(message) && showNotice(message)) {
@@ -1550,6 +1774,7 @@ window.addEventListener("pagehide", () => {
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   if (recentTimer !== null) clearTimeout(recentTimer);
   runCards.dispose();
+  taskCards.dispose();
   // Best effort: MV3 gives no guarantee this completes before teardown.
   void notes.flush();
   session.host.disconnect();
@@ -1586,7 +1811,7 @@ void (async () => {
   // demand (spec §5), so the panel asks only when a harness is set up or a
   // run may still be there: one started before the harness was removed
   // still needs its card and Cancel.
-  if (session.config?.agent || await runsMayExist(chrome.storage.local)) await runCards.restore();
+  if (session.config?.agent || await runsMayExist(chrome.storage.local)) await restoreCards();
   await showStoredNotice(true);
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();

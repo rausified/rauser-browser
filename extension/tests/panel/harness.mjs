@@ -48,8 +48,10 @@ export class FakeElement {
   addEventListener(type, listener) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
-  dispatch(type) {
-    for (const listener of this.listeners.get(type) ?? []) listener({ type, target: this });
+  // `init` adds event fields, such as a keydown's key, shiftKey,
+  // isComposing and preventDefault.
+  dispatch(type, init = {}) {
+    for (const listener of this.listeners.get(type) ?? []) listener({ type, target: this, ...init });
   }
   click() {
     if (!this.disabled) this.dispatch("click");
@@ -191,8 +193,8 @@ export function hostReply(request, config = CONFIG) {
 // does the same for messages to the worker. With `state.hostDead`, a new host
 // process closes its port without answering, as one that cannot start does.
 // `executeScript(injection)` answers chrome.scripting.executeScript for
-// summary extraction and `script(injection, state)` for site-pattern review;
-// `local`
+// summary extraction, `script(injection, state)` for site-pattern review,
+// and `selection(tabId)` for the task bar's selection probe; `local`
 // and `session` are Maps backing chrome.storage, so a test can share them
 // between panel loads.
 export async function install({
@@ -202,6 +204,7 @@ export async function install({
   local = new Map(), session = new Map(),
   localStorage = memoryStorage(),
   script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
+  selection = () => false,
 }) {
   const elements = pageElements();
   const listeners = () => {
@@ -221,6 +224,7 @@ export async function install({
     hostDead: false,
     agentStatus,
     injections: [],
+    selectionProbes: [],
     local,
     session,
     runtimeMessages: listeners(),
@@ -263,8 +267,14 @@ export async function install({
   globalThis.chrome = {
     scripting: {
       // Site-pattern review injections go to `script` and `state.scripts`;
-      // summary extraction goes to `executeScript` and `state.injections`.
+      // summary extraction goes to `executeScript` and `state.injections`;
+      // the task bar's selection probe goes to `selection` and
+      // `state.selectionProbes`.
       async executeScript(injection) {
+        if (injection.func?.name === "pageHasSelection") {
+          state.selectionProbes.push(injection);
+          return [{ frameId: 0, result: await selection(injection.target.tabId) }];
+        }
         if (injection.args?.length === 2 && injection.args[1] === true) {
           state.scripts.push(injection);
           return [{ frameId: 0, result: await script(injection, state) }];

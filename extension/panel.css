@@ -71,6 +71,13 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 .run-area { display: grid; gap: 8px; margin-top: 10px; }
 .run-area .setup-warning { margin: 0; }
 .run-line { margin: 0; overflow-wrap: anywhere; }
+.task-bar { margin: 12px 0; }
+.task-bar textarea { resize: vertical; width: 100%; font: inherit; }
+.task-bar .run-area { margin-top: 8px; }
+.task-context, .task-hint { margin: 6px 0 0; color: #767676; font-size: .85rem; overflow-wrap: anywhere; }
+.task-context:empty { display: none; }
+.task-hint button { margin: 0 0 0 6px; }
+.run-line button { margin: 0 0 0 6px; }
 .run-card { display: grid; gap: 4px; border: 1px solid #8885; border-radius: 6px; padding: 9px; overflow-wrap: anywhere; }
 .run-card p { margin: 0; }
 .run-card[hidden], .run-card [hidden] { display: none; }
