@@ -1,6 +1,7 @@
 // Built side-panel tests: the task bar. Run after build:extension;
 // the fake DOM, Chrome, host and shared helpers are in ./harness.mjs.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ARTICLE_URL, CONFIG, PANEL_HTML, READY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
@@ -717,4 +718,98 @@ test("a repeated identical announcement is announced again", async () => {
   }
   // Each announcement first empties the region, so the same text is new.
   assert.deepEqual(writes, ["", `Task done: ${instruction}`, "", `Task done: ${instruction}`]);
+});
+
+// The card's parts in order, and its activity disclosure if it has one.
+const DETAILS = (card) => card.children.find((child) => child.tagName === "DETAILS") ?? null;
+const ofClass = (card, name) => descendants(card).find((child) => (child.className ?? "").split(" ").includes(name));
+
+test("a finished task folds its activity behind Show agent activity, after the report", async () => {
+  const running = { ...TASK_VIEW, state: "running", started_at: "2026-10-27T09:00:01-07:00", instruction: "Fold me" };
+  const done = { ...running, state: "succeeded", finished_at: RECENT, task_report: "The report." };
+  const last = held();
+  let fetches = 0;
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "get_run") {
+        fetches += 1;
+        if (fetches === 1) return { type: "run_fetched", run: running, stream_text: "<b>Reading</b> the page", next_offset: 23, more: false };
+        return last.promise;
+      }
+      if (request.type === "start_task") return { type: "run_started", run: { ...running, url: request.url }, existing: false };
+      return startsTask()(request);
+    },
+  });
+  type(page, "Fold me");
+  enter(page);
+  await until(() => taskCards(page).length === 1 && page.el("task-run-area").textContent.includes("Reading"), "the running stream");
+  const [card] = taskCards(page);
+  // While the task runs its activity shows in the card, with no disclosure.
+  const stream = ofClass(card, "run-card-stream");
+  assert.ok(card.children.includes(stream), "the stream sits in the card while running");
+  assert.equal(stream.hidden, false);
+  assert.equal(stream.textContent, "<b>Reading</b> the page");
+  assert.deepEqual(stream.children, []);
+  assert.notEqual(stream.tagName, "PRE", "the task stream is body text, not a monospace block");
+  const runningDetails = DETAILS(card);
+  assert.ok(runningDetails === null || runningDetails.hidden, "no disclosure while running");
+
+  last.release({ type: "run_fetched", run: done, stream_text: " and done", next_offset: 32, more: false });
+  await until(() => card.textContent.includes("The report."), "the report");
+  const details = DETAILS(card);
+  assert.ok(details, "a disclosure once finished");
+  assert.equal(details.hidden, false);
+  assert.equal(details.open, false, "collapsed by default");
+  const summary = details.children.find((child) => child.tagName === "SUMMARY");
+  assert.equal(summary.textContent, "Show agent activity");
+  assert.ok(details.children.includes(stream), "the stream moved behind the disclosure");
+  assert.equal(card.children.includes(stream), false);
+  assert.equal(stream.textContent, "<b>Reading</b> the page and done");
+  const report = ofClass(card, "run-card-report");
+  assert.ok(card.children.indexOf(report) < card.children.indexOf(details), "the report comes first");
+});
+
+test("a restored finished task starts collapsed and stays expanded once opened", async () => {
+  const failed = {
+    ...TASK_VIEW, state: "failed", error: "The agent stopped.", error_kind: "harness_failed",
+    started_at: "2026-10-27T09:00:01-07:00", finished_at: RECENT, instruction: "Restored and failed",
+  };
+  const second = held();
+  let fetches = 0;
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs: [failed] };
+      if (request.type === "get_run") {
+        fetches += 1;
+        if (fetches === 1) return { type: "run_fetched", run: failed, stream_text: "First part.", next_offset: 11, more: true };
+        // The next page fails, so the card renders and polls once more.
+        if (fetches === 2) return { type: "error", code: "internal", message: "page broke" };
+        return second.promise;
+      }
+      return startsTask()(request);
+    },
+  });
+  await until(() => taskCards(page).length === 1 && page.el("task-run-area").textContent.includes("First part."), "the restored stream");
+  const [card] = taskCards(page);
+  const details = DETAILS(card);
+  assert.ok(details, "the restored card has a disclosure");
+  assert.equal(details.open, false, "a restored finished card starts collapsed");
+  // The user expands it; the next stream page re-renders the card.
+  await until(() => fetches === 3, "the retried page");
+  details.open = true;
+  details.dispatch("toggle");
+  second.release({ type: "run_fetched", run: failed, stream_text: " Second part.", next_offset: 24, more: false });
+  await until(() => card.textContent.includes("Second part."), "the next page");
+  await settle(20);
+  assert.equal(DETAILS(card), details);
+  assert.equal(details.open, true, "the expansion survives re-renders");
+});
+
+test("a task card's stream uses the card's body type, not monospace", () => {
+  const css = readFileSync(new URL("../../dist/panel.css", import.meta.url), "utf8");
+  const rule = css.match(/\.task-card \.run-card-stream\s*\{([^}]*)\}/);
+  assert.ok(rule, "a task-card stream rule");
+  assert.doesNotMatch(rule[1], /monospace/);
+  assert.match(rule[1], /font-family:\s*inherit/);
+  assert.match(rule[1], /max-height/);
 });

@@ -535,8 +535,12 @@ const HARNESS_NAMES: Record<RunView["harness"], string> = { codex: "Codex", clau
 const CHANGES_STAY = "Changes the agent already made stay; check before running it again.";
 
 /** One task run's card (decision 20). The headline is the instruction, the
- * subline the page and harness; on success it shows the agent's report. All
- * of it is untrusted text, shown with textContent only. It offers Cancel,
+ * subline the page and harness; on success it shows the agent's report.
+ * While the task is queued or running its streamed activity shows in the
+ * card; once it finishes (or when the card is restored finished) the
+ * activity folds behind a collapsed "Show agent activity" disclosure under
+ * the report, and stays as the user left it across re-renders. All of it
+ * is untrusted text, shown with textContent only. It offers Cancel,
  * Copy report, Reuse, the harness's resume, Copy (the error) and Dismiss,
  * and never Open summary or Retry save: a task writes nothing. */
 class TaskCard extends RunWatcher implements Card {
@@ -544,7 +548,8 @@ class TaskCard extends RunWatcher implements Card {
   private readonly headline: HTMLParagraphElement;
   private readonly pageLine: HTMLParagraphElement;
   private readonly stateLine: HTMLParagraphElement;
-  private readonly streamText: HTMLPreElement;
+  private readonly streamText: HTMLDivElement;
+  private readonly activity: HTMLDetailsElement;
   private readonly reportText: HTMLDivElement;
   private readonly changesLine: HTMLParagraphElement;
   private readonly problemLine: HTMLParagraphElement;
@@ -556,6 +561,9 @@ class TaskCard extends RunWatcher implements Card {
   // Whether the card saw the run unfinished, so its finish is news.
   private sawUnfinished: boolean;
   private reported = false;
+  // Whether the stream has moved behind the activity disclosure; a run
+  // never goes back from finished, so this happens once per card.
+  private folded = false;
 
   get url(): string {
     return this.view.url;
@@ -573,15 +581,16 @@ class TaskCard extends RunWatcher implements Card {
     this.headline = make("p", "run-card-title run-card-instruction");
     this.pageLine = make("p", "run-card-page");
     this.stateLine = make("p", "run-card-state");
-    this.streamText = make("pre", "run-card-stream");
+    this.streamText = make("div", "run-card-stream");
+    this.activity = make("details", "run-card-activity");
+    const summary = make("summary", "run-card-activity-summary");
+    summary.textContent = "Show agent activity";
+    this.activity.append(summary);
     this.reportText = make("div", "run-card-report");
     this.changesLine = make("p", "run-card-changes");
     this.problemLine = make("p", "run-card-problem warning");
     this.actions = make("div", "run-card-actions");
-    this.element.append(
-      this.headline, this.pageLine, this.stateLine, this.streamText, this.reportText, this.changesLine,
-      this.problemLine, this.actions,
-    );
+    this.layout();
     this.render();
   }
 
@@ -607,13 +616,31 @@ class TaskCard extends RunWatcher implements Card {
     this.deps.onTerminal?.(this.view);
   }
 
+  /** Places the card's parts: the stream in the card while the run is
+   * unfinished, else after the report behind the collapsed disclosure. */
+  private layout(): void {
+    const fold = isTerminal(this.view);
+    if (fold) {
+      this.folded = true;
+      this.activity.open = false;
+      this.activity.append(this.streamText);
+    }
+    this.element.replaceChildren(
+      this.headline, this.pageLine, this.stateLine,
+      ...(fold ? [this.reportText, this.activity] : [this.streamText, this.reportText]),
+      this.changesLine, this.problemLine, this.actions,
+    );
+  }
+
   protected render(): void {
     const run = this.view;
+    if (!this.folded && isTerminal(run)) this.layout();
     this.headline.textContent = this.fullInstruction ?? run.instruction ?? "";
     this.pageLine.textContent = `on ${run.title || run.url} · ${HARNESS_NAMES[run.harness]}`;
     this.stateLine.textContent = this.stateLineText();
     this.streamText.textContent = this.stream;
-    this.streamText.hidden = this.stream === "";
+    this.streamText.hidden = !this.folded && this.stream === "";
+    this.activity.hidden = this.stream === "";
     const report = run.state === "succeeded" ? this.report : null;
     this.reportText.textContent = report ?? "";
     this.reportText.hidden = report === null;

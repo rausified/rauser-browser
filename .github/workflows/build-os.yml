@@ -31,6 +31,10 @@ jobs:
         run: python protocol/generate.py --check
       - name: Check contributor status documentation
         run: python scripts/check_current_state.py
+      - name: Test the backlog renderer and queue check
+        run: python -m unittest discover -s scripts/tests
+      - name: Check the generated backlog against the beads queue
+        run: python scripts/check_queue_consistency.py
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Build Rust workspace

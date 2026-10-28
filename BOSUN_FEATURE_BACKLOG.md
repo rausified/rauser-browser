@@ -38,13 +38,19 @@ plan work. Dependencies are only the real ones (for example open access PRs
 `bd ready` shows every Known Issue at once. **Take
 them in the order listed here, per the rule above.** **[human]** items carry
 the `human` label (`bd human list`) and depend on the deferred `brwr-hpo`
-HUMAN GATE bead. Do not close the gate to make them ready. Every open item
-here carries its bead id; `scripts/check_queue_consistency.py` refuses a
-launch when the two disagree.
+HUMAN GATE bead. Do not close the gate to make them ready. **The item lists
+below are generated from the beads (2026-10-28):** each sits between
+`BEGIN/END GENERATED` markers and is rendered by `scripts/render_backlog.py`
+from the bead's `backlog_section`, `backlog_order`, `backlog_text` and
+`backlog_shipped` metadata. Never edit inside a generated block: update the
+bead, then run `python3 scripts/render_backlog.py`; after a merge or rebase
+conflict in this file or the queue, run
+`python3 scripts/render_backlog.py --resolve`. See AGENTS.md "Work queue".
+`scripts/check_queue_consistency.py` refuses a launch when a block is stale.
 
 **Known issues come before plan work (set by John, 2026-10-16).** While any
 item under "Known Issues (Blocking Deploy)" is unchecked, take the first one
-before any plan item. Fix it with a regression test, check it off with a
+before any plan item. Fix it with a regression test, close its bead with a
 one-line note, and keep each fix to one cycle. These came from a code review
 of PR #34 (merged to GitHub main as 68f180b). The review was not separately
 verified, so confirm each failure scenario with a failing test first. If the
@@ -55,6 +61,7 @@ Their line numbers predate step 6.6, so re-check them.
 
 ## Known Issues (Blocking Deploy)
 
+<!-- BEGIN GENERATED section=known show-closed: edit the beads, then run python3 scripts/render_backlog.py -->
 - [x] `brwr-7yp` **Adapter removal refused when two adapters share origin and type.**
   `validate_adapter_transition` (host/src/config.rs ~1254) checks each old
   adapter against a surviving sibling's id. Two `work.issue` adapters on one
@@ -171,6 +178,7 @@ Their line numbers predate step 6.6, so re-check them.
   Discovered during the removal review: primary recovery now refuses truncated,
   oversized or unreadable candidate sets. Four injected scan faults preserve
   note bytes and recover after cleanup; optional older-note lists stay usable.
+<!-- END GENERATED section=known -->
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
   expected count in `scripts/smoke-macos.mjs` in the same commit. The smoke run
@@ -210,6 +218,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   regenerate ownership-checked, skip-if-unchanged artifact Markdown with
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
+<!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental
   real-SQLite index.** Step 6.6 shipped a custom SQLite file writer
   (`build_sqlite`) because the sandbox can't fetch crates. Every delivery
@@ -244,6 +253,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   versions, native registration, the folder picker, standing HTTP(S) access,
   background capture, Pause, notes, Recent/worklog and later Capture Site.
   Windows remains unvalidated until its own acceptance is recorded.
+<!-- END GENERATED section=plan -->
 
 ### Gated plan work (do not start yet)
 
@@ -253,11 +263,14 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   Capture Site (shipped, including agent refinement), along with the re-keying part of
   7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
   a few weeks; John will lift the gate here when it's time.
+<!-- BEGIN GENERATED section=gated: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service (deferred).** The
   cleared-environment harness lockdown it described is superseded by open
   access. Agent runs live in the macOS-only Brauser service, which compiles
   out elsewhere; the spec defers a Windows service. When Windows agent support
   is scheduled, John approves a Windows design against the spec first.
+- [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
+<!-- END GENERATED section=gated -->
 - **M3 — Related** (FTS5 in `brauser reindex`, related pages, read later),
   **M4 — Omnibar** (built-in commands, free text, custom commands), and
   **M5 — Release** (installer, store listing, signing and provenance, docs)
@@ -265,6 +278,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
+<!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-rl2` **list_runs: site-draft runs can push summary runs out of
   the restore window.** Filter by kind before LIST_LIMIT, or reserve summary
   slots (Codex review of #170).
@@ -279,7 +293,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   when Capture Site or the open access PR 3 run card repeats rendering the
   panel already has; do not rewrite shipped views solely to create an
   abstraction. Close it as not needed if no second consumer appears by PR 3.
-
 - [ ] `brwr-o1l` **Share one authorize-and-open path across delivery entry
   points.** `record_visit`, `record_activity`, and `record_batch` repeat the
   lock, refresh, policy, and store setup, and `capture.rs` has twin
@@ -288,6 +301,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
+<!-- END GENERATED section=quality -->
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
@@ -302,19 +316,18 @@ strip_params note-identity follow-up has shipped (see Shipped).
 
 ### Cookie's own proposals (only after the plan work above)
 
+<!-- BEGIN GENERATED section=proposals: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-wg5` **Bound adapter comparisons when sandbox child pipes are denied.**
   The optional 5,000-case differential check stalled; a one-case probe timed
   out after 30 seconds, and the child-pipe guard reports EPERM. Establish the
   exact wait and reuse explicit sandbox diagnostics with a bounded runner;
   required CI mode must still fail on denial. No engine changed this cycle.
-
 - [ ] `brwr-7lq` **Restore overlapping recorded container groups with explicit identity review.**
   The removed-site flow refuses overlapping repository/PR history because it
   cannot establish one note identity. Extend the host's impact/alias planning
   (`brwr-6x2`) with a deliberate review that retains notes and considers
   intervening repository-only capture; never relax the freeze or infer a
   primary key from a canonical address.
-
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -326,18 +339,48 @@ strip_params note-identity follow-up has shipped (see Shipped).
   path removes the entire invalid document. Add copy-out and a whole-document,
   format-1 replacement workspace so a user can salvage valid rules without
   asking an older build to interpret or migrate an unsupported future format.
+<!-- END GENERATED section=proposals -->
+
+### Task bar follow-ups
+
+Follow-ups filed with the task bar (DESIGN.md §4.5, §5.6). They wait behind
+the plan work above.
+
+<!-- BEGIN GENERATED section=task-bar: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-67i` **list_runs: per-kind listing so one kind cannot crowd the other out of restore.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 32). host/src/service/supervisor.rs list_runs returns every active run, then fills the rest of LIST_LIMIT (20) with the newest finished runs of any kind. A burst of newer finished tasks (or… _(P2; labels: task-bar)_
+- [ ] `brwr-8qm` **Task completion notifications when the panel is closed.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 21 and 26). Today a finished task announces itself only through #task-announce while the panel is open. Seam: the notifications permission in extension/manifest.json (a new permission, so it needs… _(P3; labels: task-bar)_
+- [ ] `brwr-cdq` **Omnibar: slash commands and custom [[commands]] config.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26; DESIGN.md §5.6). The task bar built the Omnibar's free-text row only. Slash commands (for example /summarize) and user-defined [[commands]] in config.toml are still not built. Seam: the… _(P3; labels: task-bar)_
+- [ ] `brwr-h1g` **Task history view.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). The panel restores only active tasks plus the 5 newest finished in 24 h (restorable in extension/run-card.ts); older tasks have no view. Seam: ListRunsRequest.kind (shared with the per-kind… _(P3; labels: task-bar)_
+- [ ] `brwr-2b5` **Task bar gestures: keyboard command, context menu and / to focus.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). Seam: a task command in extension/manifest.json commands (beside summarize) and a page context-menu item that open and focus the side panel through a new focus_task panel notice (publishNotice… _(P3; labels: task-bar)_
+- [ ] `brwr-18u` **Task bar: recall earlier instructions with ArrowUp.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). Seam: a keydown branch on #task-input in extension/panel.ts that recalls recent instructions (from the service's stored instructions, as Reuse does, not from a new extension store unless… _(P3; labels: task-bar)_
+- [ ] `brwr-zla` **Tasks: choose the working folder per task.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). A task always runs in the knowledge base folder (task_setup in host/src/service/server.rs). Seam: an optional per-task cwd chosen by the host from a configured allowlist, never a path from the… _(P3; labels: task-bar)_
+- [ ] `brwr-bsx` **Tasks: save a task report as a page note.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). Brauser writes nothing for a task (TaskFinisher::save in host/src/service/finisher.rs is a no-op). Seam: a user action on a terminal task card that saves the report into the page note through… _(P3; labels: task-bar)_
+- [ ] `brwr-0yb` **Tasks: log a task event in the daily log.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 8 and 26). TaskFinisher::save (host/src/service/finisher.rs) writes no daily-log event. Seam: an optional task event written by TaskFinisher::save, carrying only what decision 28 allows in records… _(P3; labels: task-bar)_
+- [ ] `brwr-qin` **Tasks without a page.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). start_task always carries the active tab's page (readTab in extension/summarize.ts, page.md in the run folder), so the bar is disabled on non-web tabs. Seam: make the page optional on… _(P3; labels: task-bar)_
+- [ ] `brwr-tm2` **Service queue: per-kind slot configuration.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 10). host/src/service/queue.rs hard-codes MAX_RUNNING = 2, MAX_RUNNING_TASKS = 1 and MAX_ACTIVE_TASKS = 4. Seam: a per-kind slot table in Scheduler (next_ready, submit) so each kind gets its own… _(P3; labels: task-bar)_
+<!-- END GENERATED section=task-bar -->
+
+### New beads (not yet placed)
+
+Live beads with no `backlog_section` (for example discovered work filed with
+`bd create`) are listed here until someone sets one. See AGENTS.md "Work
+queue".
+
+<!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-h7p` **PR hygiene: body edits can cancel the Dev tools run.** Codex review P2 on PR #183 (.github/workflows/pr-hygiene.yml:15). The workflow's concurrency group cancels an in-progress opened/synchronize run when the PR body is edited, and the replacement 'edited' run skips the dev-tools job (if: github.event.action != 'edited'). A quick… _(P2; labels: codex-review, dev-tools)_
+- [ ] `brwr-h7q` **worktree-hygiene: keep a stable control worktree during removals.** Codex review P2 on PR #183 (scripts/dev/worktree-hygiene, main(): git(repo, 'worktree', 'remove', ...)). When --repo names a removable linked worktree and the tool runs from elsewhere, removing that worktree deletes the directory used for every later git -C call, so later… _(P2; labels: codex-review, dev-tools)_
+- [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: extraction, task-bar)_
+<!-- END GENERATED section=new -->
 
 ## In Progress / This Iteration
 
+<!-- BEGIN GENERATED section=in-progress: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
   Cookie claimed the highest-priority ready item after the coordinator cleared
   the assigned queue. The [four-stage plan](docs/superpowers/plans/2026-10-28-capture-relearning.md)
   starts with offline alias rehearsal, then revision-bound impact planning,
   durable migration/rebuild, and the panel review. The parent remains in
   progress: no migration is enabled and the ID freeze stays enforced.
-
-
-
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   **Blocked on platform execution; implementation complete.** The built-page
   smoke covers artifact/context interactions, Recent filters, worklog Copy,
@@ -348,7 +391,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
   the runner refuses before setup and no Chrome executable was found on PATH;
   mocked panel regressions cannot supply browser acceptance. Do not rebuild
   this implementation or port the runner merely to replace macOS evidence.
-
 - [ ] `brwr-bzx` **Restore Windows CI for the native host and extension.**
   **Blocked on current platform results; implementation and skip audit
   complete.** The reusable `build-os.yml` already covers Windows/macOS Rust
@@ -359,11 +401,15 @@ strip_params note-identity follow-up has shipped (see Shipped).
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
+<!-- END GENERATED section=in-progress -->
 
 
 Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+<!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+<!-- END GENERATED section=shipped -->
 
 - **Category:** Docs. **Split DESIGN.md into the current contract and an append-only history (2026-10-28).** Completed `brwr-m68` (Columbus session, John's request). Dated decision and as-built notes, probe results, review reproductions, superseded designs and the done-step build log moved verbatim to `docs/history.md`, grouped by DESIGN.md section, with pointers where a current rule depended on them; every section number, heading and §12.2 step number stays. AGENTS.md "Current state" is now a component table with invariants, and both files say new dated records go to `docs/history.md`. **Metrics:** DESIGN.md 341,373 → 275,922 bytes (1,831 → 1,604 lines); `docs/history.md` 111,854 bytes; AGENTS.md 48,143 → 22,567 bytes; 2,809 original sentences checked, none lost or duplicated beyond five glue edits. An independent review's findings are folded in: rules it found moved to history (credential refusal, the log marker format, the frozen-ID sibling rule, four headless limits now in TESTING.md) are restated, and stale §14 records are trimmed or moved.
 
