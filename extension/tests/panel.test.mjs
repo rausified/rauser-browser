@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { isResponseShape } = await import("../dist/protocol-shape.js");
 const { PANEL_NOTICE_KEY } = await import("../dist/model.js");
 const { SETUP_WARNING } = await import("../dist/agent.js");
 const { storageKey } = await import("../dist/brand.js");
@@ -654,32 +655,83 @@ test("Capture Site recognizes OneDrive document routes without scope or JSON", a
   assert.equal(updates(page)[0].config.adapters.artifacts[0].id, "sharepoint:{host}/{doc}");
 });
 
-test("GitHub requires separate inline scopes and saves exactly the selected kinds", async () => {
+test("Capture Site pre-fills the organization from the current GitHub page", async () => {
   const page = await captureReview(GITHUB_URL);
   assert.equal(page.el("capture-site-github").hidden, false);
-  assert.equal(page.el("capture-site-save").disabled, true);
-  page.el("capture-site-pr-orgs").value = "Acme-Corp";
-  page.el("capture-site-pr-orgs").dispatch("input");
-  assert.equal(page.el("capture-site-save").disabled, true, "issue scope is a separate choice");
-  page.el("capture-site-issue-orgs").value = "other-org";
-  page.el("capture-site-issue-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-orgs").value, "acme-corp");
+  assert.equal(page.el("capture-site-repos").checked, true);
+  assert.equal(page.el("capture-site-prs").checked, true);
+  assert.equal(page.el("capture-site-issues").checked, true);
   assert.equal(page.el("capture-site-save").disabled, false);
-  assert.match(page.el("capture-site-preview").textContent, /pull requests: acme-corp/);
-  assert.match(page.el("capture-site-preview").textContent, /issues: other-org/);
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
+  await saveCapture(page);
+  assert.equal(updates(page)[0].config.adapters.artifacts.length, 3);
+  for (const artifact of updates(page)[0].config.adapters.artifacts) {
+    assert.deepEqual(artifact.scope, { owner: ["acme-corp"] });
+  }
+});
+
+test("editing the pre-filled organization keeps the user's edit, not the page's owner", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-orgs").value = "other-org";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /owned by: other-org\./);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["other-org"] });
+});
+
+test("unchecking repositories omits the repo adapter", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, false);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type),
+    ["github.pr", "github.issue"]);
+});
+
+test("the confirmation line names only the checked types, truthfully and in a fixed order", async () => {
+  const page = await captureReview(GITHUB_URL);
+  page.el("capture-site-repos").checked = false;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-prs").checked = false;
+  page.el("capture-site-prs").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records issues owned by: acme-corp\./);
+
+  page.el("capture-site-repos").checked = true;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-prs").checked = true;
+  page.el("capture-site-prs").dispatch("input");
   page.el("capture-site-issues").checked = false;
   page.el("capture-site-issues").dispatch("input");
-  assert.equal(page.el("capture-site-issue-orgs").disabled, true);
-  await saveCapture(page);
-  assert.equal(updates(page)[0].config.adapters.artifacts.length, 1);
-  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["acme-corp"] });
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories and pull requests owned by: acme-corp\./);
+
+  page.el("capture-site-issues").checked = true;
+  page.el("capture-site-issues").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
+});
+
+test("unchecking every GitHub kind disables save, and clearing the organization blocks it", async () => {
+  const page = await captureReview(GITHUB_URL);
+  for (const id of ["capture-site-repos", "capture-site-prs", "capture-site-issues"]) {
+    page.el(id).checked = false;
+    page.el(id).dispatch("input");
+  }
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(page.el("capture-site-orgs").disabled, true);
+  page.el("capture-site-repos").checked = true;
+  page.el("capture-site-repos").dispatch("input");
+  page.el("capture-site-orgs").value = "";
+  page.el("capture-site-orgs").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true);
 });
 
 test("canceling and switching tabs clear a review without changing capture", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-pr-orgs").value = "sensitive-org";
+  page.el("capture-site-orgs").value = "sensitive-org";
   page.el("capture-site-cancel").click();
   assert.equal(page.el("capture-site-review").hidden, true);
-  assert.equal(page.el("capture-site-pr-orgs").value, "");
+  assert.equal(page.el("capture-site-orgs").value, "");
   assert.equal(updates(page).length, 0);
   page.el("capture-site").click();
   page.navigate(JIRA_URL, 2);
@@ -903,8 +955,27 @@ function artifact(id, title, why = null) {
     artifact_id: id, artifact_type: "doc", title, url: `https://docs.example/${id}`,
     first_seen: "2026-10-01", last_seen: "2026-10-27", focused_seconds: 60,
     background_seconds: 0, opens: 1, days_opened: 1, last_mode: null, why, linked_count: 0,
+    within: null, contained: [],
   };
 }
+
+test("artifact shape validation requires the container fields", () => {
+  const result = (value) => isResponseShape(recognized(value));
+  const repo = { artifact_id: "github.repo:github.com/acme/widgets", artifact_type: "github.repo",
+    title: "acme/widgets", url: "https://github.com/acme/widgets" };
+  const child = { artifact_id: "github.pr:github.com/acme/widgets/7", artifact_type: "github.pr",
+    title: "Fix", url: "https://github.com/acme/widgets/pull/7", focused_seconds: 60 };
+  assert.equal(result(artifact("doc:a", "A")), true);
+  assert.equal(result({ ...artifact("doc:a", "A"), within: repo }), true);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: [child] }), true);
+  const { contained: _contained, ...missingContained } = artifact("doc:a", "A");
+  assert.equal(result(missingContained), false);
+  const { within: _within, ...missingWithin } = artifact("doc:a", "A");
+  assert.equal(result(missingWithin), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), within: { ...repo, url: 7 } }), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: [{ ...child, focused_seconds: -1 }] }), false);
+  assert.equal(result({ ...artifact("doc:a", "A"), contained: Array(21).fill(child) }), false);
+});
 
 const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value });
 const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1115,6 +1186,66 @@ test("Save why stays disabled while a local pause waits for the host", async () 
   await settle();
   assert.equal(page.sent("record_why").length, 0);
   assert.match(page.el("status").textContent, /Use Pause capture to finish/);
+});
+
+// --- Artifact card: container and contents -----------------------------------
+
+const REPO = {
+  artifact_id: "github.repo:github.com/acme-corp/widgets",
+  artifact_type: "github.repo",
+  title: "acme-corp/widgets",
+  url: "https://github.com/acme-corp/widgets",
+};
+
+test("artifact card links a PR to its repository", async () => {
+  const pr = { ...artifact("github.pr:github.com/acme-corp/widgets/7", "Fix the thing"), within: REPO };
+  const page = await install({
+    tab: { id: 1, url: "https://github.com/acme-corp/widgets/pull/7", title: "Fix the thing" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(pr) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-within").hidden, false);
+  assert.equal(page.el("artifact-within").textContent, "In acme-corp/widgets");
+  const link = page.el("artifact-within").querySelector("a");
+  assert.equal(link.href, REPO.url);
+});
+
+test("repository card lists contained work", async () => {
+  const pr = { artifact_id: "github.pr:github.com/acme-corp/widgets/7", artifact_type: "github.pr",
+    title: "Fix the thing", url: "https://github.com/acme-corp/widgets/pull/7", focused_seconds: 125 };
+  const issue = { artifact_id: "github.issue:github.com/acme-corp/widgets/3", artifact_type: "github.issue",
+    title: "Flaky test", url: "https://github.com/acme-corp/widgets/issues/3", focused_seconds: 40 };
+  const repo = { ...artifact("github.repo:github.com/acme-corp/widgets", "acme-corp/widgets"), contained: [pr, issue] };
+  const page = await install({
+    tab: { id: 1, url: REPO.url, title: "acme-corp/widgets" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(repo) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-contained").hidden, false);
+  assert.equal(page.el("artifact-contained-heading").textContent, "Worked on inside");
+  const rows = page.el("artifact-contained-list").children;
+  assert.equal(rows.length, 2, "one row per contained artifact");
+  const firstLink = rows[0].querySelector("a");
+  assert.equal(firstLink.textContent, "Fix the thing · 2 min");
+  assert.equal(firstLink.href, pr.url);
+  const secondLink = rows[1].querySelector("a");
+  assert.equal(secondLink.textContent, "Flaky test · 40 sec");
+  assert.equal(secondLink.href, issue.url);
+});
+
+test("card hides container rows when absent", async () => {
+  const page = await install({
+    tab: { id: 1, url: "https://docs.example/a", title: "A" },
+    config: CAPTURING,
+    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
+  });
+  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
+  assert.equal(page.el("artifact-within").hidden, true);
+  assert.equal(page.el("artifact-within").textContent, "");
+  assert.equal(page.el("artifact-contained").hidden, true);
+  assert.equal(page.el("artifact-contained-list").children.length, 0);
 });
 
 // --- Summarize & log (plan Task 39) -----------------------------------------

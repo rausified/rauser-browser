@@ -188,13 +188,52 @@ the snapshot and offers **Stop stripping**.
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety
-probes inline, with separate GitHub pull-request and issue organization lists,
+probes inline. GitHub now offers repositories alongside pull requests and
+issues, all three checked by default and sharing one organization field
+(2026-10-27) instead of separate PR and issue lists; the field is pre-filled
+from the current URL's owner segment (also `/orgs/<org>/…`), lowercased and
+shown for the user to confirm or edit rather than applied unseen, and a page
+with no usable owner (the GitHub root, a reserved top-level route, `/orgs`
+with no org) gets no pre-fill and asks instead. The confirmation line names
+only the types actually checked, so it is never wider than what is saved. It
 then saves once through revisioned `update_config`. It preserves configured
 sites and global pauses, refuses pending local pauses/removals and stale
 reviews, and saves old note edits before reloading their host-derived identity.
 Installing policy from a page seeds already-open recognized tabs for attention
 measurement without inventing cold opens; background renewals retain their
 normal navigation accounting.
+
+GitHub repositories as container artifacts (2026-10-27): the adapter-template
+language gained a general mechanism for an adapter to declare
+`within = { type, id }`, naming a container artifact its own matches sit
+inside (adapter-templates.md §3, §8.3), and a required path capture a `scope`
+key restricts to a literal list now counts as an anchor segment too (§4.1,
+§6), not only a literal or a fixed-shape capture. `github.repo` is the first
+adapter to use either: a new starter, a catch-all over everything inside a
+GitHub repository that no PR or issue adapter claims, scoped to the owner
+like the other two, with `github.pr` and `github.issue` now declaring
+`within` it. `orderContainedFirst` (`extension/starter-adapters.ts`) keeps PR
+and issue adapters ahead of the repo catch-all on every save path (the panel,
+settings, and the JSON editor), because adapters on one origin are tried in
+config order and a PR or issue visit already rolls up into its repository.
+The host's index (`host/src/index.rs`) derives each contained visit's
+container by re-evaluating the logged URL, not by recording it at log time,
+so existing PR and issue history rolls up into repositories retroactively; a
+`within` edge records the relationship, worklog and day totals count a
+rolled-up visit once, and a container whose own page has never been opened
+directly still gets a title and URL derived from its ID instead of a stale or
+missing one. The route-history guard in `host/src/config.rs` is amended so a
+declared container may overlap the routes of a retired or removed contract it
+is exactly the container of, which is what lets settings add `github.repo` on
+top of already-configured PR/issue adapters (adding `within` to them in the
+same save) without tripping the existing-history freeze. Protocol version 7
+exposes the relationship to the panel: `ArtifactView.within` and `.contained`
+on `get_artifact`/`list_artifacts`, with the card showing "In <repo>" on a
+contained artifact's own card and "Worked on inside" with its rolled-up
+contents on a container's card. Downgrading after adding repositories is
+unsupported: older hosts reject `within` in the adapter config and in adapter
+history.
+
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
 Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier

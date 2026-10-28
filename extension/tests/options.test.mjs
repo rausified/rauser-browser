@@ -914,6 +914,45 @@ test("adapter workspace edits, reorders, and removes through revisioned saves", 
   assert.ok(state.revision >= 4);
 });
 
+test("a pull request or issue rule cannot be moved below its repository rule", async () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  const scope = { owner: ["acme-corp"] };
+  const pr = {
+    type: "github.pr", origin: "https://github.com", scope, within,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  };
+  const issue = {
+    type: "github.issue", origin: "https://github.com", scope, within,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+    id: "github.issue:{host}/{owner}/{repo}/{number}",
+  };
+  const repo = {
+    type: "github.repo", origin: "https://github.com", scope,
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }], id: within.id,
+  };
+  const state = install({ adapters: [pr, issue, repo] });
+  await openSettings();
+  const held = "A pull request or issue rule must stay ahead of its repository rule.";
+  // Each card has Edit, Move up, Move down, Remove.
+  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
+  assert.equal(buttons()[2].disabled, false, "PR and issue may swap");
+  assert.equal(buttons()[6].disabled, true, "the issue cannot move below the repository");
+  assert.equal(buttons()[6].title, held);
+  assert.equal(buttons()[9].disabled, true, "the repository cannot move above the issue");
+
+  // Even if the click arrives, nothing is saved and the reason is shown.
+  buttons()[6].dispatch("click");
+  await until(idle, "the held move");
+  assert.equal(statusText(), held);
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+
+  buttons()[2].click();
+  await until(() => state.config.adapters.artifacts[0].type === "github.issue" && idle(), "the allowed swap");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type),
+    ["github.issue", "github.pr", "github.repo"]);
+});
+
 test("an open adapter edit follows its target across an external reorder", async () => {
   const issue = {
     type: "work.issue", origin: "https://a.com",
@@ -1388,6 +1427,149 @@ test("manual artifact refresh reports unowned path conflicts", async () => {
   assert.match(statusText(), /1 unowned path conflict remains/);
   assert.match(statusText(), /artifacts\/work\/item\.md/);
   assert.equal(state.requests.at(-1).type, "refresh_artifacts");
+});
+
+// GitHub PR and issue rules as a user configured them before repositories
+// existed: scoped, with no `within`.
+function existingGitHubRules(prOwners = ["a"], issueOwners = ["b"]) {
+  return [
+    {
+      type: "github.pr", origin: "https://github.com", scope: { owner: prOwners },
+      match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+      id: "github.pr:{host}/{owner}/{repo}/{number}",
+    },
+    {
+      type: "github.issue", origin: "https://github.com", scope: { owner: issueOwners },
+      match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+      id: "github.issue:{host}/{owner}/{repo}/{number}",
+    },
+  ];
+}
+
+const repoButton = () => env.elements.get("starter-gallery").querySelectorAll("button")
+  .find((button) => button.dataset.starterKey === "github.repo");
+
+test("GitHub gallery pre-fills organizations from existing GitHub rules", async () => {
+  install({ adapters: existingGitHubRules(["a"], ["b"]) });
+  await openSettings();
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  assert.equal(scope.value, "a, b");
+
+  // Once the user edits the field, a re-render keeps what they typed.
+  scope.value = "c";
+  scope.dispatch("input");
+  typeSite("https://github.com");
+  assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "c");
+});
+
+test("a pull request starter links to repositories only when a repository rule exists", async () => {
+  const prButton = () => env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.starterKey === "github.pr");
+  install();
+  await openSettings();
+  typeSite("https://github.com");
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  scope.value = "acme-corp";
+  scope.dispatch("input");
+  prButton().click();
+  assert.equal(JSON.parse(env.elements.get("adapter-json").value).within, undefined);
+
+  const repository = {
+    type: "github.repo", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }],
+    id: "github.repo:{host}/{owner}/{repo}",
+  };
+  install({ adapters: [repository] });
+  await openSettings();
+  prButton().click();
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value).within,
+    { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" });
+});
+
+test("github.repo is offered when only PR and issue rules exist", async () => {
+  install({ adapters: existingGitHubRules(["acme-corp"], ["acme-corp"]) });
+  await openSettings();
+  const button = repoButton();
+  assert.ok(button);
+  assert.equal(button.textContent, "Review starter…");
+  assert.equal(button.disabled, false);
+});
+
+test("adding repositories links existing PR and issue rules without changing their scope", async () => {
+  const existing = existingGitHubRules(["a"], ["b"]);
+  const saves = [];
+  const state = install({
+    adapters: existing,
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  repoButton().click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.type, "github.repo");
+  assert.deepEqual(draft.scope, { owner: ["a", "b"] });
+  assert.match(env.elements.get("adapter-validation").textContent,
+    /Also links your existing pull request and issue rules to their repositories\./);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository save");
+  assert.equal(saves.length, 1);
+  const [pr, issue, repo] = saves[0].config.adapters.artifacts;
+  assert.deepEqual([pr.type, issue.type, repo.type], ["github.pr", "github.issue", "github.repo"]);
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  assert.deepEqual(pr, { ...existing[0], within });
+  assert.deepEqual(issue, { ...existing[1], within });
+  assert.deepEqual(pr.scope, { owner: ["a"] });
+  assert.deepEqual(issue.scope, { owner: ["b"] });
+});
+
+test("a repository starter with already-linked rules adds no linking line", async () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  install({ adapters: existingGitHubRules().map((adapter) => ({ ...adapter, within })) });
+  await openSettings();
+  repoButton().click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.match(env.elements.get("adapter-validation").textContent, /^Valid here\./);
+  assert.doesNotMatch(env.elements.get("adapter-validation").textContent, /Also links/);
+});
+
+test("an existing rule that cannot be linked stays as it is and does not block repositories", async () => {
+  const [, issue] = existingGitHubRules(["acme-corp"], ["acme-corp"]);
+  // Hand-written: its ID has no {repo}, so a repository `within` cannot be built from it.
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{_}/pull/{number:int}" }],
+    id: "github.pr:{host}/{number}",
+  };
+  const saves = [];
+  const state = install({
+    adapters: [handWritten, issue],
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  repoButton().click();
+  const validation = env.elements.get("adapter-validation").textContent;
+  assert.match(validation, /^Valid here\./);
+  assert.match(validation, /Also links your existing pull request and issue rules to their repositories\./);
+  assert.match(validation, /Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are\./);
+  assert.equal(env.elements.get("save-adapter").disabled, false);
+
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository save");
+  assert.equal(saves.length, 1);
+  const saved = saves[0].config.adapters.artifacts;
+  assert.deepEqual(saved.find((adapter) => adapter.type === "github.pr"), handWritten);
+  assert.deepEqual(saved.find((adapter) => adapter.type === "github.issue"),
+    { ...issue, within: { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" } });
+});
+
+test("pre-filling organizations and rendering the gallery saves nothing", async () => {
+  const state = install({ adapters: existingGitHubRules(["a"], ["b"]) });
+  await openSettings();
+  typeSite("https://github.com");
+  assert.equal(env.elements.get("starter-gallery").querySelectorAll("input")[0].value, "a, b");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
 });
 
 const DAMAGED_RECORD = "Brauser's record of the adapters it has used (/cfg/adopted-contracts.json) is malformed. " +

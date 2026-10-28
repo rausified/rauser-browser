@@ -231,6 +231,15 @@ function genAdapter(r, index, origin) {
       type: r.pick(["jira.issue", adapter.type]), find: r.pick(["jira_key", "int", "hex", "uuid"]),
     }));
   }
+  // A container (§8.3) from some of the ID and scope captures, sometimes
+  // repeated so that only the container ID passes the 512-byte cap.
+  if (r.chance(0.3)) {
+    const usable = scoped ? [...captures, scoped] : captures;
+    const parts = r.shuffle(usable).slice(0, r.range(0, usable.length)).map((c) => `{${c.name}}`);
+    if (r.chance(0.2)) parts.push(...parts, ...parts);
+    if (r.chance(0.2)) parts.unshift("x-y");
+    adapter.within = { type: `c${index}.group`, id: [`${scheme}.c:{host}`, ...parts].join("/") };
+  }
   return { json: adapter, rules, captures, scoped, titles, insensitive, modeAlts };
 }
 

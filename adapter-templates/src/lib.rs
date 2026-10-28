@@ -22,11 +22,12 @@ mod title;
 mod value;
 
 pub use ctype::{BaseType, CType, CaseMod};
-pub use document::{Adapter, Document, MAX_ADAPTERS, MAX_RULES, Mode, SHARED_ORIGINS};
+pub use document::{Adapter, Container, Document, MAX_ADAPTERS, MAX_RULES, Mode, SHARED_ORIGINS};
 pub use draft::{DraftOutcome, Scope, check_draft};
 pub use error::{DraftErrorCode, ErrorCode, Field, ValidationError};
 pub use eval::{
-    MAX_ID_BYTES, MAX_REFS, MAX_URL_CHARS, Match, NoMatch, Ref, ResolvedRef, TitleMatch, scan_refs,
+    ContainerMatch, MAX_ID_BYTES, MAX_REFS, MAX_URL_CHARS, Match, NoMatch, Ref, ResolvedRef,
+    TitleMatch, scan_refs,
 };
 pub use overlap::OverlapPair;
 pub use path::prepare_segments;

@@ -1776,29 +1776,42 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
     };
     let artifact = match index.artifact(&matched.artifact_id) {
         Ok(Some(artifact)) => artifact,
-        Ok(None) => ArtifactView {
-            // Context can be saved before the artifact's first activity is
-            // delivered, since activity derives rows but context does not
-            // wait on it; look it up directly instead of hardcoding `None`
-            // and blanking context the user just saved.
-            why: index.latest_why(&matched.artifact_id).ok().flatten(),
-            artifact_id: matched.artifact_id,
-            artifact_type: matched.artifact_type,
-            title: matched
-                .title
-                .map(|title| title.title)
-                .or(value.title)
-                .unwrap_or_else(|| "Untitled".into()),
-            url: canonical,
-            first_seen: String::new(),
-            last_seen: String::new(),
-            focused_seconds: 0,
-            background_seconds: 0,
-            opens: 0,
-            days_opened: 0,
-            last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
-            linked_count: 0,
-        },
+        Ok(None) => {
+            let document = config.adapter_document().ok();
+            let container =
+                document.and_then(|document| crate::index::unvisited_container(document, &matched));
+            let within =
+                document.and_then(|document| crate::index::unvisited_within(document, &matched));
+            let (title, url) = container.unwrap_or_else(|| {
+                let title = matched
+                    .title
+                    .map(|title| title.title)
+                    .or(value.title)
+                    .unwrap_or_else(|| "Untitled".into());
+                (title, canonical)
+            });
+            ArtifactView {
+                // Context can be saved before the artifact's first activity is
+                // delivered, since activity derives rows but context does not
+                // wait on it; look it up directly instead of hardcoding `None`
+                // and blanking context the user just saved.
+                why: index.latest_why(&matched.artifact_id).ok().flatten(),
+                artifact_id: matched.artifact_id,
+                artifact_type: matched.artifact_type,
+                title,
+                url,
+                first_seen: String::new(),
+                last_seen: String::new(),
+                focused_seconds: 0,
+                background_seconds: 0,
+                opens: 0,
+                days_opened: 0,
+                last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
+                linked_count: 0,
+                within,
+                contained: Vec::new(),
+            }
+        }
         Err(_) => {
             return error(
                 &value.request_id,
@@ -5837,6 +5850,76 @@ id = "work:{host}/{id}"
             panic!("expected capture result")
         };
         reply.outcome
+    }
+
+    #[test]
+    fn an_unvisited_container_is_titled_from_its_id() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://github.com\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "github.pr"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.pr:{host}/{owner}/{repo}/{number}"
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+
+[[artifacts]]
+type = "github.repo"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/{*}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.repo:{host}/{owner}/{repo}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let get = |config: &mut ConfigStore, url: &str| {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: url.into(),
+                    title: Some("widgets/README.md at main · acme-corp/widgets".into()),
+                },
+                config,
+            ) else {
+                panic!("expected artifact result")
+            };
+            reply.artifact.unwrap()
+        };
+        let repo = get(
+            &mut config,
+            "https://github.com/acme-corp/widgets/blob/main/README.md",
+        );
+        assert_eq!(repo.artifact_id, "github.repo:github.com/acme-corp/widgets");
+        assert_eq!(repo.title, "acme-corp/widgets");
+        assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
+        assert_eq!((repo.within, repo.contained), (None, vec![]));
+        // A contained artifact keeps its page title.
+        let pull = get(&mut config, "https://github.com/acme-corp/widgets/pull/7");
+        assert_eq!(pull.title, "widgets/README.md at main · acme-corp/widgets");
+        assert_eq!(pull.url, "https://github.com/acme-corp/widgets/pull/7");
+        // Unvisited, it still names the repository it sits within.
+        assert_eq!(
+            pull.within,
+            Some(brauser_protocol::ArtifactRefView {
+                artifact_id: "github.repo:github.com/acme-corp/widgets".into(),
+                artifact_type: "github.repo".into(),
+                title: "acme-corp/widgets".into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+            })
+        );
+        assert!(pull.contained.is_empty());
     }
 
     #[test]

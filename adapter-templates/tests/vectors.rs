@@ -146,6 +146,12 @@ fn run_evaluate(case: &Json, doc: &Document) -> Result<Json, String> {
                 "artifact_id": m.artifact_id,
                 "mode": m.mode.map(|x| x.as_str()),
             });
+            if let Some(w) = &m.within {
+                out.as_object_mut().unwrap().insert(
+                    "within".into(),
+                    json!({"type": w.artifact_type, "artifact_id": w.artifact_id}),
+                );
+            }
             if let Some(t) = &m.title {
                 let refs: Vec<Json> = t
                     .refs

@@ -330,6 +330,12 @@ PR 3 (real runners, extraction, and the run card) is built; see Shipped.
 - [ ] `brwr-3rt` **Isolate scripted host lifecycle tests on Windows.** Add a
   debug-only disposable config-path seam before running host-kill tests on
   Windows, whose Known Folders lookup ignores the Unix HOME fixture.
+- [ ] `brwr-mdt` **Make capture.rs tests independent of the calendar day (P2).**
+  `batch_appends_visits_and_overflow_once_with_a_compact_intent` and
+  `oversized_daily_log_is_rejected_not_retried` failed on Windows CI at
+  exactly 2026-10-28T00:00Z (PR #126): their timestamps come from the wall
+  clock, so a run across midnight sees two days. Pin the clock or date, or
+  build timestamps away from midnight.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.

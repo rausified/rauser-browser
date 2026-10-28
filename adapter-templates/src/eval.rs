@@ -78,6 +78,13 @@ pub struct TitleMatch {
     pub refs: Vec<Ref>,
 }
 
+/// The container a match sits within (§8.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContainerMatch {
+    pub artifact_type: String,
+    pub artifact_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Match {
     pub adapter: usize,
@@ -90,6 +97,9 @@ pub struct Match {
     pub mode: Option<Mode>,
     /// Present when a title was given.
     pub title: Option<TitleMatch>,
+    /// Present when the adapter declares `within` and the container ID fits
+    /// in 512 bytes.
+    pub within: Option<ContainerMatch>,
 }
 
 impl Match {
@@ -244,6 +254,14 @@ impl Document {
             .id
             .build(&adapter.host, |n| lookup(&caps, n))
             .ok_or(NoMatch::IdTooLong)?;
+        // A container ID past 512 bytes drops only the container (§8.3).
+        let within = adapter.within.as_ref().and_then(|c| {
+            let artifact_id = c.id.build(&adapter.host, |n| lookup(&caps, n))?;
+            Some(ContainerMatch {
+                artifact_type: c.artifact_type.clone(),
+                artifact_id,
+            })
+        });
         let rule = &adapter.rules[r];
         let mode = match lookup(&caps, "mode") {
             Some(m) => adapter
@@ -262,6 +280,7 @@ impl Document {
             artifact_id,
             mode,
             title,
+            within,
         })
     }
 
