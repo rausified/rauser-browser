@@ -2,13 +2,16 @@ import {
   PANEL_NOTICE_KEY,
   PANEL_NOTICE_MAX_AGE_MS,
   SITE_ACCESS_ORIGINS,
+  PolicyLeaseCache,
+  captureUrl,
   isHttpUrl,
   isPanelNotice,
   localTimestamp,
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, captureStateText, describe, element, setupProblem, worker } from "./settings.js";
+import { ConfigSession, captureStateText, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
+import { evaluate } from "./adapter-templates.js";
 import { PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
 import { APP_NAME, storageKey } from "./brand.js";
@@ -67,6 +70,10 @@ const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
 const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
 const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
+const captureExplanation = element<HTMLDivElement>("capture-explanation");
+const captureExplanationText = element<HTMLParagraphElement>("capture-explanation-text");
+const captureExplanationAction = element<HTMLButtonElement>("capture-explanation-action");
+const capturePolicy = new PolicyLeaseCache();
 const artifactCard = element<HTMLElement>("artifact-card");
 const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
@@ -649,8 +656,72 @@ function changing(): boolean {
   return busy || replaying || tickRunning || captureSite?.saving === true;
 }
 
+/** Explain automatic capture from the host snapshot and local narrowing
+ * state. Use the worker's compiler/evaluator; page links never enter this
+ * decision. Recognition and history on the artifact card remain host-owned. */
+function renderCaptureExplanation(): void {
+  captureExplanationAction.dataset.action = "settings";
+  captureExplanationAction.textContent = "Open settings";
+  captureExplanationAction.disabled = changing();
+  const config = session.config;
+  if (!currentPage || !config || !session.revision) {
+    captureExplanation.hidden = true;
+    captureExplanationText.textContent = "";
+    return;
+  }
+  const state = session.status;
+  let reason: string;
+  if (session.configIssue || session.adapterIssue) {
+    reason = "Capture is unavailable until the configuration is repaired in settings.";
+  } else if (!config.storage) {
+    reason = "Capture needs a home folder. Choose one in settings.";
+  } else if (state?.pending_removals.includes(new URL(currentPage.url).origin)) {
+    reason = "This site's removal is pending. Capture stays off here until settings finishes the removal.";
+  } else if (!config.capture_enabled) {
+    reason = "Capture is paused. Resume capture in settings to remember work on matching pages.";
+  } else if (state?.pause_pending) {
+    reason = "Capture is paused in this browser. Open settings to finish saving the pause.";
+  } else if (!captureUrl(currentPage.url)) {
+    reason = "Pages whose addresses include sign-in credentials are excluded from capture.";
+  } else if (!session.connected || !state || state.policy_expires_at === null || state.policy_expires_at <= Date.now()) {
+    reason = "Capture settings are unavailable or out of date in this browser. Open settings to refresh them.";
+  } else {
+    const lease = capturePolicy.restore(leaseFor(config, session.revision));
+    const compiled = lease && capturePolicy.compiledFor(lease);
+    if (!compiled) {
+      reason = "Capture rules could not be read. Repair them in settings.";
+    } else {
+      const result = evaluate(compiled, currentPage.url, currentPage.title);
+      if (result.match) {
+        captureExplanation.hidden = true;
+        captureExplanationText.textContent = "";
+        return;
+      }
+      switch (result.reason) {
+        case "out_of_scope":
+          reason = "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
+          break;
+        case "no_adapter":
+          reason = "This site has no capture rules. Review Capture Site to choose which pages to remember.";
+          captureExplanationAction.textContent = "Review Capture Site";
+          captureExplanationAction.dataset.action = "capture-site";
+          captureExplanationAction.disabled ||= element<HTMLButtonElement>("capture-site").disabled;
+          break;
+        case "no_rule":
+          reason = "This page does not match this site's capture rules. Only matching pages are remembered. Review the rules in settings.";
+          break;
+        default:
+          reason = "This page's address cannot safely match the capture rules. Review the rules in settings.";
+      }
+    }
+  }
+  if (captureExplanationText.textContent !== reason) captureExplanationText.textContent = reason;
+  captureExplanation.hidden = false;
+}
+
 function updateControls(): void {
   captureSite?.render(currentPage, changing());
+  renderCaptureExplanation();
   const connected = session.connected;
   const config = session.config;
   const state = session.status;
@@ -1343,6 +1414,12 @@ function reenableSiteAccess(): void {
 }
 
 settingsButton.addEventListener("click", openSettings);
+captureExplanationAction.addEventListener("click", () => {
+  if (captureExplanationAction.dataset.action === "capture-site") {
+    selectView("page");
+    element<HTMLButtonElement>("capture-site").click();
+  } else openSettings();
+});
 setupSettingsButton.addEventListener("click", openSettings);
 pauseButton.addEventListener("click", () => void pauseCapture());
 replayButton.addEventListener("click", () => void replayVisits());

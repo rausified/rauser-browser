@@ -287,9 +287,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   dated as-built and probe records to `docs/history.md`, and make AGENTS.md
   "Current state" a short table.
 
-- [ ] `brwr-3rt` **Isolate scripted host lifecycle tests on Windows.** Add a
-  debug-only disposable config-path seam before running host-kill tests on
-  Windows, whose Known Folders lookup ignores the Unix HOME fixture.
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
@@ -355,11 +352,6 @@ shipped (see Shipped).
   cleanup across panels. Discovered while restoring local note recovery; this optional
   UX follow-up comes after assigned work.
 
-- [ ] `brwr-vny` **Explain why the current page is outside capture.** Use
-  the compiled policy to distinguish a paused site, pending removal, tenant
-  scope and an unmatched page rule, with the relevant settings/review action.
-  Link patterns must never become evidence that a page was visited.
-
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
   person start and end one explicit local session from the panel so a Jira
   issue, design document, and pull request can appear together under the
@@ -418,6 +410,10 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** User Experience. **Explain why the current page is outside capture (2026-10-28).** Completed assigned `brwr-vny`. The panel distinguishes host and browser-local pauses, pending site removals, workspace/account scope exclusions and unmatched page rules, with settings or the existing Capture Site review as the next action. It reuses the revision-cached policy compiler and ordered evaluator, follows navigation and policy/status changes, clears on unreadable/private tabs, and never inspects links or changes capture or note identity. **Metrics:** 14 new composed-panel cases; all 158 panel cases and 15 extension files pass; 956 workspace Rust outcomes (43 explicit IPC skips), scripted-dialogs suite, full required/README gates and 10,696 inert Markdown renderings green.
+
+- **Category:** Testing & Verification. **Isolate scripted host lifecycle configuration across platforms (2026-10-28).** Completed assigned `brwr-3rt`. A debug scripted-dialogs-only absolute config-path override keeps both host picker fixtures and their cache inside temporary directories despite Windows Known Folders ignoring HOME. Ordinary builds ignore the override, invalid overrides refuse without fallback, and release builds retain the feature prohibition; macOS smoke defaults and dialog counts are unchanged. **Metrics:** Four process-boundary regressions pass in scripted builds; ordinary-build exclusion passes; all seven scripted picker lifecycle tests and the full required/README gates pass. Windows execution remains with CI.
 
 - **Category:** New Capability. **Browse preserved artifact notes without changing autosave (2026-10-28).** Completed assigned `brwr-r88`. Added an explicit panel disclosure listing verified note titles and artifact IDs when multiple historical notes share a stored address. Each opens in a separate text-only, copyable read-only viewer; the occupied URL note, primary autosave key, migrations and capture policy stay unchanged. The host rechecks ownership and address on open, uses the existing bounded scan with at most 24 results, and works without the history cache or recorded contracts. **Metrics:** 955 Rust outcomes (43 explicit IPC skips; 7 new tests), all 15 extension files, 144 panel cases (+8), two script files, and 10,696 inert Markdown renderings.
 
@@ -1187,3 +1183,39 @@ stop product work, and no history reset or production IPC change is called for.
   read-only mount. No retry or remote operation was attempted. The completed
   green diff, closed/exported bead and excluded `.bosun_commit_msg` are ready
   for the driver to commit with Cookie as author.
+
+### Cycle 13 — Capture explanations and isolated host fixtures (2026-10-28)
+
+- Health started clean: no gate-failure quarantine and no incomplete working
+  tree. The complete baseline passed before assigned work began. Completed
+  `brwr-3rt` and `brwr-vny`; both beads are closed and exported. Follow the
+  remaining assigned queue with `bd ready --label assigned` next cycle.
+- Final required and README gates pass: 956 workspace Rust outcomes (43
+  explicit IPC-denial skips), 819 scripted-dialogs outcomes (53 explicit IPC
+  skips and one ignored documentation example), all 15 extension files,
+  158 panel cases exercised individually (+14), both script files, and
+  10,696 inert Markdown renderings. Four new config-path process tests pass;
+  the ordinary build exercises the shared override-exclusion test too.
+- Fresh full-diff review checked recognition precedence, policy revision
+  changes, action wiring, privacy and config/cache isolation. It caught
+  repeated live-region text replacement, which now updates only when the
+  reason changes. Test development also corrected an invalid URL-shape
+  placeholder and an assertion that expected parser details instead of the
+  host's intentional generic configuration error; exact file revision now
+  proves which configuration was read.
+- macOS smoke explicitly refuses Linux; Windows execution is with CI. No
+  scripted dialog or smoke-step count changed. No remote Codex review was
+  run under the no-live-API instruction; the driver supplies independent
+  review. No live service, deployment, credential or git remote was touched.
+- Product direction: the capture explanation answers a concrete question
+  without becoming another monitoring view. Keep further capture diagnostics
+  subordinate to the remaining assigned work. Existing individual recovery
+  (`brwr-kws`), curated worklog sharing (`brwr-ppn`) and explicit focus sessions
+  (`brwr-ued`) offer more visible value than another internal status surface;
+  reuse those proposals rather than filing duplicates. Scope explanations
+  should continue to point to deliberate rule review, never silently widen
+  capture in response to a skipped page.
+- The required single commit attempt failed at `git add` because
+  `.git/index.lock` is on a read-only filesystem. No retry or remote operation
+  was attempted. The green working tree, closed/exported queue and excluded
+  `.bosun_commit_msg` are ready for the driver to commit as Cookie.

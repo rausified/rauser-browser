@@ -702,6 +702,19 @@ Dismiss. An unchanged generation does not request another lookup. Refreshes
 keep unsaved context for the same artifact and use the existing coalescing
 refresher so only the current page's response can render.
 
+**Capture exclusions (built 2026-10-28, `brwr-vny`).** A separate plain-language
+line explains why automatic capture is off for the current readable page:
+configuration repair, no home folder, pending site removal, a host or local
+pause, unavailable/expired browser policy, a workspace/account outside scope,
+or no matching page rule. It uses the worker's revision-cached compiler and
+ordered URL evaluator against the current host snapshot, with local narrowing
+state taking precedence. Settings handles repair, pause, scope and rule
+changes; a site without rules links to its existing Capture Site review.
+Recognized enabled pages need no exclusion line. Navigation and policy changes
+recompute it; unreadable/private tabs clear it. Page/link patterns never enter
+this decision, and the line neither enables capture nor changes the host's
+artifact/history verdict.
+
 **Incoming navigation (built 2026-10-28, `brwr-1g2`, protocol v8).** The
 artifact card shows up to five recorded incoming source/transition pairs,
 newest local day first, with ties ordered by source ID then transition.
@@ -1426,6 +1439,7 @@ The layout above is the planned release layout. The repository currently contain
 ## 10. Quality
 
 - **Host:** unit tests, property tests on URL normalization and slug generation, and fuzzing (`cargo-fuzz`) on the message parser, frontmatter parser, and path handling.
+- **Scripted host isolation:** debug `scripted-dialogs` lifecycle fixtures use an absolute `BRAUSER_TEST_CONFIG_PATH` under a temporary directory on every platform, with their cache beside it. Ordinary builds ignore the variable; a release build cannot include the feature. The macOS smoke wrapper retains its temporary-HOME defaults (TESTING.md).
 - **Extension:** unit tests, plus Playwright end-to-end tests running the real extension against a real host and a fixture vault.
 - **Round-trip tests:** every profile writes, reads back, and re-writes page notes and summary files with no diff, and user content outside managed blocks survives unchanged.
 - **CI on every PR:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, ESLint, TypeScript strict, dependency review, and the full test suite on macOS and Windows (`macos-15` and `windows-latest`, with `macos-15-intel` (x64) as a fallback only when GitHub cancels a starved `macos-15` job; the headless smoke run and the adapter-template fuzz-target compile check are macOS-only).

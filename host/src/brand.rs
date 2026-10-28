@@ -25,6 +25,9 @@ pub const FRONTMATTER_KEY: &str = concat!(namespace!(), ":");
 /// Names the scripted-answer directory in `scripted-dialogs` test builds.
 #[cfg(feature = "scripted-dialogs")]
 pub const SCRIPTED_DIALOGS_ENV: &str = "BRAUSER_SCRIPTED_DIALOGS";
+/// Absolute disposable config path for scripted host process tests.
+#[cfg(feature = "scripted-dialogs")]
+pub const TEST_CONFIG_PATH_ENV: &str = "BRAUSER_TEST_CONFIG_PATH";
 
 /// The launchd label of the per-user Brauser service. The extension's copy is
 /// `SERVICE_LABEL` in `extension/brand.ts`.

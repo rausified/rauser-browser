@@ -218,7 +218,9 @@ removals, missing folders, note edits and copy-out across identity changes,
 title refreshes during a held save, page switches during a held post-save
 note reload (including saving the next edit to the new page), and a failure
 after config commit. It asserts no Chrome permission request or native
-confirmation is sent. The worker regression installs policy with pages
+confirmation is sent. The capture-explanation action is also exercised from
+Recent: it switches to This page so the Capture Site review is visible, and
+still requires an explicit save. The worker regression installs policy with pages
 already open and verifies that
 attention begins immediately, private/non-artifact tabs stay excluded, and no
 cold open is invented; existing expired-lease and upgrade-navigation tests
@@ -448,6 +450,20 @@ Brauser's only native dialog is the folder picker, used for the home folder and 
 - Count dialogs, never hard-code a total: the runner's `dialogsShown` must equal the number of scripted answers it gives, and the final check compares it with the transcript's line count.
 
 Reference implementation: `host/src/dialog.rs` (`scripted` module) and `scripts/smoke-macos.mjs --headless`.
+
+Host lifecycle fixtures in `host/tests/scripted_dialogs.rs` also set
+`BRAUSER_TEST_CONFIG_PATH` to an absolute config file inside their temporary
+directory. Only debug `scripted-dialogs` builds honor this override; ordinary
+builds ignore it, and release builds with the feature cannot compile. Empty
+or relative overrides fail without falling back to user configuration.
+`--config-path` reports the override, and an injected path keeps the cache
+beside that config. This is necessary on Windows, where Known Folders ignore
+the fixture's `HOME`. The host-kill and knowledge-base picker tests run on
+both Windows and Unix without reading the user's config. `host/tests/config_path.rs`
+checks the process boundary, including the loaded file's exact revision and
+ordinary-build isolation. The macOS smoke wrapper still uses its cleared
+environment and temporary `HOME`; its config-path expectations and dialog
+count are unchanged.
 
 ### Browser permission prompts
 

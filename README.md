@@ -138,6 +138,12 @@ seen in only one link shape. Short lowercase route words remain readable;
 closing, collapsing, leaving or reloading the page forgets its link patterns. This is
 a preview and does not enable capture on an unknown site.
 
+The panel also explains when capture is paused, a site's removal is pending,
+the current page is outside the chosen workspaces/accounts, or no page rule
+matches. Use its settings button to review the relevant configuration, or
+**Review Capture Site** when the site has no rules. This explanation uses
+your current capture rules; it does not inspect page links or enable capture.
+
 While capture is on, Brauser keeps up to 20 visited URL patterns per configured
 site for seven days in trusted extension storage, including patterns of pages
 that capture skips. Page titles are excluded, and these samples never enter
