@@ -134,16 +134,25 @@ function choosePage(
   return { top, content: chosen.content, selection };
 }
 
-/** Extracts every frame of `tab` with the bundled Readability, then starts
- * (or joins) its summary run with the frame content choosePage picks. A page
- * no frame of which yields text, or whose top frame cannot be read, throws
+/** The page a run sends: what readTab read from a tab. */
+export interface TabPage {
+  url: string;
+  title: string;
+  content: string;
+  selection: string | null;
+}
+
+/** Extracts every frame of `tab` with the bundled Readability and returns
+ * the frame content choosePage picks, every string well-formed. A page no
+ * frame of which yields text, or whose top frame cannot be read, throws
  * `HostError("unreadable")`; a top frame that by then holds another address
- * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`;
- * neither sends anything. */
-export async function summarizeTab(
+ * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`.
+ * It sends nothing to the host: Summarize & log and the task bar both read
+ * pages through it. */
+export async function readTab(
   tab: { id: number; url: string; title: string },
-  deps: SummarizeDeps,
-): Promise<{ run: RunView; existing: boolean }> {
+  deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs">,
+): Promise<TabPage> {
   const target = { tabId: tab.id, allFrames: true };
   try {
     await deps.scripting.executeScript({ target, files: ["vendor/readability.js"] });
@@ -176,16 +185,31 @@ export async function summarizeTab(
   // The run is keyed by `tab.url`, so its content must come from that page;
   // subframe addresses differ from it by design.
   if (!sameAddress(tab.url, page.top.href)) throw new HostError("page_changed", PAGE_CHANGED_MESSAGE);
-  const response = await deps.host.call({
-    type: "start_run",
-    protocol_version: PROTOCOL_VERSION,
-    request_id: newRequestId(),
+  return {
     // Every string is made well-formed again, since the tab title comes from
     // Chrome and a stale or older extractor may not have done it.
     url: wellFormed(tab.url),
     title: wellFormed(cutTitle(page.top.title || tab.title)),
     content: wellFormed(page.content),
     selection: page.selection === null ? null : wellFormed(page.selection),
+  };
+}
+
+/** Reads `tab` (readTab, which throws `unreadable` or `page_changed` before
+ * anything is sent), then starts or joins its summary run. */
+export async function summarizeTab(
+  tab: { id: number; url: string; title: string },
+  deps: SummarizeDeps,
+): Promise<{ run: RunView; existing: boolean }> {
+  const page = await readTab(tab, deps);
+  const response = await deps.host.call({
+    type: "start_run",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+    url: page.url,
+    title: page.title,
+    content: page.content,
+    selection: page.selection,
     harness: null,
     record_key: null,
     requested_at: localTimestamp(deps.now()),

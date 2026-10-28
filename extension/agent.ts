@@ -4,10 +4,10 @@
 import type { AgentStatus, HarnessFound, HarnessId } from "../protocol/ts/generated.js";
 import { APP_NAME } from "./brand.js";
 
-/** Shown above the harness list, and once before a first summary (spec
- * §6.1). Summaries run with full access. */
+/** Shown above the harness list, and once before the first agent run of
+ * either kind, a summary or a task (spec §6.1). Both run with full access. */
 export const SETUP_WARNING =
-  "Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.";
+  "Summaries and tasks run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Use them on pages you trust.";
 
 /** What to do when the native host cannot reach the service. The host's own
  * message, which says why, follows it (serviceSetupText). */

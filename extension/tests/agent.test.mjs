@@ -58,7 +58,7 @@ test("serviceSetupText puts the setup instructions before the host's message", (
 
 test("the setup warning is the exact full-access text", () => {
   assert.equal(SETUP_WARNING,
-    "Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.");
+    "Summaries and tasks run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Use them on pages you trust.");
 });
 
 test("agentStateText_describes_each_state", () => {
