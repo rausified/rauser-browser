@@ -134,7 +134,8 @@ entry point through mocked Chrome injection and host transport. It checks the
 item heading reaches `start_run` and the returned run, and that a caller still
 holding the list URL is refused without starting another run. Separate cases
 cover Readability/body fallback, missing/hidden/ambiguous headings, equal
-duplicate headings, and title limits with surrogate replacement. The stale
+duplicate headings, title limits with surrogate replacement, and a hung
+Readability injection that is given up on after the all-frames timeout. The stale
 title cases failed before the extractor preferred a unique main-page H1.
 These are local mocks; actual GitHub navigation and Chrome rendering remain
 macOS browser acceptance work.
@@ -479,8 +480,9 @@ Service tests use in-process fake runners; none sets an environment
 variable or runs a real harness.
 
 Extension tests cover the view shape (`agent.test.mjs`: task keys only on
-task views, a task view without `instruction` rejected, the new setup
-warning), `readTab` (`extract.test.mjs`), the start
+task views, a task view without `instruction` (a corrupt record's failed
+view) accepted, the new setup warning), `readTab` (`extract.test.mjs`, including `a hung Readability injection is
+given up on and the page is read without it`), the start
 (`task.test.mjs`: no `kind` or `record_key`, the clean-up, nothing sent for
 an empty instruction, `markRunsMayExist` before and after,
 `taskFailureText` by code, the frame fit, and `startTask keeps the
@@ -495,7 +497,14 @@ per-tab failure lines, `summary and task lines live in their own areas and
 both clear on a tab switch`, the setup warning, restore into the task area
 only, cards across tabs, the draft across a tab switch, the context line,
 `the bar is never pre-filled from the page, the selection or agent text`,
-the announcement, Reuse and Dismiss).
+the announcement, Reuse and Dismiss, and the PR review cases: `a lost
+start_task answer says the task may have started and restores its card`,
+`a task view without an instruction (a corrupt record) still lists, without
+Reuse`, `a started task clears an earlier restore notice`, `the reworded
+setup warning shows once more to users who saw the old one` (the
+`summarize_warning_seen_v2` flag), `the selection is checked again when Run
+is pressed and when the panel gets focus` and `a repeated identical
+announcement is announced again`).
 
 ## Page-pattern review coverage
 
