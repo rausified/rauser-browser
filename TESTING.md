@@ -627,6 +627,10 @@ Don't just assume headless means invisible; check it. List on-screen windows (`C
 - Chrome's install-time permission warning, and what a real user sees after withdrawing and restoring site access in Chrome's own UI.
 - Browser-startup ordering for an installed extension: whether Chrome loads it, with its listeners, before restored tabs commit, and `runtime.onStartup` (see the `--load-extension` and Chrome for Testing notes above). A loaded extension with a stopped worker does get restored tabs' commits; one loaded during startup misses the active tab's.
 - Real idle and screen-lock transitions: the headless run has no way to drive them, and `chrome.idle.queryState` reported `active` throughout.
+- Chrome's own memory-saver discard: the probes discard tabs with `chrome.tabs.discard` instead.
+- The toolbar Back button, which skips history entries added without user activation (CDP has no GoBack).
+- Real omnibox and bookmark-bar navigations: the probes simulate their transition types through CDP.
+- Whether a browser restart clears `storage.session`: the probe's relaunch also reloads the unpacked recorder, which clears it anyway.
 - Visual or OS-level effects such as focus, cursors, and window lifetime (for example, the macOS busy cursor, or whether the real folder picker closes when the host goes away).
 - launchd: that `launchctl bootstrap` loads the dev LaunchAgent, that `launchctl kickstart` starts it on demand and `kickstart -k` replaces a stale build, that it exits after its idle timeout, and the environment launchd gives it. A release install's `SMAppService` registration (M5) is not built or tested at all. Real harness logins (Codex's stored login, Claude Code on Bedrock through `agent.env`) are not exercised either.
 - Real harnesses: that the installed `codex` and `claude` accept the recorded argv and JSON-RPC and stream-json shapes end to end (the fakes only follow what was read off the binaries), the quality of a real model's answer and whether it follows the §6.4 shape without a repair turn, and how a real agent with full access behaves on a hostile page.
