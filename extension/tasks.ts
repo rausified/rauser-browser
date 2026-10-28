@@ -48,7 +48,11 @@ let runs: RunView[] = [];
 let dismissed = new Set<string>();
 // The run ids in the order the list shows them, for the arrow keys.
 let order: string[] = [];
-const rows = new Map<string, { row: HTMLLIElement; pill: HTMLSpanElement }>();
+interface RowParts { row: HTMLLIElement; instruction: HTMLParagraphElement; pill: HTMLSpanElement; time: HTMLSpanElement }
+const rows = new Map<string, RowParts>();
+// The groups and rows the list last drew, so a refresh that changes neither
+// updates the rows in place instead of rebuilding them (and losing focus).
+let layoutKey = "";
 let selectedId: string | null = null;
 let detail: TaskDetail | null = null;
 // Whether the first full listing has finished, so refreshes may run.
@@ -144,8 +148,19 @@ function pillClass(run: RunView): string {
 }
 
 function setPill(pill: HTMLSpanElement, run: RunView): void {
-  pill.className = pillClass(run);
-  pill.textContent = pillText(run);
+  if (pill.className !== pillClass(run)) pill.className = pillClass(run);
+  if (pill.textContent !== pillText(run)) pill.textContent = pillText(run);
+}
+
+function setText(node: HTMLElement, text: string): void {
+  if (node.textContent !== text) node.textContent = text;
+}
+
+/** A row's text, from the latest view of its run. */
+function fillRow(parts: RowParts, run: RunView): void {
+  setText(parts.instruction, run.instruction ?? "");
+  setPill(parts.pill, run);
+  setText(parts.time, startTime(run));
 }
 
 /** The local time a run started, or was queued if it has not started. */
@@ -161,21 +176,39 @@ function rowFor(run: RunView): HTMLLIElement {
   row.setAttribute("role", "option");
   row.setAttribute("aria-selected", "false");
   row.tabIndex = -1;
-  const instruction = make("p", "task-row-instruction");
-  instruction.textContent = run.instruction ?? "";
+  const parts: RowParts = {
+    row,
+    instruction: make("p", "task-row-instruction"),
+    pill: make("span", "task-pill"),
+    time: make("span", "task-row-time"),
+  };
+  fillRow(parts, run);
   const meta = make("p", "task-row-meta");
-  const pill = make("span", "task-pill");
-  setPill(pill, run);
-  const time = make("span", "task-row-time");
-  time.textContent = startTime(run);
-  meta.append(pill, time);
-  row.append(instruction, meta);
+  meta.append(parts.pill, parts.time);
+  row.append(parts.instruction, meta);
   row.addEventListener("click", () => select(run.run_id, true));
-  rows.set(run.run_id, { row, pill });
+  rows.set(run.run_id, parts);
   return row;
 }
 
+/** Draws the list. When the groups and rows are the ones already drawn,
+ * only their text changes, so a row keeps its element and its focus; a
+ * rebuild puts focus back on the selected row if a row held it. */
 function renderList(): void {
+  const groups = runs.length === 0 ? [] : groupTasks(shownRuns(), new Date());
+  const key = runs.length === 0
+    ? "empty"
+    : JSON.stringify(groups.map((group) => [group.label, ...group.runs.map((run) => run.run_id)]));
+  if (key === layoutKey) {
+    for (const group of groups) {
+      for (const run of group.runs) fillRow(rows.get(run.run_id)!, run);
+    }
+    markSelected();
+    return;
+  }
+  layoutKey = key;
+  const active = document.activeElement;
+  const hadFocus = [...rows.values()].some((parts) => parts.row === active);
   rows.clear();
   if (runs.length === 0) {
     order = [];
@@ -186,7 +219,6 @@ function renderList(): void {
   }
   empty.hidden = true;
   layout.hidden = false;
-  const groups = groupTasks(shownRuns(), new Date());
   order = groups.flatMap((group) => group.runs.map((run) => run.run_id));
   const blocks = groups.map((group, index) => {
     const block = make("div", "task-group-block");
@@ -209,6 +241,10 @@ function renderList(): void {
     list.replaceChildren(...blocks);
   }
   markSelected();
+  if (hadFocus) {
+    const target = (selectedId !== null ? rows.get(selectedId) : undefined) ?? rows.get(order[0] ?? "");
+    target?.row.focus();
+  }
 }
 
 /** Marks the selected row, and keeps one row in the tab order. */
@@ -281,13 +317,10 @@ function selectFromHash(): void {
 }
 
 function taskChanged(run: RunView): void {
-  const before = runs.find((candidate) => candidate.run_id === run.run_id);
   runs = mergeRuns(runs, [run]);
-  const after = runs.find((candidate) => candidate.run_id === run.run_id)!;
-  const parts = rows.get(run.run_id);
-  // Finishing moves a row out of Running (and maybe out of the filter).
-  if (!before || !parts || isTerminal(before) !== isTerminal(after)) renderList();
-  else setPill(parts.pill, after);
+  // Finishing moves a row out of Running (and maybe out of the filter);
+  // otherwise only its pill changes.
+  renderList();
   schedulePoll();
 }
 
@@ -359,7 +392,8 @@ async function open(): Promise<void> {
     showListError(error);
     return;
   }
-  dismissed = new Set(await dismissedIds(storage));
+  // An unreadable dismissed list hides nothing.
+  dismissed = new Set(await dismissedIds(storage).catch((): string[] => []));
   if (closed) return;
   listed = true;
   showStatus(null);

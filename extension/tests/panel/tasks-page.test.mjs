@@ -43,7 +43,7 @@ let loads = 0;
 // full instruction. `intercept(request, state)` may answer first.
 async function openTasks({
   runs = [task(1), task(2), task(3)], pageSize = 20, agentStatus = READY, local = new Map(),
-  hash = "", platform = "MacIntel", intercept = () => null,
+  hash = "", platform = "MacIntel", intercept = () => null, localGet = null,
 } = {}) {
   const elements = pageElements(TASKS_HTML);
   // A select's value is its first option's until one is chosen.
@@ -59,7 +59,13 @@ async function openTasks({
 
   globalThis.document = {
     getElementById: (id) => elements.get(id) ?? null,
-    createElement: (tag) => new FakeElement(tag),
+    // Focus is tracked, so a test can see which element holds it.
+    createElement: (tag) => {
+      const created = new FakeElement(tag);
+      created.focus = () => { created.focused = true; state.active = created; };
+      return created;
+    },
+    get activeElement() { return state.active ?? null; },
     get visibilityState() { return state.hidden ? "hidden" : "visible"; },
     get hidden() { return state.hidden; },
     addEventListener: on(docListeners),
@@ -130,7 +136,7 @@ async function openTasks({
       },
     },
     storage: {
-      local: storageArea(local),
+      local: localGet ? { ...storageArea(local), get: localGet } : storageArea(local),
       session: storageArea(state.session),
       onChanged: { addListener() {} },
     },
@@ -411,4 +417,33 @@ test("Open page opens the task's own URL and Reuse hands the instruction to the 
   assert.equal(handed.instruction, "Task 1");
   assert.equal(handed.window_id, null);
   assert.equal(typeof handed.at, "number");
+});
+
+test("the list keeps keyboard focus across a refresh", async () => {
+  const page = await openTasks({ runs: [task(1, { state: "running" }), task(2), task(3)] });
+  await listed(page);
+  page.el("tasks-list").dispatch("keydown", { key: "ArrowDown", preventDefault() {} });
+  const focused = document.activeElement;
+  assert.equal(focused.dataset.runId, runId(2));
+  // A refresh that changes no row updates the rows in place.
+  const lists = page.sent("list_runs").length;
+  await until(() => page.sent("list_runs").length > lists, "a list refresh");
+  await settle(20);
+  assert.equal(document.activeElement, focused);
+  assert.ok(page.rows().includes(focused), "the focused row is still in the list");
+  // A refresh that adds a row rebuilds the list and puts focus back on the selected row.
+  page.state.runs.unshift(task(0, { state: "running" }));
+  await until(() => page.rows().some((row) => row.dataset.runId === runId(0)), "the new task");
+  assert.equal(document.activeElement.dataset.runId, runId(2));
+  assert.ok(page.rows().includes(document.activeElement));
+  assert.deepEqual(page.selected(), [runId(2)]);
+});
+
+test("a dismissed-list read failure still shows the tasks", async () => {
+  const page = await openTasks({
+    localGet: async () => { throw new Error("storage is unavailable"); },
+  });
+  await until(() => page.rows().length === 3, "the task list");
+  assert.equal(page.el("tasks-status-box").hidden, true);
+  assert.deepEqual(page.selected(), [runId(1)]);
 });
