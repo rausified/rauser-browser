@@ -414,7 +414,7 @@
       "url": "https://tools.example.com/?filter=x"
     }
   ],
-  "protocol_version": 7,
+  "protocol_version": 8,
   "remapped": 0,
   "request_id": "draft-1",
   "revision": "<revision>",

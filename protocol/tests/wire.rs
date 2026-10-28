@@ -1072,7 +1072,7 @@ fn unknown_drafter_value_is_rejected() {
 
 fn start_site_draft(visited: usize, links: usize) -> Value {
     json!({
-        "type": "start_site_draft", "protocol_version": 7, "request_id": "r1",
+        "type": "start_site_draft", "protocol_version": 8, "request_id": "r1",
         "origin": "https://work.example",
         "visited": shapes("v", visited), "links": shapes("l", links),
         "harness": null, "requested_at": "2026-10-28T09:00:00-07:00",
@@ -1092,7 +1092,7 @@ fn run_view() -> Value {
 
 fn run_fetched_value(view: Value) -> Value {
     json!({
-        "type": "run_fetched", "protocol_version": 7, "request_id": "r",
+        "type": "run_fetched", "protocol_version": 8, "request_id": "r",
         "run": view, "stream_text": "x", "next_offset": 1, "more": false,
     })
 }
