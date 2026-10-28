@@ -702,6 +702,22 @@ Dismiss. An unchanged generation does not request another lookup. Refreshes
 keep unsaved context for the same artifact and use the existing coalescing
 refresher so only the current page's response can render.
 
+**Incoming navigation (built 2026-10-28, `brwr-1g2`, protocol v8).** The
+artifact card shows up to five recorded incoming source/transition pairs,
+newest local day first, with ties ordered by source ID then transition.
+Each row names the known source artifact with an explicit HTTP(S) link
+opening a new tab (`noopener noreferrer`), describes the browser transition
+as navigation, and gives its last recorded day. Repeated observations of a
+pair stay one row, and a source can appear under more than one transition.
+The host derives this only from existing validated trail edges and recorded
+artifacts. Back/forward (including historical paired sources), unknown legacy
+transitions, missing source artifacts, self edges, mentions, co-focus and
+containment never supply a row. An empty list says "No known incoming source
+recorded", without claiming that no navigation happened. Titles render as
+text, and following another page clears the previous page's list. No new
+capture, permission or agent request is involved; protocol v8 adds the
+required `ArtifactView.incoming_trails` response field.
+
 ```
 ┌────────────────────────────────────────────┐
 │ Rauser Browser Assistant                ⚙  │  gear opens settings

@@ -19,7 +19,7 @@ use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
-    StorageConfig, SummaryView, WhyEvent,
+    IncomingTrailView, StorageConfig, SummaryView, WhyEvent,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -1672,6 +1672,47 @@ fn saturating_u32(value: u64) -> u32 {
 /// The most artifacts an artifact view lists as contained in it.
 const MAX_CONTAINED: usize = 20;
 
+const MAX_INCOMING_TRAILS: usize = 5;
+
+fn incoming_trails(id: &str, derived: &Derived) -> Vec<IncomingTrailView> {
+    let mut incoming = derived
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.target == id
+                && edge.source != id
+                && trail_transition_is_valid(&edge.kind)
+                // Back/forward has no attributed same-tab source. Do not
+                // turn a historical paired source into apparent provenance.
+                && edge.kind != "forward_back"
+        })
+        .filter_map(|edge| Some((edge, derived.artifacts.get(&edge.source)?)))
+        .filter(|(_, source)| {
+            Url::parse(&source.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        })
+        .collect::<Vec<_>>();
+    incoming.sort_by(|(a, _), (b, _)| {
+        b.last_seen
+            .cmp(&a.last_seen)
+            .then_with(|| a.source.cmp(&b.source))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+    incoming
+        .into_iter()
+        .take(MAX_INCOMING_TRAILS)
+        .map(|(edge, source)| IncomingTrailView {
+            source: ArtifactRefView {
+                artifact_id: source.artifact_id.clone(),
+                artifact_type: source.artifact_type.clone(),
+                title: source.title.clone(),
+                url: source.url.clone(),
+            },
+            transition: edge.kind.clone(),
+            last_seen: edge.last_seen.clone(),
+        })
+        .collect()
+}
+
 fn artifact_view(row: &ArtifactRow, derived: &Derived) -> ArtifactView {
     let id = row.artifact_id.as_str();
     let linked = linked_count(&derived.edges, &derived.artifacts, id);
@@ -1730,6 +1771,7 @@ fn artifact_view(row: &ArtifactRow, derived: &Derived) -> ArtifactView {
         linked_count: saturating_u32(linked as u64),
         within,
         contained,
+        incoming_trails: incoming_trails(id, derived),
     }
 }
 
@@ -4025,6 +4067,161 @@ print(json.dumps([tables,row]))"#;
     }
 
     #[test]
+    fn incoming_trails_only_show_known_navigation_sources() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let source = activity(
+            &Uuid::new_v4().to_string(),
+            "SOURCE",
+            "<img src=x onerror=alert(1)>",
+            "2026-10-15T12:00:00Z",
+        );
+        index.record_activities([&source], &[]).unwrap();
+        for transition in [
+            "link",
+            "typed",
+            "auto_bookmark",
+            "auto_subframe",
+            "manual_subframe",
+            "generated",
+            "start_page",
+            "form_submit",
+            "reload",
+            "keyword",
+            "keyword_generated",
+            "forward_back",
+        ] {
+            let mut target = activity(
+                &Uuid::new_v4().to_string(),
+                transition,
+                "Target mentions SOURCE",
+                "2026-10-16T13:00:00Z",
+            );
+            target.trails = vec![
+                ActivityTrail {
+                    from_artifact_id: Some(source.artifact_id.clone()),
+                    from_url: Some(source.url.clone()),
+                    transition: transition.into(),
+                },
+                ActivityTrail {
+                    from_artifact_id: Some("work:example.com/MISSING".into()),
+                    from_url: Some("https://example.com/items/MISSING".into()),
+                    transition: "link".into(),
+                },
+                ActivityTrail {
+                    from_artifact_id: Some(target.artifact_id.clone()),
+                    from_url: Some(target.url.clone()),
+                    transition: "link".into(),
+                },
+                ActivityTrail {
+                    from_artifact_id: None,
+                    from_url: None,
+                    transition: "forward_back".into(),
+                },
+            ];
+            index.record_activities([&target], &[]).unwrap();
+            let incoming = index
+                .artifact(&target.artifact_id)
+                .unwrap()
+                .unwrap()
+                .incoming_trails;
+            if transition == "forward_back" {
+                assert!(incoming.is_empty(), "{transition}");
+            } else {
+                assert_eq!(incoming.len(), 1, "{transition}");
+                assert_eq!(incoming[0].transition, transition);
+                assert_eq!(incoming[0].source.artifact_id, source.artifact_id);
+                assert_eq!(
+                    incoming[0].source.title,
+                    source.title.as_ref().unwrap().as_str()
+                );
+                assert_eq!(incoming[0].last_seen, "2026-10-16");
+            }
+        }
+        assert!(
+            index
+                .artifact(&source.artifact_id)
+                .unwrap()
+                .unwrap()
+                .incoming_trails
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn incoming_trails_are_bounded_sorted_and_deduplicated_after_rebuild() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let mut sources = Vec::new();
+        let mut targets = Vec::new();
+        for day in 10..18 {
+            let at = format!("2026-10-{day}T12:00:00Z");
+            let source = activity(
+                &Uuid::new_v4().to_string(),
+                &format!("S{day}"),
+                "Source",
+                &at,
+            );
+            let mut target = activity(&Uuid::new_v4().to_string(), "TARGET", "Target", &at);
+            target.trails.push(ActivityTrail {
+                from_artifact_id: Some(source.artifact_id.clone()),
+                from_url: Some(source.url.clone()),
+                transition: "link".into(),
+            });
+            sources.push(source);
+            targets.push(target);
+        }
+        // Repeated source/transition observations are still one incoming row.
+        let mut repeated = targets.last().unwrap().clone();
+        repeated.event_id = Uuid::new_v4().to_string();
+        targets.push(repeated);
+        index
+            .record_activities(sources.iter().chain(targets.iter()), &[])
+            .unwrap();
+        let check = || {
+            let incoming = index
+                .artifact("work:example.com/TARGET")
+                .unwrap()
+                .unwrap()
+                .incoming_trails;
+            assert_eq!(incoming.len(), MAX_INCOMING_TRAILS);
+            assert_eq!(
+                incoming
+                    .iter()
+                    .map(|trail| trail.last_seen.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "2026-10-17",
+                    "2026-10-16",
+                    "2026-10-15",
+                    "2026-10-14",
+                    "2026-10-13"
+                ]
+            );
+            assert_eq!(incoming[0].source.artifact_id, "work:example.com/S17");
+        };
+        check();
+        // Persist owned markers so reindex proves the same query from logs.
+        let logs = root.path().join("log/2026/10");
+        fs::create_dir_all(&logs).unwrap();
+        let mut log = format!("{LOG_HEADER}\n");
+        for event in sources.iter().chain(targets.iter()) {
+            log.push_str(&format!(
+                "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
+                sha256_hex(event.event_id.as_bytes()),
+                sha256_hex(event.url.as_bytes()),
+                event.occurred_at,
+                hex::encode(serde_json::to_vec(event).unwrap()),
+            ));
+        }
+        fs::write(logs.join("2026-10-17.md"), log).unwrap();
+        index.reindex().unwrap();
+        check();
+    }
+
+    #[test]
     fn linked_artifacts_are_distinct_and_unresolved_mentions_do_not_count() {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
@@ -4596,6 +4793,8 @@ print(json.dumps([tables,row]))"#;
             assert_eq!(artifact.focused_seconds, 125);
             assert_eq!(artifact.background_seconds, 61);
             assert_eq!(artifact.linked_count, 1);
+            assert_eq!(artifact.incoming_trails.len(), 1);
+            assert_eq!(artifact.incoming_trails[0].transition, "link");
             let output = Command::new("python3")
                 .args([
                     "-c",

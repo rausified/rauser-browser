@@ -208,7 +208,7 @@ test("maximal extraction stays under the host frame cap", () => {
   assert.ok(encoded(result.content) + encoded(result.selection) <= EXTRACT_LIMITS.maxRequestBytes);
   assert.ok(result.title.length <= EXTRACT_LIMITS.maxTitleChars);
   const frame = JSON.stringify({
-    type: "start_run", protocol_version: 7, request_id: "x".repeat(128), url: `https://example.com/${"a".repeat(8000)}`,
+    type: "start_run", protocol_version: 8, request_id: "x".repeat(128), url: `https://example.com/${"a".repeat(8000)}`,
     title: result.title, content: result.content, selection: result.selection, harness: null, record_key: null,
     requested_at: "2026-10-27T09:15:00-04:00",
   });

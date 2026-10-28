@@ -1878,6 +1878,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                     linked_count: 0,
                     within,
                     contained: Vec::new(),
+                    incoming_trails: Vec::new(),
                 },
                 None,
             )
@@ -6937,6 +6938,113 @@ id = "github.repo:{host}/{owner}/{repo}"
         assert_eq!(repo.artifact_id, "github.repo:github.com/acme-corp/widgets");
         assert_eq!((repo.opens, repo.focused_seconds), (0, 0));
         assert!(repo.contained.is_empty());
+    }
+
+    #[test]
+    fn artifact_query_exposes_bounded_validated_incoming_sources() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "",
+            "capture_enabled = true",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/issues/{id:int}" }]
+id = "work:{host}/{id}"
+title = "{title}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut trails = Vec::new();
+        for (id, transition) in (1..=7).zip([
+            "link",
+            "form_submit",
+            "typed",
+            "auto_bookmark",
+            "generated",
+            "keyword",
+            "reload",
+        ]) {
+            let mut source = activity_for_invalid_policy();
+            source.artifact_id = format!("work:work.example/{id}");
+            source.url = format!("https://work.example/issues/{id}");
+            source.title = Some(format!("Source {id}"));
+            trails.push(ActivityTrail {
+                from_artifact_id: Some(source.artifact_id.clone()),
+                from_url: Some(source.url.clone()),
+                transition: transition.into(),
+            });
+            assert_eq!(
+                deliver_activity(&mut config, source),
+                VisitOutcome::Persisted
+            );
+        }
+        // A valid source need not have its own delivered history yet. Keep
+        // that case unresolved rather than inventing a title or a URL.
+        trails.push(ActivityTrail {
+            from_artifact_id: Some("work:work.example/999".into()),
+            from_url: Some("https://work.example/issues/999".into()),
+            transition: "link".into(),
+        });
+        trails.push(ActivityTrail {
+            from_artifact_id: None,
+            from_url: None,
+            transition: "forward_back".into(),
+        });
+        let mut target = activity_for_invalid_policy();
+        target.artifact_id = "work:work.example/99".into();
+        target.url = "https://work.example/issues/99".into();
+        target.trails = trails;
+        assert_eq!(
+            deliver_activity(&mut config, target.clone()),
+            VisitOutcome::Persisted
+        );
+        let query = |config: &mut ConfigStore, url: &str| {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "incoming".into(),
+                    url: url.into(),
+                    title: None,
+                },
+                config,
+            ) else {
+                panic!("expected artifact result");
+            };
+            reply.artifact.unwrap()
+        };
+        let incoming = query(&mut config, &target.url).incoming_trails;
+        assert_eq!(incoming.len(), 5);
+        for (index, trail) in incoming.iter().enumerate() {
+            let id = index + 1;
+            assert_eq!(trail.source.artifact_id, format!("work:work.example/{id}"));
+            assert_eq!(trail.source.title, format!("Source {id}"));
+            assert_eq!(
+                trail.source.url,
+                format!("https://work.example/issues/{id}")
+            );
+            assert_eq!(trail.last_seen, target.occurred_at[..10]);
+        }
+        assert_eq!(incoming[0].transition, "link");
+        assert_eq!(incoming[1].transition, "form_submit");
+        assert!(
+            query(&mut config, "https://work.example/issues/1")
+                .incoming_trails
+                .is_empty()
+        );
+        assert!(
+            query(&mut config, "https://work.example/issues/999")
+                .incoming_trails
+                .is_empty()
+        );
     }
 
     #[test]
