@@ -1432,14 +1432,14 @@ stop product work, and no history reset or production IPC change is called for.
   Establish the runner's exact wait before changing it; no engine was touched.
 
 
-### Platform evidence handoff (2026-10-28, rechecked at b3d92ccf)
+### Platform evidence handoff (2026-10-28, rechecked at 8a430cfc)
 
 - Health began clean: no quarantine notice or working-tree changes. All
   required local commands passed: protocol generation check, workspace build,
-  fmt, both Clippy configurations, npm installation, typecheck, lint,
-  extension build, all 15 extension test files and workspace Rust tests
-  (including 830 host unit outcomes). Guarded IPC tests reported sandbox
-  skips; these are not platform execution evidence. Extras passed:
+  fmt, both Clippy configurations, offline npm installation, typecheck, lint,
+  extension build, all 15 extension test files and workspace Rust tests.
+  Rust reported 997 passing outcomes, including 43 explicit sandbox IPC
+  skips; these do not establish platform execution. Extras passed:
   current-state/queue checks, both script test files and 10,696 inert
   Markdown renderings. The scripted-dialog test suite was not rerun this
   cycle; its Clippy build passed.
@@ -1453,8 +1453,9 @@ stop product work, and no history reset or production IPC change is called for.
   current results appended and the queue exported. No assigned label, status
   or human gate changed. Review covers the complete documentation/queue diff;
   an API-based Codex review is prohibited by this run's no-live-API rule.
-- Scheduling observation: another identical Linux-only assignment cannot
-  remove either blocker. Obtain platform results or assign runnable work
-  before launching it again. Existing focus sessions (`brwr-ued`) and curated
-  worklogs (`brwr-ppn`) remain useful later product work; no duplicate
-  proposal or unrelated implementation was added ahead of this queue.
+- Scheduling observation: repeated Linux-only cycles cannot remove either
+  blocker. Obtain platform results or assign runnable work before launching
+  again. Existing focus sessions (`brwr-ued`) and curated worklogs (`brwr-ppn`)
+  remain useful later product work; no duplicate proposal or unrelated
+  implementation was added ahead of this queue. This handoff updates the
+  previous platform-evidence summary instead of adding another duplicate.
