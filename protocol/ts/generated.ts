@@ -529,6 +529,12 @@ export interface HarnessFound {
 
 export type HarnessId = "codex" | "claude";
 
+export type RunKind = "summary" | "site_draft";
+
+export interface SiteDraftAnswerView {
+  adapters: Record<string, unknown>[];
+}
+
 export type RunState = "queued" | "running" | "succeeded" | "failed" | "canceled";
 
 export type RunErrorKind = "harness_failed" | "timed_out" | "canceled" | "service_restarted" | "invalid_output" | "save_failed";
@@ -562,6 +568,8 @@ export interface RunView {
   stream_bytes: number;
   can_retry_save: boolean;
   answer: RunAnswer | null;
+  kind?: RunKind;
+  site_draft?: SiteDraftAnswerView | null;
 }
 
 export interface StartRunRequest {
@@ -575,6 +583,7 @@ export interface StartRunRequest {
   harness: HarnessId | null;
   record_key: RecordKey | null;
   requested_at: string;
+  kind?: RunKind;
 }
 
 export interface RunStarted {
@@ -707,13 +716,25 @@ export interface DraftSiteRequest {
   origin: string;
   visited: ShapeCount[];
   links: ShapeCount[];
+  run_id?: string | null;
 }
 
-export type SiteDrafter = "structural";
+export interface StartSiteDraftRequest {
+  type: "start_site_draft";
+  protocol_version: 7;
+  request_id: string;
+  origin: string;
+  visited: ShapeCount[];
+  links: ShapeCount[];
+  harness: HarnessId | null;
+  requested_at: string;
+}
+
+export type SiteDrafter = "structural" | "agent";
 
 export type DraftScopeState = "not_shared" | "copied" | "pending" | "unscoped_only";
 
-export type UncheckedReason = "link_only" | "token_only";
+export type UncheckedReason = "link_only" | "token_only" | "unseen";
 
 export type DraftDropReason = "root" | "probe" | "search_or_paging" | "secret_query" | "blocked_route" | "param_name" | "already_recognized" | "no_route_word" | "no_identifier" | "limit" | "draft_forbidden_key" | "draft_no_scope_source" | "draft_scope_conflict" | "draft_no_leading_literal" | "draft_rest_second" | "draft_id_needs_typed_capture" | "draft_search_capture" | "draft_matches_probe" | "draft_overlap" | "draft_blocked_route" | "draft_paging_capture" | "draft_secret_capture" | "draft_invalid_rule" | "draft_scope_pending" | "draft_scope_choice";
 
@@ -832,6 +853,6 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | CheckSiteDraftRequest | CheckCaptureSiteRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | CheckSiteDraftRequest | CheckCaptureSiteRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
 export type Response = HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | CaptureSiteChecked | ServiceReady | ErrorResponse;

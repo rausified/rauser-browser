@@ -201,6 +201,9 @@ impl RunStatusFile {
                 && !self.save_final
                 && result.is_some(),
             answer,
+            // Every run is a summary until the site-draft run kind lands.
+            kind: None,
+            site_draft: None,
         }
     }
 

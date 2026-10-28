@@ -3308,6 +3308,46 @@ function siteDraftChecked() {
   };
 }
 
+test("site_drafted accepts the agent drafter and the unseen reason", () => {
+  const draft = siteDrafted();
+  draft.drafter = "agent";
+  draft.adapters[0].rules[0].unchecked_reason = "unseen";
+  assert.equal(isResponseShape(draft), true);
+});
+
+test("run views with kind and site_draft pass the response shape check, and unknown kinds fail", () => {
+  const table = { type: "work.doc", origin: "https://work.example", match: [{ path: "/docs/{num:int}" }], id: "work.doc:{host}/{num}" };
+  const fetched = (run) => ({ type: "run_fetched", run, stream_text: "", next_offset: 0, more: false });
+  // An older service's view has neither key.
+  assert.equal(isResponseShape(fetched(RUN_VIEW)), true);
+  for (const kind of ["summary", "site_draft"]) {
+    assert.equal(isResponseShape(fetched({ ...RUN_VIEW, kind })), true, kind);
+  }
+  assert.equal(isResponseShape(fetched({ ...RUN_VIEW, kind: "site_draft", site_draft: null })), true);
+  assert.equal(isResponseShape(fetched({ ...RUN_VIEW, site_draft: null })), true);
+  for (const count of [1, 8]) {
+    const site_draft = { adapters: Array.from({ length: count }, () => table) };
+    assert.equal(isResponseShape(fetched({ ...RUN_VIEW, kind: "site_draft", site_draft })), true, String(count));
+  }
+  assert.equal(isResponseShape({ type: "runs_listed", runs: [{ ...RUN_VIEW, kind: "site_draft", site_draft: null }] }), true);
+  const bad = [
+    { ...RUN_VIEW, kind: "chat" },
+    { ...RUN_VIEW, kind: null },
+    { ...RUN_VIEW, kind: 1 },
+    { ...RUN_VIEW, site_draft: { adapters: [] } },
+    { ...RUN_VIEW, site_draft: { adapters: Array.from({ length: 9 }, () => table) } },
+    { ...RUN_VIEW, site_draft: { adapters: [[]] } },
+    { ...RUN_VIEW, site_draft: { adapters: ["/docs/{num:int}"] } },
+    { ...RUN_VIEW, site_draft: { adapters: [table], answer: "raw" } },
+    { ...RUN_VIEW, site_draft: [] },
+    { ...RUN_VIEW, site_draft: "raw" },
+    { ...RUN_VIEW, extra: 1 },
+  ];
+  for (const run of bad) {
+    assert.equal(isResponseShape(fetched(run)), false, JSON.stringify(run));
+  }
+});
+
 test("site_drafted with an extra key or an unbounded list fails the response shape check", () => {
   assert.equal(isResponseShape(siteDrafted()), true);
   assert.equal(isResponseShape(siteDraftChecked()), true);
@@ -3319,7 +3359,7 @@ test("site_drafted with an extra key or an unbounded list fails the response sha
     (draft) => { draft.dropped[0].extra = 1; },
     (draft) => { draft.preview[0].extra = 1; },
     (draft) => { delete draft.remapped; },
-    (draft) => { draft.drafter = "agent"; },
+    (draft) => { draft.drafter = "llm"; },
     (draft) => { draft.adapters[0].scope = "scoped"; },
     (draft) => { draft.adapters[0].rules[0].unchecked_reason = "planted"; },
     (draft) => { draft.dropped[0].reason = "because"; },

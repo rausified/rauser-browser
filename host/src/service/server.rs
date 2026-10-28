@@ -710,6 +710,7 @@ mod tests {
                 harness: None,
                 record_key,
                 requested_at: "2026-10-26T10:00:00Z".into(),
+                kind: None,
             }))
         }
 
@@ -915,6 +916,7 @@ mod tests {
             harness: None,
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
+            kind: None,
         })));
         assert_eq!(code, ErrorCode::InvalidRequest);
         assert!(message.contains("title"), "{message}");
@@ -1110,6 +1112,7 @@ mod tests {
             harness: Some(harness),
             record_key: Some(url_key()),
             requested_at: "2026-10-26T10:00:00Z".into(),
+            kind: None,
         }
     }
 

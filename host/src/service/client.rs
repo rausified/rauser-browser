@@ -523,6 +523,8 @@ pub(crate) mod fake {
             stream_bytes: 0,
             can_retry_save: false,
             answer: None,
+            kind: None,
+            site_draft: None,
         }
     }
 

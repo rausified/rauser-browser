@@ -513,6 +513,13 @@ fn remapped(config: &ConfigStore, existing: &Document, rows: &[PreviewRowView]) 
 /// §5.1). It reads the config and writes nothing.
 pub fn draft_site(value: DraftSiteRequest, config: &mut ConfigStore) -> Response {
     let id = value.request_id.as_str();
+    if value.run_id.is_some() {
+        return error(
+            id,
+            ErrorCode::InvalidRequest,
+            "judging an agent draft is not supported by this host yet",
+        );
+    }
     if !exact_origin(&value.origin) {
         return error(
             id,
@@ -914,6 +921,7 @@ mod handler_tests {
             origin: origin.into(),
             visited: counts(visited),
             links: counts(links),
+            run_id: None,
         }
     }
 
@@ -1148,6 +1156,19 @@ mod handler_tests {
             request(TOOLS, &many[..21], &many[..50]),
             &mut s.config,
         ));
+    }
+
+    #[test]
+    fn draft_site_with_a_run_id_is_refused_until_agent_drafting_lands() {
+        // Judging an agent run's answer is not wired yet; drafting
+        // structurally instead would show a basic draft as the AI's.
+        let mut s = setup("");
+        let mut with_run = request(TOOLS, &["/items/{num}"], &[]);
+        with_run.run_id = Some("00000000-0000-4000-8000-000000000001".into());
+        assert_eq!(
+            code(draft_site(with_run, &mut s.config)),
+            ErrorCode::InvalidRequest
+        );
     }
 
     #[test]

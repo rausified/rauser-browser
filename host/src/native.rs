@@ -471,6 +471,12 @@ fn dispatch(
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         Request::DraftSite(value) => crate::capture_site::draft_site(value, config),
+        // Agent drafting is not wired yet: refuse it as an older host would.
+        Request::StartSiteDraft(value) => error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "start_site_draft is not supported by this host yet",
+        ),
         Request::CheckSiteDraft(value) => crate::capture_site::check_site_draft(value, config),
         Request::CheckCaptureSite(value) => crate::capture_site::check_capture_site(value, config),
         Request::OpenSummary(value) => open_summary(value, config, context.open),
@@ -7672,6 +7678,7 @@ id = "work:{host}/{id}"
                 harness: None,
                 record_key,
                 requested_at: requested_at.into(),
+                kind: None,
             })
         }
 

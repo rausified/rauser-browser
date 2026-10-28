@@ -39,6 +39,7 @@ const MAX_TENANTS = 64;
 const UNCHECKED_LABELS: Record<UncheckedReason, string> = {
   link_only: "seen only in links on this page",
   token_only: "loose: its ID has no fixed shape",
+  unseen: "suggested by AI: no page you visited or linked here matches it",
 };
 
 /** One capture of a path template, in words. */

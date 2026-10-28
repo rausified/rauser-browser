@@ -50,7 +50,8 @@ its own names and a `config_issue` until the host has moved its folders; a
 save of the fixed names for the same home folder moves them first, and a
 refusal (a fixed folder already exists) is `invalid_config` naming the folder. `strip_params` is
 also required. The generated Rust deserializer rejects omitted nullable fields,
-matching the JSON Schema requirement. Existing M0 TOML defaults to an empty
+matching the JSON Schema requirement (only a property left out of `required`,
+an additive optional field, may be omitted). Existing M0 TOML defaults to an empty
 site list, `utm_*`/`fbclid`/`gclid` stripping, and a 300-second repeat window.
 An M0 file with a notes root but no native-picker provenance is returned as an
 inert repair state. The user must reselect the folder; the host backs up the
@@ -288,6 +289,42 @@ for an adapter with a rule whose only anchor is its scoped tenant
 answers `invalid_request` for the unknown types, and the panel then asks for
 a host rebuild; a version 6 host refuses every version 7 request as
 `unsupported_protocol_version`. The host enforces every bound above at runtime.
+
+Version 7 additions: Capture Site agent drafting (Improve with AI), all
+additive. No existing field changes type or becomes required, so a property
+left out of a definition's `required` list is new and optional: the generated
+Rust reads a missing key (or `null`) as `None` and does not write `None`, and
+the TypeScript field is optional.
+
+- `start_site_draft` starts, or joins, the agent drafter's run for one exact
+  HTTP(S) `origin`, and is answered with the existing `run_started`
+  (`existing` is true when that origin already has a queued or running
+  site-draft run). Only what `draft_site` sends crosses: the origin,
+  `visited` (at most 21) and `links` (at most 50) `ShapeCount`s, plus the
+  nullable `harness` and the `requested_at` click time `start_run` uses. No
+  raw URL, link `href`, tab title, page text, structural draft, or agent
+  input is sent: the host re-runs the structural drafter and builds the
+  agent's untrusted-data block from its own draft.
+- `RunKind` is `summary` or `site_draft`. `StartRunRequest.kind` is host to
+  service only; a missing `kind` means `summary`. The host sets `site_draft`
+  when it forwards a `start_site_draft`, and refuses a `start_run` from the
+  extension that carries a `kind`.
+- `RunView` gains two optional fields: `kind` (missing means `summary`, as in
+  an older service's record) and `site_draft`, a `SiteDraftAnswerView`
+  (`adapters`: 1 to 8 adapter tables) or `null`. These are the tables whose
+  form the service validated, before any host check; the panel never renders
+  them.
+- `draft_site` gains an optional `run_id` (36 characters, or `null`). When it
+  is set, the host fetches that site-draft run's tables from the service and
+  judges them with the same per-rule checks and match preview as a
+  structural draft, against the request's origin and shapes, instead of
+  drafting structurally. `site_drafted` then says `drafter: "agent"`.
+- `SiteDrafter` gains `agent`, and `UncheckedReason` gains `unseen`: an
+  AI-drafted rule that no visited or link shape matches starts unchecked.
+
+A version 7 host built before these additions answers `invalid_request` for
+`start_site_draft` and for a `draft_site` that carries `run_id`, and the
+panel then asks for a host rebuild.
 
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while
