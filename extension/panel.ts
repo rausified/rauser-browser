@@ -1416,6 +1416,7 @@ function reenableSiteAccess(): void {
 settingsButton.addEventListener("click", openSettings);
 captureExplanationAction.addEventListener("click", () => {
   if (captureExplanationAction.dataset.action === "capture-site") {
+    selectView("page");
     element<HTMLButtonElement>("capture-site").click();
   } else openSettings();
 });

@@ -3791,6 +3791,22 @@ test("an unknown site's explanation opens the existing Capture Site review", asy
   assert.equal(updates(page).length, 0, "review still requires explicit save");
 });
 
+test("Review Capture Site from Recent reveals the page view containing the review", async () => {
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" }, config: CAPTURING, workerStatus: LIVE_POLICY,
+  });
+  await noteLoaded(page);
+  await until(() => !page.el("capture-explanation-action").disabled, "capture review action");
+  page.el("tab-recent").click();
+  assert.equal(page.el("page-view").hidden, true);
+  page.el("capture-explanation-action").click();
+  await until(() => !page.el("capture-site-review").hidden, "the existing site review");
+  assert.equal(page.el("page-view").hidden, false, "the review's parent must be visible");
+  assert.equal(page.el("recent-view").hidden, true);
+  assert.equal(page.el("tab-page").getAttribute("aria-selected"), "true");
+  assert.equal(updates(page).length, 0, "review still requires explicit save");
+});
+
 test("capture explanation follows navigation and the latest policy revision and scope", async () => {
   const page = await install({
     tab: { id: 1, url: "https://github.com/personal/repo/pull/12", title: "Pull request" },

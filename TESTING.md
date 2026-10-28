@@ -218,7 +218,9 @@ removals, missing folders, note edits and copy-out across identity changes,
 title refreshes during a held save, page switches during a held post-save
 note reload (including saving the next edit to the new page), and a failure
 after config commit. It asserts no Chrome permission request or native
-confirmation is sent. The worker regression installs policy with pages
+confirmation is sent. The capture-explanation action is also exercised from
+Recent: it switches to This page so the Capture Site review is visible, and
+still requires an explicit save. The worker regression installs policy with pages
 already open and verifies that
 attention begins immediately, private/non-artifact tabs stay excluded, and no
 cold open is invented; existing expired-lease and upgrade-navigation tests
