@@ -89,6 +89,19 @@ finishes the original bytes torn inside a multibyte title, retains an earlier
 row and deduplicates a retry. It covers single delivery for all three kinds
 and batch delivery for visits/activity (Why is not a batch event).
 
+`historical_noncanonical_uuid_markers_survive_reindex` builds older activity
+and Why markers with uppercase and unhyphenated payload UUIDs and canonical
+marker hashes. Reindex retains their measurements/context with canonical
+cache IDs, live retries do not double count, unrelated payload IDs fail hash
+validation, and the log stays byte-for-byte unchanged.
+`noncanonical_v1_uuid_intents_resume_only_original_bytes` combines those
+spellings with all three pre-provenance presentation generations. It tears
+inside the marker payload, reopens the store, refuses changed payloads,
+mismatched payload UUIDs and edited tails, then recovers only the original
+bytes and deduplicates retries. It covers single activity/Why delivery and
+activity batch delivery (Why has no batch path). Run both with
+`cargo test --locked -p brauser noncanonical`; no live harness is used.
+
 ## Standalone overflow delivery
 
 `extension/tests/worker.test.mjs` fills the byte-capped queue with one final
