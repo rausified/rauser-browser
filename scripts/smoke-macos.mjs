@@ -682,6 +682,26 @@ function articlePage(title, caseId) {
     `<article><h1>${title}</h1>${paragraphs}</article></body></html>`;
 }
 
+// The unknown-site wiki: /wiki/pages/<n>/<Title> pages that link to their
+// siblings, a sibling's subpage, a search and a sign-in page. Capture Site
+// drafts a rule for the pages from these shapes and skips the rest.
+const WIKI_PAGES = new Map([["101", "Smoke-Home"], ["102", "Smoke-Notes"], ["103", "Smoke-Plans"]]);
+const WIKI_PATH = /^\/wiki\/pages\/(\d+)\/([A-Za-z-]+)$/;
+const wikiTitle = (name) => `${APP_NAME} smoke wiki ${name}`;
+
+function wikiPage(number, caseId) {
+  const name = WIKI_PAGES.get(number);
+  const siblings = [...WIKI_PAGES].filter(([other]) => other !== number);
+  const links = [
+    ...siblings.map(([other, title]) => [`/wiki/pages/${other}/${title}`, title]),
+    [`/wiki/pages/${siblings[0][0]}/${siblings[0][1]}/History`, `${siblings[0][1]} history`],
+    ["/search?q=smoke", "Search"],
+    ["/login", "Sign in"],
+  ].map(([href, text]) => `<li><a href="${href}">${text}</a></li>`).join("");
+  return `<!doctype html><html><head><title>${wikiTitle(name)}</title></head><body>` +
+    `<h1>${wikiTitle(name)}</h1><p>Run ${caseId}</p><ul>${links}</ul></body></html>`;
+}
+
 function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
@@ -689,6 +709,11 @@ function fixtureServer(caseId) {
       "/allowed/after-removal", "/fresh/page", "/article", "/summary/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
+    const wiki = WIKI_PATH.exec(pathname);
+    if (wiki && WIKI_PAGES.get(wiki[1]) === wiki[2]) {
+      response.end(wikiPage(wiki[1], caseId));
+      return;
+    }
     if (!known.has(pathname)) {
       response.writeHead(404);
       response.end("Not found");
@@ -1229,6 +1254,9 @@ async function run() {
     console.log(`Isolated-profile native host registered for ${extensionId} before Chrome launch.`);
 
     const origin = await startServer(server, options.defaultPort);
+    // The same fixture under a second origin that has no adapter and no
+    // starter: Capture Site drafts its rules from the page's shapes.
+    const unknownOrigin = origin.replace("://127.0.0.1", "://localhost");
     // The URL typed into settings; the default-port run spells out :80.
     const siteInput = options.defaultPort ? `${origin}:80` : origin;
     const allowed = `${origin}/allowed/page?case=${caseId}`;
@@ -2370,6 +2398,105 @@ async function run() {
       });
     }
 
+    // An unknown site: the host drafts rules from this page's private URL
+    // shapes, the panel reviews them in plain words, and one revision-checked
+    // update_config saves them. No JSON, no permission prompt, no dialog.
+    await step("Capture Site drafts and saves an unknown site", async () => {
+      const dialogsBefore = (await dialogLogLines()).length;
+      const wikiUrl = `${unknownOrigin}/wiki/pages/101/Smoke-Home`;
+      const before = await hostConfig(wrapper);
+      requireCondition(!before.config.adapters.artifacts.some((adapter) => adapter.origin === unknownOrigin),
+        `The host already has an adapter for ${unknownOrigin}`);
+      const { targetId } = await cdp.send("Target.createTarget", { url: wikiUrl });
+      await cdp.withTarget(targetId, (page) => waitFor(async () => requireCondition(
+        await page.evaluate(`location.href === ${JSON.stringify(wikiUrl)} && document.readyState === "complete"`),
+        `The wiki page did not finish loading ${wikiUrl}`)));
+      await cdp.send("Target.activateTarget", { targetId });
+      await openPanel();
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.text("#page-url") === wikiUrl, "The panel does not follow the wiki tab");
+        requireCondition(await page.hidden("#capture-site-area") === false, "Capture Site is not offered");
+        requireCondition(await page.hidden("#capture-site") === false, "The Capture Site button is hidden");
+        requireCondition(await page.enabled("#capture-site"), "The Capture Site button is disabled");
+      }), { timeout: 20_000 });
+      await onPanel((page) => page.click("#capture-site"));
+      const review = await waitFor(() => onPanel(async (page) => {
+        const shown = await page.evaluate(`(() => {
+          const text = (selector) => document.querySelector(selector)?.textContent ?? "";
+          return {
+            hidden: document.getElementById("capture-site-review").hidden,
+            types: [...document.querySelectorAll("#capture-site-draft input[data-type]")].map((input) => input.value),
+            rules: [...document.querySelectorAll("#capture-site-draft input[data-rule]")].map((box) => box.checked),
+            kinds: text("#capture-site-draft"),
+            preview: text("#capture-site-preview"),
+            dropped: [...document.querySelectorAll("#capture-site-dropped > ul li")].map((row) => row.textContent),
+            safety: text("#capture-site-dropped details summary"),
+            probes: [...document.querySelectorAll("#capture-site-dropped details li")].map((row) => row.textContent),
+            message: text("#capture-site-message"),
+            save: !document.getElementById("capture-site-save").disabled,
+          };
+        })()`);
+        requireCondition(!shown.hidden && shown.types.length > 0, `The review is not drafted yet: ${shown.message}`);
+        return shown;
+      }), { timeout: 30_000 });
+      // One "pages" kind, its one rule checked, and this page captured.
+      requireCondition(review.types.length === 1 && /^localhost\d*\.pages$/.test(review.types[0]),
+        `The review drafted the kinds ${JSON.stringify(review.types)}`);
+      requireCondition(review.rules.length === 1 && review.rules[0] === true,
+        `The drafted rules start as ${JSON.stringify(review.rules)}`);
+      requireCondition(review.kinds.includes("Brauser will remember"), `The review says: ${review.kinds}`);
+      requireCondition(review.preview.includes(`This page: will be captured — ${wikiUrl}`),
+        `The review says of this page: ${review.preview}`);
+      // The sibling links match; the search and sign-in links do not.
+      requireCondition(review.preview.includes("Matches 1 of 1 visited patterns and 2 of 4 link patterns."),
+        `The review counts: ${review.preview}`);
+      requireCondition(review.dropped.length === 2 &&
+        review.dropped.some((row) => row.endsWith(": search or paging pages")) &&
+        review.dropped.some((row) => row.endsWith(": no page ID in the address")),
+      `The review's "won't capture" list: ${JSON.stringify(review.dropped)}`);
+      requireCondition(review.safety.startsWith("Safety checks:") &&
+        [`${unknownOrigin}/login`, `${unknownOrigin}/search?q=x`].every((url) => review.probes.includes(`Skipped: ${url}`)),
+      `The review's safety list: ${review.safety} ${JSON.stringify(review.probes)}`);
+      requireCondition(review.save, `Save is disabled: ${review.message}`);
+
+      await onPanel(async (page) => {
+        await page.evaluate('document.getElementById("status").textContent = ""');
+        await page.click("#capture-site-save");
+      });
+      const saved = await waitFor(async () => {
+        const reply = await hostConfig(wrapper);
+        const adapter = reply.config.adapters.artifacts.find((entry) => entry.origin === unknownOrigin);
+        requireCondition(adapter, `The host has no adapter for ${unknownOrigin}`);
+        return { reply, adapter };
+      }, { timeout: 30_000, interval: 500, signal: abort.signal });
+      const { reply, adapter } = saved;
+      requireCondition(reply.config.capture_enabled === true, "Saving the drafted site turned capture off");
+      requireCondition(reply.config.adapters.artifacts.some((entry) => entry.origin === origin && entry.type === "smoke.page"),
+        "Saving the drafted site changed the configured site's adapter");
+      // A drafted adapter holds only the Tier 0 keys (DESIGN.md §5.1).
+      const keys = Object.keys(adapter);
+      requireCondition(keys.every((key) => ["type", "origin", "match", "id", "modes"].includes(key)) &&
+        adapter.type === review.types[0] && Array.isArray(adapter.match) && adapter.match.length === 1 &&
+        adapter.match.every((rule) => Object.keys(rule).every((key) => ["path", "query"].includes(key))),
+      `The host saved the drafted adapter ${JSON.stringify(adapter)}`);
+      await waitFor(() => onPanel(async (page) => {
+        const status = await page.text("#status");
+        requireCondition(status?.startsWith(`Saved capture rules for ${new URL(unknownOrigin).host}.`),
+          `Panel status says: ${status}`);
+        requireCondition(await page.hidden("#capture-site-review") === true, "The review is still open");
+      }), { timeout: 20_000 });
+      // A reloaded panel recognizes the page under the saved rules.
+      await onPanel((page) => cdp.send("Page.reload", {}, page.sessionId));
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.text("#page-url") === wikiUrl, "The reloaded panel does not follow the wiki tab");
+        requireCondition(await page.hidden("#artifact-card") === false, "The reloaded panel shows no artifact card");
+      }), { timeout: 20_000 });
+      requireCondition((await dialogLogLines()).length === dialogsBefore, "Capture Site opened a native dialog");
+      await cdp.send("Target.closeTarget", { targetId });
+      await waitFor(async () => requireCondition(
+        !(await cdp.targets()).some((entry) => entry.targetId === targetId), "The wiki tab is still closing"));
+});
+
     await step("A damaged adopted-adapter record is named in settings and forgotten with a backup", async () => {
       const support = path.dirname(configPath);
       const state = path.join(support, "adopted-contracts.json");
@@ -2404,6 +2531,25 @@ async function run() {
     });
 
     await step("Site removal", async () => {
+      await openSettingsTab();
+      await inSettings((page) => cdp.send("Page.reload", {}, page.sessionId));
+      await settingsConnected();
+      // The drafted site goes first, so the configured site's removal below
+      // still turns capture off.
+      await waitFor(() => onSettings(async (page) => requireCondition(
+        await page.enabled(`button[aria-label="Remove site ${unknownOrigin}"]`), `Settings does not list ${unknownOrigin}`)),
+      { timeout: 20_000 });
+      await inSettings((page) => page.click(`button[aria-label="Remove site ${unknownOrigin}"]`));
+      await waitFor(async () => {
+        const reply = await hostConfig(wrapper);
+        requireCondition(!reply.config.adapters.artifacts.some((adapter) => adapter.origin === unknownOrigin),
+          "Host still has the drafted site's adapter");
+        requireCondition(reply.config.adapters.artifacts.some((adapter) => adapter.origin === origin),
+          "Removing the drafted site removed the configured site");
+      }, { timeout: 20_000, interval: 1_000 });
+      await waitFor(() => onSettings(async (page) => requireCondition(
+        await page.enabled(`button[aria-label="Remove site ${origin}"]`), `Settings does not offer removing ${origin}`)),
+      { timeout: 20_000 });
       await inSettings((page) => page.click(`button[aria-label="Remove site ${origin}"]`));
       await waitFor(async () => {
         const reply = await hostConfig(wrapper);

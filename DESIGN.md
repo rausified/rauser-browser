@@ -1,6 +1,6 @@
 # Brauser: The Rauser Browser Assistant — Design Specification
 
-> Status: Draft v0.6 · M0 merged, M1 accepted for development on macOS, side-panel rework, M2 step 1 (harness setup), service-worker background delivery, and M1.5a adapter-only capture with settings review UI, first-tool starter-draft gallery, hourly artifact activity, batched durable delivery, rebuildable indexing, lazy artifact files, record keys, and artifact-facing views merged; open access with protocol v6 (standing HTTP(S) access, sites derived from adapters, no native confirmation, AI denylist, or setup token, and a knowledge base folder) merged (open access PR 1, #69); the on-demand per-user Brauser service skeleton (run records, queue, polling run messages, and `agent.env`, open access PR 2, #75); Summarize & log with full-access Codex app-server and Claude Code runners, the §6.4 prompt and a validated answer, pinned Readability extraction, and the polling run card merged (open access PR 3, #98); summary files, the `summary` log event, summarized-page artifacts, and summaries in Recent, the worklog, and the panel built on a branch (open access PR 4); live-tool certification is next, no public package yet · Short name "Brauser"; CLI and binary `brauser` · License: Apache-2.0 · Platforms: Google Chrome on macOS; Windows reinstated 2026-10-16, Windows CI green and no Windows acceptance recorded yet (§13, §14)
+> Status: Draft v0.6 · M0 merged, M1 accepted for development on macOS, side-panel rework, M2 step 1 (harness setup), service-worker background delivery, and M1.5a adapter-only capture with settings review UI, first-tool starter-draft gallery, hourly artifact activity, batched durable delivery, rebuildable indexing, lazy artifact files, record keys, and artifact-facing views merged; open access with protocol v6 (standing HTTP(S) access, sites derived from adapters, no native confirmation, AI denylist, or setup token, and a knowledge base folder) merged (open access PR 1, #69); the on-demand per-user Brauser service skeleton (run records, queue, polling run messages, and `agent.env`, open access PR 2, #75); Summarize & log with full-access Codex app-server and Claude Code runners, the §6.4 prompt and a validated answer, pinned Readability extraction, and the polling run card merged (open access PR 3, #98); summary files, the `summary` log event, summarized-page artifacts, and summaries in Recent, the worklog, and the panel built on a branch (open access PR 4); Capture Site for starter and unknown sites (the host's structural drafter, per-rule checks with URL-prefilled shared-origin tenants, and a plain-language panel review, `brwr-t40`) merged; live-tool certification is next, no public package yet · Short name "Brauser"; CLI and binary `brauser` · License: Apache-2.0 · Platforms: Google Chrome on macOS; Windows reinstated 2026-10-16, Windows CI green and no Windows acceptance recorded yet (§13, §14)
 >
 > Companion specification: [adapter-templates.md](adapter-templates.md), the adapter-template language artifact adapters are written in (§7.2), built in §12.2 step 6.2.
 
@@ -211,22 +211,24 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
        - A trailing run of `{slug}` segments folds into `{*}` only when at least two segments come before it (adapter-templates.md §10.4). Otherwise each becomes `{_}`.
        - A route word that differs in one position within a kind becomes an alternation, but only when a literal comes before that position. Otherwise the kind splits into one rule per word.
        - Link-only shapes never widen a visited rule. An alternative, a `{*}` fold, or an ending that only link shapes support goes into a separate rule of the same kind.
-    3. **Keep.** A kind becomes a candidate when a route word comes before its first identifier placeholder in the path. When the identifier is only in the query, any route word in the path is enough. On a shared origin, the host-supplied tenant capture (below) comes before that route word and does not count as the first identifier.
+    3. **Keep.** A kind becomes a candidate when an anchor comes before its first identifier placeholder in the path. When the identifier is only in the query, any anchor in the path is enough. An anchor is a route word or, on a shared origin with a tenant position, the host-supplied tenant capture (below): the review scopes it, and a scope-restricted capture anchors a template as a literal does (adapter-templates.md §4.1, §6). The tenant never counts as the first identifier and never names a kind. **Amended 2026-10-27:** this step first required a route word, with the tenant not counting; it now uses the same scoped-capture anchor rule as validation (#126), and the per-rule checks decide whether the scope really restricts the tenant.
     4. **Map.**
        - Placeholders map to capture types as in the sample: `{num}` to `int`, `{key}` to `jira_key`, `{uuid}` to `uuid`, `{hexN}` to `hex(N)`, `{tailhex32}` to `hex(32)@tail`, and `{id}` to `token(1,128)`.
        - A `{slug}` after the tenant and before the first identifier names a namespace, such as a GitHub repository. It becomes a `name` capture that the ID includes. Any other `{slug}` that is not trailing becomes `{_}`.
        - An identifier in a query value becomes a query condition when the parameter is not on the search, filter, or paging lists.
        - When a kind has a fixed-shape identifier (`uuid` or `hexN`) in the path or the query, the ID uses the fixed-shape identifiers and the kind's other `{num}` positions become `{_}`. An example is SharePoint's `/_layouts/15/Doc.aspx?sourcedoc={uuid}`.
        - An alternation that names a mode, such as `edit` or `view`, is also mapped to `modes`.
+       - Other route words that differ in a kind's one varying position name namespaces of its identifiers, so equal numbers under them are distinct pages: `/foo/discussions/7` and `/bar/discussions/7` never share an ID. **Amended 2026-10-28:** the drafter first gave every rule of such a kind one ID that left the word out. Words seen with the same visited rules, and the words of one alternation, become one captured alternation, `{space:(bar|foo)}`, that the ID includes, when another route word anchors the rules (a captured alternation never anchors a draft, adapter-templates.md §10.4). Otherwise, or when the rules differ by word, the kind splits into one adapter per word or word set. A word only links support is always an adapter of its own, so a planted link never changes the visited pages' IDs. Mode words are never namespaces.
     5. **Name.** Each kind's type is `<site>.<word>`, and its ID template is `<site>.<word>:{host}` followed by the tenant, namespace, and identifier captures in path order.
-       - `<site>` is the host's first label, and `<word>` is the last route word before the identifier. Each is reduced to lowercase letters and digits and cut to 12 characters, so the scheme stays well under 32. A label that is empty, starts with a digit, or starts with `web` becomes `site` or `page`.
+       - `<site>` is the host's first label (after a leading `www`, so `www.notion.so` drafts `notion.*`), and `<word>` is the last route word before the identifier. Each is reduced to lowercase letters and digits and cut to 12 characters, so the scheme stays well under 32. A label that is empty, starts with a digit, or starts with `web` becomes `site` or `page`.
        - A number is appended when the type is already taken by the config, by a starter adapter, or by another kind in the same draft. So every drafted type is unique, and an ID never collides across kinds.
     6. **Rank.** Rules backed by a visited shape come first, ordered by visit count, then rules backed only by link shapes, ordered by link count. At most 16 rules are kept per adapter, and at most 8 adapters per draft.
   - **Shared origins.** The host's shared-origin list (adapter-templates.md §6) records, per origin, the path position and capture name of the tenant, where the URL has one. Examples are `owner` in the first segment on `github.com`, and `workspace` in the first segment on `www.notion.so` and `linear.app`.
     - The drafter makes that position a `{<name>:name|lower}` capture, even when the shaper kept it as a route word, and the ID includes it.
-    - If the origin already has scoped adapters that all scope that capture name to the same values, the draft copies the scope. Otherwise scope is pending, and the review asks for scope, prefilled with the current tab's tenant, or for `unscoped` with its statement (§7.2).
+    - If the origin already has scoped adapters that all scope that capture name to the same values, the draft copies the scope. Otherwise scope is pending, and the review pre-fills the current tab's tenant, read from the page's own URL when a kept drafted rule records this page with it, and shows it as "Capture for `<tenant>`", already chosen: one click on Save confirms it. The list stays editable, and `unscoped` with its statement (§7.2) stays the alternative, except for a rule whose only anchor is the tenant. When the URL names no tenant at that position, nothing is pre-filled and the user chooses.
     - Where the list records no tenant position, as for `docs.google.com` and `www.figma.com`, only `unscoped` is offered.
-    - Enable stays disabled until the user chooses. This choice is part of the draft flow and does not count as a user edit.
+    - This choice is part of the draft flow and does not count as a user edit; every safety check still applies.
+    - **Superseded 2026-10-27 (John: "make adapter creation as easy as possible and do the work on our side").** This step said "Enable stays disabled until the user chooses", with the prefilled list unchosen. The tenant is now pre-filled from the real page URL and chosen, as "Capture for `<tenant>`", for the user to confirm with Save; Save stays disabled only when no tenant could be read or the user clears it. This reuses the GitHub starter's pre-fill (#126), whose organization field is filled from the URL and confirmed by a line in the review.
   - **The agent drafter.** Once an agent is set up (after M2 host invocation), the review offers **Improve with AI**. The agent receives the same shapes and the structural draft inside the untrusted-data block, and returns a draft under the same rules. The hint's draft uses the agent when one is set up, and the structural drafter otherwise.
   - **Review before enabling.** The draft opens in the settings page's adapter editor with the match preview, which covers the visited and link shapes and the probe URLs. It shows:
     - each proposed adapter and rule in plain words, with an example URL and a checkbox to keep or drop it;
@@ -279,9 +281,7 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
   a global pause. A pending local pause or removal blocks setup. Policy
   verification/publication failures after commit are reported as saved with
   status unavailable, so no automatic second save occurs. Unknown origins
-  still use advanced settings for capture. The input/review slice below is
-  built; host structural drafting, rule-selection capture and re-keying remain
-  unbuilt.
+  use the drafted flow below (`brwr-t40`); re-keying remains unbuilt.
 
   **As built (2026-10-27 — private page-pattern review, `brwr-b39`).**
   The panel's collapsed **Page patterns** review works on any public HTTP(S)
@@ -314,17 +314,149 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
   origins cannot exceed the 64-adapter limit. Validation strips unknown stored
   metadata and drops malformed/expired shapes. Short lowercase route words
   remain visible in the review. The review creates no adapter, draft token,
-  native message or agent run. `brwr-t40` stays open for the host drafter,
-  per-rule safety/selection, pending shared-origin scope, identity cases and
-  recurring-page hint; known-site Capture Site retains its current flow.
+  native message or agent run. These shapes are the only page-derived input to
+  unknown-site Capture Site (below); known-site Capture Site retains its
+  current flow.
 
-  **Drafting contract follow-up (`brwr-gf1`).** Step 7.6 names bare and
-  title-prefixed Notion page paths as a shared-ID success case, but those
-  paths have no literal before the first identifier and therefore fail the
-  current draft structure rule. This input slice shapes both correctly; it
-  does not relax that rule or claim either form can be structurally drafted.
-  Resolve the contradiction explicitly with host checker tests before
-  accepting the remaining unknown-site drafter.
+  **As built (2026-10-27 — Capture Site for unknown sites, `brwr-t40`).**
+  On any credential-free HTTP(S) origin that has no adapter and is not a
+  starter origin, the panel's **Capture Site** button drafts a policy with the
+  host's deterministic structural drafter; no agent runs, and Chrome shows no
+  prompt and the host no dialog. Open access maps the superseded flows above
+  as recorded in §12.2 step 7.6.
+  - **Messages.** Two request/response pairs were added within protocol v6
+    (protocol/README.md, "Version 6 additions: Capture Site drafting"), and no
+    existing message changed shape. `draft_site` carries only the exact origin,
+    the visited shapes (the current page's shape plus, on an enabled origin,
+    the worker's sample, at most 21) and the click-time link shapes (at most
+    50). The host refuses a raw URL or any shape its parser
+    (`adapter-templates/src/shape.rs`) rejects. `site_drafted` is bound to the
+    config revision it read and returns at most 8 adapters of at most 16 rules
+    with per-rule provenance (which rules start unchecked, and why), the
+    dropped shapes and rules with reasons, and a match preview of every
+    visited shape, link shape and probe URL, filled with the catalog's
+    illustrative values and matched without scope. The panel evaluates the
+    real current URL itself; no raw URL, link `href`, or tab title reaches the
+    host. Link shapes live only in the open review and, for the advanced
+    editor, in its expiring handoff entry (below); they never enter the
+    worker sample, the delivery buffer, `update_config` or the home folder.
+  - **Catalog.** The probe paths, search and paging keys, blocked route words,
+    secret query keys, mode words, fill values, starter types and
+    shared-origin tenant and account-index positions are one host-owned file,
+    `protocol/capture-site/catalog.json`. The host parses it; the extension's
+    probe list, blocked route words, fill values and starter types are pinned
+    to it by tests.
+  - **Secrets and capability routes.** A query pair whose key carries a
+    secret or capability (a catalog `secret_query_keys` entry such as
+    `token`, `code`, `state`, `sig` or `session`, a key containing a
+    `secret_query_key_parts` fragment such as `token` or `signature`, or one
+    ending in `sig`; ASCII case and `-`, `_`, `.` are folded) never becomes
+    an ID: the drafter drops the pair, and the shape as `secret_query` when it
+    has no other identifier, and the per-rule check drops an ID capture from
+    such a key as `draft_secret_capture`. A route literal is a blocked route
+    word when any of its `-`/`_`/`.` parts, or the parts joined, is a listed
+    word once a trailing number and a plural `s` are folded, so `sign-in`,
+    `reset-password`, `accept-invite`, `invitations` and `tokens` are blocked.
+    The check runs on every literal the shaper kept, the shared-origin tenant
+    position included, before that position is marked: `linear.app/auth/…`
+    is a sign-in route, not a workspace named `auth`. Neither the review's
+    prefill nor a chosen scope value may be a blocked route word.
+  - **Per-rule checks.** `check_draft_rules` (adapter-templates.md §10.4)
+    judges each rule: a failing drafted rule is dropped with its reason and the
+    rest of the draft kept, a failing user-written rule only warns, and an
+    adapter with no rule left is removed. Overlap is checked against the
+    origin's existing adapters, its recorded note-only contracts (retired
+    `[[adapter_id_history]]` entries and adopted contracts removed by hand),
+    and then the earlier-ranked drafted ones.
+  - **Pending scope.** On a shared origin with no scoped adapter, or with
+    scoped adapters that disagree, scope is pending rather than refused. The
+    review pre-fills the current tab's tenant from the panel's own URL (on
+    GitHub through the starter's owner reading, which also rules out
+    GitHub's own routes) and checks "Capture for `<tenant>`", so Save is a
+    one-click confirmation; the list stays editable and the review adds
+    "Records pages only for: `<tenants>`." A value counts only when one of
+    the adapter's kept drafted rules, scoped to that value, records this
+    tab's page with it as the tenant, so a page slug or app route at that
+    position (`linear.app/settings/account`, a workspace-less Notion page)
+    is no tenant. When the URL names no tenant there, nothing is pre-filled and Save stays disabled until the user
+    enters values or checks the every-account statement. A rule whose only
+    anchor is the tenant cannot be saved unscoped: the panel says so, and
+    `check_site_draft` refuses it as `draft_scope_choice`. Where the catalog
+    has no tenant position, only `unscoped` is offered; an agreeing scope is
+    copied and fixed. (Until 2026-10-27 the pre-filled list started
+    unchosen; see the superseded step above.)
+  - **Panel-owned overlays.** Scope, `unscoped` and a title entry (`{title}`
+    plus an ending the user removes, which the panel takes from the tab title)
+    are applied after the check. `check_site_draft` re-checks only the Tier 0
+    tables after unchecking and renaming, with the scope choice as a separate
+    per-adapter field that `resolve_scope_choice` judges, so a chosen scope or
+    a title entry never trips `draft_forbidden_key`, while a table that itself
+    carries `title`, `scope` or `unscoped` with a drafted rule is still refused.
+    There is no title field on the wire.
+  - **Save.** Under the shared config mutation lock, the panel re-checks the
+    selection with `check_site_draft` against the reviewed revision (a changed
+    revision is `conflict`, never rebased), and any dropped rule or scope
+    verdict with a reason saves nothing. It then saves the overlaid document
+    with the usual revision-checked `update_config`, as the starter flow does.
+  - **Hint.** On a configured origin, when the current page is unrecognized
+    and the worker sample holds an unrecognized shape with a route word that
+    was visited at least three times, the panel says "Looks like you have
+    recurring pages on `<host>`" and offers **Draft rules for these pages**. The
+    extension decides this locally against its lease and sends nothing. The
+    sample reaches the host only after that click. The draft adds adapters
+    only; existing adapters stay byte-identical, and rules they already
+    recognize, even only without scope, are listed as already captured.
+  - **Handoff.** **Open advanced settings** writes the drafted adapters,
+    their baseline rules and the shapes, never a raw URL or title, to a
+    trusted-only `storage.session` entry with a 30-minute expiry and opens the
+    adapter editor, which reads it once and deletes it; the worker deletes
+    expired entries at startup and on maintenance. A rule whose canonical form
+    differs from its baseline is user-written; an adapter given `alias`,
+    `fields` or `path_case` by hand is user-written as a whole, so its
+    forbidden key only warns. Unedited drafted failures still block the save.
+    When the review has no valid plan yet (scope still pending, a refused
+    rename, or every rule unchecked), the handoff carries the drafted tables
+    with only their checked rules and omits adapters with none, so a
+    link-only or loose rule the user never checked is never handed off as
+    drafted.
+  - **Remap invariant.** A drafted rule never re-maps an artifact the current
+    policy or a recorded contract already names. The drafter lists a shape
+    the current policy or a recorded contract recognizes as already captured,
+    and drops a drafted rule that may overlap either as `draft_overlap`, so a
+    site the user removed and captures again gets its old routes listed as
+    already captured rather than re-drafted under a new type that the save's
+    frozen-ID check would refuse. `draft_site` asserts `remapped` is 0 and
+    answers `internal` rather than offer such a draft.
+  - **Untrusted links.** A link shape never changes how visited shapes group,
+    nor the type, ID scheme or rank of a kind with visited support: when only
+    links differ in a kind's varying route word, the kind is named by its
+    visited word, and links only rank adapters that have no visits. A query
+    name a shape repeats with two classes is dropped, since one key cannot
+    hold two conditions.
+  - **Limitations.** On a shared origin the shaper keeps a short lowercase
+    route-word-like segment literal, so a repository or namespace named like
+    `widget` drafts a rule for that one name (`/{owner:name|lower}/widget/pull/{num:int}`)
+    rather than a `{space:name}` capture; other repositories need their own
+    visits or the advanced editor. The rule is never wider than what was seen.
+
+  **Drafting contract decision (`brwr-gf1`, 2026-10-27; revisited the same
+  day).** The first decision kept the leading-literal rule as written: on
+  `www.notion.so` the first segment is the host-supplied `workspace` tenant
+  capture, a `name` and not a route word, so `/acme/Release-Plan-<hex32>` and
+  `/acme/<hex32>` were refused as `draft_no_leading_literal`. #126 then made
+  a required path capture a `scope` key restricts count as an anchor
+  (adapter-templates.md §4.1, §6), for any shared origin with a tenant
+  capture. Under that rule the drafter keeps no tenant rule of its own: the
+  anchor before a drafted rule's first identifier is a literal or the scoped
+  tenant. Notion workspace pages are therefore drafted, safely: both forms
+  become one `notion.page` rule, `/{workspace:name|lower}/{hex:hex(32)@tail}`,
+  which records only the workspaces the review scopes (pre-filled from the
+  page), every other check still applies, and it can never be saved
+  `unscoped`, since that would leave it with no anchor. A workspace-less
+  `/<hex32>` page is still not drafted (adapter-templates.md §13). Behind a
+  route word on a non-shared origin, `/p/Release-Plan-<hex32>` and
+  `/p/<hex32>` draft to one rule with one shared `hex(32)@tail` ID.
+  Fixed-shape captures and plain alternations still do not anchor a draft.
 
   Create adapter with the structural drafter needs no agent, only `scripting`, which arrives with Tier 1 (§12.2 step 7.3). It is built in step 7.6. Agent drafting (step 7.7) needs M2 host invocation (step 8.2).
 
@@ -614,9 +746,9 @@ Each state changes one area rather than the layout:
 | Not set up | The setup warning replaces the tabs; the omnibar and page controls are disabled; the strip reads "Off". |
 | Capture paused | The setup warning stays hidden, since a paused setup is complete; the strip reads "○ Capture off" and the status line reads "Capture is paused. Resume it in settings." The host records nothing while paused, including "Why I'm here", so the artifact card's Save is disabled with a hint pointing to **Resume capture** (while a local pause still waits for the host, to **Pause capture**, which finishes it); a typed draft stays in the field. Settings shows **Resume capture** only while paused; from protocol v6 it saves capture back on with no Chrome grant request or native confirmation. |
 | Native host unavailable | A banner under the header with the fix; everything below is disabled. |
-| Origin not enabled | Chip `○ Not logged · Set up artifacts for this site… · Create adapter`, which opens settings with the origin filled in and offers any matching starter adapter. With standing access (protocol v6) the panel's Create adapter button works on any tab (§5.1). Notes, `/log`, and summaries still work. |
+| Origin not enabled | Chip `○ Not logged · Set up artifacts for this site… · Create adapter`, which opens settings with the origin filled in and offers any matching starter adapter. With standing access (protocol v6) the panel's Create adapter button works on any tab (§5.1). Notes, `/log`, and summaries still work. **As built (2026-10-27, `brwr-t40`):** the site-capture area shows **Capture Site** with "Remember work on this site without configuring rules by hand." On a Jira Cloud, SharePoint/OneDrive or GitHub origin it opens the starter review; on any other HTTP(S) origin it drafts rules with the structural drafter and shows the plain-language review inline (§5.1), with no Chrome prompt or native dialog. Without a home folder, or while config needs repair, the button is disabled with a pointer to settings. |
 | Site access withdrawn in Chrome | One banner, "Brauser needs site access — re-enable in Chrome", with a button that opens Brauser's extension settings; shown only on HTTP(S) tabs. The note editor returns once access does. |
-| Enabled origin, page not an artifact | No artifact card; chip `○ Not an artifact · Create adapter`. When unrecognized pages recur, a hint also offers to draft one from them (Tier 2, §5.1). |
+| Enabled origin, page not an artifact | No artifact card; chip `○ Not an artifact · Create adapter`. When unrecognized pages recur, a hint also offers to draft one from them (Tier 2, §5.1). **As built (2026-10-27, `brwr-t40`):** the chip reads `○ Not an artifact`. When the current page is unrecognized and the worker's sample holds an unrecognized shape with a route word visited at least three times, the site-capture area says "Looks like you have recurring pages on `<host>`." and offers **Draft rules for these pages**, which drafts from the sample and adds adapters only. Otherwise the area appears only on a configured starter origin, saying its rules are managed in settings. |
 | No agent set up | **Summarize & log** is disabled with the tooltip "Set up a summary harness in settings first.", and no run cards are restored. Later milestones add the chip `✦ AI not set up` and an omnibar that offers only commands that need no agent, plus a link to settings. |
 | Brauser service unavailable | The run area shows the service setup instructions and the host's reason: as a notice with **Open settings** when cards are restored, or as the line of the summary that failed (from any path). Notes and capture are unaffected. |
 | Not an HTTP(S) page | The page area names the tab and says Brauser can't use it; only Read later is active. |
@@ -1284,13 +1416,29 @@ The plan follows Chrome's current [optional-permission rules](https://developer.
    6. **Index tables and artifact files: done (2026-10-16).** Each durably accepted activity updates an atomically replaced, disposable SQLite `index.db` with `artifacts`, `visits`, `edges`, and `dirty_artifacts`; a bounded host cache avoids reparsing all prior logs on every delivery while leaving owned machine markers authoritative. Duplicate retries and upgrade-era visits reconcile from those markers instead of trusting the incoming retry body, conflicting reuse of an event ID is refused, and the explicit reindex shares the host's configuration/write lock. Connection close regenerates dirty artifact Markdown through capability-scoped, exact ownership-checked replacement, preserves mtimes when bytes are unchanged, neutralizes presentation text, and rolls old daily activity into chronologically ordered weekly then monthly Timeline rows. Case-colliding IDs receive distinct hash-suffixed paths. `brauser reindex` discards the cache, reparses bounded owned logs, and recreates both database and files. Older configs choose a non-overlapping artifact directory when `artifacts` is already occupied. The settings-facing manual trigger remains with step 6.7. Tests cover a hostile title (embeds and YAML breakers), a case-colliding ID, an external edit to an artifact file being replaced, a day of heavy use producing no file write until regeneration, standard SQLite reads across multiple B-tree pages, malformed-marker and conflicting-ID isolation, offset chronology, passive carry-over activity, legacy delivery, config migration, and a year of daily opens staying within the rollup bounds.
    7. **Panel, worklog, and record keys: done (2026-10-17).** The panel shows the current artifact's identity, mode, measured focus/background/open totals, links, and append-only one-line context; Recent groups artifact-day rows across tools with type/title filters, and the host generates copyable today, yesterday, or current-week worklogs without an agent. `get_artifact`, `list_artifacts`, `worklog`, and the settings `refresh_artifacts` action read the disposable index under host-side bounds, with regeneration conflicts and paths visible instead of overwritten. `load_note` and `save_note` now resolve and return a host-derived URL or artifact key, stale keys fail as `key_changed`, alternate routes share one note, and guarded **Use as artifact note** migration keeps older URL-keyed notes findable. When no adapter currently recognizes a URL (its adapter or last enabled site was removed), the recorded contracts in config.toml decide its key (§6.2; the index fallback this step first used was withdrawn on 2026-10-27). A new `view_older_note` message opens an older URL-keyed note read-only, by its own key, so notes beyond the one a sibling migration already moved into the shared note stay reachable even though their own URL now resolves to it. Tests cover the Google Doc, Jira modal, mid-edit adapter change, occupied artifact note, unchanged M1 note, message bounds, recent/worklog derivation, conflict reporting, removed-adapter note recovery, context saved before the first activity, the older-note candidate cap, and read-only older-note viewing (including its own authorization check) cases named for this step.
    8. **First three starter drafts: gallery built; live certification pending (2026-10-16); GitHub repositories and containers added (2026-10-27).** Settings recognizes enabled Jira Cloud, SharePoint/OneDrive, and GitHub origins and resolves the format-1 recorded fixtures to the exact origin. The GitHub gallery offers repositories alongside pull requests and issues, sharing one organization field that it pre-fills with the union of any GitHub adapters already configured (never rewriting their own scope) until the user edits it; the field is still required, and the starter path still never offers `unscoped`. Choosing repositories for an origin that already has PR or issue rules also offers to add `within` to them in the same save, so their existing history starts rolling up without a separate edit, without tripping the overlapping-route guard (§5.1, §6.2, §7.2). Each choice opens as editable JSON in the existing complete-document validation, match-preview, safety-probe, and native-confirmation flow, and an already-configured type/origin is not offered twice. The bundled documentation records example routes, ID contracts, scope behavior, and known limits. These are deliberately labeled development drafts rather than release-certified starter adapters: tonight's isolated build could validate the recorded fixtures in both engines but could not perform the required live-tool UI checks. Complete those checks and record their date in `docs/adapters/` before changing that label or treating step 6.8 as done.
-7. **Build M1.5b (artifacts, continued)** once M1.5a has been in daily use for a few weeks. **Resequenced 2026-10-16 (§14):** Create adapter (step 7.6) ships as **Capture Site** right after M1.5a step 6.7, together with the alias/re-key migration from step 7.2 that a re-learned site needs. Agent drafting (step 7.7) follows M2 host invocation (step 8.2) and comes before the rest of M2. The rest of M1.5b keeps the daily-use gate. Moved issues and renamed repositories are rare, so aliases wait until there is a real log to judge them against. M1.5b can run alongside the rest of M2 (step 8); if it adds messages, it takes the next protocol version.
+7. **Build M1.5b (artifacts, continued)** once M1.5a has been in daily use for a few weeks. **Resequenced 2026-10-16 (§14):** Create adapter (step 7.6) ships as **Capture Site** right after M1.5a step 6.7, together with the alias/re-key migration from step 7.2 that a re-learned site needs. Agent drafting (step 7.7) follows M2 host invocation (step 8.2) and comes before the rest of M2. The rest of M1.5b keeps the daily-use gate. Moved issues and renamed repositories are rare, so aliases wait until there is a real log to judge them against. M1.5b can run alongside the rest of M2 (step 8). **Protocol versions (corrected 2026-10-27):** this step once said that new M1.5b messages take the next protocol version. Capture Site first added `draft_site` and `check_site_draft` additively within version 6, following the agent-run precedent in protocol/README.md ("Also added in version 6"). When GitHub repository containers (#126) took version 7, those messages moved onto version 7 with it (2026-10-27), so one version describes the whole Capture Site wire surface. Additive host-only messages, which no older peer sends and which an older host refuses as `invalid_request`, may stay within the current version; a change to an existing message's shape takes the next one.
    1. Alias probes: that `onBeforeNavigate` plus a committed `server_redirect` qualifier pairs the requested and final URLs for a moved Jira issue and a renamed GitHub repository. If Jira's move redirect turns out to be client-side, only the title signal is used for it.
    2. Aliases: `alias` and `unalias` events, append-only and idempotent by event ID, and notes reached through an alias listed on the artifact. Tests cover a chain (A→B→C), a move back, an `unalias`, a stub left at the old path, a ref to an old key, a board-modal switch between two issues that must not create an alias, a compromised worker's alias between IDs no adapter produces, and notes on both sides of an alias.
    3. Tier 1 fields in the worker while the page is live. This step adds `scripting` to the manifest (§8); M2 content extraction (step 8.4) reuses it. The policy lease carries the confirmed Tier 1 selectors, and the host drops any undeclared Tier 1 field a compromised worker delivers. The smoke run checks that fields are captured with the panel closed, including a late-rendering SPA field that needs the retry.
    4. Worklog files: the optional Brauser-owned daily or weekly files (§5.1), off by default, behind the sync caution.
    5. The remaining starter adapters for the common tools, each checked against the live tool on the date it records and each with its documentation page (spec §11.1).
-   6. **Partly built (2026-10-27):** the panel reviews and enables the known Jira, SharePoint/OneDrive and separately scoped GitHub starters without JSON. `brwr-b39` additionally builds private URL shaping, bounded worker samples, click-only link shapes and a read-only panel/settings review (§5.1). The remaining host drafting and unknown-site capture work is `brwr-t40`; the parent Capture Site item stays open. Create adapter with the structural drafter (§5.1), after Tier 1 (step 7.3) brings `scripting`; no agent. This step adds the URL-shape sample and the recurring-pages hint, the panel button and the "Create adapter for this site" context-menu entry, the link-shape function, the host's structural drafter, and the review in the settings page's adapter editor. Shaper tests feed real URL forms from every shipped starter adapter, plus Confluence `/display/SPACE/Title`, SharePoint `sourcedoc` GUIDs, Notion `Title-<32 hex>` pages, percent-encoded names, and long mixed-case slugs, and check that no stored shape contains a digit outside a placeholder name, an uppercase letter, a segment over 20 characters, a query value, or any title. Link-shape tests check that the function runs only in the top frame of the document the panel saw, rechecks the origin, reads only same-origin `href`s, stops at 500 links, turns a literal seen in only one link into `{slug}`, returns at most 50 shapes and no raw URL, and that nothing it returns is stored, sampled, or delivered. Drafter tests feed the shapes of every shipped starter adapter's recorded URLs and check that the draft matches those URLs with one adapter per kind of page, unique types, and no `web` scheme. Named cases: a GitHub pull request and its `/files` tab become one adapter keyed by owner, repository, and number; Notion pages with and without a title slug share one `hex(32)@tail` ID; SharePoint's `sourcedoc` GUID, not `15`, becomes the ID; and Google Docs' `/u/0/` never enters an ID. They also feed planted links steering toward `/{*}`, a root match, a search page, an auth or capability route, an ID from a search or paging parameter, an ID-less rule, or a new alternative on a visited rule, and check that each is dropped, or kept in a separate unchecked rule, before the review. A `token`-only rule starts unchecked, and a draft overlapping an existing adapter loses only the overlapping rules. Flow tests cover starting from the context menu on an ungranted tab, a canceled or expired flow removing the newly granted origin but keeping it when a note was taken there meanwhile, a link-shape run that returns nothing after the tab navigated, a shared origin whose tenant position becomes a capture with scope pending and Enable disabled until the user chooses, a draft unchecked down to one rule, and a user edit turning only the edited rule into user-written config whose draft-rule failures only warn.
+   6. **Built (2026-10-27, `brwr-t40` on `feat/capture-site-unknown`; plan `docs/superpowers/plans/2026-10-27-capture-site-unknown-sites.md`).** The panel reviews and enables the known Jira, SharePoint/OneDrive and separately scoped GitHub starters without JSON; `brwr-b39` builds private URL shaping, bounded worker samples, click-only link shapes and a read-only panel/settings review; and `brwr-t40` adds the host-owned catalog, the Rust shape parser, the per-rule checks with pending scope, the structural drafter, `draft_site`/`check_site_draft`, the panel's plain-language review and revision-checked save, the advanced-editor handoff, the recurring-pages hint, and a headless smoke step (§5.1). Scope, `unscoped` and the title entry are panel-owned overlays applied after `check_site_draft`; the checked tables hold only Tier 0 keys and the scope choice travels as a separate field. Starter live-tool certification stays human work, and agent drafting is step 7.7. The text below is the original step; open access (protocol v6) supersedes parts of it as follows, and nothing in the left column was built:
+
+      | Superseded requirement | Open-access equivalent built |
+      |---|---|
+      | Ungranted page starts Create adapter from the context menu or the toolbar action, using `activeTab` | No ungranted pages exist. The panel's **Capture Site** button shows on any unconfigured HTTP(S) tab; no context-menu entry, and the toolbar action stays "open panel" |
+      | Clicking requests the exact origin from Chrome; `create-adapter` grant purpose with a 30-minute expiry | No `chrome.permissions` call and no grant purposes. Only the advanced-editor handoff keeps a 30-minute `storage.session` entry |
+      | A canceled or expired flow removes the newly granted origin, keeping it when a note was taken there | Cancel, close, tab switch, navigation or a stale revision discards the draft and its link shapes and sends no `update_config`; notes never depended on the draft |
+      | Hand-over to the settings page's host through `storage.session` | The panel's own host connection drafts inline; the settings handoff exists only for the advanced editor |
+      | Settings reads the tab title on the now-granted origin and shows it only in the review | The panel reads the active tab title and shows it only in the review; it never goes to `draft_site`/`check_site_draft`, and a title entry the user types is part of the saved adapter |
+      | A final native confirmation names the origin and repeats the visited and link match counts | The review names the origin and shows "Matches N of M visited patterns and K of L link patterns"; the save is `check_site_draft` plus revision-checked `update_config` under the config mutation lock |
+      | The origin is acceptable only because the native confirmation names it | The host drafts only for the request's exact origin and never adds one; user-written config is trusted (§4.2) |
+      | The agent denylist applies to the origin | Removed in v6; no agent runs |
+      | Enabling or widening needs the native confirmation (§7.2, adapter-templates.md §6) | The review must be shown and saved explicitly, and `unscoped` needs its own checkbox with the statement |
+      | Flow test starting from the context menu on an ungranted tab | Starting from the panel on an unknown tab with no permission request |
+      | Flow test of a canceled or expired flow removing the newly granted origin | Cancel or expiry saves nothing and leaves notes untouched; an expired advanced-editor handoff is deleted |
+
+      The Notion named case below is covered by the `brwr-gf1` decision as revisited on 2026-10-27 (§5.1, §14): behind a route word on a non-shared origin, title-prefixed and bare `hex(32)` pages share one `hex(32)@tail` ID (`title_prefixed_and_bare_hex_pages_share_one_tail_id_behind_a_route_word`), and Notion workspace pages share one behind the scoped workspace, their anchor (`notion_workspace_pages_draft_behind_the_scoped_workspace`). The shared-origin flow test below is superseded by John's 2026-10-27 decision (§14): the tenant is pre-filled from the tab's URL as "Capture for `<tenant>`" and confirmed with one click on Save (`a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click`); Save stays disabled only when the URL names no tenant. Original step: Create adapter with the structural drafter (§5.1), after Tier 1 (step 7.3) brings `scripting`; no agent. This step adds the URL-shape sample and the recurring-pages hint, the panel button and the "Create adapter for this site" context-menu entry, the link-shape function, the host's structural drafter, and the review in the settings page's adapter editor. Shaper tests feed real URL forms from every shipped starter adapter, plus Confluence `/display/SPACE/Title`, SharePoint `sourcedoc` GUIDs, Notion `Title-<32 hex>` pages, percent-encoded names, and long mixed-case slugs, and check that no stored shape contains a digit outside a placeholder name, an uppercase letter, a segment over 20 characters, a query value, or any title. Link-shape tests check that the function runs only in the top frame of the document the panel saw, rechecks the origin, reads only same-origin `href`s, stops at 500 links, turns a literal seen in only one link into `{slug}`, returns at most 50 shapes and no raw URL, and that nothing it returns is stored, sampled, or delivered. Drafter tests feed the shapes of every shipped starter adapter's recorded URLs and check that the draft matches those URLs with one adapter per kind of page, unique types, and no `web` scheme. Named cases: a GitHub pull request and its `/files` tab become one adapter keyed by owner, repository, and number; Notion pages with and without a title slug share one `hex(32)@tail` ID; SharePoint's `sourcedoc` GUID, not `15`, becomes the ID; and Google Docs' `/u/0/` never enters an ID. They also feed planted links steering toward `/{*}`, a root match, a search page, an auth or capability route, an ID from a search or paging parameter, an ID-less rule, or a new alternative on a visited rule, and check that each is dropped, or kept in a separate unchecked rule, before the review. A `token`-only rule starts unchecked, and a draft overlapping an existing adapter loses only the overlapping rules. Flow tests cover starting from the context menu on an ungranted tab, a canceled or expired flow removing the newly granted origin but keeping it when a note was taken there meanwhile, a link-shape run that returns nothing after the tab navigated, a shared origin whose tenant position becomes a capture with scope pending and Enable disabled until the user chooses (superseded 2026-10-27: pre-filled and confirmed, above), a draft unchecked down to one rule, and a user edit turning only the edited rule into user-written config whose draft-rule failures only warn.
    7. Agent drafting, after M2 host invocation (step 8.2), using the same harness isolation, for the hint and for **Improve with AI** in the review. Draft tests give the fake harness the step 7.6 planted inputs and check that its drafts are held to the same per-rule checks. They also cover a draft carrying Tier 1 fields, a title template, or a `scope`, and a draft that does not parse; the host must reject each before the preview, and the preview must list every non-artifact shape a borderline draft matches.
 8. **Build the rest of M2** after M1.5a, in this order, each step reviewed and merged separately. The sub-steps keep M2's step numbers, so step 8.2 is M2 step 2.
    2. Host invocation: an environment of only the allowlisted variables, argv from the template, page content on stdin inside the untrusted-data block, the host-owned working directory, a timeout, output cap, and process-tree kill, and the confirmed-install-location prefix check (§7.1). Test with fake harness binaries on both OSes, including one whose symlink target changes between runs (identity re-check), one moved outside the confirmed install location, one that emits a tool call or an unknown Codex event, and one that reports `is_error`. Run the §7.1 canary for each shipped harness template, including a prompt-injected page that asks Codex to read a planted file; it passes if the contents appear in no forwarded chunk or summary and any non-allowlisted event ends the run as `rejected`.
@@ -1313,6 +1461,13 @@ The plan follows Chrome's current [optional-permission rules](https://developer.
 ## 14. Open Questions
 
 No open M0 or M1 design questions. The release hosting, support, platform, browser, and signing policies are defined in §11; M1 security requirements are recorded in §12.
+
+Capture Site drafting decisions (2026-10-27, `brwr-t40`; plan `docs/superpowers/plans/2026-10-27-capture-site-unknown-sites.md`):
+
+- **`brwr-gf1`: the leading-literal rule stood, then the scoped tenant became the anchor (revisited 2026-10-27).** First decided: Notion workspace pages (`/acme/Release-Plan-<hex32>`, `/acme/<hex32>`) have only the host's `workspace` tenant capture, a `name`, before the ID, and were refused as `draft_no_leading_literal`. Revisited after #126 made a scope-restricted capture an anchor: the drafter and the per-rule checks adopt that rule instead of keeping a tenant rule of their own, so these pages draft to one `notion.page` `hex(32)@tail` rule behind the scoped workspace, which can never be saved `unscoped` (§5.1). Step 7.6's Notion success case holds on Notion itself again, as well as behind a route word on a non-shared origin.
+- **Shared-origin tenants are pre-filled and confirmed (2026-10-27, John: "make adapter creation as easy as possible and do the work on our side").** On a shared origin with a tenant position, the drafted review pre-fills the tenant from the current tab's URL as "Capture for `<tenant>`", already chosen, so Save is a one-click confirmation; it stays editable and keeps every safety check. This supersedes "scope pending, Enable disabled until the user chooses" (§5.1, §12.2 step 7.6), which now applies only when the URL names no tenant.
+- **Additive messages stay within the version.** `draft_site` and `check_site_draft` were host-only additions within protocol v6, and moved onto version 7 with #126's containers; a changed existing message still takes the next version (§12.2 step 7).
+- **Scope, `unscoped` and title are overlays.** They are applied by the panel after `check_site_draft`, never inside the checked tables, so the forbidden-key check stays a whole-draft refusal for drafted rules (§5.1).
 
 Home folder decision (2026-10-27, John; supersedes the configurable content locations of §6.1 and PR #72's per-folder settings):
 
@@ -1384,7 +1539,7 @@ Artifact decisions (2026-09-28):
 
 - **First starter adapters (2026-09-28).** Jira, SharePoint/OneDrive, and GitHub ship first, in step 6.8. The other starter adapters wait for M1.5b (step 7.5).
 - **Users create their own adapters (2026-09-28).** A **Create adapter** button in the side panel drafts an adapter from the site the user is on, from the shapes of its URL, of the links on the page, and of the origin's sample. It never fetches or crawls pages. A deterministic structural drafter in the host makes it work without an agent in M1.5b, and the agent can refine the draft after M2. It starts from the context menu or the toolbar action on an ungranted tab, because a side-panel click grants no `activeTab`. It proposes one adapter per kind of page, checks each rule separately, and starts rules seen only in links unchecked. Only the rules the user edits become user-written. The user reviews every rule, the ID, and the scope before the usual native confirmation (§5.1).
-- **Fixed-shape captures anchor a template (2026-09-28).** A path template needs a required anchor segment: a literal, an alternation, or a fixed-shape capture (`uuid`, or `hex` with an exact length of 32 or more). Optional segments never count. So Notion's all-capture URL shape is a valid starter adapter, while short or variable-length hex is not. Drafts still need a route word before their first capture (adapter-templates.md §4.1, §10.4).
+- **Fixed-shape captures anchor a template (2026-09-28).** A path template needs a required anchor segment: a literal, an alternation, or a fixed-shape capture (`uuid`, or `hex` with an exact length of 32 or more). Optional segments never count. So Notion's all-capture URL shape is a valid starter adapter, while short or variable-length hex is not. Drafts still need a literal before their first identifier capture, or, since 2026-10-27, the scoped shared-origin tenant (adapter-templates.md §4.1, §10.4).
 - **Scoped tenants also anchor a template (2026-10-27).** A required path capture a `scope` key restricts to a literal list counts as an anchor segment too, because the user's chosen tenant list is effectively a literal (adapter-templates.md §4.1, §6). This is what lets GitHub's repository catch-all, `/{owner:name|lower}/{repo:name|lower}/{*}`, validate once it is scoped to an organization list; it is a general rule for any shared origin with a tenant capture, such as a Notion or Linear workspace, not a GitHub exception. An `unscoped = "acknowledged"` adapter, or a capture scope does not restrict, still gets no anchor.
 - **Containers (2026-10-27).** An adapter may declare `within`, naming a container artifact its own artifacts sit inside (adapter-templates.md §3, §8.3). A visit rolls up into its container once — each second, open, and local day counted there exactly once, days as a union of the container's own and its contents' days — and the index records the relationship as a `within` edge alongside `mentions` and `co-focused` (§5.1, §6.2). GitHub repositories are the first container: `github.repo` is a new catch-all starter over everything inside a repository that no PR or issue adapter claims, and `github.pr`/`github.issue` declare `within` it. A container's title and URL come from its ID, never from a sub-page's title, so a repository with rolled-up activity but no direct visit yet still shows `owner/repo` and a link to its home page; this applies while some adapter declares `within` the container's type, so a repositories-only setup keeps the latest sub-page title (accepted limit, docs/adapters/github.repo.md). Enabling the repository catch-all on top of already-configured PR or issue adapters would otherwise trip the overlapping-route guard (§6.2): any past edit to their scope leaves a retired contract the catch-all's routes overlap under a different type. The guard is amended to allow that overlap when the new adapter is exactly the retired contract's declared container, because those URLs were already counting toward it. Existing PR and issue history rolls up into repositories retroactively, because the index is rebuilt from the append-only logs and derives each event's container when the event is re-evaluated, not when it was originally written. Downgrading after adding repositories is unsupported: older hosts reject `within` in the adapter config and in adapter history.
 - **Brauser owns its ID scheme (2026-09-28).** Brauser is a standalone product, so starter adapters use Brauser's own `artifact_id` form (§6.2) and do not follow any other tool's keys. Other tools read Brauser's IDs and alias events from the log if they want them. A starter adapter's `id` template is still frozen once it ships (§6.2).

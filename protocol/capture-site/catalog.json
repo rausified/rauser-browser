@@ -1,0 +1,134 @@
+{
+  "format": 1,
+  "probe_paths": [
+    "/",
+    "/search?q=x",
+    "/?q=x",
+    "/query",
+    "/filter",
+    "/login",
+    "/home",
+    "/dashboard",
+    "/invite",
+    "/reset",
+    "/password",
+    "/verify",
+    "/confirm",
+    "/share",
+    "/magic",
+    "/token",
+    "/oauth",
+    "/auth",
+    "/signin",
+    "/signup",
+    "/logout",
+    "/unsubscribe",
+    "/?search=x",
+    "/?query=x",
+    "/?q=x",
+    "/?jql=x",
+    "/?filter=x"
+  ],
+  "search_keys": ["q", "query", "search", "jql", "filter"],
+  "paging_keys": ["page", "offset", "start", "cursor", "limit", "sort", "order", "tab", "view"],
+  "blocked_route_words": [
+    "search",
+    "query",
+    "filter",
+    "login",
+    "home",
+    "dashboard",
+    "invite",
+    "reset",
+    "password",
+    "verify",
+    "confirm",
+    "share",
+    "magic",
+    "token",
+    "oauth",
+    "auth",
+    "signin",
+    "signup",
+    "logout",
+    "unsubscribe",
+    "invitation",
+    "callback",
+    "authorize",
+    "sso",
+    "saml",
+    "join",
+    "activate",
+    "activation",
+    "verification"
+  ],
+  "secret_query_keys": [
+    "token",
+    "auth",
+    "code",
+    "state",
+    "nonce",
+    "sig",
+    "signature",
+    "key",
+    "apikey",
+    "secret",
+    "session",
+    "sid",
+    "otp",
+    "invite",
+    "magic",
+    "reset",
+    "jwt",
+    "hmac",
+    "password",
+    "pwd",
+    "credential"
+  ],
+  "secret_query_key_parts": ["token", "secret", "signature", "password", "session", "credential"],
+  "secret_query_key_suffixes": ["sig"],
+  "mode_words": {
+    "edit": "edit",
+    "view": "view",
+    "preview": "view",
+    "review": "review",
+    "files": "review"
+  },
+  "fill": {
+    "num": "123456",
+    "key": "ABC-123",
+    "slug": "example-page",
+    "uuid": "123e4567-e89b-12d3-a456-426614174000",
+    "hex32": "0123456789abcdef0123456789abcdef",
+    "hex40": "0123456789abcdef0123456789abcdef01234567",
+    "hex64": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "tailhex32": "example-page-0123456789abcdef0123456789abcdef",
+    "id": "example123"
+  },
+  "starter_types": ["jira.issue", "sharepoint.doc", "github.pr", "github.issue", "github.repo"],
+  "shared_origins": {
+    "https://github.com": {
+      "tenant": { "segment": 0, "capture": "owner" },
+      "account_index": []
+    },
+    "https://www.notion.so": {
+      "tenant": { "segment": 0, "capture": "workspace" },
+      "account_index": []
+    },
+    "https://linear.app": {
+      "tenant": { "segment": 0, "capture": "workspace" },
+      "account_index": []
+    },
+    "https://docs.google.com": {
+      "tenant": null,
+      "account_index": [
+        { "literal": "u", "segment": 0 },
+        { "literal": "u", "segment": 1 }
+      ]
+    },
+    "https://www.figma.com": {
+      "tenant": null,
+      "account_index": []
+    }
+  }
+}

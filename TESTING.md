@@ -68,9 +68,59 @@ starter URLs against live tools or prove Chrome layout and keyboard focus.
 Those checks remain the existing human starter-certification and interactive
 Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
 Capture Site adds no scripted dialogs; the runner compares answered dialogs
-with its transcript instead of expecting a fixed total. Unknown-site structural
-drafting still needs the separate DESIGN §12.2 step 7.6 safety, grouping,
-scope and identity tests when implemented.
+with its transcript instead of expecting a fixed total.
+
+### Unknown-site drafting (`brwr-t40`)
+
+Two shared fixtures pin both sides of the boundary to one source:
+
+- `protocol/capture-site/catalog.json`, the host-owned drafting catalog. The
+  host parses it (`host/src/capture_site.rs` tests check its shared origins
+  equal `SHARED_ORIGINS` and that its probes cover the root, search, auth and
+  capability routes); `extension/tests/adapter-review.test.mjs` pins
+  `probeUrls` to its `probe_paths`, and `starter-adapters.test.mjs` checks
+  every starter type is reserved in `starter_types`.
+- `protocol/capture-site/shapes.json`, real URL forms (every starter's
+  recorded forms plus Confluence, SharePoint `sourcedoc`, Notion, Google Docs
+  `/u/0/`, Linear, percent-encoded and long mixed-case names) with their
+  expected shapes, and shape strings that must be refused. The in-page shaper
+  (`site-patterns.test.mjs`) and the Rust parser
+  (`adapter-templates/tests/shapes.rs`) both read it.
+
+The per-rule checks have 32 `draft_rules` vectors (protocol/adapter-templates/README.md)
+plus unit tests in `adapter-templates/src/draft.rs`. The drafter's step 7.6
+cases are in `adapter-templates/tests/structural.rs`: recorded starter URLs
+drafting to matching adapters, the GitHub pull request and `/files` tab, the
+`hex(32)@tail` and Notion (`brwr-gf1`) cases, SharePoint `sourcedoc`, Google
+Docs' account index, seven planted-link cases (plus the `adapter-templates/src/structural.rs` unit test `link_only_alternative_never_widens_visited_rule`) and overlap. The
+`structural_draft` fuzz target checks that every returned rule passes the
+per-rule checks and none matches the root. Host tests in
+`host/src/capture_site.rs` cover the handlers: revision binding, raw-URL and
+invalid-shape refusal, repair refusal, recorded contract types counted as
+taken, the full preview, zero re-mapping, no writes to the home or config
+directories, the outbound cap at the request limits, and `check_site_draft`'s
+overlap, user-written warnings, stale-revision conflict, scope choices and
+the forbidden-key refusal of a table that carries an overlay. Extension tests
+cover the plan (`capture-site.test.mjs`), the composed review, save,
+recurring-pages hint and older-host fallback (`panel.test.mjs`), the
+advanced-editor handoff and per-rule provenance (`options.test.mjs`) and the
+worker's handoff expiry and that link shapes are never sampled, buffered or
+saved (`worker.test.mjs`). They assert that no request carries a raw URL,
+link `href` or tab title, and that no Chrome permission request or native
+dialog occurs.
+
+The headless smoke run adds `step("Capture Site drafts and saves an unknown site")`
+before `step("Site removal")`. It serves `/wiki/pages/<n>/<Title>` pages
+that link to sibling pages, `/search?q=` and `/login` on the second origin
+`http://localhost:<port>` (distinct from the configured `127.0.0.1` origin),
+clicks **Capture Site**, and checks one checked "pages" rule that captures
+this page, the counts ("1 of 1 visited patterns and 2 of 4 link patterns"),
+the search and sign-in links in the "won't capture" list, and the safety
+list. It saves, checks the host holds a drafted adapter with only Tier 0 keys
+while the configured site's adapter is unchanged, checks the reloaded panel
+shows the artifact card, and checks no native dialog was shown. `Site
+removal` then removes both origins. This proves the real Chrome injection
+and save on one simple site; it does not certify drafts on live tools.
 
 ## Page-pattern review coverage
 
@@ -99,8 +149,8 @@ These checks use mocked Chrome APIs and DOM objects; the serialized function
 has been exercised, but real Chrome injection, disclosure layout and keyboard
 focus still need the macOS interactive/headless gates. No scripted dialog or
 smoke step was added. The Linux VM cannot run `smoke:macos:headless`; do not
-claim that it passed here. Structural drafting and unknown-site enabling are
-still unbuilt, so these tests do not certify any machine-drafted rule.
+claim that it passed here. Unknown-site drafting is covered separately
+(above); these tests do not certify any machine-drafted rule.
 
 ## Capture Site attention across an hour boundary
 
@@ -326,6 +376,7 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-10-27: Branch `feat/capture-site-unknown` (`brwr-t40`). Unknown-site Capture Site pins the host catalog and real URL shapes in `protocol/capture-site/` and reads them from both the Rust and extension suites, so neither side keeps a private copy of the probe list, fill values or shaper expectations ("Unknown-site drafting" above). Scope, `unscoped` and title overlays are tested on both sides of `check_site_draft`: the checked request never carries them, and a table that does is still refused. `scripts/check_current_state.py` now rejects the retired "Unknown-site automatic drafting is still in development" claim. After merging #126 (protocol v7), the drafter's scoped-tenant anchor is pinned on both sides: `validate.drafted.*` vectors (rust, ts) show a drafted shared-origin adapter whose only anchor is its tenant validating scoped and failing `no_literal_segment` unscoped in both engines, plus the drafted Notion adapter and the ID-less rule (`id_unknown_capture`); `draft_rules` vectors and host `check_site_draft` tests show the same tables kept, `scope_anchored`, and refused unscoped as `draft_scope_choice`. The step 7.6 shared-origin panel test now expects the tab's tenant pre-filled and chosen as "Capture for <tenant>" (one-click Save), and a tab with no tenant in its URL still waiting for a choice.
 - 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).
   Failing-first host tests (`config::tests::strip_params_readers`,
   `native::tests::update_config_refuses_stripping_a_parameter_an_adapter_reads`)

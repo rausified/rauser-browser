@@ -16,6 +16,7 @@ const {
 
 const vectors = JSON.parse(await readFile(new URL("../../protocol/adapter-templates/vectors.json", import.meta.url)));
 const recorded = vectors.fixtures.starters.artifacts;
+const catalog = JSON.parse(await readFile(new URL("../../protocol/capture-site/catalog.json", import.meta.url)));
 
 function compiled(offers) {
   const artifacts = offers.map((offer) => offer.adapter);
@@ -181,6 +182,19 @@ test("GitHub drafts are scoped and preserve PR modes", () => {
   const issue = evaluate(doc, "https://github.com/acme-corp/widget/issues/77");
   assert.equal(issue.match, true);
   assert.equal(issue.artifact_id, "github.issue:github.com/acme-corp/widget/77");
+});
+
+test("every starter type is reserved in the host catalog", () => {
+  const offers = [
+    ...starterOffers("https://acme.atlassian.net", []),
+    ...starterOffers("https://github.com", ["acme-corp"]),
+    ...starterOffers("https://github.com", []),
+    ...starterOffers("https://acme.sharepoint.com", []),
+    ...starterOffers("https://acme-my.sharepoint.com", []),
+  ];
+  const types = new Set(offers.map((offer) => offer.artifact_type));
+  assert.deepEqual([...types].sort(), ["github.issue", "github.pr", "github.repo", "jira.issue", "sharepoint.doc"]);
+  for (const type of types) assert.ok(catalog.starter_types.includes(type), type);
 });
 
 test("withContainerLinks links only rules whose linked copy compiles, and leaves the rest as they are", () => {

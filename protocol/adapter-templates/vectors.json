@@ -9238,6 +9238,38 @@
       "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
     },
     {
+      "id": "validate.drafted.tenant_anchored_scoped",
+      "kind": "validate",
+      "why": "§4.1, §6, DESIGN §5.1: a drafted shared-origin adapter whose only anchor is its tenant validates once the review scopes the tenant",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "linear.issue", "origin": "https://linear.app", "match": [{"path": "/{workspace:name|lower}/{key:jira_key}"}], "id": "linear.issue:{host}/{workspace}/{key}", "scope": {"workspace": ["acme"]}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.drafted.tenant_anchored_unscoped",
+      "kind": "validate",
+      "why": "§4.1: the same drafted adapter saved unscoped has no anchor",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "linear.issue", "origin": "https://linear.app", "match": [{"path": "/{workspace:name|lower}/{key:jira_key}"}], "id": "linear.issue:{host}/{workspace}/{key}", "unscoped": "acknowledged"}]},
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.drafted.notion_workspace_scoped",
+      "kind": "validate",
+      "why": "§4.1, §6, DESIGN §5.1 (brwr-gf1): the drafted Notion workspace page adapter, scoped to the workspace the review confirmed",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{hex:hex(32)@tail}"}], "id": "notion.page:{host}/{workspace}/{hex}", "scope": {"workspace": ["acme"]}}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.drafted.id_less_rule",
+      "kind": "validate",
+      "why": "§8.1, DESIGN §5.1: a drafted rule that does not bind the ID's captures cannot be saved, so the per-rule checks drop it as draft_invalid_rule",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "tools.docs", "origin": "https://tools.example.com", "match": [{"path": "/docs/{num:int}"}, {"path": "/about/team"}], "id": "tools.docs:{host}/{num}"}]},
+      "expect": {"error": {"code": "id_unknown_capture", "adapter": 0, "rule": 1, "entry": null}}
+    },
+    {
       "id": "validate.path.alternation_counts_as_literal",
       "kind": "validate",
       "why": "§4.1: a plain alternation satisfies the literal rule",
@@ -19057,6 +19089,44 @@
       "url": "https://github.com/other/widgets"
     },
     {
+      "id": "eval.namespace.bound_foo",
+      "kind": "evaluate",
+      "why": "§8.1: a captured alternation in the ID keeps equal numbers under two namespaces apart (drafted namespaces, DESIGN 5.1)",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "tools.discussions",
+            "origin": "https://tools.example.com",
+            "match": [{"path": "/{space:(bar|foo)}/discussions/{num:int}"}],
+            "id": "tools.discussions:{host}/{space}/{num}"
+          }
+        ]
+      },
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "tools.discussions", "captures": {"space": "foo", "num": "7"}, "artifact_id": "tools.discussions:tools.example.com/foo/7", "mode": null},
+      "url": "https://tools.example.com/foo/discussions/7"
+    },
+    {
+      "id": "eval.namespace.bound_bar",
+      "kind": "evaluate",
+      "why": "§8.1: a captured alternation in the ID keeps equal numbers under two namespaces apart (drafted namespaces, DESIGN 5.1)",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "tools.discussions",
+            "origin": "https://tools.example.com",
+            "match": [{"path": "/{space:(bar|foo)}/discussions/{num:int}"}],
+            "id": "tools.discussions:{host}/{space}/{num}"
+          }
+        ]
+      },
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "tools.discussions", "captures": {"space": "bar", "num": "7"}, "artifact_id": "tools.discussions:tools.example.com/bar/7", "mode": null},
+      "url": "https://tools.example.com/bar/discussions/7"
+    },
+    {
       "id": "eval.github.pr_files_case",
       "kind": "evaluate",
       "why": "§5.1: FILES is not the literal files, so it goes to the rest",
@@ -26325,6 +26395,402 @@
       "expect": {"match": false, "reason": "id_too_long"},
       "doc": {"$fixture": "long_once"},
       "url": "https://l.example.com/i/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    },
+    {
+      "id": "draft_rules.drop_only_the_failing_rule",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a failing rule is dropped and the rest of the draft is kept",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/(a|b)/{id:int}"}], "id": "x:{host}/{id}"},
+      "provenance": ["drafted", "drafted"],
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_no_leading_literal"}]}
+    },
+    {
+      "id": "draft_rules.bound_namespace_is_kept",
+      "kind": "draft_rules",
+      "why": "§10.4: a drafted namespace bound as a captured alternation behind a literal is kept; the alternation capture is not an identifier",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "tools.discussions", "origin": "https://tools.example.com", "match": [{"path": "/{space:(bar|foo)}/discussions/{num:int}"}], "id": "tools.discussions:{host}/{space}/{num}"},
+      "provenance": ["drafted"],
+      "expect": {"scope": "not_shared", "rules": ["kept"]}
+    },
+    {
+      "id": "draft_rules.pending_scope_without_scoped_adapters",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a shared origin with no scoped adapter leaves scope pending",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept"]}
+    },
+    {
+      "id": "draft_rules.copied_scope_ignores_unscoped_adapters",
+      "kind": "draft_rules",
+      "why": "§10.4: only scoped adapters are scope sources; an unscoped one does not conflict",
+      "impls": ["rust"],
+      "existing": {"$fixture": "sq4_lab"},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "sq": ["SQ-V17"],
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": ["kept"]}
+    },
+    {
+      "id": "draft_rules.unscoped_only_without_tenant_position",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a shared origin whose URLs name no tenant offers only unscoped",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {"type": "gdoc.sheet", "origin": "https://docs.google.com", "match": [{"path": "/spreadsheets/d/{id:token(20,64)}"}], "id": "gsheet:{host}/{id}"},
+      "expect": {"scope": "unscoped_only", "rules": ["kept"]}
+    },
+    {
+      "id": "draft_rules.copy_agreeing_scope",
+      "kind": "draft_rules",
+      "why": "§10.4: scoped adapters that agree give the draft their scope",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": [{"type": "github.issue", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.issue:{host}/{owner}/{repo}/{number}"}, {"type": "github.issue", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.issue:{host}/{owner}/{repo}/{number}"}]},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": ["kept"]}
+    },
+    {
+      "id": "draft_rules.conflicting_scopes_leave_scope_pending",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: scoped adapters that disagree leave scope pending",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": [{"type": "github.issue", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}], "scope": {"owner": ["acme-corp"]}, "id": "github.issue:{host}/{owner}/{repo}/{number}"}, {"type": "github.issue", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}], "scope": {"owner": ["acme-labs"]}, "id": "github.issue:{host}/{owner}/{repo}/{number}"}]},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "sq": ["SQ-V5"],
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept"]}
+    },
+    {
+      "id": "draft_rules.drop_search_parameter_ids",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: an ID captured from a search key is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/items", "query": {"q": "{id:int}"}}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_search_capture"}]}
+    },
+    {
+      "id": "draft_rules.drop_paging_parameter_ids",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: an ID captured from a paging key is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/items", "query": {"page": "{id:int}"}}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_paging_capture"}]}
+    },
+    {
+      "id": "draft_rules.drop_blocked_route_words",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a blocked route word as a literal or alternative is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/share/{id:int}"}, {"path": "/x/(view|login)/{id:int}"}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}]}
+    },
+    {
+      "id": "draft_rules.drop_secret_parameter_ids",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: an ID captured from a token, signature, code or session key is dropped, whatever its case or separators",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/files", "query": {"access_token": "{id:int}"}}, {"path": "/files", "query": {"X-Amz-Signature": "{id:int}"}}, {"path": "/cb", "query": {"code": "{id:int}"}}, {"path": "/doc", "query": {"session_id": "{id:int}"}}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_secret_capture"}, {"dropped": "draft_secret_capture"}, {"dropped": "draft_secret_capture"}, {"dropped": "draft_secret_capture"}]}
+    },
+    {
+      "id": "draft_rules.drop_blocked_route_word_variants",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: blocked route words are matched by their hyphen or underscore parts, joined, and with a trailing number or plural folded",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/sign-in/{id:int}"}, {"path": "/reset-password/{id:int}"}, {"path": "/invitations/{id:int}"}, {"path": "/oauth2/{id:int}"}, {"path": "/x/(view|magic-link)/{id:int}"}, {"path": "/shared-drives/{id:int}"}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, {"dropped": "draft_blocked_route"}, "kept"]}
+    },
+    {
+      "id": "draft_rules.drop_root_and_probe_matches",
+      "kind": "draft_rules",
+      "why": "§10.4: a rule matching a probe URL is dropped; rules are matched without scope",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/reports/view", "query": {"rid": "{id:int}"}}, {"path": "/items/{id:int}"}], "id": "x:{host}/{id}"},
+      "extra_probe_paths": ["/reports/view?rid=5"],
+      "sq": ["SQ-V3", "SQ-V4"],
+      "expect": {"scope": "not_shared", "rules": [{"dropped": "draft_matches_probe"}, "kept"]}
+    },
+    {
+      "id": "draft_rules.drop_rest_after_first_segment",
+      "kind": "draft_rules",
+      "why": "§10.4: a rest in the second position is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/x/{*}", "query": {"item": "{id:int}"}}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_rest_second"}]}
+    },
+    {
+      "id": "draft_rules.overlap_drops_only_overlapping_rules",
+      "kind": "draft_rules",
+      "why": "§10.4: a rule that may overlap an existing rule is dropped",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {"type": "jira.filter", "origin": "https://acme.atlassian.net", "match": [{"path": "/jira/boards/{id:int}"}, {"path": "/reports/{id:int}"}], "id": "jf:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": [{"dropped": "draft_overlap"}, "kept"]}
+    },
+    {
+      "id": "draft_rules.overlap_between_drafted_kinds_keeps_the_higher_ranked_rule",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a rule overlapping an earlier-ranked drafted adapter is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.other", "origin": "https://tools.example.com", "match": [{"path": "/items/{n:int}"}, {"path": "/other/{n:int}"}], "id": "xo:{host}/{n}"},
+      "accepted": [{"format": 1, "artifacts": [{"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}], "id": "x:{host}/{id}"}]}],
+      "expect": {"scope": "not_shared", "rules": [{"dropped": "draft_overlap"}, "kept"]}
+    },
+    {
+      "id": "draft_rules.user_written_failures_only_warn",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a user-written rule's failure only warns",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/share/{id:int}"}, {"path": "/items", "query": {"q": "{id:int}"}}, {"path": "/share/{id:int}/x"}], "id": "x:{host}/{id}"},
+      "provenance": ["user_written", "user_written", "drafted"],
+      "expect": {"scope": "not_shared", "rules": [{"warned": "draft_blocked_route"}, {"warned": "draft_search_capture"}, {"dropped": "draft_blocked_route"}]}
+    },
+    {
+      "id": "draft_rules.forbidden_key_rejects_whole_draft_when_any_rule_is_drafted",
+      "kind": "draft_rules",
+      "why": "§10.4: a forbidden key refuses the whole draft when any rule is drafted",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/other/{id:int}"}], "id": "x:{host}/{id}", "title": "{title} - Tools"},
+      "provenance": ["user_written", "drafted"],
+      "expect": {"draft_error": "draft_forbidden_key"}
+    },
+    {
+      "id": "draft_rules.all_user_written_adapter_forbidden_key_only_warns",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: an adapter the user wrote by hand only warns about a forbidden key",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/share/{id:int}"}], "id": "x:{host}/{id}", "path_case": "insensitive"},
+      "provenance": ["user_written", "user_written"],
+      "expect": {"scope": "not_shared", "rules": [{"warned": "draft_forbidden_key"}, {"warned": "draft_forbidden_key"}]}
+    },
+    {
+      "id": "draft_rules.invalid_rule_is_dropped",
+      "kind": "draft_rules",
+      "why": "§10.3: a rule that fails validation alone can never be saved and is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/other/{id:int"}], "id": "x:{host}/{id}"},
+      "provenance": ["user_written", "user_written"],
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_invalid_rule"}]}
+    },
+    {
+      "id": "draft_rules.conflicting_rule_is_dropped",
+      "kind": "draft_rules",
+      "why": "§10.3: a rule valid alone but conflicting with an earlier kept rule is dropped",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/other/{id:token}"}], "id": "x:{host}/{id}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_invalid_rule"}]}
+    },
+    {
+      "id": "draft_rules.copied_scope_unbound_drops_the_rule",
+      "kind": "draft_rules",
+      "why": "§6: a rule that does not bind the copied scope's capture is dropped",
+      "impls": ["rust"],
+      "existing": {"$fixture": "github_without_repo"},
+      "draft": {"type": "github.gist", "origin": "https://github.com", "match": [{"path": "/gists/{id:hex}"}, {"path": "/{owner:name|lower}/x/gists/{id:hex}"}], "id": "gist:{host}/{id}"},
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": [{"dropped": "draft_invalid_rule"}, "kept"]}
+    },
+    {
+      "id": "draft_rules.adapter_level_invalid_rejects_draft",
+      "kind": "draft_rules",
+      "why": "SQ-V10: an adapter-level validation failure refuses the whole draft",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "X", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}], "id": "x:{host}/{id}"},
+      "sq": ["SQ-V10"],
+      "expect": {"error": {"code": "bad_adapter_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "draft_rules.id_without_identifier_rejects_draft",
+      "kind": "draft_rules",
+      "why": "§10.4: an ID without an identifier capture refuses the draft",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.kind", "origin": "https://tools.example.com", "match": [{"path": "/x/{kind:(a|b)}"}], "id": "x:{host}/{kind}"},
+      "expect": {"draft_error": "draft_id_needs_typed_capture"}
+    },
+    {
+      "id": "draft_rules.notion_workspace_pages_are_anchored_by_the_scoped_tenant",
+      "kind": "draft_rules",
+      "why": "§4.1, §6, §10.4: the scoped workspace tenant is a Notion workspace page's anchor before its ID (brwr-gf1, revisited 2026-10-27)",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{id:hex(32)@tail}"}], "id": "notion:{host}/{workspace}/{id}"},
+      "choice": {"values": ["acme"]},
+      "expect": {"scope": {"pending": "workspace"}, "rules": ["kept"], "scope_anchored": true, "resolved": {"scoped": {"workspace": ["acme"]}}}
+    },
+    {
+      "id": "draft_rules.id_less_rule_is_dropped",
+      "kind": "draft_rules",
+      "why": "§8.1, DESIGN §5.1: a drafted rule that does not bind the ID's captures is dropped and the rest kept; validate.drafted.id_less_rule is the same table in both engines",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "tools.docs", "origin": "https://tools.example.com", "match": [{"path": "/docs/{num:int}"}, {"path": "/about/team"}], "id": "tools.docs:{host}/{num}"},
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_invalid_rule"}]}
+    },
+    {
+      "id": "draft_rules.tenant_anchored_rule_refuses_unscoped",
+      "kind": "draft_rules",
+      "why": "§4.1, §10.4: unscoped would leave a tenant-anchored rule with no anchor",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "notion.page", "origin": "https://www.notion.so", "match": [{"path": "/{workspace:name|lower}/{id:hex(32)@tail}"}], "id": "notion:{host}/{workspace}/{id}"},
+      "choice": "unscoped",
+      "expect": {"scope": {"pending": "workspace"}, "rules": ["kept"], "scope_anchored": true, "resolved": {"scope_error": "draft_scope_choice"}}
+    },
+    {
+      "id": "draft_rules.route_word_rule_may_be_unscoped",
+      "kind": "draft_rules",
+      "why": "§10.4: a rule with a route word before its ID does not depend on the tenant scope",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "linear.issue", "origin": "https://linear.app", "match": [{"path": "/{workspace:name|lower}/issue/{key:jira_key}"}], "id": "linear.issue:{host}/{workspace}/{key}"},
+      "choice": "unscoped",
+      "expect": {"scope": {"pending": "workspace"}, "rules": ["kept"], "resolved": "unscoped"}
+    },
+    {
+      "id": "draft_rules.tenant_anchor_needs_a_tenant_position",
+      "kind": "draft_rules",
+      "why": "§10.4: off a shared origin a name capture is not scoped, so it anchors nothing",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/{space:name|lower}/{id:hex(32)@tail}"}], "id": "x:{host}/{space}/{id}"},
+      "expect": {"scope": "not_shared", "rules": [{"dropped": "draft_no_leading_literal"}]}
+    },
+    {
+      "id": "draft_rules.copied_scope_anchors_its_capture",
+      "kind": "draft_rules",
+      "why": "§4.1, §10.4: a copied scope restricts its capture, which then anchors the rule",
+      "impls": ["rust"],
+      "existing": {"$fixture": "github_without_repo"},
+      "draft": {"type": "github.thing", "origin": "https://github.com", "match": [{"path": "/{owner:name|lower}/{number:int}"}], "id": "github.thing:{host}/{owner}/{number}"},
+      "choice": null,
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": ["kept"], "scope_anchored": true, "resolved": {"scoped": {"owner": ["acme-corp"]}}}
+    },
+    {
+      "id": "draft_rules.resolve_pending_with_values",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: pending scope accepts chosen tenant values",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}, {"path": "/orgs/{owner:name|lower}/share/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": {"values": ["acme-corp", "acme-labs"]},
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept", {"dropped": "draft_blocked_route"}], "resolved": {"scoped": {"owner": ["acme-corp", "acme-labs"]}}}
+    },
+    {
+      "id": "draft_rules.resolve_pending_refuses_blocked_route_word_tenants",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: a tenant value that is a blocked route word (a sign-in, invite or sharing route) is not a workspace",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": {"values": ["acme-corp", "auth"]},
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept"], "resolved": {"scope_error": "draft_scope_choice"}}
+    },
+    {
+      "id": "draft_rules.resolve_pending_with_unscoped",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: pending scope accepts unscoped; the rule verdicts do not change",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}, {"path": "/orgs/{owner:name|lower}/share/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": "unscoped",
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept", {"dropped": "draft_blocked_route"}], "resolved": "unscoped"}
+    },
+    {
+      "id": "draft_rules.resolve_pending_without_choice",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: pending scope with no choice is refused",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}, {"path": "/orgs/{owner:name|lower}/share/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": null,
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept", {"dropped": "draft_blocked_route"}], "resolved": {"scope_error": "draft_scope_pending"}}
+    },
+    {
+      "id": "draft_rules.resolve_pending_with_empty_values",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: pending scope with an empty value list is refused",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": {"values": []},
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept"], "resolved": {"scope_error": "draft_scope_pending"}}
+    },
+    {
+      "id": "draft_rules.resolve_pending_with_invalid_value",
+      "kind": "draft_rules",
+      "why": "§6: a scope value must be a canonical name value",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": {"values": ["Acme"]},
+      "expect": {"scope": {"pending": "owner"}, "rules": ["kept"], "resolved": {"scope_error": "draft_scope_choice"}}
+    },
+    {
+      "id": "draft_rules.resolve_unscoped_only_refuses_values",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: where no tenant position exists only unscoped is accepted",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {"type": "gdoc.sheet", "origin": "https://docs.google.com", "match": [{"path": "/spreadsheets/d/{id:token(20,64)}"}], "id": "gsheet:{host}/{id}"},
+      "choice": {"values": ["acme"]},
+      "expect": {"scope": "unscoped_only", "rules": ["kept"], "resolved": {"scope_error": "draft_scope_choice"}}
+    },
+    {
+      "id": "draft_rules.resolve_unscoped_only_accepts_unscoped",
+      "kind": "draft_rules",
+      "why": "DESIGN 5.1: where no tenant position exists unscoped is accepted",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {"type": "gdoc.sheet", "origin": "https://docs.google.com", "match": [{"path": "/spreadsheets/d/{id:token(20,64)}"}], "id": "gsheet:{host}/{id}"},
+      "choice": "unscoped",
+      "expect": {"scope": "unscoped_only", "rules": ["kept"], "resolved": "unscoped"}
+    },
+    {
+      "id": "draft_rules.resolve_copied_keeps_scope_fixed",
+      "kind": "draft_rules",
+      "why": "§10.4: a copied scope is the host's copy",
+      "impls": ["rust"],
+      "existing": {"$fixture": "github_without_repo"},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": null,
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": ["kept"], "resolved": {"scoped": {"owner": ["acme-corp"]}}}
+    },
+    {
+      "id": "draft_rules.resolve_copied_refuses_a_choice",
+      "kind": "draft_rules",
+      "why": "§10.4: a copied scope cannot be replaced by a choice",
+      "impls": ["rust"],
+      "existing": {"$fixture": "github_without_repo"},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}"},
+      "choice": {"values": ["other"]},
+      "expect": {"scope": {"copied": {"owner": ["acme-corp"]}}, "rules": ["kept"], "resolved": {"scope_error": "draft_scope_choice"}}
+    },
+    {
+      "id": "draft_rules.resolve_not_shared_refuses_a_choice",
+      "kind": "draft_rules",
+      "why": "§6: unscoped is an error on an origin that is not shared",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}], "id": "x:{host}/{id}"},
+      "choice": "unscoped",
+      "expect": {"scope": "not_shared", "rules": ["kept"], "resolved": {"scope_error": "draft_scope_choice"}}
     },
     {
       "id": "validate.within.accepted",

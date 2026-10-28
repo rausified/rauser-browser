@@ -18,12 +18,18 @@ mod error;
 mod eval;
 mod overlap;
 mod path;
+mod policy;
+pub mod shape;
+pub mod structural;
 mod title;
 mod value;
 
 pub use ctype::{BaseType, CType, CaseMod};
 pub use document::{Adapter, Container, Document, MAX_ADAPTERS, MAX_RULES, Mode, SHARED_ORIGINS};
-pub use draft::{DraftOutcome, Scope, check_draft};
+pub use draft::{
+    DraftOutcome, DraftRulesReport, Provenance, ResolvedScope, RuleVerdict, Scope, ScopeChoice,
+    ScopeState, check_draft, check_draft_rules, resolve_scope_choice, scope_state,
+};
 pub use error::{DraftErrorCode, ErrorCode, Field, ValidationError};
 pub use eval::{
     ContainerMatch, MAX_ID_BYTES, MAX_REFS, MAX_URL_CHARS, Match, NoMatch, Ref, ResolvedRef,
@@ -31,4 +37,5 @@ pub use eval::{
 };
 pub use overlap::OverlapPair;
 pub use path::prepare_segments;
+pub use policy::{DraftPolicy, Fill, SharedOrigin};
 pub use value::Value;

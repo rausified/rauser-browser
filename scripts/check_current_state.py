@@ -39,6 +39,7 @@ def main() -> int:
     try:
         agents = section(ROOT / "AGENTS.md", "Current state")
         readme = section(ROOT / "README.md", "Status")
+        readme_development = section(ROOT / "README.md", "Development")
         design = status_line(ROOT / "DESIGN.md")
     except (OSError, ValueError) as error:
         print(error, file=sys.stderr)
@@ -75,7 +76,15 @@ def main() -> int:
     }.items():
         for doc in ("AGENTS.md", "README.md", "DESIGN.md"):
             stale_claims[f"{doc} {label}"] = claim
+    # Retired by Capture Site for unknown sites (`brwr-t40`): the host
+    # structural drafter, per-rule review and recurring-pages hint are built.
+    stale_claims["README.md drafting"] = "Unknown-site automatic drafting is still in development"
+    stale_claims["AGENTS.md drafting"] = "Unknown-site automatic drafting is still in development"
+    stale_claims["AGENTS.md drafter"] = (
+        "host structural drafter, selected-rule enable flow and recurring-page hint remain unbuilt"
+    )
     bodies = {
+        "README.md drafting": readme + "\n" + readme_development,
         "AGENTS.md": agents,
         "README.md": readme,
         "DESIGN.md": design,
@@ -104,6 +113,7 @@ def main() -> int:
         "worker prefilter": "prefilters unrecognized or out-of-scope navigations",
         "host recognition": "host independently rechecks each delivered event",
         "artifact activity": "offset-qualified hourly artifact activity",
+        "unknown-site capture": "capture site for unknown sites (`brwr-t40`",
     }
     folded_agents = normalized(agents)
     for fact, wording in required_agents_facts.items():

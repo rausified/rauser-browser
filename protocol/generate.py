@@ -46,7 +46,9 @@ def shape_type(shape: dict, target: str) -> str:
         if not isinstance(item, dict):
             fail(f"unsupported array item: {shape!r}")
         inner = shape_type(item, target)
-        return f"Vec<{inner}>" if target == "rust" else f"{inner}[]"
+        if target == "rust":
+            return f"Vec<{inner}>"
+        return f"({inner})[]" if " | " in inner else f"{inner}[]"
     if "oneOf" in shape:
         alternatives = shape["oneOf"]
         if len(alternatives) == 2 and alternatives[1] == {"type": "null"}:
@@ -76,6 +78,22 @@ def shape_type(shape: dict, target: str) -> str:
 
 def variants(definitions: dict, name: str) -> list[str]:
     return [ref_name(item) for item in definitions[name]["oneOf"]]
+
+
+def is_union(definition: dict) -> bool:
+    """A named union of object or enum definitions, told apart by shape."""
+    return "oneOf" in definition and set(definition) <= {"oneOf", "description"}
+
+
+def union_members(definitions: dict, name: str) -> list[str]:
+    members = variants(definitions, name)
+    if len(members) < 2:
+        fail(f"{name}: a union needs at least two members")
+    for member in members:
+        target = definitions.get(member)
+        if target is None or is_union(target) or target.get("type") not in ("object", "string"):
+            fail(f"{name}: union member {member} must be an object or enum definition")
+    return members
 
 
 def variant_name(struct_name: str) -> str:
@@ -154,6 +172,20 @@ def render_rust(definitions: dict, version: int) -> str:
                 ]
             )
             continue
+        if is_union(definition):
+            # Members reject unknown fields and values, so at most one of
+            # them reads any given JSON value.
+            output.extend(
+                [
+                    "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]",
+                    "#[serde(untagged)]",
+                    f"pub enum {name} {{",
+                    *[f"    {member}({member})," for member in union_members(definitions, name)],
+                    "}",
+                    "",
+                ]
+            )
+            continue
         if definition.get("type") != "object":
             fail(f"unsupported definition: {name}")
         output.extend(
@@ -218,6 +250,10 @@ def render_typescript(definitions: dict, version: int) -> str:
         if definition.get("type") == "string" and "enum" in definition:
             values = " | ".join(json.dumps(value) for value in definition["enum"])
             output.extend([f"export type {name} = {values};", ""])
+            continue
+        if is_union(definition):
+            members = " | ".join(union_members(definitions, name))
+            output.extend([f"export type {name} = {members};", ""])
             continue
         if definition.get("type") != "object":
             fail(f"unsupported definition: {name}")
