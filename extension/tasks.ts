@@ -7,11 +7,12 @@
 // textContent only, and none of it reaches diag (DESIGN.md §15).
 import type { RunView } from "../protocol/ts/generated.js";
 import { serviceSetupText } from "./agent.js";
-import { APP_NAME, storageKey } from "./brand.js";
+import { storageKey } from "./brand.js";
 import { initDiag } from "./diag.js";
 import { HostError } from "./native.js";
 import {
-  TaskDetail, dismissedIds, elapsedText, isTerminal, runsMayExist, type TaskDetailDeps,
+  RUNS_REBUILD_HOST_MESSAGE, TaskDetail, dismissedIds, elapsedText, isTerminal, runsMayExist,
+  type TaskDetailDeps,
 } from "./run-card.js";
 import { ConfigSession, describe, element } from "./settings.js";
 import { harnessReady } from "./summarize.js";
@@ -25,7 +26,6 @@ initDiag("tasks");
 /** How often the list is re-read while any listed task is unfinished. */
 export const LIST_REFRESH_MS = 2000;
 const WINDOWS_TEXT = "Tasks are not supported on Windows yet.";
-const OLDER_HOST_TEXT = `Rebuild the ${APP_NAME} host to see task history.`;
 const REUSE_DONE_TEXT = "Instruction sent to the task bar.";
 const TASK_REUSE_KEY = storageKey("task_reuse_v1");
 
@@ -90,7 +90,7 @@ function showListError(error: unknown): void {
   if (error instanceof HostError && error.code === "service_unavailable") {
     showStatus(serviceSetupText(error.message), { problem: true, settings: true });
   } else if (error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT) {
-    showStatus(OLDER_HOST_TEXT, { problem: true });
+    showStatus(RUNS_REBUILD_HOST_MESSAGE, { problem: true });
   } else {
     showStatus(`Could not list tasks: ${describe(error)}`, { problem: true });
   }

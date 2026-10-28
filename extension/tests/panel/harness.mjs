@@ -225,6 +225,7 @@ export async function install({
     removed: [],
     ports: [],
     hostDead: false,
+    hidden: false,
     agentStatus,
     injections: [],
     selectionProbes: [],
@@ -234,9 +235,15 @@ export async function install({
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
+  const documentListeners = new Map();
   globalThis.document = {
     getElementById: (id) => elements.get(id) ?? null,
     createElement: (tag) => new FakeElement(tag),
+    get visibilityState() { return state.hidden ? "hidden" : "visible"; },
+    get hidden() { return state.hidden; },
+    addEventListener(type, listener) {
+      documentListeners.set(type, [...(documentListeners.get(type) ?? []), listener]);
+    },
   };
   globalThis.Option = class extends FakeElement {
     constructor(text = "", value = text) {
@@ -413,6 +420,12 @@ export async function install({
     // The panel's window gets an event, such as focus.
     windowEvent(type) {
       for (const listener of type === "pagehide" ? [] : windowListeners.get(type) ?? []) listener({ type });
+    },
+    // The panel is hidden (another side panel, a minimized window) or shown
+    // again; Chrome fires visibilitychange either way.
+    setHidden(hidden) {
+      state.hidden = hidden;
+      for (const listener of documentListeners.get("visibilitychange") ?? []) listener({ type: "visibilitychange" });
     },
     // The worker broadcasts a notice to open extension pages.
     notify(notice) {

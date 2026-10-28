@@ -19,10 +19,12 @@ import { hostBuildText } from "./build-info.js";
 import { initDiag } from "./diag.js";
 import { SETUP_WARNING } from "./agent.js";
 import { NEEDS_HARNESS_MESSAGE, harnessReady, summarizeFailureText, summarizeTab } from "./summarize.js";
-import { RunCards, restoreRunCards, runsMayExist } from "./run-card.js";
+import { RunCards, clearNotice, restoreRunCards, runsMayExist, showListFailure } from "./run-card.js";
 import {
   TASK_NEEDS_HARNESS_MESSAGE, TASK_REPAIR_MESSAGE, cleanInstruction, startTask, taskFailureText,
 } from "./task.js";
+import { tasksPageUrl } from "./task-history.js";
+import { TaskTracker } from "./task-tracker.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor } from "./note-editor.js";
 import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
@@ -136,6 +138,7 @@ const taskHintText = element<HTMLSpanElement>("task-hint-text");
 const taskHintSettings = element<HTMLButtonElement>("task-hint-settings");
 const taskAnnounce = element<HTMLParagraphElement>("task-announce");
 const taskRunArea = element<HTMLDivElement>("task-run-area");
+const taskOpenButton = element<HTMLButtonElement>("task-open");
 
 const session = new ConfigSession(render);
 const runCards = new RunCards(runArea, {
@@ -147,19 +150,18 @@ const runCards = new RunCards(runArea, {
   openSettings,
   summarySaved: () => void refreshArtifact(true),
 });
-// Task cards show on every tab, under the task bar (§5.7). Nothing here
-// passes a task's instruction or report to diag (DESIGN.md §15).
-const taskCards = new RunCards(taskRunArea, {
-  host: session.host,
-  now: () => Date.now(),
-  copy: (text) => navigator.clipboard.writeText(text),
-  visible: () => document.visibilityState !== "hidden",
-  storage: chrome.storage.local,
-  openSettings,
-  kind: "task",
-  onTerminal: announceTask,
-  reuse: reuseInstruction,
-});
+// Tasks show on the Tasks page; the panel only counts the active ones on
+// its Tasks button and announces a finish (§5.7). It starts once the panel
+// may list runs (a harness, or a run record), so it never wakes the service
+// needlessly. Nothing here passes a task's instruction or report to diag
+// (DESIGN.md §15).
+let tracker: TaskTracker | null = null;
+// What the tracker last reported, and its last list's error, if it failed.
+let tasksRunning = 0;
+let newestTaskId: string | null = null;
+let trackerError: unknown = null;
+// The task this panel last started, which Tasks ↗ opens.
+let lastStartedRunId: string | null = null;
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
 // Once the post-save reload starts, tab events must reach NoteEditor's token
@@ -1199,16 +1201,20 @@ async function runTask(): Promise<void> {
     if (runLines.get(taskRunArea)?.tabId === tabId) clearRunLine(taskRunArea);
     if (run !== null) {
       if (taskInput.value === instruction) taskInput.value = "";
-      taskCards.show(run);
+      // A start proves the host answers, so an earlier list notice goes.
+      clearNotice(taskRunArea);
+      lastStartedRunId = run.run_id;
+      startTracker().track(run);
+      void refreshTasks();
       taskInput.focus();
     }
   } catch (error) {
     const failure = taskFailureText(error);
     // Like Summarize, the line is about the tab the task was started on.
     if (followedTabId === tabId) showRunLine(taskRunArea, tabId, failure.text, true, failure.openSettings);
-    // A lost answer may hide a queued task; listing the runs shows its card
-    // (on every tab), so Run is not pressed again for a duplicate.
-    if (failure.uncertain) void restoreCards();
+    // A lost answer may hide a queued task; listing the tasks counts it on
+    // the Tasks button, so Run is not pressed again for a duplicate.
+    if (failure.uncertain) void refreshTasks();
   } finally {
     taskStarting = false;
     updateControls();
@@ -1218,7 +1224,7 @@ async function runTask(): Promise<void> {
 // The announcement waiting for its tick after the region was emptied.
 let announceTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Announces a task card's finish in `#task-announce`, the bar's only live
+/** Announces a tracked task's finish in `#task-announce`, the bar's only live
  * region. The region is emptied first and written on the next tick, so a
  * screen reader announces a text identical to the last one again. */
 function announceTask(run: RunView): void {
@@ -1234,19 +1240,50 @@ function announceTask(run: RunView): void {
   }, 0);
 }
 
-/** Reuse on a finished task card: the instruction the service stored goes
- * back in the bar, the only text other than the user's typing that does. */
-function reuseInstruction(instruction: string): void {
-  if (taskStarting) return;
-  taskInput.value = instruction;
-  taskInput.focus();
-  updateControls();
+/** The tracker, started on first use. */
+function startTracker(): TaskTracker {
+  tracker ??= new TaskTracker({
+    host: session.host,
+    now: () => Date.now(),
+    visible: () => document.visibilityState !== "hidden",
+    changed: ({ running, newestId }) => {
+      tasksRunning = running;
+      newestTaskId = newestId;
+      const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
+      if (taskOpenButton.textContent !== label) taskOpenButton.textContent = label;
+    },
+    finished: announceTask,
+  });
+  return tracker;
 }
 
+/** Lists the tasks again. A failed list shows the run-list notice under
+ * the bar (an older host's reads "Rebuild the Brauser host…") and leaves
+ * the button as it was. */
+async function refreshTasks(): Promise<void> {
+  if (closed) return;
+  try {
+    await startTracker().refresh();
+    trackerError = null;
+  } catch (error) {
+    trackerError = error;
+    if (!closed) showListFailure(taskRunArea, error, openSettings);
+  }
+}
+
+/** Opens the Tasks page on the task this panel last started, else the
+ * newest one. */
+function openTasksPage(): void {
+  const runId = lastStartedRunId ?? newestTaskId;
+  void chrome.tabs.create({ url: tasksPageUrl(runId, (path) => chrome.runtime.getURL(path)) });
+}
+
+/** Restores the summary cards. The run record stays while a task is active,
+ * or when the task list failed and nothing is known. */
 function restoreCards(): Promise<void> {
-  return restoreRunCards([runCards, taskCards], taskRunArea, {
+  return restoreRunCards([runCards], taskRunArea, {
     host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
-  });
+  }, { keepRecord: tasksRunning > 0 || trackerError !== null });
 }
 
 /** Shows a notice from the worker's shortcut or context-menu summary when it
@@ -1766,6 +1803,12 @@ taskInput.addEventListener("focus", () => void probeSelection());
 taskRunButton.addEventListener("pointerdown", () => void probeSelection());
 window.addEventListener("focus", () => void probeSelection());
 taskHintSettings.addEventListener("click", openSettings);
+taskOpenButton.addEventListener("click", openTasksPage);
+// The tracker does not poll while the panel is hidden; showing it again
+// catches up at once.
+document.addEventListener("visibilitychange", () => {
+  if (tracker !== null && document.visibilityState !== "hidden") void refreshTasks();
+});
 pageSummaryOpen.addEventListener("click", () => void openPageSummary());
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (sender.id === chrome.runtime.id && isPanelNotice(message) && showNotice(message)) {
@@ -1791,7 +1834,7 @@ window.addEventListener("pagehide", () => {
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   if (recentTimer !== null) clearTimeout(recentTimer);
   runCards.dispose();
-  taskCards.dispose();
+  tracker?.dispose();
   // Best effort: MV3 gives no guarantee this completes before teardown.
   void notes.flush();
   session.host.disconnect();
@@ -1828,7 +1871,17 @@ void (async () => {
   // demand (spec §5), so the panel asks only when a harness is set up or a
   // run may still be there: one started before the harness was removed
   // still needs its card and Cancel.
-  if (session.config?.agent || await runsMayExist(chrome.storage.local)) await restoreCards();
+  if (session.config?.agent || await runsMayExist(chrome.storage.local)) {
+    // Tasks first, so the summary restore knows whether one is active; a
+    // list failure notice from either stays under the bar.
+    await refreshTasks();
+    await restoreCards();
+    // A summary list that works clears the notice; the task list's failure
+    // still stands.
+    if (trackerError !== null && !closed) showListFailure(taskRunArea, trackerError, openSettings);
+  }
+  // A panel closed meanwhile leaves a stored notice for the next one.
+  if (closed) return;
   await showStoredNotice(true);
   // Opening the panel is a natural moment to catch up; the worker does it.
   if (initialized) await replayVisits();

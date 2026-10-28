@@ -74,6 +74,8 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 .task-bar { margin: 12px 0; }
 .task-bar textarea { resize: vertical; width: 100%; font: inherit; }
 .task-bar .run-area { margin-top: 8px; }
+.task-buttons { display: flex; flex-direction: column; gap: 4px; align-self: stretch; justify-content: center; }
+.task-buttons button { margin: 0; white-space: nowrap; }
 .task-context, .task-hint { margin: 6px 0 0; color: #767676; font-size: .85rem; overflow-wrap: anywhere; }
 .task-context:empty { display: none; }
 .task-hint button { margin: 0 0 0 6px; }
@@ -84,9 +86,6 @@ button.tab-button.active { background: #24619a20; box-shadow: inset 0 -2px #1557
 .run-card-title { font-weight: 650; }
 .run-card-state { color: #767676; font-size: .85rem; }
 .run-card-stream { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; margin: 2px 0; border: 1px solid #8885; border-radius: 5px; padding: 8px; font: .85rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.run-card-instruction { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; white-space: pre-wrap; }
-.run-card-page { color: #767676; font-size: .85rem; }
-.run-card-report { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; margin: 2px 0; border: 1px solid #8885; border-radius: 5px; padding: 8px; font: inherit; }
 /* The Tasks page's report and headline are agent text, kept as written; the page's layout styles them further. */
 .task-detail-instruction, .task-detail-report { white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-card-actions:empty { display: none; }

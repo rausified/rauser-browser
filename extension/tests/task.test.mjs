@@ -207,7 +207,7 @@ test("taskFailureText maps each error", () => {
   }
   assert.equal(TASK_NEEDS_HARNESS_MESSAGE, "Set up an agent (Codex or Claude Code) in settings to run tasks.");
   assert.equal(TASK_UNREADABLE_MESSAGE, "Brauser could not read this page for a task.");
-  assert.equal(TASK_MAY_HAVE_STARTED_MESSAGE, "The task may have started — check below before running it again.");
+  assert.equal(TASK_MAY_HAVE_STARTED_MESSAGE, "The task may have started — check Tasks before running it again.");
   assert.equal(TASK_INPUT_MAX_UTF16_UNITS, 4000);
 });
 

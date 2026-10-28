@@ -270,7 +270,7 @@ test("with no summary harness set up, opening the panel does not wake the servic
   teardown.splice(0).forEach((listener) => listener());
 
   const ready = await summarizePanel();
-  await until(() => ready.sent("list_runs").length === 1, "list_runs");
+  await until(() => ready.sent("list_runs").some((request) => request.kind === "summary"), "list_runs");
 });
 
 test("a run still in the service restores with Cancel after the harness is removed", async () => {
@@ -281,19 +281,20 @@ test("a run still in the service restores with Cancel after the harness is remov
   const page = await install({
     tab: { id: 1, url: ARTICLE_URL, title: "A" }, local,
     intercept: (request) => {
-      if (request.type === "list_runs") return { type: "runs_listed", runs: [running] };
+      if (request.type === "list_runs") return { type: "runs_listed", runs: request.kind === "summary" ? [running] : [] };
       if (request.type === "get_run") return { type: "run_fetched", run: running, stream_text: "", next_offset: 0, more: false };
       return null;
     },
   });
   await until(() => /Running/.test(page.el("run-area").textContent), "the restored card");
   assert.ok(buttonIn(page.el("run-area"), "Cancel"), "the restored card offers Cancel");
-  assert.equal(page.sent("list_runs").length, 1);
+  // Once for the summary cards, once for the Tasks button.
+  assert.deepEqual(page.sent("list_runs").map((request) => request.kind), ["task", "summary"]);
   teardown.splice(0).forEach((listener) => listener());
 
   // Once list_runs finds nothing left to show, later opens stop asking.
   const empty = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
-  await until(() => empty.sent("list_runs").length === 1, "list_runs");
+  await until(() => empty.sent("list_runs").length === 2, "list_runs");
   await until(() => !local.has(RUNS_MAY_EXIST_KEY), "the record to clear");
   teardown.splice(0).forEach((listener) => listener());
   const later = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
