@@ -1077,7 +1077,7 @@ impl ArtifactIndex {
             row,
             linked_count(&derived.edges, &derived.artifacts, artifact_id),
         );
-        // Rows keep summaries sorted by instant, then event ID; the newest
+        // Rows keep summaries sorted by instant, then append order; the newest
         // that renders is the latest, so a broken one hides no earlier one.
         Ok((
             Some(view),
@@ -1085,14 +1085,13 @@ impl ArtifactIndex {
         ))
     }
 
-    /// The artifact's latest summary (by instant, then event ID, as the
+    /// The artifact's latest summary (by instant, then append order, as the
     /// artifact file's Summary line picks it) that renders as a view, or
     /// `None` when it has none.
     pub fn summary_for(&self, artifact_id: &str) -> Result<Option<SummaryView>> {
         let cache = self.load_or_rebuild()?;
-        let mut summaries = cache
-            .events
-            .values()
+        let mut summaries = ordered_events(&cache)
+            .into_iter()
             .filter_map(|event| match event {
                 CachedEvent::Summary(summary) if summary.artifact_id == artifact_id => {
                     Some(summary)
@@ -1100,9 +1099,8 @@ impl ArtifactIndex {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        summaries.sort_by(|a, b| {
-            timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
-        });
+        // Stable, so equal times keep `ordered_events`' log order.
+        summaries.sort_by(|a, b| timestamp_order(&a.occurred_at, &b.occurred_at));
         Ok(summaries.into_iter().rev().find_map(summary_view))
     }
 
@@ -1348,12 +1346,21 @@ fn migrate_state(state: &mut IndexState) -> bool {
 /// #59's shape (no record key or harness) fails to deserialize, which makes
 /// the whole cache unreadable and rescanned. Version 6 changes summary
 /// parse acceptance (the record key and harness, adapter artifact types)
-/// and summary derivation only, so no generated file differs and nothing
-/// becomes dirty. The checkpoints are kept, so a log a version 5 build
+/// and summary derivation, and the same release changed how every artifact
+/// file renders (front matter through `markdown::yaml_string`, the Why line
+/// through `markdown::inline`), so every artifact becomes dirty: the next
+/// regeneration rewrites each file whose rendering changed and leaves the
+/// rest unchanged. The checkpoints are kept, so a log a version 5 build
 /// checkpointed after skipping a version 6 summary marker (a downgrade,
 /// then an upgrade) is not reread until it changes; `brauser reindex`
 /// recovers that summary.
 fn migrate_v5_state(state: &mut IndexState) {
+    let artifacts = state
+        .events
+        .values()
+        .map(|event| event.artifact_id().to_owned())
+        .collect::<Vec<_>>();
+    state.dirty.extend(artifacts);
     state.version = STATE_VERSION;
 }
 
@@ -1775,16 +1782,19 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
             }
         }
     }
-    visits.sort_by(|a, b| {
-        timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
-    });
+    // Visits and summaries were pushed in `ordered_events` order (instant,
+    // then durable log position), and a stable sort by time keeps that
+    // order for equal times: two summaries of a record in the same second
+    // (stamps have whole-second resolution) keep their append order, which
+    // is the order their summary file was written in, not their random
+    // run IDs'.
+    visits.sort_by(|a, b| timestamp_order(&a.occurred_at, &b.occurred_at));
     for row in artifacts.values_mut() {
         row.activities.sort_by(|a, b| {
             timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
         });
-        row.summaries.sort_by(|a, b| {
-            timestamp_order(&a.occurred_at, &b.occurred_at).then(a.event_id.cmp(&b.event_id))
-        });
+        row.summaries
+            .sort_by(|a, b| timestamp_order(&a.occurred_at, &b.occurred_at));
         row.why = whys.remove(&row.artifact_id).map(|(_, text)| text);
     }
     Derived {
@@ -4997,6 +5007,42 @@ print(json.dumps([tables,row]))"#;
         );
     }
 
+    /// Two summaries of one record in the same second (the stamp has
+    /// whole-second resolution) order by when they were recorded, as the
+    /// summary file holds the later write, never by their random run IDs.
+    #[test]
+    fn same_second_summaries_keep_their_recorded_order() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let at = "2026-10-16T08:00:00Z";
+        let first = SummaryEvent {
+            event_id: "ffffffff-ffff-4fff-bfff-ffffffffffff".into(),
+            document_type: "first".into(),
+            ..web_summary(url, at)
+        };
+        let second = SummaryEvent {
+            event_id: "00000000-0000-4000-8000-000000000000".into(),
+            document_type: "second".into(),
+            ..web_summary(url, at)
+        };
+        index.record_summary(&first).unwrap();
+        index.record_summary(&second).unwrap();
+
+        let latest = Some(expected_view(&second));
+        assert_eq!(index.summary_for(&first.artifact_id).unwrap(), latest);
+        assert_eq!(
+            index.artifact_with_summary(&first.artifact_id).unwrap().1,
+            latest
+        );
+        let (recent, _, _) = index.recent(None, None, 32).unwrap();
+        assert_eq!(recent[0].summary, latest);
+        let day = Date::from_calendar_date(2026, time::Month::October, 16).unwrap();
+        let (worklog, _) = index.worklog(day, day).unwrap();
+        assert!(worklog.contains("second, high importance"), "{worklog}");
+    }
+
     /// A latest summary with no view (an unparseable, over-long time) does
     /// not hide an earlier one that renders.
     #[test]
@@ -5659,27 +5705,54 @@ print(json.dumps([tables,row]))"#;
             "Version five",
             "2026-10-20T12:00:00Z",
         );
-        write_log(root.path(), "2026-10-20.md", &[&event]);
-        assert_eq!(index.reindex().unwrap().written, 1);
-        let path = artifact_files(root.path()).pop().unwrap();
-        let current = fs::read_to_string(&path).unwrap();
+        let other = activity(
+            "00000000-0000-4000-8000-000000000402",
+            "V5B",
+            "Version five, rendered by a v5 build",
+            "2026-10-20T13:00:00Z",
+        );
+        write_log(root.path(), "2026-10-20.md", &[&event, &other]);
+        assert_eq!(index.reindex().unwrap().written, 2);
+        let mut files = artifact_files(root.path());
+        files.sort();
+        let current = files
+            .iter()
+            .map(|path| fs::read_to_string(path).unwrap())
+            .collect::<Vec<_>>();
+        let (stale_at, stale_text) = files
+            .iter()
+            .zip(&current)
+            .find(|(_, text)| text.contains("rendered by a v5 build"))
+            .unwrap();
+        // A file as a version 5 build rendered it: PR 4 changed how every
+        // artifact file escapes its title and Why line.
+        fs::write(
+            stale_at,
+            stale_text.replace("Version five, rendered", "Version five rendered"),
+        )
+        .unwrap();
         // The clean cache a version 5 build left. It can hold no summary
-        // (#59 had no caller), so nothing it derived renders differently.
+        // (#59 had no caller).
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
         state["version"] = 5.into();
         fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
 
-        // Migrated in place: no log is reread and no file is rewritten.
+        // Migrated in place: no log is reread, and only the file whose
+        // rendering changed is rewritten.
         LOG_BYTES_READ.with(|count| count.set(0));
-        assert_eq!(index.regenerate_dirty().unwrap().written, 0);
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!((report.written, report.unchanged), (1, 1));
         assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
-        assert_eq!(fs::read_to_string(&path).unwrap(), current);
+        for (path, text) in files.iter().zip(&current) {
+            assert_eq!(&fs::read_to_string(path).unwrap(), text);
+        }
         assert_eq!(
             read_state(&index.state_path()).unwrap().unwrap().version,
             STATE_VERSION
         );
         assert!(index.artifact(&event.artifact_id).unwrap().is_some());
+        assert_eq!(index.regenerate_dirty().unwrap().written, 0);
     }
 
     #[test]

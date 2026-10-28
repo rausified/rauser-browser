@@ -23,6 +23,13 @@
 //! before the retry, the summary file follows the change but the log event
 //! cannot be completed, and the reason says so (`LOG_ORIGINAL_FOLDER`,
 //! `LOG_INTERRUPTED`) instead of offering a retry that cannot work.
+//!
+//! Such a reason, and every other one a retry cannot fix (`LOG_FULL`,
+//! `LOG_INVALID`, `INVALID_ANSWER`, `STALE`), is a final `SaveFailure`, so
+//! the run offers no Retry save; one that follows the file write carries the
+//! written path, so the run card can still open it. A save never replaces
+//! a summary file whose `summarized_at` is later than its own stamp
+//! (`STALE`): a retried older run must not overwrite a newer run's summary.
 
 use std::path::{Path, PathBuf};
 
@@ -32,7 +39,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 
 use super::record::RunStatusFile;
-use super::supervisor::{RunFinisher, SavedRun, accept_summary_answer, timestamp};
+use super::supervisor::{RunFinisher, SaveFailure, SavedRun, accept_summary_answer, timestamp};
 use crate::answer::SummaryAnswer;
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url};
@@ -42,7 +49,7 @@ use crate::layout;
 use crate::markdown::link_style;
 use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key, summary_artifact};
 use crate::summary::{MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, render_summary};
-use crate::vault::{OwnedWrite, Vault};
+use crate::vault::{FoundSummary, OwnedWrite, Vault};
 
 const INVALID_ANSWER: &str = "The stored answer is not a valid summary.";
 const NEEDS_REPAIR: &str = "The configuration needs repair. Fix it in settings, then Retry save.";
@@ -65,6 +72,10 @@ const LOG_NAME_CONFLICT: &str = concat!(
 );
 const LOG_INVALID: &str = "The run's details are not valid for the daily log, so this summary cannot be logged. The summary file was saved.";
 const LOG_INTERRUPTED: &str = "An earlier attempt to log this summary was interrupted, and its daily log entry has changed since, so it cannot be completed. The summary file was saved.";
+const INDEX_UNAVAILABLE: &str =
+    "The artifact index could not be read to log this summary. Retry save.";
+const STALE: &str =
+    "A newer summary of this page was saved after this run, so this run's summary was not saved.";
 const LOG_ORIGINAL_FOLDER: &str = "An earlier attempt to log this summary was interrupted in a notes folder that has since changed. Choose that folder again in settings, then Retry save.";
 
 /// Writes a run's summary under the config read at save time.
@@ -92,12 +103,17 @@ impl RunFinisher for SummaryFinisher {
         accept_summary_answer(run, final_text)
     }
 
-    fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String> {
-        let answer = SummaryAnswer::deserialize(result).map_err(|_| INVALID_ANSWER.to_string())?;
+    fn save(
+        &self,
+        run: &RunStatusFile,
+        result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure> {
+        let answer = SummaryAnswer::deserialize(result)
+            .map_err(|_| SaveFailure::final_reason(INVALID_ANSWER, None))?;
         let mut config = ConfigStore::load_from(self.config_path.clone());
         let _config_lock = config.lock_current().map_err(|error| {
             eprintln!("{NAMESPACE} service: locking the configuration: {error:#}");
-            "The configuration could not be locked. Retry save.".to_string()
+            SaveFailure::from("The configuration could not be locked. Retry save.")
         })?;
         if config.refresh().is_err() {
             return Err(NEEDS_REPAIR.into());
@@ -114,7 +130,7 @@ impl RunFinisher for SummaryFinisher {
             .into());
         };
         let vault = Vault::open_checked(&storage, config.root_identity())
-            .map_err(|_| FOLDER_UNAVAILABLE.to_string())?;
+            .map_err(|_| SaveFailure::from(FOLDER_UNAVAILABLE))?;
         // An older layout (one without a summaries folder included) is a
         // config issue too, but its fix is finishing the move, which
         // settings does when it opens.
@@ -125,14 +141,16 @@ impl RunFinisher for SummaryFinisher {
             return Err(NEEDS_REPAIR.into());
         }
         let key = resolve_record_key(&mut config, &run.url).map_err(key_error)?;
-        let canonical = canonical_url(&run.url, &config.snapshot().strip_params)
-            .map_err(|_| "The page URL is invalid; this run cannot be saved.".to_string())?;
+        let canonical = canonical_url(&run.url, &config.snapshot().strip_params).map_err(|_| {
+            SaveFailure::final_reason("The page URL is invalid; this run cannot be saved.", None)
+        })?;
 
         let style = link_style(&storage.profile);
         let relative = vault
             .summary_relative_path(&key, &canonical)
             .map_err(|error| unwritable(&error))?;
-        let summary_path = slash_path(&relative).ok_or_else(|| FILE_UNWRITABLE.to_string())?;
+        let summary_path =
+            slash_path(&relative).ok_or_else(|| SaveFailure::from(FILE_UNWRITABLE))?;
         let note_link = vault
             .note_link(&key, &canonical, style)
             .map_err(|error| unwritable(&error))?;
@@ -156,6 +174,17 @@ impl RunFinisher for SummaryFinisher {
             answer: &answer,
         };
         let markdown = render_summary(&document, style);
+        // A run retried (or saved late) after a later run of the same record
+        // was saved must not put its older answer over the newer file. Every
+        // save holds the config lock, so nothing writes in between.
+        if let Ok(FoundSummary::Owned {
+            summarized_at: Some(existing),
+            ..
+        }) = vault.find_summary(&key, &canonical)
+            && is_later(&existing, &occurred_at)
+        {
+            return Err(SaveFailure::final_reason(STALE, None));
+        }
         match vault.write_summary(&key, &canonical, &markdown) {
             Ok(OwnedWrite::Written(warnings)) => {
                 // Published: a failed sync or cleanup is only logged.
@@ -167,7 +196,8 @@ impl RunFinisher for SummaryFinisher {
             Ok(OwnedWrite::Conflict) => {
                 return Err(format!(
                     "A file {APP_NAME} does not own is at {summary_path}. Move it, then Retry save."
-                ));
+                )
+                .into());
             }
             Err(error) => return Err(unwritable(&error)),
         }
@@ -179,7 +209,14 @@ impl RunFinisher for SummaryFinisher {
             eprintln!("{NAMESPACE} service: opening the artifact index: {error:#}");
         }
         let index = index.ok();
-        let (event_key, artifact_type) = summary_artifact(&config, &run.url, &key, index.as_ref());
+        // Written from here on: a failure that no retry can fix still lets
+        // the run card open the file.
+        let written = SavedRun {
+            written_key: key.clone(),
+            summary_path: Some(summary_path.clone()),
+        };
+        let (event_key, artifact_type) = summary_artifact(&config, &run.url, &key, index.as_ref())
+            .ok_or_else(|| SaveFailure::from(INDEX_UNAVAILABLE))?;
         let summary = PageSummary {
             event_id: run.run_id.clone(),
             url: run.url.clone(),
@@ -196,7 +233,7 @@ impl RunFinisher for SummaryFinisher {
         let store = config
             .dir()
             .and_then(|dir| CaptureStore::open_in(&storage, config.root_identity(), dir))
-            .map_err(|error| log_failure(&format!("{error:#}")))?;
+            .map_err(|error| log_failure(&format!("{error:#}"), &written))?;
         let origins = config.capture_origins();
         let policy = CapturePolicy {
             enabled: config.snapshot().capture_enabled,
@@ -213,26 +250,37 @@ impl RunFinisher for SummaryFinisher {
             }
             (CaptureOutcome::Persisted { .. }, None) => None,
             (CaptureOutcome::Suppressed { reason } | CaptureOutcome::Rejected { reason }, _) => {
-                return Err(log_refusal(reason));
+                return Err(log_refusal(reason, &written));
             }
-            (CaptureOutcome::Retryable { message }, _) => return Err(log_failure(message)),
+            (CaptureOutcome::Retryable { message }, _) => {
+                return Err(log_failure(message, &written));
+            }
         };
         // The daily log is authoritative and already holds the event; the
         // index catches up from it on its next read.
         if let Some(Err(error)) = indexed {
             eprintln!("{NAMESPACE} service: updating the artifact index: {error:#}");
         }
-        Ok(SavedRun {
-            written_key: key,
-            summary_path: Some(summary_path),
-        })
+        Ok(written)
+    }
+}
+
+/// Whether RFC 3339 time `existing` is strictly after `ours`; an
+/// unparseable time is not.
+fn is_later(existing: &str, ours: &str) -> bool {
+    match (
+        OffsetDateTime::parse(existing, &Rfc3339),
+        OffsetDateTime::parse(ours, &Rfc3339),
+    ) {
+        (Ok(existing), Ok(ours)) => existing > ours,
+        _ => false,
     }
 }
 
 /// `resolve_record_key`'s refusal as a Retry save reason. Its config and
 /// folder checks already ran above, so these are races with a change made
 /// in between, and get the same messages.
-fn key_error((code, message): crate::native::Refusal) -> String {
+fn key_error((code, message): crate::native::Refusal) -> SaveFailure {
     match code {
         ErrorCode::InvalidConfig => NEEDS_REPAIR.into(),
         ErrorCode::NotConfigured => NO_STORAGE.into(),
@@ -240,49 +288,48 @@ fn key_error((code, message): crate::native::Refusal) -> String {
         // An unusable adopted-contract record already names its repair
         // (Forget recorded adapters in settings), which a retry cannot do.
         ErrorCode::Internal if message.starts_with(ADOPTED_CONTRACTS_PAUSED) => {
-            message.into_owned()
+            message.into_owned().into()
         }
-        _ => format!("This page's notes record could not be found ({message}). Retry save."),
+        _ => format!("This page's notes record could not be found ({message}). Retry save.").into(),
     }
 }
 
-fn unwritable(error: &anyhow::Error) -> String {
+fn unwritable(error: &anyhow::Error) -> SaveFailure {
     eprintln!("{NAMESPACE} service: writing a summary file: {error:#}");
     FILE_UNWRITABLE.into()
 }
 
 /// The daily log's refusal of the event, as a reason in words. Only a
-/// refusal the user can fix offers Retry save; the raw reason goes to
-/// stderr. (A summary is an explicit action, so `capture_disabled` and
+/// refusal the user can fix offers Retry save; any other is final, with
+/// the summary file already `written`. The raw reason goes to stderr. (A
+/// summary is an explicit action, so `capture_disabled` and
 /// `site_not_allowed` do not apply to it.)
-fn log_refusal(reason: &str) -> String {
+fn log_refusal(reason: &str, written: &SavedRun) -> SaveFailure {
     eprintln!("{NAMESPACE} service: the daily log refused a summary event: {reason}");
     match reason {
         // A retry re-stamps an answer outside the window (`retry_save`).
-        "timestamp_too_old" | "timestamp_in_future" => LOG_CLOCK,
-        "daily_log_full" => LOG_FULL,
-        "daily_log_name_conflict" => LOG_NAME_CONFLICT,
-        _ => LOG_INVALID,
+        "timestamp_too_old" | "timestamp_in_future" => LOG_CLOCK.into(),
+        "daily_log_name_conflict" => LOG_NAME_CONFLICT.into(),
+        "daily_log_full" => SaveFailure::final_reason(LOG_FULL, Some(written.clone())),
+        _ => SaveFailure::final_reason(LOG_INVALID, Some(written.clone())),
     }
-    .into()
 }
 
 /// A failed append (`CaptureOutcome::Retryable`, or the store not opening)
 /// in words. A replay of an interrupted append that its home folder or
 /// entry no longer matches cannot be fixed by retrying; any other failure
 /// (I/O, mostly) can.
-fn log_failure(message: &str) -> String {
+fn log_failure(message: &str, written: &SavedRun) -> SaveFailure {
     eprintln!("{NAMESPACE} service: appending a summary event: {message}");
     if message.contains("original home folder changed")
         || message.contains("previously selected home folder")
     {
-        LOG_ORIGINAL_FOLDER
+        LOG_ORIGINAL_FOLDER.into()
     } else if message.contains("manual repair is required") || message.contains("is not owned by") {
-        LOG_INTERRUPTED
+        SaveFailure::final_reason(LOG_INTERRUPTED, Some(written.clone()))
     } else {
-        LOG_UNWRITABLE
+        LOG_UNWRITABLE.into()
     }
-    .into()
 }
 
 /// A `/`-separated home-relative path, as a summary event links it.
@@ -536,6 +583,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            save_final: false,
         }
     }
 
@@ -588,6 +636,33 @@ mod tests {
         let summary = summary.unwrap();
         assert_eq!(summary.importance, ImportanceLevel::High);
         assert_eq!(summary.summary_path, slash(&relative));
+    }
+
+    /// A 64-character label of multibyte letters passes the answer's
+    /// character bound, so the log event takes it too.
+    #[test]
+    fn a_64_character_multibyte_label_is_logged() {
+        let world = World::new();
+        let run = run(&world, PAGE, HarnessId::Codex);
+        let mut answer = answer();
+        let category = "\u{30cb}".repeat(crate::answer::MAX_LABEL_CHARS);
+        answer["category"] = category.clone().into();
+        answer["document_type"] = "\u{e9}".repeat(crate::answer::MAX_LABEL_CHARS).into();
+
+        world.finisher().save(&run, &answer).unwrap();
+
+        let events = world.summary_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].category, category);
+        let id = web_page_artifact_id(PAGE).unwrap();
+        assert!(
+            world
+                .index()
+                .artifact_with_summary(&id)
+                .unwrap()
+                .1
+                .is_some()
+        );
     }
 
     #[test]
@@ -720,6 +795,42 @@ mod tests {
         assert_eq!(events[1].artifact_type, "work.item");
     }
 
+    /// An index that cannot answer is not one that answered "no row": a
+    /// recovered key's type is unknown until it can, so the save asks for a
+    /// retry instead of logging the summary under the web page.
+    #[test]
+    fn an_unavailable_index_for_a_recovered_key_asks_for_a_retry() {
+        let world = World::new();
+        world.configure(&world.root, WORK_ADAPTER);
+        world
+            .finisher()
+            .save(&run(&world, WORK_PAGE, HarnessId::Codex), &answer())
+            .unwrap();
+        world.configure_history_only();
+        let cache = world.dir.path().join("cache");
+        let away = world.dir.path().join("cache-away");
+        fs::rename(&cache, &away).unwrap();
+        fs::write(&cache, "not a folder").unwrap();
+        let later = run(&world, WORK_PAGE, HarnessId::Codex);
+
+        let error = world.finisher().save(&later, &answer()).unwrap_err();
+
+        assert_eq!(
+            error.reason,
+            "The artifact index could not be read to log this summary. Retry save."
+        );
+        assert!(error.retryable);
+        assert_eq!(world.summary_events().len(), 1);
+
+        fs::remove_file(&cache).unwrap();
+        fs::rename(&away, &cache).unwrap();
+        world.finisher().save(&later, &answer()).unwrap();
+        let events = world.summary_events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].artifact_id, WORK_ID);
+        assert_eq!(events[1].artifact_type, "work.item");
+    }
+
     #[test]
     fn a_home_folder_changed_mid_run_receives_the_file() {
         let world = World::new();
@@ -752,7 +863,7 @@ mod tests {
             "",
         );
 
-        let error = world.finisher().save(&run, &answer()).unwrap_err();
+        let error = world.finisher().save(&run, &answer()).unwrap_err().reason;
 
         assert_eq!(
             error,
@@ -827,9 +938,10 @@ mod tests {
         let error = world.later_finisher().save(&run, &answer()).unwrap_err();
 
         assert_eq!(
-            error,
+            error.reason,
             "An earlier attempt to log this summary was interrupted, and its daily log entry has changed since, so it cannot be completed. The summary file was saved."
         );
+        assert!(!error.retryable, "a retry cannot complete it");
         let key = RecordKey {
             kind: RecordKeyKind::Artifact,
             value: WORK_ID.into(),
@@ -839,6 +951,14 @@ mod tests {
             .summary_relative_path(&key, WORK_PAGE)
             .unwrap();
         assert!(world.root.join(&relative).is_file());
+        // The saved file is still reachable from the run card.
+        assert_eq!(
+            error.written,
+            Some(SavedRun {
+                written_key: key,
+                summary_path: Some(slash(&relative)),
+            })
+        );
         assert!(world.summary_events().is_empty());
     }
 
@@ -852,7 +972,11 @@ mod tests {
         fs::create_dir(&moved).unwrap();
         world.configure(&moved, "");
 
-        let error = world.later_finisher().save(&run, &answer()).unwrap_err();
+        let error = world
+            .later_finisher()
+            .save(&run, &answer())
+            .unwrap_err()
+            .reason;
 
         assert_eq!(
             error,
@@ -869,7 +993,7 @@ mod tests {
         let mut run = run(&world, PAGE, HarnessId::Codex);
         run.answered_at = Some(timestamp(fixed_now() - time::Duration::days(31)));
 
-        let error = world.finisher().save(&run, &answer()).unwrap_err();
+        let error = world.finisher().save(&run, &answer()).unwrap_err().reason;
 
         assert_eq!(
             error,
@@ -880,27 +1004,46 @@ mod tests {
 
     #[test]
     fn log_refusals_are_plain_reasons() {
+        let written = SavedRun {
+            written_key: url_record_key(PAGE).unwrap(),
+            summary_path: Some("summaries/a.summary.md".into()),
+        };
+        let full = log_refusal("daily_log_full", &written);
         assert_eq!(
-            log_refusal("daily_log_full"),
+            full.reason,
             "The day's daily log is full, so this summary cannot be logged. The summary file was saved."
         );
+        let conflict = log_refusal("daily_log_name_conflict", &written);
         assert_eq!(
-            log_refusal("daily_log_name_conflict"),
+            conflict.reason,
             "A file Brauser does not own is where the daily log goes, in logs/. Move it, then Retry save."
         );
-        assert_eq!(log_refusal("timestamp_in_future"), LOG_CLOCK);
+        assert!(conflict.retryable && conflict.written.is_none());
+        let clock = log_refusal("timestamp_in_future", &written);
+        assert_eq!(clock.reason, LOG_CLOCK);
+        assert!(clock.retryable);
         for reason in ["invalid_summary_key", "title_too_long", "something_new"] {
             assert_eq!(
-                log_refusal(reason),
+                log_refusal(reason, &written).reason,
                 "The run's details are not valid for the daily log, so this summary cannot be logged. The summary file was saved."
             );
         }
+        let unwritable = log_failure("appending daily log entry", &written);
         assert_eq!(
-            log_failure("appending daily log entry"),
+            unwritable.reason,
             "The daily log could not be written. Retry save."
         );
-        for reason in [&log_refusal("daily_log_full"), LOG_INVALID, LOG_INTERRUPTED] {
-            assert!(!reason.contains("Retry save"), "{reason}");
+        assert!(unwritable.retryable);
+        // The reasons that say a retry cannot work offer none, and keep the
+        // saved file reachable.
+        for failure in [
+            full,
+            log_refusal("something_new", &written),
+            log_failure("manual repair is required", &written),
+        ] {
+            assert!(!failure.reason.contains("Retry save"), "{}", failure.reason);
+            assert!(!failure.retryable, "{}", failure.reason);
+            assert_eq!(failure.written.as_ref(), Some(&written));
         }
     }
 
@@ -924,7 +1067,7 @@ mod tests {
     #[test]
     fn an_unavailable_home_folder_refusal_names_the_fix() {
         assert_eq!(
-            key_error((ErrorCode::Internal, crate::native::HOME_UNAVAILABLE.into())),
+            key_error((ErrorCode::Internal, crate::native::HOME_UNAVAILABLE.into())).reason,
             FOLDER_UNAVAILABLE
         );
     }
@@ -942,7 +1085,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = world.finisher().save(&run, &answer()).unwrap_err();
+        let error = world.finisher().save(&run, &answer()).unwrap_err().reason;
         let expected = ConfigStore::load_from(world.config_path()).adopted_contracts_unavailable();
         assert_eq!(error, expected);
         assert!(error.contains("Forget recorded adapters"), "{error}");
@@ -957,7 +1100,7 @@ mod tests {
         fs::rename(&world.root, world.dir.path().join("old")).unwrap();
         fs::create_dir(&world.root).unwrap();
 
-        let error = world.finisher().save(&run, &answer()).unwrap_err();
+        let error = world.finisher().save(&run, &answer()).unwrap_err().reason;
 
         assert_eq!(
             error,
@@ -973,7 +1116,7 @@ mod tests {
         let away = world.dir.path().join("unmounted");
         fs::rename(&world.root, &away).unwrap();
 
-        let error = world.finisher().save(&run, &answer()).unwrap_err();
+        let error = world.finisher().save(&run, &answer()).unwrap_err().reason;
         assert!(error.contains("Choose it again"), "{error}");
         assert!(!world.root.exists(), "nothing recreated the folder");
 
@@ -994,7 +1137,8 @@ mod tests {
         let error = world
             .finisher()
             .save(&run(&world, PAGE, HarnessId::Codex), &answer())
-            .unwrap_err();
+            .unwrap_err()
+            .reason;
 
         assert_eq!(
             error,
@@ -1043,21 +1187,52 @@ mod tests {
         let run = run(&world, PAGE, HarnessId::Codex);
         fs::write(world.config_path(), "not = [valid").unwrap();
         assert_eq!(
-            world.finisher().save(&run, &answer()).unwrap_err(),
+            world.finisher().save(&run, &answer()).unwrap_err().reason,
             "The configuration needs repair. Fix it in settings, then Retry save."
         );
         fs::remove_file(world.config_path()).unwrap();
         assert_eq!(
-            world.finisher().save(&run, &answer()).unwrap_err(),
+            world.finisher().save(&run, &answer()).unwrap_err().reason,
             "Choose a notes folder in settings, then Retry save."
         );
+        let invalid = world
+            .finisher()
+            .save(&run, &serde_json::json!({}))
+            .unwrap_err();
+        assert_eq!(invalid.reason, "The stored answer is not a valid summary.");
+        assert!(!invalid.retryable);
+    }
+
+    /// Review finding: a failed run retried after a later run of the same
+    /// record succeeded must not put its older answer over the newer file.
+    #[test]
+    fn a_stale_retry_never_replaces_a_newer_summary() {
+        let world = World::new();
+        let mut older = run(&world, PAGE, HarnessId::Codex);
+        older.answered_at = Some(answered_stamp());
+        let mut newer = run(&world, PAGE, HarnessId::Codex);
+        newer.answered_at = Some(timestamp(fixed_now()));
+        let mut newer_answer = answer();
+        newer_answer["description"] = "The newer summary.".into();
+        world.finisher().save(&newer, &newer_answer).unwrap();
+        let path = world.root.join(world.summary_path(PAGE));
+        let written = fs::read(&path).unwrap();
+
+        let error = world.later_finisher().save(&older, &answer()).unwrap_err();
+
         assert_eq!(
-            world
-                .finisher()
-                .save(&run, &serde_json::json!({}))
-                .unwrap_err(),
-            "The stored answer is not a valid summary."
+            error.reason,
+            "A newer summary of this page was saved after this run, so this run's summary was not saved."
         );
+        assert!(!error.retryable);
+        assert_eq!(error.written, None);
+        assert_eq!(fs::read(&path).unwrap(), written);
+        let events = world.summary_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].event_id, newer.run_id);
+        // The newer run's own retry is still idempotent.
+        world.later_finisher().save(&newer, &newer_answer).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), written);
     }
 
     #[test]
@@ -1077,21 +1252,24 @@ mod tests {
         let url_key = url_record_key(PAGE).unwrap();
         assert_eq!(
             summary_artifact(&config, PAGE, &url_key, None),
-            (url_key.clone(), "web.page".to_string())
+            Some((url_key.clone(), "web.page".to_string()))
         );
         let unknown = RecordKey {
             kind: RecordKeyKind::Artifact,
             value: WORK_ID.into(),
         };
+        // Without an index, a key no adapter matches has no known answer.
+        assert_eq!(summary_artifact(&config, WORK_PAGE, &unknown, None), None);
+        // An index with no row for it: the URL's web page.
         assert_eq!(
-            summary_artifact(&config, WORK_PAGE, &unknown, None),
-            (url_record_key(WORK_PAGE).unwrap(), "web.page".to_string())
+            summary_artifact(&config, WORK_PAGE, &unknown, Some(&world.index())),
+            Some((url_record_key(WORK_PAGE).unwrap(), "web.page".to_string()))
         );
         world.configure(&world.root, WORK_ADAPTER);
         let config = world.config();
         assert_eq!(
             summary_artifact(&config, WORK_PAGE, &unknown, None),
-            (unknown.clone(), "work.item".to_string())
+            Some((unknown.clone(), "work.item".to_string()))
         );
     }
 }

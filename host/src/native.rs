@@ -1846,26 +1846,44 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
 }
 
 /// Open the summary file of the record the page's note uses (§7.2). The key
-/// is resolved and the file's ownership read under `lock_current`, so a
-/// config update cannot change the record in between; the opener runs after
-/// the lock is released. Only a file `summary::owned_summary` accepts for
-/// that key is opened, never another file at the generated name.
+/// is resolved, the file's ownership read, and the opener run, all under
+/// `lock_current`, so a config update cannot change the record in between.
+/// Only a file `summary::owned_summary` accepts for that key is opened,
+/// never another file at the generated name: just before the opener runs,
+/// the ambient path must still name the very inode whose bytes were checked
+/// (`vault::same_file`), not a symlink, so a leaf or folder swapped since
+/// is refused.
+///
+/// Accepted window: `/usr/bin/open` takes a pathname, not a handle, so a
+/// local writer that swaps the name between that last check and open's own
+/// lookup (microseconds) can still redirect it, as `replace_owned_file`'s
+/// replace window is accepted. Closing it would need opening by handle,
+/// which LaunchServices does not offer.
 fn open_summary(
     value: brauser_protocol::OpenSummaryRequest,
     config: &mut ConfigStore,
     open: crate::open::Opener,
 ) -> Response {
-    let found = match config.lock_current() {
-        Ok(_config_lock) => resolve_key_parts(config, &value.url).and_then(|parts| {
-            parts
-                .vault
-                .find_summary(&parts.key, &parts.canonical)
-                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
-        }),
-        Err(_) => Err((ErrorCode::Internal, "configuration is unavailable".into())),
+    let Ok(_config_lock) = config.lock_current() else {
+        return error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "configuration is unavailable",
+        );
     };
-    let (relative, linked) = match found {
-        Ok(crate::vault::FoundSummary::Owned { relative, linked }) => (relative, linked),
+    let found = resolve_key_parts(config, &value.url).and_then(|parts| {
+        parts
+            .vault
+            .find_summary(&parts.key, &parts.canonical)
+            .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
+    });
+    let (relative, linked, file_id) = match found {
+        Ok(crate::vault::FoundSummary::Owned {
+            relative,
+            linked,
+            file_id,
+            ..
+        }) => (relative, linked, file_id),
         Ok(crate::vault::FoundSummary::Absent) => {
             return error(
                 &value.request_id,
@@ -1873,13 +1891,7 @@ fn open_summary(
                 "This page has no summary yet.",
             );
         }
-        Ok(crate::vault::FoundSummary::Unowned) => {
-            return error(
-                &value.request_id,
-                ErrorCode::Conflict,
-                "The file at the summary path is not a Brauser summary.",
-            );
-        }
+        Ok(crate::vault::FoundSummary::Unowned) => return not_a_summary(&value.request_id),
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
     // resolve_key_parts only succeeds with a home folder configured.
@@ -1891,6 +1903,9 @@ fn open_summary(
         );
     };
     let path = std::path::Path::new(&storage.root).join(relative);
+    if !crate::vault::same_file(&path, file_id) {
+        return not_a_summary(&value.request_id);
+    }
     // `--` ends open's options, so no path can be read as one.
     match open(&["--".into(), path.into_os_string()]) {
         Ok(()) => Response::SummaryOpened(brauser_protocol::SummaryOpened {
@@ -1911,40 +1926,55 @@ fn open_summary(
     }
 }
 
+fn not_a_summary(request_id: &str) -> Response {
+    error(
+        request_id,
+        ErrorCode::Conflict,
+        "The file at the summary path is not a Brauser summary.",
+    )
+}
+
 /// The record key and artifact type the summary's log event uses:
 /// - a `Url` key is its own `web.page`;
 /// - an `Artifact` key takes the type of the adapter that matches `url` to
 ///   it, or, for a key recovered from an older contract, of its indexed row;
 /// - an artifact whose type neither knows falls back to the URL's own key
 ///   and `web.page`. The summary file keeps the resolved key.
+///
+/// `None` when the answer needs the index and it cannot give one (it is
+/// `None`, or its catch-up failed): that is not an answer of "no row", and
+/// falling back then would log the summary under an identity the page no
+/// longer looks under once the index recovers.
 pub(crate) fn summary_artifact(
     config: &ConfigStore,
     url: &str,
     key: &RecordKey,
     index: Option<&ArtifactIndex>,
-) -> (RecordKey, String) {
+) -> Option<(RecordKey, String)> {
     if key.kind == RecordKeyKind::Url {
-        return (key.clone(), crate::summary::WEB_PAGE_TYPE.into());
+        return Some((key.clone(), crate::summary::WEB_PAGE_TYPE.into()));
     }
     let matched = config
         .adapter_match(url, None)
         .ok()
         .filter(|found| found.artifact_id == key.value)
         .map(|found| found.artifact_type);
-    let known = matched.or_else(|| {
-        index
-            .and_then(|index| index.artifact(&key.value).ok().flatten())
+    let known = match matched {
+        Some(artifact_type) => Some(artifact_type),
+        None => index?
+            .artifact(&key.value)
+            .ok()?
             .map(|artifact| artifact.artifact_type)
-            .filter(|artifact_type| artifact_type != crate::summary::WEB_PAGE_TYPE)
-    });
+            .filter(|artifact_type| artifact_type != crate::summary::WEB_PAGE_TYPE),
+    };
     if let Some(artifact_type) = known {
-        return (key.clone(), artifact_type);
+        return Some((key.clone(), artifact_type));
     }
     let url_key = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .ok()
         .and_then(|canonical| crate::vault::url_record_key(&canonical).ok())
         .unwrap_or_else(|| key.clone());
-    (url_key, crate::summary::WEB_PAGE_TYPE.into())
+    Some((url_key, crate::summary::WEB_PAGE_TYPE.into()))
 }
 
 /// The latest summary of a page no live adapter recognizes, under the
@@ -1966,7 +1996,7 @@ fn unrecognized_page_summary(
                 kind: RecordKeyKind::Artifact,
                 value: artifact_id,
             };
-            let (event_key, _) = summary_artifact(config, url, &key, Some(&index));
+            let (event_key, _) = summary_artifact(config, url, &key, Some(&index))?;
             match event_key.kind {
                 RecordKeyKind::Artifact => event_key.value,
                 RecordKeyKind::Url => crate::summary::web_page_artifact_id(canonical).ok()?,
@@ -4980,7 +5010,7 @@ id = "work:{host}/{id}"
         let storage = config.snapshot().storage.clone().unwrap();
         let index = open_index(&config, &storage, &config.cache_dir().unwrap()).unwrap();
         let (event_key, artifact_type) =
-            summary_artifact(&config, url, &artifact_key, Some(&index));
+            summary_artifact(&config, url, &artifact_key, Some(&index)).unwrap();
         assert_eq!(event_key, crate::vault::url_record_key(url).unwrap());
         assert_eq!(artifact_type, crate::summary::WEB_PAGE_TYPE);
         let event = record_page_summary(&config, url, event_key, &artifact_type);

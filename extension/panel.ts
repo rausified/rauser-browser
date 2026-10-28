@@ -103,6 +103,7 @@ const runCards = new RunCards(runArea, {
   visible: () => document.visibilityState !== "hidden",
   storage: chrome.storage.local,
   openSettings,
+  summarySaved: () => void refreshArtifact(true),
 });
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.

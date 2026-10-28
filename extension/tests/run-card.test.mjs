@@ -110,7 +110,7 @@ const ANSWER = {
 
 // `reply(request)` answers each host call; a HostError it throws (or returns)
 // is the host's error answer.
-function setup({ reply = () => null, visible = true, storage = storageArea() } = {}) {
+function setup({ reply = () => null, visible = true, storage = storageArea(), summarySaved } = {}) {
   globalThis.document = { createElement: (tag) => new FakeElement(tag) };
   const requests = [];
   const copied = [];
@@ -133,6 +133,7 @@ function setup({ reply = () => null, visible = true, storage = storageArea() } =
     visible: () => state.visible,
     storage,
     openSettings: () => { state.settingsOpened += 1; },
+    ...(summarySaved ? { summarySaved } : {}),
   });
   return { container, runCards, requests, copied, state, storage, sent: (type) => requests.filter((r) => r.type === type) };
 }
@@ -497,6 +498,64 @@ test("a succeeded card shows the saved summary line and opens it", async () => {
   page.runCards.show(saved);
   await tick(POLL_MS * 4);
   assert.equal(page.sent("get_artifact").length, 1);
+  page.runCards.dispose();
+});
+
+test("a run seen succeeding tells the panel once, so its page summary refreshes", async () => {
+  const running = view();
+  const saved = view({
+    state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER,
+    summary_path: SAVED.summary_path, written_record_key: running.record_key,
+  });
+  let current = running;
+  const told = [];
+  const page = setup({
+    summarySaved: (run) => told.push(run.run_id),
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SAVED };
+      return null;
+    },
+  });
+  page.runCards.show(running);
+  await settle();
+  assert.deepEqual(told, []);
+  current = saved;
+  await tick();
+  assert.deepEqual(told, [saved.run_id]);
+  page.runCards.show(saved);
+  await tick(POLL_MS * 3);
+  assert.deepEqual(told, [saved.run_id]);
+  // A card restored already succeeded changes nothing on the page.
+  const other = view({ ...saved, run_id: "00000000-0000-4000-8000-000000000041" });
+  page.runCards.show(other);
+  await tick();
+  assert.deepEqual(told, [saved.run_id]);
+  page.runCards.dispose();
+});
+
+test("a save failure no retry can fix offers no Retry save but opens the saved file", async () => {
+  const failed = view({
+    state: "failed", finished_at: "2026-10-27T16:00:10Z", error_kind: "save_failed",
+    error: "The day's daily log is full, so this summary cannot be logged. The summary file was saved.",
+    summary_path: SAVED.summary_path, can_retry_save: false, answer: ANSWER,
+  });
+  const page = setup({
+    reply: (request) => {
+      if (request.type === "get_run") return { type: "run_fetched", run: failed, stream_text: "", next_offset: 0, more: false };
+      if (request.type === "open_summary") return { type: "summary_opened", relative_path: SAVED.summary_path };
+      return null;
+    },
+  });
+  page.runCards.show(failed);
+  await tick();
+  const [card] = cards(page.container);
+  assert.ok(!buttonTexts(card).includes("Retry save"));
+  // No log event, so no saved line is asked for.
+  assert.equal(page.sent("get_artifact").length, 0);
+  button(card, "Open summary").click();
+  await settle();
+  assert.deepEqual(page.sent("open_summary").map((r) => r.url), [failed.url]);
   page.runCards.dispose();
 });
 

@@ -200,10 +200,13 @@ and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
 validation, `answer` is a `RunAnswer` (`document_type`, `category`,
 `importance` as an `ImportanceLevel` of `high`, `medium`, or `low`, and
 `importance_reason`); before that, or when validation failed, it is null.
-`summary_path` is the home-relative path of the summary file a succeeded
-run saved (`summaries/<note stem>.summary.md`), and null until a save
-succeeds; `written_record_key` is the key the save resolved under the
-configuration current at finish.
+`summary_path` is the home-relative path of the summary file a save
+wrote (`summaries/<note stem>.summary.md`): set when a save succeeds, and
+also when a `save_failed` save wrote the file before the daily log refused
+its event, so the file can still be opened; null otherwise.
+`written_record_key` is the key the save resolved under the configuration
+current at finish. `can_retry_save` is true only for a `save_failed` run
+whose kept answer is on disk and whose failure a retry can fix.
 
 `service_hello` and `service_ready` pass only between the host and the
 service: before forwarding, the host sends `service_hello` and the service

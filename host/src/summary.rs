@@ -29,8 +29,11 @@ use crate::presentation::plain_line;
 use crate::vault::{note_filename, owned_frontmatter};
 
 pub const MAX_TITLE_BYTES: usize = 2048;
-pub const MAX_DOCUMENT_TYPE_BYTES: usize = 64;
-pub const MAX_CATEGORY_BYTES: usize = 64;
+/// The most characters (not bytes) of a summary's document type and
+/// category: the answer's and the vocabulary's own bound, so a label the
+/// answer accepts is never refused by the daily log.
+pub const MAX_DOCUMENT_TYPE_CHARS: usize = MAX_LABEL_CHARS;
+pub const MAX_CATEGORY_CHARS: usize = MAX_LABEL_CHARS;
 pub const MAX_SUMMARY_PATH_BYTES: usize = 1024;
 
 /// What a caller supplies to record a summary. `record_key` is the page's
@@ -88,11 +91,11 @@ pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'stati
         return Err("invalid_summary_title");
     }
     if summary.document_type.trim().is_empty()
-        || summary.document_type.len() > MAX_DOCUMENT_TYPE_BYTES
+        || summary.document_type.chars().count() > MAX_DOCUMENT_TYPE_CHARS
     {
         return Err("invalid_summary_document_type");
     }
-    if summary.category.trim().is_empty() || summary.category.len() > MAX_CATEGORY_BYTES {
+    if summary.category.trim().is_empty() || summary.category.chars().count() > MAX_CATEGORY_CHARS {
         return Err("invalid_summary_category");
     }
     check_summary_path(&summary.summary_path)
@@ -220,6 +223,22 @@ pub fn owned_summary(bytes: &[u8], key: &RecordKey) -> bool {
         RecordKeyKind::Artifact => ("artifact_id", "url_id"),
     };
     owned_frontmatter(bytes, "summary", &[(id, key.value.as_str())], &[forbidden])
+}
+
+/// The `summarized_at` time an owned summary file's front matter records,
+/// as `render_summary` writes it (a JSON-quoted top-level line), or `None`
+/// when the line is missing, repeated, or not a JSON string.
+pub(crate) fn summary_summarized_at(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let (frontmatter, _) = text.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let mut values = frontmatter
+        .lines()
+        .filter_map(|line| line.strip_prefix("summarized_at: "));
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    serde_json::from_str(value).ok()
 }
 
 /// Where the run that wrote a summary can be resumed: a Codex thread
@@ -536,6 +555,47 @@ mod tests {
     #[test]
     fn a_well_formed_summary_is_valid() {
         assert!(validate_page_summary(&summary()).is_ok());
+    }
+
+    /// The answer and the vocabulary bound labels in characters
+    /// (`answer::MAX_LABEL_CHARS`), so the event must too: a 64-character
+    /// label of multibyte letters is longer than 64 bytes.
+    #[test]
+    fn summarized_at_is_read_from_the_front_matter_only() {
+        let file = "---\nbrauser:\n  kind: summary\nsummarized_at: \"2026-10-26T14:05:00-07:00\"\n---\n\nsummarized_at: \"2030-01-01T00:00:00Z\"\n";
+        assert_eq!(
+            summary_summarized_at(file.as_bytes()).as_deref(),
+            Some("2026-10-26T14:05:00-07:00")
+        );
+        for bad in [
+            "---\nsummarized_at: 2026\n---\n",
+            "---\ntitle: \"T\"\n---\n",
+            "---\nsummarized_at: \"a\"\nsummarized_at: \"b\"\n---\n",
+            "no front matter",
+        ] {
+            assert_eq!(summary_summarized_at(bad.as_bytes()), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn labels_are_bounded_in_characters_not_bytes() {
+        let mut wide = summary();
+        wide.document_type = "\u{65e5}".repeat(MAX_LABEL_CHARS);
+        wide.category = "\u{e9}".repeat(MAX_LABEL_CHARS);
+        assert!(wide.category.len() > MAX_LABEL_CHARS);
+        assert_eq!(validate_page_summary(&wide), Ok(()));
+        let mut long = summary();
+        long.document_type = "\u{65e5}".repeat(MAX_LABEL_CHARS + 1);
+        assert_eq!(
+            validate_page_summary(&long),
+            Err("invalid_summary_document_type")
+        );
+        let mut long = summary();
+        long.category = "c".repeat(MAX_LABEL_CHARS + 1);
+        assert_eq!(
+            validate_page_summary(&long),
+            Err("invalid_summary_category")
+        );
     }
 
     #[test]

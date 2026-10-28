@@ -28,6 +28,10 @@ export interface RunCardDeps {
   visible(): boolean;
   storage: ChromeStorageArea;
   openSettings(): void;
+  /** A card saw its run succeed and save a summary, so the page's own
+   * Summary line can refresh: a summary event does not change the
+   * worker's delivery count the panel otherwise refreshes on. */
+  summarySaved?(run: RunView): void;
 }
 
 function isTerminal(run: RunView): boolean {
@@ -234,7 +238,9 @@ class RunCard {
   // another.
   private setView(run: RunView): void {
     if (isTerminal(this.view) && !isTerminal(run)) return;
+    const before = this.savedPath();
     this.view = run;
+    if (before === null && this.savedPath() !== null) this.deps.summarySaved?.(run);
     void this.loadSavedSummary();
   }
 
@@ -401,7 +407,11 @@ class RunCard {
 
     const buttons: HTMLButtonElement[] = [];
     if (!isTerminal(run)) buttons.push(actionButton("Cancel", () => this.cancel()));
-    if (savedPath !== null) buttons.push(actionButton("Open summary", () => this.openSummary()));
+    // A failed save can still have written the file (the daily log then
+    // refused its event); the run keeps its path, so it opens too.
+    if (isTerminal(run) && run.summary_path !== null) {
+      buttons.push(actionButton("Open summary", () => this.openSummary()));
+    }
     if (run.harness === "codex" && run.thread_id) {
       buttons.push(actionButton("Open in Codex", () => this.openInCodex()));
     }

@@ -224,6 +224,8 @@ impl Vault {
             Some(bytes) if crate::summary::owned_summary(&bytes, key) => FoundSummary::Owned {
                 relative: path,
                 linked,
+                summarized_at: crate::summary::summary_summarized_at(&bytes),
+                file_id: file_id(&inspected),
             },
             _ => FoundSummary::Unowned,
         })
@@ -572,12 +574,57 @@ impl Vault {
 pub(crate) enum FoundSummary {
     /// Nothing is there yet.
     Absent,
-    /// The record's own summary: its home-folder relative path, and the same
-    /// path with `/` separators as summary events write it.
-    Owned { relative: PathBuf, linked: String },
+    /// The record's own summary: its home-folder relative path, the same
+    /// path with `/` separators as summary events write it, and the time
+    /// its front matter says it was summarized (`None` if unreadable).
+    ///
+    /// `file_id` is the (device, inode) of the file whose bytes were read
+    /// (Unix only), so a caller handing the path to another program can
+    /// check the name still holds that file ([`same_file`]).
+    Owned {
+        relative: PathBuf,
+        linked: String,
+        summarized_at: Option<String>,
+        file_id: Option<(u64, u64)>,
+    },
     /// Something else holds the name: another file, a directory, a symlink,
     /// or another record's summary.
     Unowned,
+}
+
+#[cfg(unix)]
+fn file_id(metadata: &cap_std::fs::Metadata) -> Option<(u64, u64)> {
+    use cap_std::fs::MetadataExt;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(_metadata: &cap_std::fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
+/// Whether the ambient `path` names, without following a symlink at its
+/// leaf, the regular file `file_id` identifies. Any intermediate folder
+/// swapped or renamed since the check (the home folder included) makes the
+/// path resolve to another inode, so it fails too. Without a file ID (not
+/// Unix) only the regular, non-symlink check applies.
+pub(crate) fn same_file(path: &Path, file_id: Option<(u64, u64)>) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        file_id == Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file_id;
+        true
+    }
 }
 
 /// The outcome of `replace_owned_file`.
@@ -1589,5 +1636,33 @@ pub(crate) mod tests {
                 .is_err()
         );
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_file_refuses_a_swapped_or_symlinked_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.summary.md");
+        fs::write(&path, "owned\n").unwrap();
+        let id = {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = fs::metadata(&path).unwrap();
+            Some((metadata.dev(), metadata.ino()))
+        };
+        assert!(same_file(&path, id));
+        // Another file under the name.
+        let other = dir.path().join("other.command");
+        fs::write(&other, "#!/bin/sh\n").unwrap();
+        fs::rename(&path, dir.path().join("kept")).unwrap();
+        fs::copy(&other, &path).unwrap();
+        assert!(!same_file(&path, id));
+        // A symlink to the very file that was checked is still refused.
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("kept"), &path).unwrap();
+        assert!(!same_file(&path, id));
+        // Nothing at the name, or no file ID to match.
+        fs::remove_file(&path).unwrap();
+        assert!(!same_file(&path, id));
+        assert!(!same_file(&dir.path().join("kept"), None));
     }
 }

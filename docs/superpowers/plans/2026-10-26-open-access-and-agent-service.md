@@ -2074,6 +2074,8 @@ Identity decision: the spec's `brauser.record_key` is written with the encoding 
 
 ### Task 45: Summary file rendering and the checked summary write
 
+> **As built (2026-10-27).** The fixed layout (§6.1) replaced a configurable summaries folder: `Vault`'s `summaries_dir` is the fixed `summaries` folder once the layout move is done, and a vault opened from an older config still names its old folder until the move finishes. `find_summary` returns `FoundSummary::Owned` with the file's `summarized_at` and (device, inode), used by the finisher's newer-summary check and `open_summary`'s re-check.
+
 **Files:**
 - Modify: `host/src/summary.rs`. It already exists from #59; add the file rendering and ownership check beside #59's event types, and rewrite its module comment, which says this module "never writes a summary file".
 - Modify: `host/src/vault.rs` (`Vault` gains `summaries_dir: Option<PathBuf>`, set in `open_checked`; `sweep_stale_temporaries` also sweeps the summaries dir)
@@ -2177,6 +2179,8 @@ impl CaptureStore {
 
 ### Task 47: Index: adapter-attached summaries, a chronological Timeline, and a version 4 cache
 
+> **As built (2026-10-27).** main moved to cache format 5 first, so this task shipped as **format 6** (`STATE_VERSION = 6`): a format-5 cache migrates in place (`migrate_v5_state`, which marks every artifact dirty so files whose rendering changed are rewritten) and a format-4 cache migrates through 5 to 6. The rescan test below became `a_version_5_state_cache_is_migrated`. Summaries with the same whole-second stamp keep their append order, not run-ID order.
+
 **Files:**
 - Modify `host/src/index.rs`: the Summary arm of `fn derive`, `fn render_artifact`, `STATE_VERSION`, and `fn artifact_candidates_for_url` (tests only).
 
@@ -2227,6 +2231,8 @@ impl CaptureStore {
 - [ ] Commit: `git add protocol/schema.json protocol/src/generated.rs protocol/ts/generated.ts protocol/tests/wire.rs host/src/index.rs host/src/native.rs extension/protocol-shape.ts extension/tests/agent.test.mjs && git commit -m "feat: summaries in Recent, the worklog, and get_artifact"`
 
 ### Task 49: `SummaryFinisher`: write under the configuration current at finish
+
+> **As built (2026-10-27).** The fixed layout replaced the "No summaries folder is set" reason with `LAYOUT_MOVING` ("Your notes folders are moving to the fixed layout. Open Brauser settings to finish the move, then Retry save."), and `a_summaries_dir_changed_mid_run_receives_the_file` became `a_summaries_dir_changed_mid_run_waits_for_the_layout_move`. `save` returns `Result<SavedRun, SaveFailure>`: a reason no retry can fix (full or refusing daily log, an interrupted entry that changed, an invalid stored answer, a newer summary already saved) is final, so the run offers no Retry save, and keeps the written file's `summary_path` when there is one. `summary_artifact` returns `None` when it needs the index and the index cannot answer, and the save then asks for Retry save. Daily-log refusals have their own reasons (step 7), not one "could not be written (<reason>)" sentence.
 
 **Files:**
 - Create: `host/src/service/finisher.rs`
@@ -2347,7 +2353,7 @@ pub(crate) fn summary_artifact(config: &ConfigStore, url: &str, key: &RecordKey,
 
 - [ ] Add the steps:
   1. Write a page note on an unrecognized fixture page, then summarize it. Expect `succeeded`, with the page note's bytes unchanged.
-  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. From the description (`neutralize_remote`) it contains `\![t](https://evil.example/t.png)` and `&lt;img src=https://evil.example/d.png>`. The entity is written by `inline` as `\<img src=https://evil.example/x.png\>` in the neutral profile, or by `wikilink` as `[[img src=https://evil.example/x.png]]` in the obsidian profile. From the Mermaid fence and Dataview query it contains `&#96;&#96;&#96;mermaid` and `&#96;&#36;= dv.el(`, and the summary body holds no raw backtick fence (no line starting with three backticks) and no raw `` `$= ``; backticks and `$` are written as entities because Obsidian runs Mermaid, Dataview and math from code spans, fences and `$`, so agent prose loses code formatting by design. No raw `<img` appears anywhere (front matter values write `<` as a JSON `\u` escape).
+  2. The summary file starts with `---\nbrauser:\n  kind: summary\n`. From the description (`neutralize_remote`) it contains `\![t](https://evil.example/t.png)` and `&lt;img src=https://evil.example/d.png>`. The entity is written by `inline` as `\<img src=https://evil.example/x.png\>` in the neutral profile, or by `wikilink` as `[[img src=https://evil.example/x.png]]` in the obsidian profile. From the Mermaid fence and Dataview query it contains `&#96;&#96;&#96;mermaid` and `&#96;&#36;= dv.el(`, and the summary body holds no raw backtick fence (no line starting with three backticks) and no raw `` `$= ``; backticks and `$` are written as entities because Obsidian runs Mermaid, Dataview and math from code spans, fences and `$`, so agent prose loses code formatting by design. No `<img` appears that is not backslash-escaped (front matter values write `<` as a JSON `\u` escape; neutral-profile single-line fields write `\<img`).
   3. Today's daily log has exactly one ` kind=summary ` line, and its payload has `harness: "codex"` and a `url` record key.
   4. `list_artifacts` returns a `web.page` item with `summary.importance === "high"`.
   5. `worklog` contains `Summarized: <fixture title> — specification, high importance`.

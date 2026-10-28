@@ -74,6 +74,48 @@ pub struct SavedRun {
     pub summary_path: Option<String>,
 }
 
+/// Why a save failed: a user-facing reason for the run's `error`, whether
+/// Retry save can work, and anything the save had written before it failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveFailure {
+    pub reason: String,
+    /// False when a retry builds the same refused output again (the day's
+    /// daily log is full, the run's details are invalid for it, ...): the
+    /// run then offers no Retry save.
+    pub retryable: bool,
+    /// What was written before the failure (the summary file, when the
+    /// daily log then refused its event), so the run card can still open it.
+    pub written: Option<SavedRun>,
+}
+
+impl SaveFailure {
+    /// A failure no retry can fix.
+    pub fn final_reason(reason: impl Into<String>, written: Option<SavedRun>) -> Self {
+        Self {
+            reason: reason.into(),
+            retryable: false,
+            written,
+        }
+    }
+}
+
+/// A plain reason is one Retry save can fix.
+impl From<String> for SaveFailure {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            retryable: true,
+            written: None,
+        }
+    }
+}
+
+impl From<&str> for SaveFailure {
+    fn from(reason: &str) -> Self {
+        reason.to_owned().into()
+    }
+}
+
 /// Validates a harness's final answer and saves it. Errors are user-facing
 /// reasons stored in the run's `error`.
 pub trait RunFinisher: Send + Sync {
@@ -82,7 +124,11 @@ pub trait RunFinisher: Send + Sync {
     fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String>;
     /// Writes the run's outputs from its kept answer; `retry_save` calls it
     /// again after a failure (`super::finisher::SummaryFinisher`).
-    fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String>;
+    fn save(
+        &self,
+        run: &RunStatusFile,
+        result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure>;
 }
 
 /// Validate `final_text` as a §6.4 answer against the run's knowledge base
@@ -508,6 +554,7 @@ impl Supervisor {
                 run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
                 vocabulary: Some(req.vocabulary.clone()),
                 answered_at: None,
+                save_final: false,
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
@@ -682,15 +729,10 @@ impl Supervisor {
             })?;
         }
         match inner.finisher.save(&status, &result) {
-            Ok(saved) => {
-                status.state = RunState::Succeeded;
-                status.error = None;
-                status.error_kind = None;
-                status.written_key = Some(saved.written_key);
-                status.summary_path = saved.summary_path;
-            }
-            Err(reason) => status.error = Some(reason),
+            Ok(saved) => Finish::Succeeded(saved),
+            Err(failure) => Finish::SaveFailed(failure),
         }
+        .apply(&mut status);
         status.finished_at = Some(now_timestamp());
         inner.write_status(&status).map_err(|error| {
             eprintln!("brauser service: recording retry save of run {id}: {error:#}");
@@ -1076,7 +1118,7 @@ impl Inner {
         };
         match self.finisher.save(&status, result) {
             Ok(saved) => Finish::Succeeded(saved),
-            Err(reason) => Finish::fail(RunErrorKind::SaveFailed, Some(reason)),
+            Err(failure) => Finish::SaveFailed(failure),
         }
     }
 
@@ -1293,6 +1335,8 @@ enum Driven {
 /// A run's end state.
 enum Finish {
     Succeeded(SavedRun),
+    /// The finisher could not save the kept answer.
+    SaveFailed(SaveFailure),
     Failed {
         kind: RunErrorKind,
         error: Option<String>,
@@ -1310,8 +1354,19 @@ impl Finish {
                 status.state = RunState::Succeeded;
                 status.error = None;
                 status.error_kind = None;
+                status.save_final = false;
                 status.written_key = Some(saved.written_key);
                 status.summary_path = saved.summary_path;
+            }
+            Self::SaveFailed(failure) => {
+                status.state = RunState::Failed;
+                status.error_kind = Some(RunErrorKind::SaveFailed);
+                status.error = Some(failure.reason);
+                status.save_final = !failure.retryable;
+                if let Some(written) = failure.written {
+                    status.written_key = Some(written.written_key);
+                    status.summary_path = written.summary_path;
+                }
             }
             Self::Failed { kind, error } => {
                 status.state = if kind == RunErrorKind::Canceled {
@@ -1428,7 +1483,7 @@ mod tests {
             &self,
             run: &RunStatusFile,
             _result: &serde_json::Value,
-        ) -> Result<SavedRun, String> {
+        ) -> Result<SavedRun, SaveFailure> {
             self.saves.fetch_add(1, Ordering::SeqCst);
             *self.seen.lock().unwrap() = Some(run.clone());
             let failing = self
@@ -1438,7 +1493,7 @@ mod tests {
                 })
                 .is_ok();
             if failing {
-                return Err("The notes folder is unavailable.".to_string());
+                return Err("The notes folder is unavailable.".into());
             }
             Ok(SavedRun {
                 written_key: run.start_key.clone(),
@@ -2322,6 +2377,52 @@ mod tests {
         assert_eq!(summary_lines(&fixture.path("home").join("logs")), 1);
     }
 
+    /// A finisher whose saves write the summary file, then fail in a way no
+    /// retry can fix (as a full daily log does).
+    struct FinalFailureFinisher;
+
+    impl RunFinisher for FinalFailureFinisher {
+        fn accept(
+            &self,
+            run: &RunStatusFile,
+            final_text: &str,
+        ) -> Result<serde_json::Value, String> {
+            accept_summary_answer(run, final_text)
+        }
+
+        fn save(
+            &self,
+            run: &RunStatusFile,
+            _result: &serde_json::Value,
+        ) -> Result<SavedRun, SaveFailure> {
+            Err(SaveFailure::final_reason(
+                "The day's daily log is full. The summary file was saved.",
+                Some(SavedRun {
+                    written_key: run.start_key.clone(),
+                    summary_path: Some("summaries/a.summary.md".into()),
+                }),
+            ))
+        }
+    }
+
+    #[test]
+    fn a_save_failure_no_retry_can_fix_offers_no_retry_but_opens_the_file() {
+        let fixture = Fixture::with_finisher("echo \"$VALID_ANSWER\"\n", |_: &Path| {
+            Box::new(FinalFailureFinisher)
+        });
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed);
+        assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
+        assert!(!view.can_retry_save, "{view:?}");
+        assert_eq!(view.summary_path.as_deref(), Some("summaries/a.summary.md"));
+        assert!(view.written_record_key.is_some());
+        assert!(matches!(
+            fixture.supervisor.retry_save(id),
+            Err((ErrorCode::Conflict, _))
+        ));
+    }
+
     /// The `kind=summary` lines in every daily log under `dir`.
     fn summary_lines(dir: &Path) -> usize {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -2704,6 +2805,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            save_final: false,
         }
     }
 
@@ -2714,7 +2816,10 @@ mod tests {
         let run = sample_status(Uuid::new_v4());
         let answer: serde_json::Value = serde_json::from_str(TEST_ANSWER).unwrap();
         let error = finisher.save(&run, &answer).unwrap_err();
-        assert_eq!(error, "Choose a notes folder in settings, then Retry save.");
+        assert_eq!(
+            error.reason,
+            "Choose a notes folder in settings, then Retry save."
+        );
         assert!(!dir.path().join("summaries").exists());
     }
 
@@ -2774,6 +2879,7 @@ mod tests {
             run_timeout_secs: None,
             vocabulary: None,
             answered_at: None,
+            save_final: false,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
