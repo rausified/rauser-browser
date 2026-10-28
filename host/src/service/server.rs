@@ -26,7 +26,7 @@ use uuid::Uuid;
 use super::agent_env::{AgentEnv, AgentEnvError};
 use super::open::{list_agent_env, open_target};
 use super::paths::{self, ServicePaths};
-use super::record::check_start_run;
+use super::record::{TaskStatus, check_start_run, check_task_instruction};
 use super::setup;
 use super::supervisor::{CwdCheck, EnvSource, ServiceOptions, StartRun, Supervisor};
 use crate::capture_site::exact_origin;
@@ -40,6 +40,11 @@ use crate::vault::selected_root_identity;
 
 /// How often the accept loop checks for a connection and for idle exit.
 const ACCEPT_POLL: Duration = Duration::from_millis(250);
+/// Why a task was refused when Brauser's own configuration or cache folder
+/// cannot be named in its prompt: it fails closed rather than run without
+/// them.
+pub const TASK_FOLDERS_MISSING: &str =
+    "Brauser's own folders could not be found, so the task was not started.";
 pub const NOT_CONFIGURED: &str = "Choose a notes folder in Brauser settings first.";
 pub const SET_UP_HARNESS: &str = "Set up a summary harness in Brauser settings first.";
 pub const KNOWLEDGE_BASE_CHANGED: &str =
@@ -433,6 +438,9 @@ impl Server {
     /// site_draft`, which only the native host sends) runs in its own run
     /// directory, so it needs no knowledge base: its `url` must be an exact
     /// HTTP(S) origin, its `record_key` that origin, and it has no selection.
+    /// A task (`kind: task`, which only the native host sends) runs in the
+    /// knowledge base like a summary and carries a bounded `instruction`,
+    /// which no other kind may carry.
     fn start_run(&self, value: StartRunRequest) -> Response {
         let id = value.request_id.clone();
         let kind = value.kind.unwrap_or(RunKind::Summary);
@@ -449,6 +457,30 @@ impl Server {
         ) {
             return error(&id, ErrorCode::InvalidRequest, message);
         }
+        // The refusal texts are fixed, so the request log never quotes the
+        // instruction.
+        match (kind, value.instruction.as_deref()) {
+            (RunKind::Task, None) => {
+                return error(
+                    &id,
+                    ErrorCode::InvalidRequest,
+                    "a task needs an instruction",
+                );
+            }
+            (RunKind::Task, Some(instruction)) => {
+                if let Err(message) = check_task_instruction(instruction) {
+                    return error(&id, ErrorCode::InvalidRequest, message);
+                }
+            }
+            (RunKind::Summary | RunKind::SiteDraft, Some(_)) => {
+                return error(
+                    &id,
+                    ErrorCode::InvalidRequest,
+                    "instruction is only for a task",
+                );
+            }
+            (RunKind::Summary | RunKind::SiteDraft, None) => {}
+        }
         if kind == RunKind::SiteDraft
             && let Err(message) = check_site_draft(&value.url, &record_key, &value.selection)
         {
@@ -457,8 +489,7 @@ impl Server {
         let setup = match kind {
             RunKind::Summary => self.run_setup(value.harness),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
-            // Placeholder until the service builds a task's setup.
-            RunKind::Task => Err((ErrorCode::InvalidRequest, "not yet")),
+            RunKind::Task => self.task_setup(value.harness),
         };
         let setup = match setup {
             Ok(setup) => setup,
@@ -469,6 +500,10 @@ impl Server {
         if let Err(env_error) = run_env(&self.paths) {
             return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
         }
+        let task = value.instruction.map(|instruction| TaskStatus {
+            instruction,
+            protected: setup.protected,
+        });
         match self.supervisor.start_run(StartRun {
             kind,
             url: value.url,
@@ -481,6 +516,7 @@ impl Server {
             cwd: setup.cwd,
             timeout: setup.timeout,
             vocabulary: setup.vocabulary,
+            task,
         }) {
             Ok((run, existing)) => Response::RunStarted(RunStarted {
                 protocol_version: PROTOCOL_VERSION,
@@ -535,6 +571,35 @@ impl Server {
             cwd: knowledge_base,
             timeout,
             vocabulary: config.snapshot().summary_vocabulary.clone(),
+            protected: Vec::new(),
+        })
+    }
+
+    /// As [`Server::run_setup`], for a task: the same harness, time limit
+    /// and knowledge base, plus the folders its prompt names as Brauser's
+    /// own, all read under the same config lock. A configuration or cache
+    /// folder that cannot be found refuses the task (fails closed).
+    fn task_setup(
+        &self,
+        requested: Option<HarnessId>,
+    ) -> Result<RunSetup, (ErrorCode, &'static str)> {
+        let mut config = lock(&self.config);
+        let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
+        let (harness, timeout) = agent_setup(&config, requested)?;
+        // `locked_knowledge_base` already refused a missing home folder.
+        let root = config
+            .snapshot()
+            .storage
+            .as_ref()
+            .map(|storage| PathBuf::from(&storage.root))
+            .ok_or((ErrorCode::NotConfigured, NOT_CONFIGURED))?;
+        let protected = protected_paths(&root, config.dir(), config.cache_dir())?;
+        Ok(RunSetup {
+            harness,
+            cwd: knowledge_base,
+            timeout,
+            vocabulary: config.snapshot().summary_vocabulary.clone(),
+            protected,
         })
     }
 
@@ -555,8 +620,34 @@ impl Server {
             cwd: PathBuf::new(),
             timeout,
             vocabulary: default_summary_vocabulary(),
+            protected: Vec::new(),
         })
     }
+}
+
+/// The absolute paths a task's prompt names as Brauser's own: the home
+/// folder's `notes/`, `logs/`, `artifacts/`, `summaries/` and `later/`,
+/// Brauser's configuration folder (which also holds the service's `runs/`)
+/// and its cache folder. Either folder failing to resolve refuses the task.
+fn protected_paths(
+    root: &Path,
+    config_dir: Result<&Path>,
+    cache_dir: Result<PathBuf>,
+) -> Result<Vec<String>, (ErrorCode, &'static str)> {
+    use crate::layout::{ARTIFACTS_DIR, LATER_DIR, LOGS_DIR, NOTES_DIR, SUMMARIES_DIR};
+    let missing = (ErrorCode::Internal, TASK_FOLDERS_MISSING);
+    let config_dir = config_dir.map_err(|_| missing)?.to_path_buf();
+    let cache_dir = cache_dir.map_err(|_| missing)?;
+    [NOTES_DIR, LOGS_DIR, ARTIFACTS_DIR, SUMMARIES_DIR, LATER_DIR]
+        .into_iter()
+        .map(|name| root.join(name))
+        .chain([config_dir, cache_dir])
+        .map(|path| {
+            std::path::absolute(&path)
+                .map(|path| path.display().to_string())
+                .map_err(|_| missing)
+        })
+        .collect()
 }
 
 /// A site draft's own bounds, beside `check_start_run`'s.
@@ -657,6 +748,9 @@ struct RunSetup {
     cwd: PathBuf,
     timeout: Option<Duration>,
     vocabulary: SummaryVocabulary,
+    /// A task's protected paths ([`protected_paths`]); empty for the other
+    /// kinds.
+    protected: Vec<String>,
 }
 
 fn parse_run_id(run_id: &str) -> Option<Uuid> {
@@ -1910,5 +2004,398 @@ mod tests {
         assert_eq!(std::fs::read_to_string(world.socket()).unwrap(), "keep");
         // The failed start left no pid file behind.
         assert!(!world.paths.pid().exists());
+    }
+
+    // --- Task runs -------------------------------------------------------
+
+    const INSTRUCTION: &str = "instruction-sentinel-7d20: tidy\tthe notes\nand report";
+
+    /// A start_run for a task, as the native host forwards one.
+    fn task_start(instruction: Option<&str>) -> StartRunRequest {
+        StartRunRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "task".into(),
+            url: "https://example.com/a".into(),
+            title: "Page A".into(),
+            content: "Body text".into(),
+            selection: None,
+            harness: None,
+            record_key: Some(url_key()),
+            requested_at: "2026-10-26T10:00:00Z".into(),
+            kind: Some(RunKind::Task),
+            instruction: instruction.map(str::to_owned),
+        }
+    }
+
+    fn runs_are_empty(world: &World) -> bool {
+        !world.paths.runs().exists() || dir_is_empty(&world.paths.runs())
+    }
+
+    #[test]
+    fn a_task_needs_an_instruction() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(task_start(None)))),
+            (
+                ErrorCode::InvalidRequest,
+                "a task needs an instruction".to_string()
+            )
+        );
+        assert!(runs_are_empty(&world));
+    }
+
+    #[test]
+    fn an_instruction_on_a_summary_or_site_draft_is_refused() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let mut summary = named_start_run(HarnessId::Claude);
+        summary.instruction = Some("Do something".into());
+        let mut explicit = summary.clone();
+        explicit.kind = Some(RunKind::Summary);
+        let mut site_draft = site_draft_start(TOOLS);
+        site_draft.instruction = Some("Do something".into());
+        for request in [summary, explicit, site_draft] {
+            assert_eq!(
+                error_of(world.call(&Request::StartRun(request))),
+                (
+                    ErrorCode::InvalidRequest,
+                    "instruction is only for a task".to_string()
+                )
+            );
+        }
+        assert!(runs_are_empty(&world));
+    }
+
+    #[test]
+    fn a_direct_socket_task_with_a_bad_instruction_is_refused() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let long = "a".repeat(4097);
+        for (instruction, message) in [
+            ("", "instruction is empty"),
+            ("  \n\t ", "instruction is empty"),
+            (long.as_str(), "instruction is longer than 4096 characters"),
+            (
+                "tidy\rthe notes",
+                "instruction contains a control character",
+            ),
+            ("tidy\u{1b}[31m", "instruction contains a control character"),
+        ] {
+            assert_eq!(
+                error_of(world.call(&Request::StartRun(task_start(Some(instruction))))),
+                (ErrorCode::InvalidRequest, message.to_string()),
+                "{instruction:?}"
+            );
+        }
+        assert!(runs_are_empty(&world));
+    }
+
+    #[test]
+    fn a_start_task_sent_to_the_service_socket_is_not_a_service_request() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let request = Request::StartTask(brauser_protocol::StartTaskRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "direct-task".into(),
+            url: "https://example.com/a".into(),
+            title: "Page A".into(),
+            content: "Body text".into(),
+            selection: None,
+            instruction: INSTRUCTION.into(),
+            harness: None,
+            requested_at: "2026-10-26T10:00:00Z".into(),
+        });
+        assert_eq!(
+            error_of(world.call(&request)),
+            (
+                ErrorCode::InvalidRequest,
+                "not a service request".to_string()
+            )
+        );
+        assert!(runs_are_empty(&world));
+    }
+
+    /// The paths a task's prompt names as Brauser's own, for a home folder
+    /// at `root` and the world's support (configuration) folder.
+    fn expected_protected(world: &World, root: &Path) -> Vec<String> {
+        ["notes", "logs", "artifacts", "summaries", "later"]
+            .into_iter()
+            .map(|name| root.join(name))
+            .chain([world.support.clone(), world.support.join("cache")])
+            .map(|path| path.display().to_string())
+            .collect()
+    }
+
+    /// A fake harness that keeps its prompt and reports its folder.
+    fn task_reporter() -> String {
+        "/bin/cat > \"$0.prompt\"\necho \"Ran in $(pwd -P).\"\n".to_string()
+    }
+
+    fn start_task_run(world: &World) -> brauser_protocol::RunFetched {
+        let run_id = match world.call(&Request::StartRun(task_start(Some(INSTRUCTION)))) {
+            Response::RunStarted(started) => {
+                assert!(!started.existing);
+                assert_eq!(started.run.kind, Some(RunKind::Task));
+                started.run.run_id
+            }
+            other => panic!("unexpected response: {other:?}"),
+        };
+        world.wait_finished(&run_id)
+    }
+
+    fn assert_task_ran_in(world: &World, fetched: &brauser_protocol::RunFetched, cwd: &Path) {
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+        let expected = std::fs::canonicalize(cwd).unwrap();
+        assert_eq!(
+            fetched.run.task_report.as_deref(),
+            Some(format!("Ran in {}.", expected.display()).as_str())
+        );
+        assert_eq!(fetched.run.cwd, Some(cwd.display().to_string()));
+        assert_eq!(fetched.run.instruction.as_deref(), Some(INSTRUCTION));
+        let protected = expected_protected(world, &world.notes);
+        let status = world
+            .paths
+            .runs()
+            .join(&fetched.run.run_id)
+            .join("status.json");
+        let status: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(status).unwrap()).unwrap();
+        assert_eq!(status["task"]["instruction"], INSTRUCTION);
+        assert_eq!(status["task"]["protected"], serde_json::json!(protected));
+        let prompt = std::fs::read_to_string(world.program.with_extension("prompt")).unwrap();
+        assert!(prompt.contains(INSTRUCTION), "{prompt}");
+        for path in &protected {
+            assert!(
+                prompt.contains(&format!("\n- {path}\n")),
+                "{path}: {prompt}"
+            );
+        }
+        assert!(
+            prompt.contains(&format!("Your working directory is {}.", cwd.display())),
+            "{prompt}"
+        );
+        // A task writes nothing in the home folder.
+        assert!(
+            dir_is_empty(&world.notes),
+            "the task wrote to the home folder"
+        );
+    }
+
+    #[test]
+    fn a_task_runs_in_the_knowledge_base_with_protected_paths() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::unconfigured(&task_reporter());
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        world.start(Duration::from_secs(600));
+        let fetched = start_task_run(&world);
+        assert_task_ran_in(&world, &fetched, &knowledge_base);
+        assert_eq!(fetched.run.harness, HarnessId::Claude);
+    }
+
+    #[test]
+    fn a_task_without_a_knowledge_base_runs_in_the_home_folder_with_protected_paths_inside_it() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&task_reporter());
+        world.start(Duration::from_secs(600));
+        let fetched = start_task_run(&world);
+        assert_task_ran_in(&world, &fetched, &world.notes);
+        for path in expected_protected(&world, &world.notes).iter().take(5) {
+            assert!(Path::new(path).starts_with(&world.notes), "{path}");
+        }
+    }
+
+    /// `ConfigStore::dir` and `cache_dir` fail only for a configuration
+    /// path no service runs with, so the fail-closed rule is pinned on the
+    /// function `task_setup` reads them through: an `Err` from either
+    /// refuses the task before anything is queued.
+    #[test]
+    fn a_task_fails_closed_when_brauser_folders_cannot_be_found() {
+        let root = Path::new("/home/user/Brauser");
+        let config = Path::new("/home/user/.config/brauser");
+        let refused = Err((
+            ErrorCode::Internal,
+            "Brauser's own folders could not be found, so the task was not started.",
+        ));
+        assert_eq!(
+            protected_paths(
+                root,
+                Err(anyhow::anyhow!("no parent")),
+                Ok(config.join("cache"))
+            ),
+            refused
+        );
+        assert_eq!(
+            protected_paths(root, Ok(config), Err(anyhow::anyhow!("no cache folder"))),
+            refused
+        );
+        assert_eq!(
+            protected_paths(root, Ok(config), Ok(config.join("cache"))).unwrap(),
+            [
+                "/home/user/Brauser/notes",
+                "/home/user/Brauser/logs",
+                "/home/user/Brauser/artifacts",
+                "/home/user/Brauser/summaries",
+                "/home/user/Brauser/later",
+                "/home/user/.config/brauser",
+                "/home/user/.config/brauser/cache",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_run_logs_neither_its_instruction_nor_its_report() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        const PAGE: &str = "page-sentinel-61c2";
+        const TITLE: &str = "title-sentinel-0f3e";
+        const PATH: &str = "path-sentinel-a9b4";
+        const REPORT: &str = "report-sentinel-2d77";
+        const STDERR: &str = "stderr-sentinel-5e08";
+        // The first turn's reply is empty only when `$0.empty` exists.
+        let world = World::new(&format!(
+            "echo '{STDERR}' >&2\n\
+             if [ -e \"$0.empty\" ]; then /bin/rm \"$0.empty\"; exit 0; fi\n\
+             echo 'Did it: {REPORT}'\n"
+        ));
+        let url = format!("https://example.com/{PATH}?q={PATH}");
+        let request = |request_id: &str, instruction: &str| {
+            Request::StartRun(StartRunRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.into(),
+                url: url.clone(),
+                title: TITLE.into(),
+                content: PAGE.into(),
+                selection: None,
+                harness: None,
+                record_key: Some(RecordKey {
+                    kind: RecordKeyKind::Url,
+                    value: url.clone(),
+                }),
+                requested_at: "2026-10-26T10:00:00Z".into(),
+                kind: Some(RunKind::Task),
+                instruction: Some(instruction.into()),
+            })
+        };
+        let started = |response: Response| match response {
+            Response::RunStarted(started) => started.run.run_id,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        let mut run_id = String::new();
+        let mut repaired_id = String::new();
+        let lines = capture(|| {
+            let service = world.start(Duration::from_millis(300));
+            run_id = started(world.call(&request("req-task-1", INSTRUCTION)));
+            let fetched = world.wait_finished(&run_id);
+            assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+            assert!(
+                fetched
+                    .run
+                    .task_report
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains(REPORT),
+                "{fetched:?}"
+            );
+            // An empty first reply, then the repair turn's report.
+            std::fs::write(world.program.with_extension("empty"), "").unwrap();
+            repaired_id = started(world.call(&request("req-task-2", INSTRUCTION)));
+            let fetched = world.wait_finished(&repaired_id);
+            assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+            // A refused instruction.
+            let refused = format!("{INSTRUCTION}\r");
+            let (code, _) = error_of(world.call(&request("req-task-3", &refused)));
+            assert_eq!(code, ErrorCode::InvalidRequest);
+            assert_eq!(service.join().unwrap().unwrap(), ServeExit::Idle);
+        });
+        let all = lines
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for sentinel in ["instruction-sentinel", PAGE, TITLE, PATH, REPORT, STDERR] {
+            assert!(!all.contains(sentinel), "{sentinel} was logged:\n{all}");
+        }
+
+        let request_done = line_in(&lines, "request done", "request_id", "req-task-1").expect(&all);
+        let span = request_done["spans"].as_array().unwrap().last().unwrap();
+        assert_eq!(span["kind"], "start_run", "{all}");
+        assert_eq!(span["outcome"], "ok", "{all}");
+        let queued = line_in(&lines, "run queued", "request_id", "req-task-1").expect(&all);
+        assert_eq!(queued["fields"]["run_id"], run_id.as_str(), "{all}");
+        assert_eq!(queued["fields"]["kind"], "task", "{all}");
+        assert_eq!(queued["fields"]["origin"], "https://example.com", "{all}");
+
+        let in_run = |message: &str, id: &str| {
+            lines.iter().position(|line| {
+                line["fields"]["message"] == message
+                    && line["spans"].as_array().is_some_and(|spans| {
+                        spans
+                            .iter()
+                            .any(|span| span["name"] == "run" && span["run_id"] == id)
+                    })
+            })
+        };
+        let order = [
+            "run started",
+            "turn completed",
+            "answer validated",
+            "run saved",
+            "run finished",
+        ]
+        .map(|message| {
+            in_run(message, &run_id).unwrap_or_else(|| panic!("no {message} in the run:\n{all}"))
+        });
+        assert!(order.is_sorted(), "{order:?}\n{all}");
+        let saved = &lines[order[3]];
+        assert_eq!(saved["fields"]["summary_written"], false, "{all}");
+        assert!(saved["fields"].get("summary_dir").is_none(), "{all}");
+        assert_eq!(lines[order[4]]["fields"]["state"], "succeeded", "{all}");
+        let run = &lines[order[0]];
+        let span = run["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["name"] == "run")
+            .unwrap();
+        assert_eq!(span["kind"], "task", "{all}");
+        assert_eq!(span["harness"], "claude", "{all}");
+
+        // The empty reply is rejected by its reason code only.
+        let rejected = in_run("answer rejected", &repaired_id).expect(&all);
+        assert_eq!(
+            lines[rejected]["fields"]["reason"], "invalid_output",
+            "{all}"
+        );
+        assert_eq!(lines[rejected]["fields"]["turn"], 1, "{all}");
+        let validated = in_run("answer validated", &repaired_id).expect(&all);
+        assert_eq!(lines[validated]["fields"]["turn"], 2, "{all}");
+        // The refused instruction's request is logged with its fixed text.
+        let refused = line_in(&lines, "request done", "request_id", "req-task-3").expect(&all);
+        let span = refused["spans"].as_array().unwrap().last().unwrap();
+        assert_eq!(span["outcome"], "invalid_request", "{all}");
+        assert_eq!(
+            span["error"], "instruction contains a control character",
+            "{all}"
+        );
     }
 }

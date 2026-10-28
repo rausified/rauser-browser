@@ -45,11 +45,13 @@ use super::harness_api::{
     HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
-use super::prompt::{repair_prompt, site_draft_prompt, summary_prompt};
+use super::prompt::{
+    repair_prompt, site_draft_prompt, summary_prompt, task_prompt, task_repair_prompt,
+};
 use super::queue::{Scheduler, Submit};
 use super::record::{
-    MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, cap_bytes, fit_session_id,
-    page_markdown,
+    MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, TaskStatus, cap_bytes,
+    fit_session_id, list_instruction, page_markdown,
 };
 use crate::answer::parse_answer;
 use crate::capture_site::catalog;
@@ -57,6 +59,12 @@ use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
 use crate::diag;
 use crate::open::Opener;
 use tracing::Span;
+
+/// How many characters of a task's instruction name its Codex thread.
+const TASK_TITLE_CHARS: usize = 80;
+/// Why a task run cannot start: its record lost the request it was queued
+/// with.
+const TASK_REQUEST_MISSING: &str = "The task's request is missing.";
 
 /// How long a run may take before its process group is killed.
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -221,6 +229,11 @@ impl fmt::Debug for ServiceOptions {
 /// `page.md` unchanged, and it runs in its own run directory, so `cwd` is
 /// ignored and the knowledge base check ([`ServiceOptions::run_cwd`]) is
 /// skipped.
+///
+/// A task run (`kind: Task`) runs in the knowledge base like a summary,
+/// with the page written as `page.md`; its instruction and the paths its
+/// prompt names as Brauser's own come in `task` and are kept in
+/// `status.json`, so a queued task resumes after a restart.
 #[derive(Debug, Clone)]
 pub struct StartRun {
     pub kind: RunKind,
@@ -237,6 +250,9 @@ pub struct StartRun {
     pub timeout: Option<Duration>,
     /// The document types and categories the prompt offers.
     pub vocabulary: SummaryVocabulary,
+    /// A task's instruction and the paths its prompt names as Brauser's
+    /// own; `Some` exactly when `kind` is [`RunKind::Task`].
+    pub task: Option<TaskStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -620,7 +636,7 @@ impl Supervisor {
                 first_answered_at: None,
                 save_final: false,
                 kind: req.kind,
-                task: None,
+                task: req.task,
             };
             if let Err(error) = inner.store.create(&status, &page) {
                 scheduler.finished(id);
@@ -715,14 +731,17 @@ impl Supervisor {
                 .cmp(&a.created_at)
                 .then_with(|| b.run_id.cmp(&a.run_id))
         });
-        // A site draft's tables come only from `get_run`, so twenty views
-        // still fit one outbound frame.
+        // A site draft's tables and a task's report come only from
+        // `get_run`, and a task's instruction is cut, so twenty views still
+        // fit one outbound frame.
         chosen
             .iter()
             .filter_map(|run| {
                 let id = Uuid::parse_str(&run.run_id).ok()?;
                 let mut view = self.inner.view_of(id, run);
                 view.site_draft = None;
+                view.task_report = None;
+                view.instruction = view.instruction.as_deref().map(list_instruction);
                 Some(view)
             })
             .collect()
@@ -1029,10 +1048,11 @@ impl Inner {
         };
         // The folder as it is now, not as it was when the run was queued.
         // A site draft runs in its own run directory, not the knowledge
-        // base, so it has no knowledge base to check.
+        // base, so it has no knowledge base to check; a summary and a task
+        // both run in the knowledge base.
         if let Some(Err(reason)) = launch
             .as_ref()
-            .filter(|launch| launch.kind == RunKind::Summary)
+            .filter(|launch| launch.kind != RunKind::SiteDraft)
             .map(|launch| (this.options.run_cwd)(&launch.cwd))
         {
             tracing::warn!(error = reason.as_str(), "knowledge base check failed");
@@ -1097,7 +1117,7 @@ impl Inner {
             (None, Driven::Invalid(reason)) => {
                 Finish::fail(RunErrorKind::InvalidOutput, Some(reason))
             }
-            (None, Driven::Accepted(result)) => this.conclude(id, &result),
+            (None, Driven::Accepted(result)) => this.conclude(id, status.kind, &result),
         };
         this.end(&control, id, begun, finished);
         let _ = watchdog.join();
@@ -1125,26 +1145,38 @@ impl Inner {
             return Driven::Failed("The AI harness is no longer set up.".to_string());
         };
         let page_path = self.store.page_path(id);
-        // Only the prompt, the answer schema and (through the finisher) the
-        // answer's validation differ by kind; the turns and the repair turn
-        // are shared. A site draft sends no schema: Codex's strict structured
+        // Only the prompt, the answer schema, the repair prompt and (through
+        // the finisher) the answer's validation differ by kind; the turns are
+        // shared. A site draft sends no schema: Codex's strict structured
         // output cannot describe adapter tables (see [`OutputSchema::Omit`]).
-        let (prompt, output_schema) = match status.kind {
+        // A task sends none either, because its answer is a plain-text
+        // report, and its Codex thread is named after its instruction.
+        let (prompt, output_schema, title) = match status.kind {
             RunKind::Summary => (
                 summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
                 OutputSchema::RunnerDefault,
+                status.title.clone(),
             ),
             RunKind::SiteDraft => (
                 site_draft_prompt(&page_path, &status.url, catalog()),
                 OutputSchema::Omit,
+                status.title.clone(),
             ),
-            // Placeholder until the task prompt lands.
-            RunKind::Task => return Driven::Failed("not yet".to_string()),
+            RunKind::Task => {
+                let Some(task) = status.task.as_ref() else {
+                    return Driven::Failed(TASK_REQUEST_MISSING.to_string());
+                };
+                (
+                    task_prompt(&task.instruction, &page_path, &launch.cwd, &task.protected),
+                    OutputSchema::Omit,
+                    task_title(&task.instruction),
+                )
+            }
         };
         let spec = RunSpec {
             run_id: id,
             harness: status.harness,
-            title: status.title.clone(),
+            title,
             prompt,
             output_schema,
             cwd: launch.cwd,
@@ -1250,15 +1282,17 @@ impl Inner {
                 Err(_) if control.stop_requested() => {
                     Driven::Failed("The run was stopped.".to_string())
                 }
-                Err(problem) => match turn(&repair_prompt(&problem), 2, &mut sink) {
-                    TurnOutcome::Failed { reason } => Driven::Failed(reason),
-                    TurnOutcome::Answered { final_text } => match accept(&final_text, 2) {
-                        Ok(result) => Driven::Accepted(result),
-                        Err(problem) => Driven::Invalid(format!(
-                            "The agent's answer was not valid after one correction: {problem}"
-                        )),
-                    },
-                },
+                Err(problem) => {
+                    match turn(&kind_repair_prompt(status.kind, &problem), 2, &mut sink) {
+                        TurnOutcome::Failed { reason } => Driven::Failed(reason),
+                        TurnOutcome::Answered { final_text } => match accept(&final_text, 2) {
+                            Ok(result) => Driven::Accepted(result),
+                            Err(problem) => Driven::Invalid(format!(
+                                "The agent's answer was not valid after one correction: {problem}"
+                            )),
+                        },
+                    }
+                }
             },
         };
         // An accepted answer stands: a cancel or timeout from here on (while
@@ -1275,12 +1309,19 @@ impl Inner {
     /// Keep and save a validated answer. The record is stamped with the
     /// answer's time before the save, and the save gets the record as it
     /// is now (with the session the harness reported), so a retry writes
-    /// the same event as this save would have.
-    fn conclude(&self, id: Uuid, result: &serde_json::Value) -> Finish {
+    /// the same event as this save would have. A task saves nothing, so a
+    /// report that cannot be kept gets its own words.
+    fn conclude(&self, id: Uuid, kind: RunKind, result: &serde_json::Value) -> Finish {
         const NOT_KEPT: &str = "The answer could not be kept for saving.";
+        const TASK_NOT_KEPT: &str =
+            "The agent finished, but its report could not be kept. Changes it made stay.";
+        let not_kept = match kind {
+            RunKind::Task => TASK_NOT_KEPT,
+            RunKind::Summary | RunKind::SiteDraft => NOT_KEPT,
+        };
         if let Err(error) = self.store.write_result(id, result) {
             tracing::error!(error = format!("{error:#}"), "keeping run result");
-            return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
+            return Finish::fail(RunErrorKind::SaveFailed, Some(not_kept.to_string()));
         }
         let answered = now_timestamp();
         let status = match self.update(id, |status| {
@@ -1289,7 +1330,7 @@ impl Inner {
             Ok(status) => status,
             Err(error) => {
                 tracing::error!(error = format!("{error:#}"), "stamping run answer");
-                return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
+                return Finish::fail(RunErrorKind::SaveFailed, Some(not_kept.to_string()));
             }
         };
         match log_save(id, self.finisher.save(&status, result)) {
@@ -1638,6 +1679,25 @@ fn log_save(id: Uuid, saved: Result<SavedRun, SaveFailure>) -> Result<SavedRun, 
     saved
 }
 
+/// The repair turn's prompt: a task asks again for its plain-text report and
+/// never for JSON, nor for the work to be done again.
+fn kind_repair_prompt(kind: RunKind, problem: &str) -> String {
+    match kind {
+        RunKind::Task => task_repair_prompt(),
+        RunKind::Summary | RunKind::SiteDraft => repair_prompt(problem),
+    }
+}
+
+/// A task's harness session title (its Codex thread name): "Task: " and the
+/// first [`TASK_TITLE_CHARS`] characters of the instruction, whitespace
+/// collapsed, so task threads can be told apart. It travels only to the
+/// harness, never into a log.
+fn task_title(instruction: &str) -> String {
+    let collapsed = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = collapsed.chars().take(TASK_TITLE_CHARS).collect();
+    format!("Task: {cut}")
+}
+
 /// Wire names for log fields.
 pub(crate) fn harness_name(harness: HarnessId) -> &'static str {
     match harness {
@@ -1756,10 +1816,16 @@ mod tests {
 
     use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
+    use crate::service::finisher::TASK_REPORT_SHORTENED;
     use crate::service::finisher::{KindFinisher, SummaryFinisher};
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
-    use crate::service::prompt::site_draft_input;
-    use crate::service::record::{RunStatusFile, RunStore};
+    use crate::service::prompt::{
+        TASK_PROMPT_START, site_draft_input, task_prompt, task_repair_prompt,
+    };
+    use crate::service::record::{
+        LIST_INSTRUCTION_CHARS, MAX_TASK_REPORT_BYTES, RunStatusFile, RunStore, TaskStatus,
+        list_instruction,
+    };
 
     /// Accepts a §6.4 answer and saves nothing, counting its saves and
     /// keeping the record the last one was given.
@@ -2014,6 +2080,7 @@ mod tests {
                 cwd: self.dir.path().to_path_buf(),
                 timeout: None,
                 vocabulary: default_summary_vocabulary(),
+                task: None,
             }
         }
 
@@ -4141,6 +4208,7 @@ mod tests {
                 cwd: self.dir.path().to_path_buf(),
                 timeout: None,
                 vocabulary: default_summary_vocabulary(),
+                task: None,
             }
         }
 
@@ -4487,5 +4555,497 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].site_draft, None);
         assert_eq!(listed[0].kind, Some(RunKind::SiteDraft));
+    }
+
+    // --- Task runs -------------------------------------------------------
+
+    const INSTRUCTION: &str = "instruction-sentinel-4c1d:\trename the draft\nand list what changed";
+
+    impl Fixture {
+        /// The paths a task's prompt names as Brauser's own, under the
+        /// fixture's directory.
+        fn protected(&self) -> Vec<String> {
+            ["home/notes", "home/logs", "config", "config/cache"]
+                .iter()
+                .map(|name| self.path(name).display().to_string())
+                .collect()
+        }
+
+        fn task_request(&self, key: &str, instruction: &str) -> StartRun {
+            StartRun {
+                kind: RunKind::Task,
+                task: Some(TaskStatus {
+                    instruction: instruction.to_string(),
+                    protected: self.protected(),
+                }),
+                ..self.request(key)
+            }
+        }
+
+        fn start_task(&self, key: &str, instruction: &str) -> Uuid {
+            let (view, existing) = self
+                .supervisor
+                .start_run(self.task_request(key, instruction))
+                .unwrap();
+            assert!(!existing);
+            assert_eq!(view.kind, Some(RunKind::Task));
+            Uuid::parse_str(&view.run_id).unwrap()
+        }
+    }
+
+    /// A seeded task record for `key`, holding `task` as its request.
+    fn seed_task(
+        store: &RunStore,
+        cwd: &Path,
+        state: RunState,
+        created_at: &str,
+        task: Option<TaskStatus>,
+    ) -> Uuid {
+        let id = seed_record(store, cwd, state, created_at);
+        let mut status = store.status(id).unwrap();
+        status.kind = RunKind::Task;
+        status.task = task;
+        store.write_status(&status).unwrap();
+        id
+    }
+
+    #[test]
+    fn task_runs_send_no_output_schema() {
+        let (fixture, seen) = recording(&["Renamed the draft."]);
+        let id = fixture.start_task("a", INSTRUCTION);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let seen = seen.lock().unwrap();
+        // Strict structured output would force the summary JSON schema.
+        assert_eq!(seen.starts[0].0.output_schema, OutputSchema::Omit);
+        assert!(
+            seen.prompts[0].starts_with(TASK_PROMPT_START),
+            "{}",
+            seen.prompts[0]
+        );
+        assert_eq!(
+            fixture.saves.load(Ordering::SeqCst),
+            0,
+            "a task saves nothing"
+        );
+    }
+
+    #[test]
+    fn task_run_writes_the_page_to_page_md_and_the_instruction_only_to_the_prompt() {
+        let (fixture, seen) = recording(&["Done."]);
+        let id = fixture.start_task("page-path-sentinel", INSTRUCTION);
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        let seen = seen.lock().unwrap();
+        let (spec, page) = &seen.starts[0];
+        // The page: its title, url, content and selection, never the
+        // instruction.
+        for part in [
+            "Page page-path-sentinel",
+            "https://example.com/page-path-sentinel",
+            "Body text",
+            "Picked words",
+        ] {
+            assert!(page.contains(part), "{part} not in page.md:\n{page}");
+        }
+        assert!(!page.contains("instruction-sentinel"), "{page}");
+        // The prompt: the fenced instruction, the page only by its path.
+        let prompt = &seen.prompts[0];
+        assert_eq!(
+            prompt,
+            &task_prompt(
+                INSTRUCTION,
+                &spec.page_path,
+                &spec.cwd,
+                &fixture.protected()
+            )
+        );
+        assert!(prompt.contains(&format!(
+            "----- BEGIN USER REQUEST -----\n{INSTRUCTION}\n----- END USER REQUEST -----"
+        )));
+        for part in [
+            "Page page-path-sentinel",
+            "https://example.com",
+            "Body text",
+            "Picked words",
+        ] {
+            assert!(!prompt.contains(part), "{part} in the prompt:\n{prompt}");
+        }
+        assert!(prompt.contains(&spec.page_path.display().to_string()));
+        // Nothing else the harness is given carries the instruction.
+        assert_eq!(spec.cwd, fixture.dir.path());
+        for value in
+            [
+                spec.cwd.display().to_string(),
+                spec.page_path.display().to_string(),
+            ]
+            .into_iter()
+            .chain(spec.env.iter().map(|(name, value)| {
+                format!("{}={}", name.to_string_lossy(), value.to_string_lossy())
+            }))
+        {
+            assert!(!value.contains("instruction-sentinel"), "{value}");
+        }
+        // The run keeps the request for a restart, and the page title for
+        // its card.
+        let status = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(
+            status.task,
+            Some(TaskStatus {
+                instruction: INSTRUCTION.to_string(),
+                protected: fixture.protected(),
+            })
+        );
+        assert_eq!(status.title, "Page page-path-sentinel");
+    }
+
+    #[test]
+    fn task_spec_title_names_the_instruction_not_the_page() {
+        let long = format!("  Tidy\tthe\n\nnotes  {}", "word ".repeat(40));
+        // Valid for a summary too, and any non-empty text is a report.
+        let (fixture, seen) = recording(&[TEST_ANSWER]);
+        let id = fixture.start_task("a", &long);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        // The card keeps the page title.
+        assert_eq!(view.title, "Page a");
+        let collapsed: String = long
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(80)
+            .collect();
+        let starts = seen.lock().unwrap();
+        let title = &starts.starts[0].0.title;
+        assert_eq!(title, &format!("Task: {collapsed}"));
+        assert!(
+            title.starts_with("Task: Tidy the notes word word"),
+            "{title}"
+        );
+        assert_eq!(title.chars().count(), "Task: ".len() + 80);
+        assert!(!title.contains("Page a"), "{title}");
+        drop(starts);
+        // A summary's spec keeps the page title.
+        let summary = fixture.start("b");
+        assert_eq!(fixture.wait_finished(summary).state, RunState::Succeeded);
+        assert_eq!(seen.lock().unwrap().starts[1].0.title, "Page b");
+    }
+
+    #[test]
+    fn an_empty_task_reply_gets_the_task_repair_prompt() {
+        let (fixture, seen) = recording(&["", "Renamed the draft."]);
+        let id = fixture.start_task("a", INSTRUCTION);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.task_report.as_deref(), Some("Renamed the draft."));
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.prompts.len(), 2);
+            assert_eq!(seen.prompts[1], task_repair_prompt());
+            assert!(
+                !seen.prompts[1].contains("JSON object"),
+                "{}",
+                seen.prompts[1]
+            );
+        }
+
+        // A second empty reply is invalid output, after exactly one repair.
+        let (fixture, seen) = recording(&["  \n", "\t"]);
+        let id = fixture.start_task("a", INSTRUCTION);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::InvalidOutput));
+        assert_eq!(view.task_report, None);
+        assert_eq!(seen.lock().unwrap().prompts.len(), 2);
+    }
+
+    #[test]
+    fn a_long_task_report_is_shortened_not_failed() {
+        let long = "report line\n".repeat(4 * 1024);
+        assert!(long.len() > MAX_TASK_REPORT_BYTES);
+        let (fixture, seen) = recording(&[&long]);
+        let id = fixture.start_task("a", INSTRUCTION);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let report = view.task_report.unwrap();
+        assert!(report.len() <= MAX_TASK_REPORT_BYTES, "{}", report.len());
+        assert!(report.ends_with(TASK_REPORT_SHORTENED), "{report}");
+        assert!(report.starts_with("report line\nreport line\n"));
+        assert_eq!(seen.lock().unwrap().prompts.len(), 1, "no repair turn");
+    }
+
+    #[test]
+    fn cancel_ends_a_running_task() {
+        let fixture = Fixture::new("echo started\nexec sleep 30\n");
+        let id = fixture.start_task("a", INSTRUCTION);
+        fixture.wait_for(id, |view| view.state == RunState::Running);
+        let view = fixture.supervisor.cancel_run(id).unwrap();
+        assert_eq!(view.state, RunState::Canceled, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::Canceled));
+        assert_eq!(view.task_report, None);
+        assert_eq!(view.instruction.as_deref(), Some(INSTRUCTION));
+        assert!(fixture.supervisor.is_idle());
+    }
+
+    #[test]
+    fn a_queued_task_resumes_with_its_instruction_after_restart() {
+        let mut queued = None;
+        let mut protected = Vec::new();
+        let script = "/bin/cat > \"$COUNT.prompt\"\necho 'Renamed the draft.'\n";
+        let fixture = Fixture::seeded(script, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            protected = vec![cwd.join("home/notes").display().to_string()];
+            queued = Some(seed_task(
+                store,
+                cwd,
+                RunState::Queued,
+                "2026-10-26T09:00:00.000000000Z",
+                Some(TaskStatus {
+                    instruction: INSTRUCTION.to_string(),
+                    protected: protected.clone(),
+                }),
+            ));
+        });
+        let id = queued.unwrap();
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.kind, Some(RunKind::Task));
+        assert_eq!(view.instruction.as_deref(), Some(INSTRUCTION));
+        assert_eq!(view.task_report.as_deref(), Some("Renamed the draft."));
+        let prompt = read(&fixture.path("count.prompt"));
+        assert!(prompt.starts_with(TASK_PROMPT_START), "{prompt}");
+        assert!(prompt.contains(INSTRUCTION), "{prompt}");
+        assert!(
+            prompt.contains(&format!("\n- {}\n", protected[0])),
+            "{prompt}"
+        );
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_task_record_without_its_request_fails_before_spawning() {
+        let mut queued = None;
+        let script = "echo ran > \"$COUNT.ran\"\necho 'Did it.'\n";
+        let fixture = Fixture::seeded(script, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            queued = Some(seed_task(
+                store,
+                cwd,
+                RunState::Queued,
+                "2026-10-26T09:00:00.000000000Z",
+                None,
+            ));
+        });
+        let view = fixture.wait_finished(queued.unwrap());
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
+        assert_eq!(
+            view.error.as_deref(),
+            Some("The task's request is missing.")
+        );
+        assert!(!fixture.path("count.ran").exists(), "the harness ran");
+    }
+
+    #[test]
+    fn list_runs_nulls_task_reports_and_cuts_instructions() {
+        let long = "é".repeat(LIST_INSTRUCTION_CHARS + 20);
+        let (fixture, _) = recording(&["Renamed the draft."]);
+        let id = fixture.start_task("a", &long);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.task_report.as_deref(), Some("Renamed the draft."));
+        let listed = fixture.supervisor.list_runs();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, Some(RunKind::Task));
+        assert_eq!(listed[0].task_report, None);
+        let cut = listed[0].instruction.clone().unwrap();
+        assert_eq!(cut, list_instruction(&long));
+        assert_eq!(cut.chars().count(), LIST_INSTRUCTION_CHARS + 1);
+        assert!(cut.ends_with('…'));
+        // A short instruction is listed whole.
+        let (fixture, _) = recording(&["Done."]);
+        let id = fixture.start_task("a", "Short one");
+        fixture.wait_finished(id);
+        let listed = fixture.supervisor.list_runs();
+        assert_eq!(listed[0].instruction.as_deref(), Some("Short one"));
+        assert_eq!(listed[0].task_report, None);
+    }
+
+    #[test]
+    fn get_run_carries_the_full_task_view() {
+        let long = "x".repeat(LIST_INSTRUCTION_CHARS * 2);
+        let (fixture, _) = recording(&["- Renamed notes/a.md\n- Nothing else"]);
+        let id = fixture.start_task("a", &long);
+        fixture.wait_finished(id);
+        let view = fixture.view(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.kind, Some(RunKind::Task));
+        assert_eq!(view.instruction.as_deref(), Some(long.as_str()));
+        assert_eq!(
+            view.task_report.as_deref(),
+            Some("- Renamed notes/a.md\n- Nothing else")
+        );
+        assert_eq!(view.answer, None);
+        assert_eq!(view.site_draft, None);
+        assert_eq!(view.summary_path, None);
+        assert!(!view.can_retry_save);
+        assert_eq!(view.written_record_key.as_ref(), Some(&view.record_key));
+        assert!(run_dir(&fixture, id).join("result.json").is_file());
+    }
+
+    #[test]
+    fn the_knowledge_base_recheck_applies_to_tasks() {
+        let (fixture, seen) = recording(&["Done."]);
+        std::fs::write(fixture.path(KNOWLEDGE_BASE_GONE), "").unwrap();
+        let id = fixture.start_task("a", INSTRUCTION);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error.as_deref(), Some(FOLDER_CHANGED_ERROR));
+        assert_eq!(view.started_at, None);
+        assert!(
+            seen.lock().unwrap().starts.is_empty(),
+            "the harness started"
+        );
+    }
+
+    #[test]
+    fn a_fifth_task_start_is_a_conflict() {
+        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
+        // Four tasks for one page are four runs.
+        let ids: Vec<Uuid> = (0..4)
+            .map(|_| fixture.start_task("a", INSTRUCTION))
+            .collect();
+        assert_eq!(
+            fixture
+                .supervisor
+                .start_run(fixture.task_request("a", INSTRUCTION))
+                .unwrap_err(),
+            (
+                ErrorCode::Conflict,
+                "Four tasks are already waiting or running. Wait for one to finish.".to_string()
+            )
+        );
+        assert_eq!(
+            fixture.supervisor.list_runs().len(),
+            4,
+            "nothing was queued"
+        );
+        // A summary still takes the other slot.
+        let summary = fixture.start("b");
+        fixture.wait_for(summary, |view| view.state == RunState::Running);
+        fixture.release();
+        for id in ids {
+            assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        }
+        fixture.wait_finished(summary);
+        let again = fixture.start_task("a", INSTRUCTION);
+        assert_eq!(fixture.wait_finished(again).state, RunState::Succeeded);
+    }
+
+    /// Put a folder where the answer's `result.json` goes, so keeping it
+    /// fails.
+    fn block_results(supervisor: &Supervisor) {
+        for run in supervisor.store().list() {
+            let id = Uuid::parse_str(&run.run_id).unwrap();
+            let path = supervisor.store().run_dir(id).join("result.json");
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("keep"), "").unwrap();
+        }
+    }
+
+    #[test]
+    fn a_task_whose_report_cannot_be_kept_fails_with_the_task_text() {
+        const TASK_NOT_KEPT: &str =
+            "The agent finished, but its report could not be kept. Changes it made stay.";
+        const NOT_KEPT: &str = "The answer could not be kept for saving.";
+        // `write_result` fails.
+        for (task, answer, expected) in [
+            (true, "Renamed the draft.", TASK_NOT_KEPT),
+            (false, TEST_ANSWER, NOT_KEPT),
+        ] {
+            let (fixture, _) = scripted(&[answer], |supervisor, at| {
+                if at == At::Turn(1) {
+                    block_results(supervisor);
+                }
+            });
+            let id = if task {
+                fixture.start_task("a", INSTRUCTION)
+            } else {
+                fixture.start("a")
+            };
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Failed, "{view:?}");
+            assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
+            assert_eq!(view.error.as_deref(), Some(expected), "{view:?}");
+            assert!(!view.can_retry_save);
+            assert_eq!(view.task_report, None);
+        }
+        // The `answered_at` update fails after `result.json` is kept.
+        for (task, answer, expected) in [
+            (true, "Renamed the draft.", TASK_NOT_KEPT),
+            (false, TEST_ANSWER, NOT_KEPT),
+        ] {
+            let (fixture, _) = scripted(&[answer], |_, _| {});
+            fixture
+                .supervisor
+                .set_status_fault(Arc::new(|io: StatusIo<'_>| match io {
+                    StatusIo::Write(status) => {
+                        status.answered_at.is_some() && status.finished_at.is_none()
+                    }
+                    StatusIo::Read(_) => false,
+                }));
+            let id = if task {
+                fixture.start_task("a", INSTRUCTION)
+            } else {
+                fixture.start("a")
+            };
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Failed, "{view:?}");
+            assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
+            assert_eq!(view.error.as_deref(), Some(expected), "{view:?}");
+            assert!(run_dir(&fixture, id).join("result.json").is_file());
+            if task {
+                // A task saves nothing, so there is nothing to retry.
+                assert!(!view.can_retry_save, "{view:?}");
+                assert_eq!(view.task_report, None);
+            }
+        }
+    }
+
+    /// Known behaviour for this cut (decision 32): `list_runs` shares
+    /// [`LIST_LIMIT`] across kinds, so newer finished tasks push an older
+    /// finished summary out of the list, while active runs always stay.
+    /// Per-kind listing (`ListRunsRequest.kind`) is the P2 `brwr` bead filed
+    /// with the task bar's follow-ups.
+    #[test]
+    fn list_runs_lets_newer_finished_tasks_crowd_out_an_older_summary() {
+        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
+        fixture.release();
+        let summary = fixture.start("old-summary");
+        assert_eq!(fixture.wait_finished(summary).state, RunState::Succeeded);
+        let mut tasks = Vec::new();
+        for _ in 0..LIST_LIMIT {
+            let id = fixture.start_task("a", INSTRUCTION);
+            fixture.wait_finished(id);
+            tasks.push(id.to_string());
+        }
+        let listed = fixture.supervisor.list_runs();
+        assert_eq!(listed.len(), LIST_LIMIT);
+        assert!(listed.iter().all(|view| view.kind == Some(RunKind::Task)));
+        assert!(!listed.iter().any(|view| view.run_id == summary.to_string()));
+        tasks.reverse();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|view| view.run_id.clone())
+                .collect::<Vec<_>>(),
+            tasks
+        );
+        // An active summary is still listed.
+        std::fs::remove_file(fixture.path("release")).unwrap();
+        let active = fixture.start("new-summary");
+        fixture.wait_for(active, |view| view.state == RunState::Running);
+        let listed = fixture.supervisor.list_runs();
+        assert_eq!(listed.len(), LIST_LIMIT);
+        assert_eq!(listed[0].run_id, active.to_string());
+        fixture.release();
+        fixture.wait_finished(active);
     }
 }
