@@ -32,11 +32,28 @@ export async function listTaskPage(
   return { runs: response.runs, more: response.more ?? false };
 }
 
+/** The last (oldest) terminal run in `runs`, or undefined when the page has
+ * none: only a finished run's `{created_at, run_id}` is a safe `before` —
+ * the service answers `before` with finished runs strictly older than it,
+ * so cursoring from an active run (an old queued task, say) would skip
+ * every finished run between it and the last one actually walked. */
+function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    const run = runs[index]!;
+    if (isTerminal(run)) return run;
+  }
+  return undefined;
+}
+
 /** Every task run the service holds, walked one page at a time with the
- * last run of each page as the next page's cursor. Stops when a page says
- * there is no more, after {@link MAX_HISTORY_PAGES} pages, or when a page's
- * last run does not move the cursor past the one it was asked for (a host
- * stuck on the same page cannot be walked forever). */
+ * last *finished* run of each page as the next page's cursor (see
+ * {@link lastFinishedRun}). Stops when a page says there is no more, after
+ * {@link MAX_HISTORY_PAGES} pages, when a page has no finished run to
+ * cursor from, or when a page's cursor does not move past the one it was
+ * asked for (a host stuck on the same page cannot be walked forever). The
+ * result can repeat a run_id across pages (a run finishing mid-walk can
+ * reappear, once active and once finished); callers merge with
+ * {@link mergeRuns} rather than assuming each id appears once. */
 export async function listAllTasks(host: Pick<HostClient, "call">): Promise<RunView[]> {
   const all: RunView[] = [];
   let cursor: RunCursor | null = null;
@@ -44,7 +61,7 @@ export async function listAllTasks(host: Pick<HostClient, "call">): Promise<RunV
     const { runs, more } = await listTaskPage(host, cursor);
     all.push(...runs);
     if (!more) break;
-    const last = runs.at(-1);
+    const last = lastFinishedRun(runs);
     if (!last) break;
     const next: RunCursor = { created_at: last.created_at, run_id: last.run_id };
     if (cursor !== null && next.created_at === cursor.created_at && next.run_id === cursor.run_id) break;

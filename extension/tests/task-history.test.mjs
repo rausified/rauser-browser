@@ -81,6 +81,40 @@ test("listAllTasks treats a missing more as the last page", async () => {
   assert.equal(all.length, 5);
 });
 
+test("listAllTasks takes the cursor from the last finished view", async () => {
+  // The first page: a newer finished run, an older finished run, then an
+  // active run older than both (one old queued task sitting among the
+  // page's active runs). The active run's cursor must never be used: a
+  // `before` that old would skip every finished run strictly between it
+  // and B on a real service.
+  const runA = taskRun(1, { state: "succeeded" });
+  const runB = taskRun(2, { state: "succeeded" });
+  const oldActive = taskRun(50, { state: "queued", started_at: null });
+  const page1 = [runA, runB, oldActive];
+  const page2 = [taskRun(3, { state: "succeeded" })];
+  const { host, requests } = scriptedHost([
+    { runs: page1, hasMore: true, more: true },
+    { runs: page2, hasMore: true, more: false },
+  ]);
+  const all = await listAllTasks(host);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].before, { created_at: runB.created_at, run_id: runB.run_id });
+  assert.equal(all.length, 4);
+});
+
+test("listAllTasks stops when a page has no finished view", async () => {
+  // A page full of active runs: there is no finished view to cursor from,
+  // so paging stops rather than looping on an undefined cursor.
+  const activeOnly = [
+    taskRun(1, { state: "queued", started_at: null }),
+    taskRun(2, { state: "running" }),
+  ];
+  const { host, requests } = scriptedHost([{ runs: activeOnly, hasMore: true, more: true }]);
+  const all = await listAllTasks(host);
+  assert.equal(requests.length, 1);
+  assert.equal(all.length, 2);
+});
+
 test("mergeRuns keeps one view per run, the fresher state", () => {
   const running = taskRun(1, { state: "running" });
   const succeeded = taskRun(1, { state: "succeeded", finished_at: new Date(BASE).toISOString() });
