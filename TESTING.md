@@ -870,7 +870,7 @@ recorded offsets (including a range spanning multiple days), overlapping
 notices without summed counts, duplicated marker IDs, full-count preservation,
 32-notice truncation, malformed/unowned logs, real attached and standalone
 capture batches, lost-ack retries, restart, reindex and format-7 checkpoints
-that had skipped overflow. Attached fixtures include a long URL and a log time
+that had skipped overflow. Attached fixtures use a JSON-escaped URL and a log time
 outside the missing range, so the reader must use the loss payload rather than
 the anchor. Old-format migration cases keep event checkpoints while testing the
 one-time bounded gap rescan and partial-pass recovery. Source logs stay unchanged;

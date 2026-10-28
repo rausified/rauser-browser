@@ -2652,7 +2652,9 @@ fn parse_overflow_marker(line: &str) -> Option<(String, OverflowMarker)> {
     let at = fields[2].strip_prefix("at=")?;
     OffsetDateTime::parse(at, &Rfc3339).ok()?;
     let data = fields[4].strip_prefix("data=")?;
-    if data.len() > 24 * 1024 {
+    // An 8 KiB anchor URL can double in JSON (query backslashes), then
+    // double again in hex. Leave room for that and the bounded gap fields.
+    if data.len() > 64 * 1024 {
         return None;
     }
     let mut payload: serde_json::Value = serde_json::from_slice(&hex::decode(data).ok()?).ok()?;
@@ -3918,7 +3920,8 @@ mod tests {
         );
         // Attached markers include their anchor URL and provenance. The
         // anchor's log time can differ from the missing range's endpoints.
-        event.url.push_str(&format!("&large={}", "a".repeat(4000)));
+        // Query backslashes survive URL normalization and double in JSON.
+        event.url.push_str(&format!("&large={}", "\\".repeat(7000)));
         event.occurred_at = (stamp + time::Duration::hours(1)).format(&Rfc3339).unwrap();
         for _ in 0..2 {
             assert!(
