@@ -439,6 +439,10 @@ pinned at the layer that owns it:
   `supervisor.rs`: the instruction-kind checks, a `start_task` sent straight
   to the socket refused, the knowledge-base cwd with protected paths in both
   layouts, `a_task_fails_closed_when_brauser_folders_cannot_be_found`,
+  the task time limit (`a_task_gets_at_least_thirty_minutes`: the larger of
+  `[summarizer] timeout_secs` and 1800 s, at most 3600;
+  `a_task_runs_with_the_task_limit_and_a_summary_with_the_configured_one`:
+  with the default 600 a task records 1800 and a summary 600),
   `task_runs_send_no_output_schema`,
   `task_run_writes_the_page_to_page_md_and_the_instruction_only_to_the_prompt`,
   `an_empty_task_reply_gets_the_task_repair_prompt`, cancel,
