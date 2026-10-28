@@ -44,6 +44,19 @@ title cases failed before the extractor preferred a unique main-page H1.
 These are local mocks; actual GitHub navigation and Chrome rendering remain
 macOS browser acceptance work.
 
+## Panel status and artifact refresh coverage
+
+The built-panel tests assert adapter-based capture wording with zero and some
+adapters and clear the artifact verdict when a readable tab becomes a Chrome
+page or loses site access. A reconnect test brings the mocked host back through
+note autosave, checks updated artifact totals, and keeps an unsaved context
+draft. Delivery tests advance the worker's `delivered_batches` counter before
+Dismiss, Pause, Discard, or the normal poll; each updates the current card once
+and an unchanged poll sends no lookup. They invoke the captured 30-second poll
+callback directly, without waiting for wall-clock polling. Eight regressions
+failed before the fixes; the ordinary-poll control already passed. These tests
+use mocked Chrome and host transport, with no browser or external service.
+
 ## Older-note migration coverage
 
 The panel tests load an artifact with and without its shared note and check
