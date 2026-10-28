@@ -425,10 +425,14 @@ pinned at the layer that owns it:
   untrusted-page and no-exfiltration lines, every protected location,
   reading `page.md` allowed, page steps only when the request asks, a fence
   and the "Highlighted by the user" section inside `page.md` being page text
-  (`task_prompt_says_the_highlighted_section_is_page_text`), and the repair
-  prompt asking for no JSON;
+  (`task_prompt_says_the_highlighted_section_is_page_text`, called text
+  selected on the page, never by the user), the service folder and
+  `agent.env` off limits for reading
+  (`task_prompt_forbids_reading_agent_env_and_the_service_folder`), and the
+  repair prompt asking for no JSON;
 - the finisher, `host/src/service/finisher.rs`: empty replies rejected,
-  control characters replaced, long reports shortened on a character
+  control characters and invisible format characters (bidi controls,
+  zero-width characters, the byte-order mark) replaced, long reports shortened on a character
   boundary, and `task_finisher_save_writes_nothing`;
 - the server and supervisor, `host/src/service/server.rs` and
   `supervisor.rs`: the instruction-kind checks, a `start_task` sent straight
@@ -436,8 +440,13 @@ pinned at the layer that owns it:
   layouts, `a_task_fails_closed_when_brauser_folders_cannot_be_found`,
   `task_runs_send_no_output_schema`,
   `task_run_writes_the_page_to_page_md_and_the_instruction_only_to_the_prompt`,
-  `an_empty_task_reply_gets_the_task_repair_prompt`, cancel, resume after a
-  restart, a record without its request, `list_runs` cuts, `a_fifth_task_start_is_a_conflict`,
+  `an_empty_task_reply_gets_the_task_repair_prompt`, cancel,
+  `a_queued_task_is_not_resumed_after_restart` (failed as
+  `service_restarted` with the task text), the protected paths checked
+  again when a queued task starts (`a_starting_task_rechecks_its_protected_paths`,
+  `a_queued_task_whose_home_folder_changed_fails_closed`,
+  `a_task_whose_protected_paths_changed_while_queued_fails_before_spawning`),
+  a task without its request, `list_runs` cuts, `a_fifth_task_start_is_a_conflict`,
   `a_task_whose_report_cannot_be_kept_fails_with_the_task_text`,
   `list_runs_lets_newer_finished_tasks_crowd_out_an_older_summary` (known
   behaviour, decision 32) and `a_task_run_logs_neither_its_instruction_nor_its_report`;
